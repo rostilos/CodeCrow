@@ -169,6 +169,11 @@
                 <version>1.0</version>
                 <scope>compile</scope>
             </dependency>
+            <dependency>
+                <groupId>org.rostilos.codecrow</groupId>
+                <artifactId>codecrow-plugin-contracts</artifactId>
+                <version>1.0</version>
+            </dependency>
 
             <dependency>
                 <groupId>org.springdoc</groupId>
@@ -572,6 +577,10 @@
         <module>libs/rag-engine</module>
         <module>libs/queue</module>
         <module>libs/ast-parser</module>
+        <module>../analysis-plugins/contracts/java</module>
+        <module>../analysis-plugins/languages</module>
+        <module>../analysis-plugins/frameworks</module>
+        <module>../analysis-plugins/domains</module>
         <module>libs/test-support</module>
         <module>libs/task-management</module>
 

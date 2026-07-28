@@ -1,13 +1,14 @@
 FROM eclipse-temurin:17-jre-alpine
 
-RUN apk add --no-cache curl unzip su-exec && \
+RUN apk add --no-cache curl git unzip su-exec && \
     addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup && \
     mkdir -p /app/logs && chown -R appuser:appgroup /app
 
 WORKDIR /app
 
 # Copy the built jar file (--chown avoids a duplicate layer)
-COPY --chown=appuser:appgroup ./target/codecrow-pipeline-agent-1.0.jar app.jar
+COPY --chown=appuser:appgroup java-ecosystem/services/pipeline-agent/target/codecrow-pipeline-agent-1.0.jar app.jar
+COPY --chown=appuser:appgroup analysis-plugins/build/java/ /app/plugins/
 
 # Download New Relic Java agent (config newrelic.yml is mounted at runtime)
 RUN mkdir -p /usr/local/newrelic && \
@@ -30,4 +31,4 @@ ENV NEW_RELIC_LOG_FILE_NAME=STDOUT
 ENV JAVA_OPTS="-Xms512m -Xmx1g -javaagent:/usr/local/newrelic/newrelic.jar -XX:+UseG1GC -XX:G1HeapRegionSize=16m -XX:+UseStringDeduplication"
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
+CMD ["sh", "-c", "java $JAVA_OPTS -Dloader.path=/app/plugins -jar app.jar"]

@@ -1,13 +1,56 @@
-### IntelliJ IDEA ###
-.idea
+# Editors and operating systems
+.idea/
+.vscode/
 *.iws
 *.iml
 *.ipr
-.vscode
-.venv
+.DS_Store
+Thumbs.db
 
+# Python bytecode, test, type-checker, and coverage output
+**/__pycache__/
+*.py[cod]
+*$py.class
+**/.pytest_cache/
+**/.mypy_cache/
+**/.pyright/
+**/.ruff_cache/
+**/.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.ci-test-results/
+
+# Python environments and packaging output
+.venv/
+venv/
+env/
+ENV/
+**/*.egg-info/
+**/.eggs/
+**/dist/
+pip-wheel-metadata/
+
+# Java and Maven output
+**/target/
+*.class
+dependency-reduced-pom.xml
+.flattened-pom.xml
+hs_err_pid*
+replay_pid*
+
+# Generated archives and local runtime output
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.log
+*.pid
+analysis-plugins/build/
+java-ecosystem/services/pipeline-agent/runtime-plugins/
 
 **/newrelic.jar
 **/newrelic.yml
 
-tools/environment/dumps
+tools/environment/dumps/

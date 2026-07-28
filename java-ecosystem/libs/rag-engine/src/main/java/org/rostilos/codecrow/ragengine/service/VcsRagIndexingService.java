@@ -23,10 +23,16 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.FileVisitResult;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -56,6 +62,12 @@ public class VcsRagIndexingService {
 
     @Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
+
+    @Value("${codecrow.rag.queue.inactivity-timeout-minutes:15}")
+    private long ragQueueInactivityTimeoutMinutes;
+
+    @Value("${codecrow.rag.queue.lock-lease-minutes:30}")
+    private int ragQueueLockLeaseMinutes;
 
     public VcsRagIndexingService(
             ProjectRepository projectRepository,
@@ -114,7 +126,12 @@ public class VcsRagIndexingService {
             return Map.of("status", "error", "message", "Project has no VCS connection");
         }
 
-        String branch = determineBranch(requestBranch, config);
+        String branch = determineBranch(requestBranch, config, project);
+        if (branch == null) {
+            String message = "No RAG indexing branch is configured for project: " + project.getName();
+            log.warn(message);
+            return Map.of("status", "error", "message", message);
+        }
 
         // Check if indexing can start BEFORE creating job to avoid orphan "failed" jobs
         if (!ragIndexTrackingService.canStartIndexing(project)) {
@@ -193,7 +210,10 @@ public class VcsRagIndexingService {
 
             Path tempArchiveFile = Files.createTempFile("codecrow-archive-", ".zip");
             try {
-                long archiveSize = vcsClient.downloadRepositoryArchiveToFile(workspaceSlug, repoSlug, branch,
+                // Index exactly the commit recorded above. Downloading the
+                // mutable branch here could race a push and mislabel different
+                // archive bytes with the earlier commit hash.
+                long archiveSize = vcsClient.downloadRepositoryArchiveToFile(workspaceSlug, repoSlug, commitHash,
                         tempArchiveFile);
                 log.info("Downloaded archive: {} bytes for {}/{}", archiveSize, workspaceSlug, repoSlug);
 
@@ -214,6 +234,7 @@ public class VcsRagIndexingService {
                 var excludePatterns = config.ragConfig() != null ? config.ragConfig().excludePatterns() : null;
                 var includePatterns = config.ragConfig() != null ? config.ragConfig().includePatterns() : null;
                 Path tempDir = Files.createTempDirectory("codecrow-rag-");
+                boolean ownershipTransferred = false;
 
                 try {
                     // Extract the downloaded archive locally
@@ -241,6 +262,8 @@ public class VcsRagIndexingService {
                             "project", project.getNamespace(),
                             "branch", branch,
                             "commit", commitHash,
+                            "preserve_other_branches", config.ragConfig().isMultiBranchEnabled(),
+                            "cleanup_repo_path", true,
                             "include_patterns", includePatterns != null ? includePatterns : java.util.List.of(),
                             "exclude_patterns", excludePatterns != null ? excludePatterns : java.util.List.of());
 
@@ -250,8 +273,10 @@ public class VcsRagIndexingService {
 
                     String eventQueueKey = "codecrow:analysis:events:" + jobId;
                     String jobsQueueKey = "codecrow:queue:rag";
+                    String serializedJobPayload = objectMapper.writeValueAsString(jobPayload);
 
-                    queueService.leftPush(jobsQueueKey, objectMapper.writeValueAsString(jobPayload));
+                    queueService.leftPush(jobsQueueKey, serializedJobPayload);
+                    ownershipTransferred = true;
                     queueService.setExpiry(eventQueueKey, 245); // ~ 4 hours + 5 mins buffer
 
                     jobService.logToJob(job, JobLogLevel.INFO, "indexing",
@@ -260,7 +285,7 @@ public class VcsRagIndexingService {
                     // Delegate the polling to a background executor thread, returning immediately
                     // to caller
                     self.pollRagIndexingJobAsync(jobId, eventQueueKey, project, branch, commitHash, tempDir, lockKey,
-                            job);
+                            job, jobsQueueKey, serializedJobPayload);
 
                     return Map.of(
                             "status", "queued",
@@ -269,7 +294,9 @@ public class VcsRagIndexingService {
                             "commitHash", commitHash);
 
                 } catch (Exception fileExtractEx) { // Catch issues during extraction specifically
-                    deleteDir(tempDir);
+                    if (!ownershipTransferred) {
+                        deleteDir(tempDir);
+                    }
                     throw fileExtractEx;
                 }
 
@@ -313,18 +340,90 @@ public class VcsRagIndexingService {
                 throw new IOException("Failed to extract repository archive, unzip exit code: " + exitCode);
             }
 
-            // Ensure the extracted files and the parent directory are readable by the
-            // Python pipeline running as appuser
-            ProcessBuilder chmodPb = new ProcessBuilder("chmod", "-R", "755", destDir.toAbsolutePath().toString());
-            Process chmodP = chmodPb.start();
-            int chmodExitCode = chmodP.waitFor();
-            if (chmodExitCode != 0) {
-                log.warn("Failed to set 755 permissions on extracted archive directory: {}", destDir);
+            if (normalizeSingleArchiveRoot(destDir)) {
+                log.info("Normalized single VCS archive root before RAG plugin detection");
             }
+
+            prepareTransferredWorkspacePermissions(destDir);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("Extraction interrupted", e);
         }
+    }
+
+    /**
+     * Prepare a shared-volume workspace for ownership transfer to the RAG
+     * consumer, which runs under a different container UID.
+     *
+     * <p>Files only need cross-user read access. Directories also need
+     * cross-user write access so the consumer that owns the queued request can
+     * remove the workspace after indexing. File write bits are not broadened.</p>
+     */
+    static void prepareTransferredWorkspacePermissions(Path destination) throws IOException {
+        Set<PosixFilePermission> directoryPermissions = EnumSet.allOf(PosixFilePermission.class);
+        Files.walkFileTree(destination, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes)
+                    throws IOException {
+                Files.setPosixFilePermissions(directory, directoryPermissions);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
+                    throws IOException {
+                if (!Files.isSymbolicLink(file)) {
+                    Set<PosixFilePermission> permissions =
+                            EnumSet.copyOf(Files.getPosixFilePermissions(file));
+                    permissions.add(PosixFilePermission.GROUP_READ);
+                    permissions.add(PosixFilePermission.OTHERS_READ);
+                    Files.setPosixFilePermissions(file, permissions);
+                }
+                return FileVisitResult.CONTINUE;
+            }
+        });
+    }
+
+    /**
+     * Provider archives wrap repository files in one synthetic top-level
+     * directory. Move that directory's contents to the owned workspace root so
+     * every downstream consumer sees repository-relative paths from the start.
+     *
+     * <p>This normalization is provider-neutral and happens before plugin
+     * selection, include/exclude matching, architecture extraction, and
+     * embedding. Archives that do not have exactly one directory root are left
+     * unchanged.</p>
+     */
+    static boolean normalizeSingleArchiveRoot(Path destination) throws IOException {
+        java.util.List<Path> roots;
+        try (var entries = Files.list(destination)) {
+            roots = entries.toList();
+        }
+        if (roots.size() != 1) {
+            return false;
+        }
+
+        Path wrapper = roots.get(0);
+        if (Files.isSymbolicLink(wrapper)
+                || !Files.isDirectory(wrapper, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            return false;
+        }
+
+        java.util.List<Path> children;
+        try (var entries = Files.list(wrapper)) {
+            children = entries.toList();
+        }
+        for (Path child : children) {
+            Path target = destination.resolve(child.getFileName().toString());
+            if (target.equals(wrapper) || Files.exists(target)) {
+                return false;
+            }
+        }
+        for (Path child : children) {
+            Files.move(child, destination.resolve(child.getFileName().toString()));
+        }
+        Files.delete(wrapper);
+        return true;
     }
 
     private void deleteDir(Path dir) {
@@ -343,10 +442,12 @@ public class VcsRagIndexingService {
     @Async("webhookExecutor")
     public void pollRagIndexingJobAsync(
             String jobId, String eventQueueKey, Project project, String branch,
-            String commitHash, Path tempDir, String lockKey, Job job) {
+            String commitHash, Path tempDir, String lockKey, Job job,
+            String jobsQueueKey, String serializedJobPayload) {
         log.info("Background thread started polling for RAG Job ID: {}", jobId);
-        long startTime = System.currentTimeMillis();
-        long timeoutMillis = TimeUnit.HOURS.toMillis(4) + TimeUnit.MINUTES.toMillis(5);
+        long lastActivityTime = System.currentTimeMillis();
+        long inactivityTimeoutMinutes = Math.max(1L, ragQueueInactivityTimeoutMinutes);
+        long inactivityTimeoutMillis = TimeUnit.MINUTES.toMillis(inactivityTimeoutMinutes);
         Integer filesIndexed = null;
         Integer chunkCount = null;
         boolean success = false;
@@ -354,8 +455,22 @@ public class VcsRagIndexingService {
 
         try {
             while (true) {
-                if (System.currentTimeMillis() - startTime > timeoutMillis) {
-                    errorMessage = "RAG indexing timed out after 4 hours for Job: " + jobId;
+                if (System.currentTimeMillis() - lastActivityTime > inactivityTimeoutMillis) {
+                    if (queueService.listContains(jobsQueueKey, serializedJobPayload)) {
+                        // The exact job is still durably queued behind admitted
+                        // work. Extend producer supervision and the analysis
+                        // lock without pretending that indexing has started.
+                        lastActivityTime = System.currentTimeMillis();
+                        if (!analysisLockService.renewLock(lockKey, ragQueueLockLeaseMinutes)) {
+                            errorMessage = "RAG indexing lost its analysis-lock lease while queued for Job: "
+                                    + jobId;
+                            break;
+                        }
+                        ragIndexTrackingService.markIndexingHeartbeat(project);
+                        continue;
+                    }
+                    errorMessage = "RAG indexing produced no worker heartbeat for "
+                            + inactivityTimeoutMinutes + " minutes for Job: " + jobId;
                     break;
                 }
 
@@ -363,11 +478,23 @@ public class VcsRagIndexingService {
                 if (eventJson == null) {
                     continue;
                 }
+                lastActivityTime = System.currentTimeMillis();
+                if (!analysisLockService.renewLock(lockKey, ragQueueLockLeaseMinutes)) {
+                    errorMessage = "RAG indexing lost its analysis-lock lease for Job: " + jobId;
+                    break;
+                }
 
                 try {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> event = objectMapper.readValue(eventJson, Map.class);
                     Object type = event.get("type");
+
+                    if ("status".equals(type)) {
+                        // Redis activity keeps the lease alive; persist the same
+                        // activity on the existing status row so long-running,
+                        // healthy indexes do not look stalled to operators.
+                        ragIndexTrackingService.markIndexingHeartbeat(project);
+                    }
 
                     if ("error".equals(type) || "failed".equals(type)) {
                         errorMessage = String.valueOf(event.get("message"));
@@ -390,14 +517,15 @@ public class VcsRagIndexingService {
                         break;
                     }
                 } catch (Exception ex) {
-                    log.warn("Failed to parse Redis event JSON for RAG indexing {}: {}", jobId, ex.getMessage());
+                    log.warn("Failed to process Redis event for RAG indexing {}: {}", jobId, ex.getMessage());
                 }
             }
         } catch (Exception ex) {
             errorMessage = "Background polling interrupted: " + ex.getMessage();
         } finally {
-            // Cleanup
-            deleteDir(tempDir);
+            // The queued RAG consumer owns tempDir after enqueue and removes it only after
+            // indexing has stopped. Producer-side cleanup here can delete files from a
+            // healthy, long-running consumer when polling or Redis is interrupted.
             analysisLockService.releaseLock(lockKey);
             try {
                 queueService.deleteKey(eventQueueKey);
@@ -427,20 +555,46 @@ public class VcsRagIndexingService {
         }
     }
 
-    private String determineBranch(String requestBranch, ProjectConfig config) {
-        if (requestBranch != null && !requestBranch.isBlank()) {
-            return requestBranch;
+    private String determineBranch(String requestBranch, ProjectConfig config, Project project) {
+        String explicitBranch = normalizedBranch(requestBranch);
+        if (explicitBranch != null) {
+            return explicitBranch;
         }
 
-        if (config != null && config.ragConfig() != null && config.ragConfig().branch() != null) {
-            return config.ragConfig().branch();
+        if (config != null && config.ragConfig() != null) {
+            String ragBranch = normalizedBranch(config.ragConfig().branch());
+            if (ragBranch != null) {
+                return ragBranch;
+            }
         }
 
-        if (config != null && config.defaultBranch() != null) {
-            return config.defaultBranch();
+        if (config != null) {
+            String configuredBranch = normalizedBranch(config.defaultBranch());
+            if (configuredBranch != null) {
+                return configuredBranch;
+            }
         }
 
-        return "main";
+        if (project != null && project.getVcsRepoBinding() != null) {
+            String repositoryBranch = normalizedBranch(project.getVcsRepoBinding().getDefaultBranch());
+            if (repositoryBranch != null) {
+                return repositoryBranch;
+            }
+        }
+
+        if (project != null && project.getDefaultBranch() != null) {
+            return normalizedBranch(project.getDefaultBranch().getBranchName());
+        }
+
+        return null;
+    }
+
+    private String normalizedBranch(String branch) {
+        if (branch == null) {
+            return null;
+        }
+        String normalized = branch.trim();
+        return normalized.isEmpty() ? null : normalized;
     }
 
     private String formatBytes(long bytes) {

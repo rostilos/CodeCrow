@@ -5,9 +5,9 @@ import logging
 from typing import Any, Callable, Dict, Optional
 
 from model.output_schemas import CodeReviewOutput, ReconciliationOutput
+from utils.llm_response import extract_llm_response_text
 from utils.prompts.prompt_builder import PromptBuilder
 
-from service.review.orchestrator.agents import RecursiveMCPAgent, extract_llm_response_text
 from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
 from service.review.orchestrator.stage_helpers import emit_status, emit_error
 
@@ -21,6 +21,11 @@ async def execute_branch_analysis(
     event_callback: Optional[Callable[[Dict], None]] = None,
 ) -> Dict[str, Any]:
     emit_status(event_callback, "branch_analysis_started", "Starting Branch Analysis & Reconciliation...")
+
+    # The MCP runtime is required only for the legacy branch-analysis path.
+    # PR review, direct reconciliation, and provider-free prompt capture must
+    # remain importable without initializing an agent runtime.
+    from service.review.orchestrator.agents import RecursiveMCPAgent
 
     agent = RecursiveMCPAgent(
         llm=llm,

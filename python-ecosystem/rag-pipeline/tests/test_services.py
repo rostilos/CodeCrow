@@ -3,6 +3,7 @@ Tests for rag_pipeline.services — RAGQueryBase, SemanticSearchMixin,
 DeterministicContextMixin, PRContextMixin.
 """
 import pytest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, PropertyMock
 
 
@@ -15,7 +16,6 @@ def _mock_config(**overrides):
     cfg.embedding_provider = overrides.get("embedding_provider", "ollama")
     cfg.embedding_dim = overrides.get("embedding_dim", 768)
     cfg.embedding_supports_instructions = overrides.get("embedding_supports_instructions", False)
-    cfg.fallback_branches = overrides.get("fallback_branches", ["main", "master"])
     cfg.ollama_model = "nomic-embed-text"
     cfg.ollama_base_url = "http://localhost:11434"
     cfg.openrouter_api_key = "sk-test"
@@ -100,46 +100,57 @@ class TestRAGQueryBase:
     @patch("rag_pipeline.services.base.create_embedding_model")
     @patch("rag_pipeline.services.base.get_embedding_model_info")
     @patch("rag_pipeline.services.base.QdrantClient")
-    def test_get_fallback_branch(self, MockQdrant, mock_info, mock_create):
+    def test_plugin_identity_requires_current_descriptor_and_build_content(
+        self, MockQdrant, mock_info, mock_create
+    ):
         from rag_pipeline.services.base import RAGQueryBase
 
         mock_info.return_value = {"provider": "ollama", "type": "local"}
         mock_create.return_value = MagicMock()
+        catalog = MagicMock()
+        catalog.registry.fingerprint_for.return_value = "sha256:descriptor"
+        catalog.implementation_fingerprint.return_value = "sha256:implementation"
+        base = RAGQueryBase(_mock_config(), plugin_catalog=catalog)
+        current = {
+            "plugin_ids": ["python", "fastapi"],
+            "plugin_descriptor_fingerprint": "sha256:descriptor",
+            "plugin_implementation_fingerprint": "sha256:implementation",
+            "index_representation_fingerprint": (
+                base.index_representation_fingerprint
+            ),
+        }
 
-        config = _mock_config(fallback_branches=["main", "master"])
-        base = RAGQueryBase(config)
+        assert base._plugin_identity_compatible(current) is True
+        assert base._plugin_identity_compatible({
+            **current,
+            "plugin_implementation_fingerprint": "sha256:old",
+        }) is False
+        assert base._plugin_identity_compatible({
+            "plugin_ids": ["python", "fastapi"],
+        }) is False
+        catalog.registry.fingerprint_for.assert_called_once_with(
+            ("python", "fastapi")
+        )
 
-        # Collection exists
-        mock_coll = MagicMock()
-        mock_coll.name = "rag_workspace1__project1"
-        base.qdrant_client.get_collections.return_value.collections = [mock_coll]
-        base.qdrant_client.get_aliases.return_value.aliases = []
 
-        # main has data
-        mock_count = MagicMock()
-        mock_count.count = 100
-        base.qdrant_client.count.return_value = mock_count
-
-        result = base._get_fallback_branch("workspace1", "project1", "feature/xyz")
-        assert result == "main"
+class TestRAGQueryService:
 
     @patch("rag_pipeline.services.base.create_embedding_model")
     @patch("rag_pipeline.services.base.get_embedding_model_info")
     @patch("rag_pipeline.services.base.QdrantClient")
-    def test_get_fallback_branch_no_collection(self, MockQdrant, mock_info, mock_create):
-        from rag_pipeline.services.base import RAGQueryBase
+    def test_facade_forwards_plugin_catalog(
+        self, MockQdrant, mock_info, mock_create
+    ):
+        from rag_pipeline.services.query_service import RAGQueryService
 
         mock_info.return_value = {"provider": "ollama", "type": "local"}
         mock_create.return_value = MagicMock()
+        catalog = MagicMock()
 
-        config = _mock_config()
-        base = RAGQueryBase(config)
+        service = RAGQueryService(_mock_config(), plugin_catalog=catalog)
 
-        base.qdrant_client.get_collections.return_value.collections = []
-        base.qdrant_client.get_aliases.return_value.aliases = []
-
-        result = base._get_fallback_branch("workspace1", "project1", "feature/xyz")
-        assert result is None
+        assert service.plugin_catalog is catalog
+        assert service._plugin_identity_cache == {}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -166,6 +177,92 @@ class TestSemanticSearchDedup:
         # Should keep feature branch version for same path
         feature_results = [r for r in deduped if r["metadata"]["branch"] == "feature"]
         assert len(feature_results) >= 1
+
+    def test_search_post_filters_boolean_plugin_points(self):
+        from rag_pipeline.services.semantic_search import SemanticSearchMixin
+
+        semantic_node = SimpleNamespace(
+            node=SimpleNamespace(text="class Service {}", metadata={
+                "path": "src/Service.java",
+                "branch": "main",
+            }),
+            score=0.9,
+        )
+        architecture_node = SimpleNamespace(
+            node=SimpleNamespace(text="opaque snapshot", metadata={
+                "path": "__architecture__/spring",
+                "branch": "main",
+                "repository_snapshot": True,
+            }),
+            score=1.0,
+        )
+        retriever = MagicMock()
+        retriever.retrieve.return_value = [architecture_node, semantic_node]
+        index = MagicMock()
+        index.as_retriever.return_value = retriever
+        mixin = SemanticSearchMixin()
+        mixin._get_project_collection_name = MagicMock(return_value="rag_ws__project")
+        mixin._collection_or_alias_exists = MagicMock(return_value=True)
+        mixin._get_or_create_index = MagicMock(return_value=index)
+        mixin._require_compatible_branches = MagicMock()
+        mixin._supports_instructions = False
+        mixin._plugin_identity_compatible = MagicMock(return_value=True)
+
+        results = mixin.semantic_search_multi_branch(
+            query="service",
+            workspace="ws",
+            project="project",
+            branches=["main"],
+            top_k=2,
+        )
+
+        assert [result["metadata"]["path"] for result in results] == [
+            "src/Service.java"
+        ]
+        assert index.as_retriever.call_args.kwargs["similarity_top_k"] == 8
+        filters = index.as_retriever.call_args.kwargs["filters"].filters
+        assert [metadata_filter.key for metadata_filter in filters] == ["branch"]
+
+    def test_search_discards_stale_plugin_build_before_result_limit(self):
+        from rag_pipeline.services.semantic_search import SemanticSearchMixin
+
+        stale_node = SimpleNamespace(
+            node=SimpleNamespace(text="stale", metadata={
+                "path": "src/Stale.py",
+                "branch": "feature",
+                "compatible": False,
+            }),
+            score=1.0,
+        )
+        current_node = SimpleNamespace(
+            node=SimpleNamespace(text="current", metadata={
+                "path": "src/Current.py",
+                "branch": "main",
+                "compatible": True,
+            }),
+            score=0.9,
+        )
+        retriever = MagicMock()
+        retriever.retrieve.return_value = [stale_node, current_node]
+        index = MagicMock()
+        index.as_retriever.return_value = retriever
+        mixin = SemanticSearchMixin()
+        mixin._get_project_collection_name = MagicMock(return_value="rag_ws__project")
+        mixin._collection_or_alias_exists = MagicMock(return_value=True)
+        mixin._get_or_create_index = MagicMock(return_value=index)
+        mixin._require_compatible_branches = MagicMock()
+        mixin._supports_instructions = False
+        mixin._plugin_identity_compatible = lambda metadata: metadata["compatible"]
+
+        results = mixin.semantic_search_multi_branch(
+            query="service",
+            workspace="ws",
+            project="project",
+            branches=["feature", "main"],
+            top_k=1,
+        )
+
+        assert [result["text"] for result in results] == ["current"]
 
 
 # ─────────────────────────────────────────────────────────────

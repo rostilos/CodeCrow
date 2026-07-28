@@ -1,10 +1,12 @@
 package org.rostilos.codecrow.core.persistence.repository.vcs;
 
+import jakarta.persistence.LockModeType;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.EVcsSetupStatus;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -36,8 +38,18 @@ public interface VcsConnectionRepository extends JpaRepository<VcsConnection, Lo
             String externalWorkspaceId
     );
 
-    Optional<VcsConnection> findByProviderTypeAndInstallationId(
+    List<VcsConnection> findAllByProviderTypeAndInstallationId(
             EVcsProvider provider, String installationId
+    );
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT c FROM VcsConnection c "
+            + "WHERE c.providerType = :provider "
+            + "AND c.installationId = :installationId "
+            + "ORDER BY c.id")
+    List<VcsConnection> findAllByProviderTypeAndInstallationIdForUpdate(
+            @Param("provider") EVcsProvider provider,
+            @Param("installationId") String installationId
     );
 
     @Query("SELECT c FROM VcsConnection c WHERE c.workspace.id = :workspaceId " +

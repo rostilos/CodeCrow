@@ -10,6 +10,7 @@ from service.review.orchestrator.context_helpers import (
     get_diff_snippets_for_batch,
     format_rag_context,
     format_duplication_context,
+    rag_evidence_id,
 )
 
 
@@ -127,6 +128,22 @@ class TestFormatRagContext:
         result = format_rag_context(ctx, deleted_files=["old.py"])
         assert result == ""
 
+    def test_deleted_module_config_does_not_remove_same_basename_peer(self):
+        ctx = {
+            "relevant_code": [{
+                "metadata": {"path": "app/code/Acme/Cart/etc/di.xml"},
+                "text": "Cart module DI configuration",
+                "score": 0.9,
+            }]
+        }
+
+        result = format_rag_context(
+            ctx,
+            deleted_files=["app/code/Acme/Checkout/etc/di.xml"],
+        )
+
+        assert "Cart module DI configuration" in result
+
     def test_preserves_documentation_context_for_llm(self):
         ctx = {
             "relevant_code": [
@@ -160,8 +177,9 @@ class TestFormatRagContext:
             ]
         }
         result = format_rag_context(ctx)
-        # Same basename + content → deduped
-        assert result.count("utils.py") >= 1
+        assert "a/utils.py" in result
+        assert "b/utils.py" in result
+        assert result.count(same_text) == 2
 
     def test_chunks_key_fallback(self):
         ctx = {"chunks": [{"metadata": {"path": "a.py"}, "text": "code", "score": 0.9}]}
@@ -204,6 +222,47 @@ class TestFormatRagContext:
         # Score below threshold → filtered as stale
         assert result == ""
 
+    def test_changed_module_config_does_not_stale_same_basename_peer(self):
+        ctx = {
+            "relevant_code": [{
+                "metadata": {"path": "app/code/Acme/Cart/etc/di.xml"},
+                "text": "Cart module branch DI configuration",
+                "score": 0.5,
+                "_source": "semantic",
+            }]
+        }
+
+        result = format_rag_context(
+            ctx,
+            pr_changed_files=["app/code/Acme/Checkout/etc/di.xml"],
+        )
+
+        assert "Cart module branch DI configuration" in result
+
+    def test_architecture_peer_with_same_config_basename_is_not_stale(self):
+        ctx = {
+            "relevant_code": [{
+                "metadata": {
+                    "path": "__analysis_architecture__/magento/cart.context",
+                    "architecture_paths": [
+                        "app/code/Acme/Cart/etc/di.xml",
+                    ],
+                    "architecture_key": "Acme_Cart:global",
+                },
+                "text": "Cart effective DI relation",
+                "score": 1.0,
+                "_source": "deterministic",
+                "_match_type": "architecture_relation",
+            }]
+        }
+
+        result = format_rag_context(
+            ctx,
+            pr_changed_files=["app/code/Acme/Checkout/etc/di.xml"],
+        )
+
+        assert "Cart effective DI relation" in result
+
     def test_pr_indexed_not_stale(self):
         ctx = {
             "relevant_code": [
@@ -232,6 +291,20 @@ class TestFormatDuplicationContext:
         ]
         assert format_duplication_context(results, ["src/a.py"]) == ""
 
+    def test_same_basename_in_another_module_is_not_a_self_match(self):
+        results = [{
+            "metadata": {"path": "app/code/Acme/Cart/etc/di.xml"},
+            "text": "Cart module preference configuration",
+            "score": 0.9,
+        }]
+
+        result = format_duplication_context(
+            results,
+            ["app/code/Acme/Checkout/etc/di.xml"],
+        )
+
+        assert "Cart module preference configuration" in result
+
     def test_filters_low_score(self):
         results = [
             {"metadata": {"path": "other.py"}, "text": "code", "score": 0.3},
@@ -248,6 +321,46 @@ class TestFormatDuplicationContext:
         assert "helper.py" in result
         assert "SIMILAR IMPLEMENTATIONS" in result
 
+    def test_exposes_stable_id_and_only_prompt_visible_graph_facts(self):
+        visible_fact = {
+            "kind": "magento-effective-observer",
+            "source": "checkout_submit_all_after",
+            "relation": "dispatches-to",
+            "target": "Acme\\Checkout\\Observer\\Submit",
+            "path": "app/code/Acme/Checkout/etc/events.xml",
+            "line": 4,
+        }
+        hidden_fact = {
+            "kind": "magento-webapi-route",
+            "source": "POST /V1/cart",
+            "relation": "invokes",
+            "target": "Acme\\Api\\CartInterface::save",
+            "path": "app/code/Acme/Checkout/etc/webapi.xml",
+            "line": 7,
+        }
+        chunk = {
+            "metadata": {
+                "path": "__analysis_architecture__/magento/events.context",
+                "plugin_graph_facts": [visible_fact, hidden_fact],
+            },
+            "text": (
+                "[magento-effective-observer] checkout_submit_all_after "
+                "dispatches-to Acme\\Checkout\\Observer\\Submit"
+            ),
+            "score": 0.95,
+        }
+        visible = {}
+
+        result = format_duplication_context(
+            [chunk],
+            ["app/code/Acme/Checkout/Model/Cart.php"],
+            visible_evidence_by_id=visible,
+        )
+
+        evidence_id = rag_evidence_id(chunk)
+        assert f"Evidence ID: {evidence_id}" in result
+        assert visible == {evidence_id: (visible_fact,)}
+
     def test_deduplication(self):
         results = [
             {"metadata": {"path": "lib/a.py"}, "text": "same code same code same", "score": 0.8},
@@ -256,6 +369,28 @@ class TestFormatDuplicationContext:
         result = format_duplication_context(results, ["src/main.py"])
         # deduplication by text hash
         assert result.count("Existing Implementation") >= 1
+
+    def test_equal_long_prefix_with_distinct_implementation_tails_survives(self):
+        shared_prefix = "def configure_service():\n" + ("    shared_setup()\n" * 20)
+        results = [
+            {
+                "metadata": {"path": "lib/first.py"},
+                "text": shared_prefix + "    enable_first_behavior()\n",
+                "score": 0.9,
+            },
+            {
+                "metadata": {"path": "lib/second.py"},
+                "text": shared_prefix + "    enable_second_behavior()\n",
+                "score": 0.89,
+            },
+        ]
+
+        result = format_duplication_context(results, ["src/main.py"])
+
+        assert "lib/first.py" in result
+        assert "enable_first_behavior()" in result
+        assert "lib/second.py" in result
+        assert "enable_second_behavior()" in result
 
     def test_max_chunks_limit(self):
         results = [

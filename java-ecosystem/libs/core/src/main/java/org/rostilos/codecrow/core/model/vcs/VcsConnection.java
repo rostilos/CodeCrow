@@ -94,6 +94,15 @@ public class VcsConnection {
     @Column(name = "github_installation_request_snapshot", columnDefinition = "TEXT")
     private String githubInstallationRequestSnapshot;
 
+    /**
+     * Comma-separated installation IDs that were visible to the authenticated
+     * GitHub requester when CodeCrow detected an already-installed App. The
+     * requester selects one of these candidates and completes a fresh
+     * user-scoped verification before it can be linked.
+     */
+    @Column(name = "github_installation_candidates", columnDefinition = "TEXT")
+    private String githubInstallationCandidates;
+
     @Column(name = "github_installation_request_started_at")
     private LocalDateTime githubInstallationRequestStartedAt;
 
@@ -247,6 +256,14 @@ public class VcsConnection {
 
     public void setGithubInstallationRequestSnapshot(String githubInstallationRequestSnapshot) {
         this.githubInstallationRequestSnapshot = githubInstallationRequestSnapshot;
+    }
+
+    public String getGithubInstallationCandidates() {
+        return githubInstallationCandidates;
+    }
+
+    public void setGithubInstallationCandidates(String githubInstallationCandidates) {
+        this.githubInstallationCandidates = githubInstallationCandidates;
     }
 
     public LocalDateTime getGithubInstallationRequestStartedAt() {

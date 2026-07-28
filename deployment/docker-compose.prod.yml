@@ -34,7 +34,7 @@ services:
       PGADMIN_DISABLE_POSTFIX: "True"
       PGADMIN_LISTEN_PORT: 80
     ports:
-        - "127.0.0.1:${PGADMIN_HOST_PORT:-5050}:80"
+      - "127.0.0.1:${PGADMIN_HOST_PORT:-5050}:80"
     depends_on:
       postgres:
         condition: service_healthy
@@ -164,6 +164,11 @@ services:
       ANALYSIS_MAX_FILE_SIZE_BYTES: ${ANALYSIS_MAX_FILE_SIZE_BYTES:-5242880}
       ANALYSIS_MAX_TOTAL_DIFF_SIZE_BYTES: ${ANALYSIS_MAX_TOTAL_DIFF_SIZE_BYTES:-20971520}
       ANALYSIS_MAX_TOTAL_TOKENS: ${ANALYSIS_MAX_TOTAL_TOKENS:-1000000}
+      PR_ENRICHMENT_MAX_FILE_SIZE_BYTES: ${PR_ENRICHMENT_MAX_FILE_SIZE_BYTES:-5242880}
+      PR_ENRICHMENT_MAX_TOTAL_SIZE_BYTES: ${PR_ENRICHMENT_MAX_TOTAL_SIZE_BYTES:-20971520}
+      ANALYSIS_QUEUE_INACTIVITY_TIMEOUT_MINUTES: ${ANALYSIS_QUEUE_INACTIVITY_TIMEOUT_MINUTES:-15}
+      ANALYSIS_PROMPT_DRY_RUN_ENABLED: ${ANALYSIS_PROMPT_DRY_RUN_ENABLED:-false}
+      ANALYSIS_PROMPT_DRY_RUN_PROJECT_IDS: ${ANALYSIS_PROMPT_DRY_RUN_PROJECT_IDS:-}
       LOGGING_FILE_NAME: /app/logs/codecrow-pipeline-agent.log
     ports:
       - "127.0.0.1:8082:8082"
@@ -196,7 +201,7 @@ services:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-inference-orchestrator:latest
     container_name: codecrow-inference-orchestrator
     ports:
-        - "127.0.0.1:${INFERENCE_ORCHESTRATOR_HOST_PORT:-8000}:8000"
+      - "127.0.0.1:${INFERENCE_ORCHESTRATOR_HOST_PORT:-8000}:8000"
     depends_on:
       - rag-pipeline
       - web-server
@@ -208,6 +213,15 @@ services:
       # Internal API secret for service-to-service communication
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
+      ANALYSIS_QUEUE_HEARTBEAT_SECONDS: ${ANALYSIS_QUEUE_HEARTBEAT_SECONDS:-30}
+      ANALYSIS_PROMPT_DRY_RUN_ENABLED: ${ANALYSIS_PROMPT_DRY_RUN_ENABLED:-false}
+      ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_PER_FILE: ${ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_PER_FILE:-6}
+      ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_MAX_TOTAL: ${ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_MAX_TOTAL:-24}
+      ANALYSIS_PROMPT_DRY_RUN_OUTPUT_DIR: /app/logs/prompt-dry-runs
+      REVIEW_QUALITY_CAPTURE_ENABLED: ${REVIEW_QUALITY_CAPTURE_ENABLED:-false}
+      REVIEW_QUALITY_CAPTURE_PROJECT_IDS: ${REVIEW_QUALITY_CAPTURE_PROJECT_IDS:-}
+      REVIEW_QUALITY_CAPTURE_OUTPUT_DIR: /app/logs/review-quality-captures
+      REVIEW_QUALITY_CAPTURE_MAX_FILES: ${REVIEW_QUALITY_CAPTURE_MAX_FILES:-20}
       # Redis connection for async analysis queue (DB 1 to isolate from session storage on DB 0)
       REDIS_URL: redis://redis:6379/1
       # New Relic APM — points to the mounted config file
@@ -217,6 +231,7 @@ services:
     volumes:
       - ./config/inference-orchestrator/.env:/app/.env
       - ./config/inference-orchestrator/newrelic.ini:/app/newrelic.ini:ro
+      - inference_orchestrator_logs:/app/logs
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -239,7 +254,7 @@ services:
       QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
       REDIS_URL: redis://redis:6379/1
     ports:
-        - "127.0.0.1:${RAG_PIPELINE_HOST_PORT:-8001}:8001"
+      - "127.0.0.1:${RAG_PIPELINE_HOST_PORT:-8001}:8001"
     depends_on:
       redis:
         condition: service_healthy
@@ -316,6 +331,9 @@ volumes:
     driver: local
   rag_logs:
     name: rag_logs
+    driver: local
+  inference_orchestrator_logs:
+    name: inference_orchestrator_logs
     driver: local
 
 networks:

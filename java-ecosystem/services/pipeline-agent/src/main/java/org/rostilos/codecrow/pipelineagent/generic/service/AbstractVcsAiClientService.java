@@ -32,6 +32,7 @@ import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
+import org.rostilos.codecrow.plugins.ProjectCapabilities;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,6 +41,9 @@ import org.slf4j.LoggerFactory;
  * only remote VCS reads; all analysis policy and request assembly lives here.
  */
 public abstract class AbstractVcsAiClientService implements VcsAiClientService {
+    private static final int MINIMUM_TRUSTED_COMMIT_PREFIX_LENGTH = 12;
+    private static final java.util.regex.Pattern FULL_GIT_OBJECT_ID =
+            java.util.regex.Pattern.compile("(?i)^(?:[0-9a-f]{40}|[0-9a-f]{64})$");
     private final Logger log = LoggerFactory.getLogger(getClass());
     private final TokenEncryptionService tokenEncryptionService;
     private final VcsClientProvider vcsClientProvider;
@@ -48,6 +52,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
     private final TaskContextEnrichmentService taskContextEnrichmentService;
     private final TaskHistoryContextService taskHistoryContextService;
     private final PullRequestDiffPreparationService diffPreparationService;
+    private final ProjectCapabilitySelectionService capabilitySelectionService;
 
     protected AbstractVcsAiClientService(
             TokenEncryptionService tokenEncryptionService,
@@ -55,6 +60,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             PrFileEnrichmentService enrichmentService,
             TaskContextEnrichmentService taskContextEnrichmentService,
             TaskHistoryContextService taskHistoryContextService,
+            ProjectCapabilitySelectionService capabilitySelectionService,
             PullRequestDiffPreparationService diffPreparationService) {
         this.tokenEncryptionService = tokenEncryptionService;
         this.vcsClientProvider = vcsClientProvider;
@@ -62,6 +68,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         this.enrichmentService = enrichmentService;
         this.taskContextEnrichmentService = taskContextEnrichmentService;
         this.taskHistoryContextService = taskHistoryContextService;
+        this.capabilitySelectionService = capabilitySelectionService;
         this.diffPreparationService = diffPreparationService;
     }
 
@@ -107,7 +114,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
         String previousCommit = previousAnalysis.map(CodeAnalysis::getCommitHash).orElse(null);
         String currentCommit = request.getCommitHash();
-        PullRequestData pullRequest = PullRequestData.empty();
+        PullRequestData pullRequest;
         PreparedDiff preparedDiff = PreparedDiff.empty(previousCommit, currentCommit);
 
         log.info("Building pull request analysis: project={}, AI model={}, provider={}, connection={}",
@@ -116,15 +123,40 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         try {
             OkHttpClient client = vcsClientProvider.getHttpClient(repository.connection());
             pullRequest = fetchPullRequest(client, repository, request.getPullRequestId());
+            if (!isFullGitObjectId(pullRequest.headCommit())
+                    || !isFullGitObjectId(pullRequest.baseCommit())) {
+                throw new IOException("VCS provider did not return immutable pull-request commits");
+            }
+            if (!matchesAuthoritativeBranch(
+                    request.targetBranchName, pullRequest.targetBranch())) {
+                throw new IOException("Pull-request target branch changed during acquisition: expected="
+                        + request.targetBranchName + ", actual=" + pullRequest.targetBranch());
+            }
+            if (!matchesAuthoritativeBranch(
+                    request.sourceBranchName, pullRequest.sourceBranch())) {
+                throw new IOException("Pull-request source branch changed during acquisition: expected="
+                        + request.sourceBranchName + ", actual=" + pullRequest.sourceBranch());
+            }
+            if (!matchesAuthoritativeCommit(currentCommit, pullRequest.headCommit())) {
+                throw new IOException("Pull-request head changed during acquisition: expected="
+                        + currentCommit + ", actual=" + pullRequest.headCommit());
+            }
+            currentCommit = pullRequest.headCommit();
+            // Webhook payloads from some providers contain a stable abbreviation.
+            // All downstream cache, RAG, prompt and persistence identities must use
+            // the full object ID acquired from the provider for this exact PR.
+            request.commitHash = currentCommit;
+            String pinnedDiff = fetchCommitRangeDiff(
+                    client, repository, pullRequest.baseCommit(), pullRequest.headCommit());
             preparedDiff = diffPreparationService.prepare(
                     project,
                     request.getPullRequestId(),
-                    pullRequest.rawDiff(),
+                    pinnedDiff,
                     previousCommit,
                     currentCommit,
                     (base, head) -> fetchCommitRangeDiff(client, repository, base, head));
         } catch (IOException e) {
-            log.warn("Unable to fetch pull request data: {}", e.getMessage());
+            throw new IllegalStateException("Unable to acquire immutable pull-request snapshot", e);
         }
 
         if (preparedDiff.isEmpty()) {
@@ -133,8 +165,10 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             return List.of();
         }
 
-        PrEnrichmentDataDto enrichment = enrichFiles(
+        CapabilityEnrichment capabilityEnrichment = prepareCapabilityEnrichment(
                 repository, currentCommit, preparedDiff.changedFiles(), "pull request");
+        PrEnrichmentDataDto enrichment = capabilityEnrichment.enrichment();
+        ProjectCapabilities projectCapabilities = capabilityEnrichment.capabilities();
         Map<String, String> taskContext = resolveTaskContext(
                 project, request.sourceBranchName, pullRequest.title(), pullRequest.description());
         String taskHistory = resolveTaskHistory(
@@ -158,7 +192,9 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                         ? preparedDiff.deltaDiff() : null)
                 .withPreviousCommitHash(previousCommit)
                 .withCurrentCommitHash(currentCommit)
-                .withEnrichmentData(enrichment);
+                .withBaseCommitHash(pullRequest.baseCommit())
+                .withEnrichmentData(enrichment)
+                .withProjectCapabilities(projectCapabilities);
 
         addVcsCredentials(builder, repository.connection());
         return List.of(builder.build());
@@ -227,8 +263,9 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         RepositoryInfo repository = repositoryInfo(project);
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
         List<String> safeChangedFiles = changedFiles != null ? changedFiles : List.of();
-        PrEnrichmentDataDto enrichment = enrichFiles(
+        CapabilityEnrichment capabilityEnrichment = prepareCapabilityEnrichment(
                 repository, branchRequest.getCommitHash(), safeChangedFiles, "direct push");
+        PrEnrichmentDataDto enrichment = capabilityEnrichment.enrichment();
 
         AiAnalysisRequestImpl.Builder<?> builder = baseBuilder(
                 project, branchRequest, repository, aiConnection)
@@ -240,7 +277,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withDiffSnippets(DiffParser.extractDiffSnippets(rawDiff != null ? rawDiff : "", 20))
                 .withRawDiff(rawDiff)
                 .withAnalysisMode(AnalysisMode.FULL)
-                .withEnrichmentData(enrichment);
+                .withEnrichmentData(enrichment)
+                .withProjectCapabilities(capabilityEnrichment.capabilities());
 
         addVcsCredentials(builder, repository.connection());
         return List.of(builder.build());
@@ -279,9 +317,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         try {
             vcsClient = vcsClientProvider.getClient(repository.connection());
         } catch (Exception e) {
-            log.warn("Unable to obtain a VCS client for {} enrichment (non-critical): {}",
-                    operation, e.getMessage());
-            return PrEnrichmentDataDto.empty();
+            throw new IllegalStateException("Unable to obtain a VCS client for " + operation + " enrichment", e);
         }
 
         PrEnrichmentDataDto enrichment = PrEnrichmentDataDto.empty();
@@ -290,7 +326,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 enrichment = enrichmentService.enrichPrFiles(
                         vcsClient, repository.workspace(), repository.repoSlug(), commitHash, changedFiles);
             } catch (Exception e) {
-                log.warn("Unable to enrich {} files (non-critical): {}", operation, e.getMessage());
+                log.warn("Structured enrichment failed for {}; trying content-only acquisition: {}",
+                        operation, e.getMessage());
             }
         }
         if (enrichment.hasData()) return enrichment;
@@ -299,8 +336,34 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             return enrichmentService.fetchFileContentsOnly(
                     vcsClient, repository.workspace(), repository.repoSlug(), commitHash, changedFiles);
         } catch (Exception e) {
-            log.warn("Unable to fetch {} file contents (non-critical): {}", operation, e.getMessage());
-            return PrEnrichmentDataDto.empty();
+            throw new IllegalStateException("Unable to fetch " + operation + " file contents", e);
+        }
+    }
+
+    private CapabilityEnrichment prepareCapabilityEnrichment(
+            RepositoryInfo repository,
+            String commit,
+            List<String> changedFiles,
+            String operation) {
+        if (capabilitySelectionService == null) {
+            return new CapabilityEnrichment(
+                    enrichFiles(repository, commit, changedFiles, operation),
+                    null);
+        }
+        try {
+            VcsClient vcsClient = vcsClientProvider.getClient(repository.connection());
+            var plan = capabilitySelectionService.plan(
+                    vcsClient, repository.workspace(), repository.repoSlug(), commit,
+                    changedFiles);
+            PrEnrichmentDataDto enrichment = enrichFiles(
+                    repository, commit, plan.enrichmentPaths(), operation);
+            ProjectCapabilities capabilities = capabilitySelectionService.complete(
+                    plan, enrichment);
+            return new CapabilityEnrichment(enrichment, capabilities);
+        } catch (Exception exception) {
+            throw new IllegalStateException(
+                    "Unable to select project capabilities and file policy at commit " + commit,
+                    exception);
         }
     }
 
@@ -359,8 +422,47 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
     protected final PullRequestData pullRequestData(
             String title,
             String description,
-            String rawDiff) {
-        return new PullRequestData(title, description, rawDiff);
+            String sourceBranch,
+            String targetBranch,
+            String baseCommit,
+            String headCommit) {
+        return new PullRequestData(
+                title,
+                description,
+                sourceBranch,
+                targetBranch,
+                baseCommit,
+                headCommit);
+    }
+
+    static boolean isFullGitObjectId(String value) {
+        return value != null && FULL_GIT_OBJECT_ID.matcher(value).matches();
+    }
+
+    static boolean matchesAuthoritativeCommit(String supplied, String authoritative) {
+        if (!isFullGitObjectId(authoritative)) {
+            return false;
+        }
+        if (supplied == null) {
+            return true;
+        }
+        if (supplied.isBlank()) {
+            return false;
+        }
+        if (supplied.equals(authoritative)) {
+            return true;
+        }
+        return supplied.length() >= MINIMUM_TRUSTED_COMMIT_PREFIX_LENGTH
+                && supplied.length() < authoritative.length()
+                && authoritative.startsWith(supplied);
+    }
+
+    static boolean matchesAuthoritativeBranch(String supplied, String authoritative) {
+        return supplied != null
+                && authoritative != null
+                && !supplied.isBlank()
+                && !authoritative.isBlank()
+                && supplied.equals(authoritative);
     }
 
     protected record RepositoryInfo(
@@ -371,9 +473,12 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
     protected record PullRequestData(
             String title,
             String description,
-            String rawDiff) {
-        static PullRequestData empty() {
-            return new PullRequestData(null, null, null);
-        }
-    }
+            String sourceBranch,
+            String targetBranch,
+            String baseCommit,
+            String headCommit) {}
+
+    private record CapabilityEnrichment(
+            PrEnrichmentDataDto enrichment,
+            ProjectCapabilities capabilities) {}
 }

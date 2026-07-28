@@ -31,9 +31,24 @@ CURRENT-DEFECT CONTRACT FOR NEW FINDINGS:
 NON-NEGOTIABLE REVIEW RULES:
 - Review only visible evidence: diff content, structured parser metadata, task
   context, previous issues, and retrieved codebase context.
-- Treat Current File Content as the post-change source of truth. Before reporting
-  an unused/missing/unreferenced symbol, search all visible current-file and diff
+- When a finding relies on retrieved context, copy every supporting `Evidence ID`
+  into `evidenceRefs`. Do not invent IDs. Leave `evidenceRefs` empty when the
+  current file/diff alone proves the finding.
+- When a finding asserts a plugin-governed relationship using an exact evidence
+  class in ANALYSIS PLUGIN EVIDENCE CONSTRAINTS, copy that class
+  verbatim into `claimKind` and cite matching retrieved evidence in
+  `evidenceRefs`. If no E# class is supplied and deterministic repository
+  architecture context proves the relationship, use the exact bracketed fact kind
+  from its supporting fact line as `claimKind`. Leave `claimKind` empty for
+  generic defects proved directly by changed source. Never invent a claim kind.
+- Treat Current File Content as the post-change source of truth. When an added
+  file explicitly says its duplicate current-source copy was omitted, its complete
+  added-side diff is the post-change source of truth. Before reporting an
+  unused/missing/unreferenced symbol, search all visible current-file and diff
   evidence for that symbol and suppress the issue if the evidence contradicts it.
+- Anchor every new finding to exact current source inside a visible reviewable
+  diff hunk. Full-file and retrieved context may prove impact, but code outside
+  the changed hunk is supporting context, not a separate PR finding.
 - Do not report missing imports, undefined variables, missing methods/properties,
   or unseen definitions unless the visible evidence proves they are absent.
 - Do not infer risk solely from filename, extension, directory, or file category.
@@ -145,6 +160,8 @@ Return ONLY valid JSON with this structure:
           "line": "42",
           "scope": "LINE|BLOCK|FUNCTION|FILE",
           "codeSnippet": "exact source line copied verbatim from visible diff/file context",
+          "evidenceRefs": ["RAG-stable-id copied from supporting retrieved context"],
+          "claimKind": "exact plugin evidence class, or empty string",
           "title": "Short issue title, max 10 words",
           "reason": "Detailed Markdown explanation with evidence and impact",
           "resolutionReason": null,
@@ -161,7 +178,8 @@ Return ONLY valid JSON with this structure:
 
 OUTPUT CONSTRAINTS:
 - Return exactly one review object per input file and match file paths exactly.
-- Every NEW finding must include a non-empty current-source codeSnippet and scope.
+- Every NEW finding must include a non-empty current-source codeSnippet from a
+  reviewable changed hunk and a scope.
 - An exact matched previous issue returned only with isResolved=true may preserve
   its supplied historical codeSnippet when the fixed line no longer exists; it is
   exempt from current-source snippet matching and may have an empty snippet when

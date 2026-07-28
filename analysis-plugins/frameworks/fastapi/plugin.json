@@ -1,0 +1,64 @@
+{
+  "id": "fastapi",
+  "kind": "framework",
+  "requires": ["python"],
+  "capabilities": ["context", "graph", "index", "planning", "prompt", "validation"],
+  "detection": {
+    "extensions": [],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": [
+      {
+        "filesAll": [],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [],
+        "contentPatternMarkers": [{"pathPattern": "**/*.py", "contains": "from fastapi"}]
+      },
+      {
+        "filesAll": [],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [],
+        "contentPatternMarkers": [{"pathPattern": "**/*.py", "contains": "import fastapi"}]
+      },
+      {
+        "filesAll": [],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [],
+        "contentPatternMarkers": [{"pathPattern": "**/pyproject.toml", "contains": "fastapi"}]
+      },
+      {
+        "filesAll": [],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [],
+        "contentPatternMarkers": [{"pathPattern": "**/requirements.txt", "contains": "fastapi"}]
+      },
+      {
+        "filesAll": ["pyproject.toml"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [{"path": "pyproject.toml", "contains": "fastapi"}]
+      },
+      {
+        "filesAll": ["requirements.txt"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [{"path": "requirements.txt", "contains": "fastapi"}]
+      }
+    ]
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.fastapi.FastApiPlugin",
+    "python": "codecrow_plugin_fastapi:create_plugin"
+  }
+}

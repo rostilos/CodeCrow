@@ -60,14 +60,14 @@ public class VcsClientProvider {
     private static final MediaType FORM_MEDIA_TYPE = MediaType.parse("application/x-www-form-urlencoded");
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
-    /** Cached HTTP client entry: client + creation timestamp. */
-    private record CachedClient(OkHttpClient client, Instant createdAt) {}
+    /** Cached authorized transport entry + creation timestamp. */
+    private record CachedTransport(AuthorizedVcsTransport transport, Instant createdAt) {}
 
     /** TTL for cached HTTP clients (2 minutes). */
     private static final long CLIENT_CACHE_TTL_SECONDS = 120;
 
-    /** Per-connection HTTP client cache (connection-id → CachedClient). */
-    private final ConcurrentHashMap<Long, CachedClient> httpClientCache = new ConcurrentHashMap<>();
+    /** Per-connection authorized transport cache (connection-id → transport). */
+    private final ConcurrentHashMap<Long, CachedTransport> transportCache = new ConcurrentHashMap<>();
 
     private final VcsConnectionRepository connectionRepository;
     private final BitbucketConnectInstallationRepository connectInstallationRepository;
@@ -101,9 +101,8 @@ public class VcsClientProvider {
      * @throws VcsClientException if client creation fails
      */
     public VcsClient getClient(VcsConnection connection) {
-        // Delegate to getHttpClient() which handles caching and token refresh
-        OkHttpClient httpClient = getHttpClient(connection);
-        return createVcsClient(connection.getProviderType(), httpClient);
+        AuthorizedVcsTransport transport = getAuthorizedTransport(connection);
+        return createVcsClient(connection.getProviderType(), transport);
     }
 
     /**
@@ -115,6 +114,10 @@ public class VcsClientProvider {
      * @return authorized OkHttpClient
      */
     public OkHttpClient getHttpClient(VcsConnection connection) {
+        return getAuthorizedTransport(connection).httpClient();
+    }
+
+    private AuthorizedVcsTransport getAuthorizedTransport(VcsConnection connection) {
         try {
             log.debug("getHttpClient called for connection: id={}, type={}, provider={}, hasRefreshToken={}, tokenExpiresAt={}", 
                     connection.getId(), 
@@ -125,26 +128,26 @@ public class VcsClientProvider {
 
             // Return cached client if still valid (avoids redundant token decrypt + client construction)
             Long connId = connection.getId();
-            CachedClient cached = connId != null ? httpClientCache.get(connId) : null;
+            CachedTransport cached = connId != null ? transportCache.get(connId) : null;
             if (cached != null && Instant.now().isBefore(cached.createdAt().plusSeconds(CLIENT_CACHE_TTL_SECONDS))) {
                 // Still within TTL — but check if a token refresh is needed first
                 if (!needsTokenRefresh(connection)) {
                     log.debug("getHttpClient: returning cached client for connection={}", connId);
-                    return cached.client();
+                    return cached.transport();
                 }
                 // Token needs refresh — evict and fall through
-                httpClientCache.remove(connId);
+                transportCache.remove(connId);
             }
 
             // Refresh token if needed for APP connections
             VcsConnection activeConnection = ensureValidToken(connection);
-            OkHttpClient client = createHttpClient(activeConnection);
+            AuthorizedVcsTransport transport = createAuthorizedTransport(activeConnection);
 
             // Cache the client
             if (connId != null) {
-                httpClientCache.put(connId, new CachedClient(client, Instant.now()));
+                transportCache.put(connId, new CachedTransport(transport, Instant.now()));
             }
-            return client;
+            return transport;
         } catch (GeneralSecurityException e) {
             throw new VcsClientException("Failed to decrypt credentials for connection: " + connection.getId(), e);
         }
@@ -156,7 +159,7 @@ public class VcsClientProvider {
      */
     public void evictCachedClient(Long connectionId) {
         if (connectionId != null) {
-            httpClientCache.remove(connectionId);
+            transportCache.remove(connectionId);
         }
     }
     
@@ -572,7 +575,7 @@ public class VcsClientProvider {
     
     // ==================== Private Methods ====================
     
-    private OkHttpClient createHttpClient(VcsConnection connection) throws GeneralSecurityException {
+    private AuthorizedVcsTransport createAuthorizedTransport(VcsConnection connection) throws GeneralSecurityException {
         EVcsConnectionType connectionType = connection.getConnectionType();
         
         // Handle null connectionType as OAUTH_MANUAL (legacy connections)
@@ -585,9 +588,9 @@ public class VcsClientProvider {
                 connection.getId(), connectionType, connection.getProviderType());
         
         return switch (connectionType) {
-            case APP, GITHUB_APP, CONNECT_APP -> createAppHttpClient(connection);
-            case OAUTH_MANUAL -> createOAuthManualHttpClient(connection);
-            case PERSONAL_TOKEN, REPOSITORY_TOKEN -> createPersonalTokenHttpClient(connection);
+            case APP, GITHUB_APP, CONNECT_APP -> createAppTransport(connection);
+            case OAUTH_MANUAL -> createOAuthManualTransport(connection);
+            case PERSONAL_TOKEN, REPOSITORY_TOKEN -> createPersonalTokenTransport(connection);
             default -> throw new VcsClientException("Unsupported connection type: " + connectionType);
         };
     }
@@ -596,7 +599,7 @@ public class VcsClientProvider {
      * Create HTTP client for APP-type connections.
      * Uses OAuth2 access token (bearer token authentication).
      */
-    private OkHttpClient createAppHttpClient(VcsConnection connection) throws GeneralSecurityException {
+    private AuthorizedVcsTransport createAppTransport(VcsConnection connection) throws GeneralSecurityException {
         String accessToken = connection.getAccessToken();
         if (accessToken == null || accessToken.isBlank()) {
             throw new VcsClientException("No access token found for APP connection: " + connection.getId());
@@ -605,18 +608,18 @@ public class VcsClientProvider {
         // Decrypt the access token
         String decryptedToken = encryptionService.decrypt(accessToken);
         
-        return httpClientFactory.createClientWithBearerToken(decryptedToken);
+        return httpClientFactory.createTransportWithBearerToken(decryptedToken);
     }
     
     /**
      * Create HTTP client for OAUTH_MANUAL connections.
      * Uses OAuth Consumer key/secret (OAuth 1.0 style or OAuth 2.0 client credentials).
      */
-    private OkHttpClient createOAuthManualHttpClient(VcsConnection connection) throws GeneralSecurityException {
+    private AuthorizedVcsTransport createOAuthManualTransport(VcsConnection connection) throws GeneralSecurityException {
         VcsConnectionCredentials credentials = credentialsExtractor.extractCredentials(connection);
         
         if (VcsConnectionCredentialsExtractor.hasOAuthCredentials(credentials)) {
-            return httpClientFactory.createClient(
+            return httpClientFactory.createTransport(
                     credentials.oAuthClient(), 
                     credentials.oAuthSecret(), 
                     connection.getProviderType().getId()
@@ -630,7 +633,7 @@ public class VcsClientProvider {
      * Create HTTP client for PERSONAL_TOKEN and REPOSITORY_TOKEN connections.
      * Uses personal/repository access token (bearer token authentication).
      */
-    private OkHttpClient createPersonalTokenHttpClient(VcsConnection connection) throws GeneralSecurityException {
+    private AuthorizedVcsTransport createPersonalTokenTransport(VcsConnection connection) throws GeneralSecurityException {
         VcsConnectionCredentials credentials = credentialsExtractor.extractCredentials(connection);
         
         if (!VcsConnectionCredentialsExtractor.hasAccessToken(credentials)) {
@@ -641,20 +644,23 @@ public class VcsClientProvider {
         
         // Use provider-specific client factory for proper headers
         return switch (connection.getProviderType()) {
-            case GITHUB -> httpClientFactory.createGitHubClient(accessToken);
-            case GITLAB -> httpClientFactory.createGitLabClient(accessToken);
-            default -> httpClientFactory.createClientWithBearerToken(accessToken);
+            case GITHUB -> AuthorizedVcsTransport.withAccessToken(
+                    httpClientFactory.createGitHubClient(accessToken), accessToken);
+            case GITLAB -> AuthorizedVcsTransport.withAccessToken(
+                    httpClientFactory.createGitLabClient(accessToken), accessToken);
+            default -> httpClientFactory.createTransportWithBearerToken(accessToken);
         };
     }
     
     /**
      * Create a VcsClient for the given provider with the authorized HTTP client.
      */
-    private VcsClient createVcsClient(EVcsProvider provider, OkHttpClient httpClient) {
+    private VcsClient createVcsClient(EVcsProvider provider, AuthorizedVcsTransport transport) {
         return switch (provider) {
-            case BITBUCKET_CLOUD -> new BitbucketCloudClient(httpClient);
-            case GITHUB -> new GitHubClient(httpClient);
-            case GITLAB -> new org.rostilos.codecrow.vcsclient.gitlab.GitLabClient(httpClient);
+            case BITBUCKET_CLOUD -> new BitbucketCloudClient(
+                    transport.httpClient(), null, transport.accessToken().orElse(null));
+            case GITHUB -> new GitHubClient(transport.httpClient());
+            case GITLAB -> new org.rostilos.codecrow.vcsclient.gitlab.GitLabClient(transport.httpClient());
             default -> throw new VcsClientException("Unsupported provider: " + provider);
         };
     }

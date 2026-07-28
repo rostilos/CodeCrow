@@ -42,10 +42,13 @@ cp "$CONFIG_PATH/web-frontend/.env" "$FRONTEND_DIR/.env"
 echo "--- 3. Building Java Artifacts (mvn clean package) ---"
 (cd "$JAVA_DIR" && mvn clean package -DskipTests)
 
-echo "--- 4. MCP Servers jar update ---"
+echo "--- 4. Assembling independently packaged Java plugins ---"
+python3 tools/assemble_java_plugins.py
+
+echo "--- 5. MCP Servers jar update ---"
 cp "$MCP_SERVERS_JAR_PATH" python-ecosystem/inference-orchestrator/src/codecrow-vcs-mcp-1.0.jar
 
-echo "--- 4.1. Platform MCP jar update ---"
+echo "--- 5.1. Platform MCP jar update ---"
 if [ -f "$PLATFORM_MCP_JAR_PATH" ]; then
     cp "$PLATFORM_MCP_JAR_PATH" python-ecosystem/inference-orchestrator/src/codecrow-platform-mcp-1.0.jar
     echo "Platform MCP JAR copied successfully."
@@ -53,11 +56,11 @@ else
     echo "Warning: Platform MCP JAR not found at $PLATFORM_MCP_JAR_PATH"
 fi
 
-echo "--- 5. Shutting down existing services cleanly ---"
+echo "--- 6. Shutting down existing services cleanly ---"
 cd "$DOCKER_PATH"
 docker compose down --remove-orphans
 
-echo "--- 6. Building Docker images and starting services ---"
+echo "--- 7. Building Docker images and starting services ---"
 docker compose up -d --build --wait
 
 echo "--- Deployment Complete! Services are up and healthy. ---"

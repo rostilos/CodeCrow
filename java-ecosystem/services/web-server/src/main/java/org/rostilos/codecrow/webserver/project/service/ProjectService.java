@@ -100,6 +100,7 @@ public class ProjectService implements IProjectService {
     private final RagBranchIndexRepository ragBranchIndexRepository;
     private final CommentCommandRateLimitRepository commentCommandRateLimitRepository;
     private final AnalyzedCommitRepository analyzedCommitRepository;
+    private final ProjectWebhookCleanupService webhookCleanupService;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -126,7 +127,8 @@ public class ProjectService implements IProjectService {
             AllowedCommandUserRepository allowedCommandUserRepository,
             RagBranchIndexRepository ragBranchIndexRepository,
             CommentCommandRateLimitRepository commentCommandRateLimitRepository,
-            AnalyzedCommitRepository analyzedCommitRepository) {
+            AnalyzedCommitRepository analyzedCommitRepository,
+            ProjectWebhookCleanupService webhookCleanupService) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
         this.tokenEncryptionService = tokenEncryptionService;
@@ -152,6 +154,7 @@ public class ProjectService implements IProjectService {
         this.ragBranchIndexRepository = ragBranchIndexRepository;
         this.commentCommandRateLimitRepository = commentCommandRateLimitRepository;
         this.analyzedCommitRepository = analyzedCommitRepository;
+        this.webhookCleanupService = webhookCleanupService;
     }
 
     @Transactional(readOnly = true)
@@ -285,6 +288,9 @@ public class ProjectService implements IProjectService {
 
         Long projectId = project.getId();
 
+        VcsRepoBinding binding = vcsRepoBindingRepository.findByProject_Id(projectId).orElse(null);
+        webhookCleanupService.deleteProjectWebhook(binding);
+
         // Clear the default branch reference first to avoid circular FK constraint
         project.setDefaultBranch(null);
         projectRepository.save(project);
@@ -361,6 +367,9 @@ public class ProjectService implements IProjectService {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
 
+        VcsRepoBinding binding = vcsRepoBindingRepository.findByProject_Id(projectId).orElse(null);
+        webhookCleanupService.deleteProjectWebhook(binding);
+
         // Clear the default branch reference first to avoid circular FK constraint
         project.setDefaultBranch(null);
         projectRepository.save(project);
@@ -418,6 +427,8 @@ public class ProjectService implements IProjectService {
             binding = new VcsRepoBinding();
             binding.setProject(project);
             binding.setWorkspace(workspace);
+        } else {
+            webhookCleanupService.deleteProjectWebhook(binding, connection);
         }
 
         // Update binding with new connection info
@@ -488,6 +499,7 @@ public class ProjectService implements IProjectService {
                 .orElse(null);
 
         if (binding != null) {
+            webhookCleanupService.deleteProjectWebhook(binding);
             vcsRepoBindingRepository.delete(binding);
         }
 
@@ -1191,9 +1203,10 @@ public class ProjectService implements IProjectService {
     /**
      * Change the VCS connection for a project.
      * This will update the VCS binding and optionally setup webhooks.
-     * 
-     * WARNING: Changing VCS connection may require manual cleanup of old webhooks
-     * in the previous repository.
+     *
+     * <p>The exact webhook ID stored on the previous binding is deleted before
+     * the binding is changed. A cleanup failure leaves the old binding intact
+     * so the operation can be retried safely.</p>
      */
     @Transactional
     public Project changeVcsConnection(Long workspaceId, Long projectId, ChangeVcsConnectionRequest request) {
@@ -1216,6 +1229,8 @@ public class ProjectService implements IProjectService {
             binding = new VcsRepoBinding();
             binding.setProject(project);
             binding.setWorkspace(workspace);
+        } else {
+            webhookCleanupService.deleteProjectWebhook(binding, newConnection);
         }
 
         // Clear analysis history if requested

@@ -117,21 +117,59 @@ public interface RagOperationsService {
     }
     
     /**
-     * Get the base branch for RAG indexing.
+     * Get the authoritative base branch for RAG indexing.
      * 
      * @param project The project
-     * @return The base branch name (e.g., "master" or "main")
+     * @return The configured or provider-reported base branch
+     * @throws IllegalStateException when no authoritative branch identity exists
      */
     default String getBaseBranch(Project project) {
+        if (project == null) {
+            throw new IllegalStateException("Cannot resolve RAG base branch without a project");
+        }
+
         var config = project.getConfiguration();
-        if (config != null && config.ragConfig() != null && config.ragConfig().branch() != null) {
-            return config.ragConfig().branch();
+        if (config != null && config.ragConfig() != null) {
+            String ragBranch = normalizeBranch(config.ragConfig().branch());
+            if (ragBranch != null) {
+                return ragBranch;
+            }
         }
-        // Use main branch from project config (single source of truth)
+
         if (config != null) {
-            return config.mainBranch();
+            String configuredBranch = normalizeBranch(config.defaultBranch());
+            if (configuredBranch != null) {
+                return configuredBranch;
+            }
         }
-        return "main";
+
+        if (project.getVcsRepoBinding() != null) {
+            String repositoryBranch = normalizeBranch(
+                    project.getVcsRepoBinding().getDefaultBranch());
+            if (repositoryBranch != null) {
+                return repositoryBranch;
+            }
+        }
+
+        if (project.getDefaultBranch() != null) {
+            String persistedBranch = normalizeBranch(
+                    project.getDefaultBranch().getBranchName());
+            if (persistedBranch != null) {
+                return persistedBranch;
+            }
+        }
+
+        throw new IllegalStateException(
+                "No authoritative RAG base branch is configured for project: "
+                        + project.getId());
+    }
+
+    private static String normalizeBranch(String branch) {
+        if (branch == null) {
+            return null;
+        }
+        String normalized = branch.trim();
+        return normalized.isEmpty() ? null : normalized;
     }
     
     /**

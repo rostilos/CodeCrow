@@ -768,8 +768,8 @@ class CodeAnalysisServiceTest {
         }
 
         @Test
-        @DisplayName("should deduplicate issues at ingestion time")
-        void shouldDeduplicateIssuesAtIngestion() {
+        @DisplayName("should preserve distinct issues that share a location and category")
+        void shouldPreserveDistinctIssuesAtSameLocation() {
             Project project = createProjectWithWorkspace(1L, "Test", 1L);
             when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "abc123", 42L))
                     .thenReturn(Optional.empty());
@@ -780,10 +780,9 @@ class CodeAnalysisServiceTest {
                 return a;
             });
 
-            // Two identical issues at same file:line:category
+            // Two independent findings at the same file:line:category.
             Map<String, Object> issue1 = createIssueData("HIGH", "App.java", 10, "Null check missing");
             Map<String, Object> issue2 = createIssueData("MEDIUM", "App.java", 10, "Possible null pointer");
-            // Same category ensures structural dedup triggers
             issue1.put("category", "BUG_RISK");
             issue2.put("category", "BUG_RISK");
 
@@ -798,10 +797,10 @@ class CodeAnalysisServiceTest {
                     project, data, 42L, "main", "feature", "abc123",
                     "author1", "authorUser");
 
-            // Structural dedup should merge these into 1
-            assertThat(result.getIssues()).hasSize(1);
-            // Higher severity should win
-            assertThat(result.getIssues().get(0).getSeverity()).isEqualTo(IssueSeverity.HIGH);
+            assertThat(result.getIssues()).hasSize(2);
+            assertThat(result.getIssues())
+                    .extracting(CodeAnalysisIssue::getTitle)
+                    .containsExactly("Null check missing", "Possible null pointer");
         }
 
         @Test
@@ -896,14 +895,52 @@ class CodeAnalysisServiceTest {
         }
 
         @Test
-        @DisplayName("should persist explicit file-scope issue at line one without line hash")
-        void shouldPersistExplicitFileScopeIssueAtLineOneWithoutLineHash() {
+        @DisplayName("should reject explicit file-scope issue without source anchor")
+        void shouldRejectExplicitFileScopeIssueWithoutSourceAnchor() {
             Project project = createProjectWithWorkspace(1L, "Test", 1L);
             stubNewPrAnalysis(1L, "abc123", 42L);
 
             Map<String, Object> issueData = createIssueData("LOW", "App.java", 77, "File-wide concern");
             issueData.put("scope", "FILE");
             issueData.remove("codeSnippet");
+            Map<String, Object> data = createBasicAnalysisData("Review");
+            data.put("issues", List.of(issueData));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser", "fp123", Map.of("App.java", "class App {}\n"));
+
+            assertThat(result.getIssues()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("should reject explicit file-scope issue with stale source anchor")
+        void shouldRejectExplicitFileScopeIssueWithStaleSourceAnchor() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            stubNewPrAnalysis(1L, "abc123", 42L);
+
+            Map<String, Object> issueData = createIssueData("LOW", "App.java", 77, "File-wide concern");
+            issueData.put("scope", "FILE");
+            issueData.put("codeSnippet", "class Removed {}");
+            Map<String, Object> data = createBasicAnalysisData("Review");
+            data.put("issues", List.of(issueData));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser", "fp123", Map.of("App.java", "class App {}\n"));
+
+            assertThat(result.getIssues()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("should persist anchored file-scope issue at line one without line hash")
+        void shouldPersistAnchoredFileScopeIssueAtLineOneWithoutLineHash() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            stubNewPrAnalysis(1L, "abc123", 42L);
+
+            Map<String, Object> issueData = createIssueData("LOW", "App.java", 77, "File-wide concern");
+            issueData.put("scope", "FILE");
+            issueData.put("codeSnippet", "class App {}");
             Map<String, Object> data = createBasicAnalysisData("Review");
             data.put("issues", List.of(issueData));
 

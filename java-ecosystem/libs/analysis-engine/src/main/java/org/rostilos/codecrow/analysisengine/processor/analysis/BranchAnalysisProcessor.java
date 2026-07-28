@@ -786,6 +786,17 @@ public class BranchAnalysisProcessor {
 				}
 			});
 
+			if (AiAnalysisClient.isPromptDryRunResult(aiResponse)) {
+				log.warn(
+						"Prompt dry run completed for direct push project={}, branch={}; artifact={}",
+						project.getId(), request.getTargetBranchName(), aiResponse.get("promptArtifact"));
+				EventNotificationEmitter.emitStatus(
+						consumer,
+						"prompt_dry_run_completed",
+						"Prompt dry run completed without persisting a direct-push analysis");
+				return;
+			}
+
 			// Save the analysis with DetectionSource.DIRECT_PUSH_ANALYSIS
 			CodeAnalysis directPushAnalysis = codeAnalysisService.createDirectPushAnalysisFromAiResponse(
 					project, aiResponse, request.getTargetBranchName(),

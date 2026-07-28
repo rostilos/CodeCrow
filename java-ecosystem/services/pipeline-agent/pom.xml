@@ -56,11 +56,6 @@
         </dependency>
 
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
-
-        <dependency>
             <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-core</artifactId>
         </dependency>
@@ -99,8 +94,6 @@
             <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-task-management</artifactId>
         </dependency>
-
-
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
@@ -187,6 +180,7 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
                     <mainClass>org.rostilos.codecrow.pipelineagent.ProcessingApplication</mainClass>
+                    <layout>ZIP</layout>
                 </configuration>
             </plugin>
 

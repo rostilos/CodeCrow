@@ -173,6 +173,47 @@ class TestBuildGraphFromRag:
         nodes = graph.build_graph_from_rag(groups, "ws", "proj", ["main"])
         assert "a.py" in nodes
 
+    def test_structured_rag_error_uses_basic_directory_fallback(self):
+        mock_rag = MagicMock()
+        mock_rag.get_deterministic_context.return_value = {
+            "status": "error",
+            "status_code": 503,
+            "error": "unavailable",
+        }
+        groups = _make_file_group([
+            ("HIGH", ["src/a.py", "src/b.py", "lib/c.py"]),
+        ])
+
+        graph = DependencyGraph(rag_client=mock_rag)
+        nodes = graph.build_graph_from_rag(groups, "ws", "proj", ["main"])
+
+        assert "src/b.py" in nodes["src/a.py"].related_files
+        assert "lib/c.py" not in nodes["src/a.py"].related_files
+
+
+class TestMergeSmallBatches:
+    def test_mixed_priority_tie_uses_fixed_priority_order(self):
+        graph = DependencyGraph()
+
+        def item(path, priority):
+            file_info = MagicMock()
+            file_info.path = path
+            return {"file": file_info, "priority": priority}
+
+        merged = graph._merge_small_batches(
+            [
+                [item("low.py", "LOW"), item("critical.py", "CRITICAL")],
+                [item("high.py", "HIGH")],
+            ],
+            min_size=1,
+            max_size=4,
+        )
+
+        assert [
+            [entry["file"].path for entry in batch]
+            for batch in merged
+        ] == [["low.py", "critical.py"], ["high.py"]]
+
 
 class TestExtractRelationshipsFromRag:
     def test_processes_changed_files_metadata(self):

@@ -35,13 +35,18 @@ public class GetPullRequestAction {
         private final String state;
         private final String sourceRef;
         private final String destRef;
+        private final String sourceCommit;
+        private final String destinationCommit;
 
-        public PullRequestMetadata(String title, String description, String state, String sourceRef, String destRef) {
+        public PullRequestMetadata(String title, String description, String state, String sourceRef, String destRef,
+                                   String sourceCommit, String destinationCommit) {
             this.title = title;
             this.description = description;
             this.state = state;
             this.sourceRef = sourceRef;
             this.destRef = destRef;
+            this.sourceCommit = sourceCommit;
+            this.destinationCommit = destinationCommit;
         }
 
         public String getTitle() { return title; }
@@ -49,6 +54,8 @@ public class GetPullRequestAction {
         public String getState() { return state; }
         public String getSourceRef() { return sourceRef; }
         public String getDestRef() { return destRef; }
+        public String getSourceCommit() { return sourceCommit; }
+        public String getDestinationCommit() { return destinationCommit; }
     }
 
     /**
@@ -88,16 +95,25 @@ public class GetPullRequestAction {
 
             String sourceRef = "";
             String destRef = "";
+            String sourceCommit = "";
+            String destinationCommit = "";
 
             if (json.has("source") && json.get("source").has("branch")) {
                 sourceRef = json.get("source").get("branch").get("name").asText();
+            }
+            if (json.has("source") && json.get("source").has("commit")) {
+                sourceCommit = json.get("source").get("commit").path("hash").asText("");
             }
 
             if (json.has("destination") && json.get("destination").has("branch")) {
                 destRef = json.get("destination").get("branch").get("name").asText();
             }
+            if (json.has("destination") && json.get("destination").has("commit")) {
+                destinationCommit = json.get("destination").get("commit").path("hash").asText("");
+            }
 
-            return new PullRequestMetadata(title, description, state, sourceRef, destRef);
+            return new PullRequestMetadata(title, description, state, sourceRef, destRef,
+                    sourceCommit, destinationCommit);
 
         } catch (IOException e) {
             log.error("Failed to get pull request: {}", e.getMessage(), e);
@@ -105,4 +121,3 @@ public class GetPullRequestAction {
         }
     }
 }
-

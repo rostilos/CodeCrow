@@ -64,10 +64,12 @@ class BranchIssueTest {
     void shouldSetAndGetResolved() {
         BranchIssue branchIssue = new BranchIssue();
         assertThat(branchIssue.isResolved()).isFalse();
-        
+        branchIssue.setContentFingerprint("active-identity");
+
         branchIssue.setResolved(true);
-        
+
         assertThat(branchIssue.isResolved()).isTrue();
+        assertThat(branchIssue.getContentFingerprint()).isNull();
     }
 
     @Test

@@ -1,4 +1,10 @@
-from rag_pipeline.api.routers.inspect import _build_graph, _relation_lookup_names
+from types import SimpleNamespace
+
+from rag_pipeline.api.routers.inspect import (
+    _build_graph,
+    _relation_lookup_names,
+    _to_graph_node,
+)
 
 
 def _node(
@@ -120,3 +126,34 @@ def test_relation_lookup_names_collects_dependency_tokens_by_branch():
 
     assert "main" in names
     assert {"org.example.Service", "Service", "run", "Worker"} <= set(names["main"])
+
+
+def test_architecture_points_are_labeled_and_expose_invalidation_metadata():
+    point = SimpleNamespace(
+        id="point-id",
+        payload={
+            "branch": "main",
+            "path": "__analysis_architecture__/magento/hash.context",
+            "architecture_context": True,
+            "architecture_plugin": "magento",
+            "architecture_kind": "magento-di",
+            "architecture_source_path": "app/etc/di.xml",
+            "architecture_group": "group-id",
+            "architecture_paths": [
+                "app/etc/di.xml",
+                "app/code/Acme/Model/Cart.php",
+            ],
+            "plugin_graph_facts": [{"relation": "resolves-to"}],
+            "text": "Deterministic repository architecture context",
+        },
+    )
+
+    node = _to_graph_node(point, detail=True)
+
+    assert node["kind"] == "architecture_context"
+    assert node["title"].startswith("magento: magento-di")
+    assert node["metadata"]["architecture_group"] == "group-id"
+    assert node["metadata"]["architecture_paths"] == [
+        "app/etc/di.xml",
+        "app/code/Acme/Model/Cart.php",
+    ]

@@ -67,8 +67,13 @@ public interface ReconcilableIssue extends Trackable {
     String getLineHashContext();
 
     /**
-     * Category-agnostic fingerprint: SHA-256 of (lineHash + normalizedTitle).
-     * Used as secondary dedup key when primary fingerprint diverges due to category drift.
+     * Category-agnostic content identity.
+     * <p>
+     * PR-level issues expose {@code SHA-256(lineHash + normalizedTitle)}. Branch
+     * issues persist the path-aware anchored storage form required by their
+     * branch-wide unique index. Code that compares heterogeneous issue types
+     * must derive identity from source fields through {@link AnchoredIssueIdentity}
+     * rather than compare this stored value directly.
      */
     String getContentFingerprint();
 

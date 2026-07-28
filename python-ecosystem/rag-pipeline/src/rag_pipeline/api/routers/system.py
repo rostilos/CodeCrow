@@ -9,7 +9,7 @@ router = APIRouter(tags=["system"])
 
 @router.get("/")
 def root():
-    return {"message": "CodeCrow RAG Pipeline API", "version": "2.0.0"}
+    return {"message": "CodeCrow RAG Pipeline API"}
 
 
 @router.get("/health")

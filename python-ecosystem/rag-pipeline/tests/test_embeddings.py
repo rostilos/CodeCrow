@@ -114,6 +114,20 @@ class TestOpenRouterEmbedding:
         assert embed.model == "openai/text-embedding-3-small"
 
     @patch("rag_pipeline.core.openrouter_embedding.OpenAI")
+    def test_init_attributes_requests_to_codecrow(self, MockOpenAI):
+        from rag_pipeline.core.openrouter_embedding import OpenRouterEmbedding
+        OpenRouterEmbedding(
+            api_key="sk-test-key",
+            model="openai/text-embedding-3-small",
+            expected_dim=1536,
+        )
+
+        assert MockOpenAI.call_args.kwargs["default_headers"] == {
+            "HTTP-Referer": "https://codecrow.cloud",
+            "X-Title": "CodeCrow AI",
+        }
+
+    @patch("rag_pipeline.core.openrouter_embedding.OpenAI")
     def test_init_requires_api_key(self, MockOpenAI):
         from rag_pipeline.core.openrouter_embedding import OpenRouterEmbedding
         with pytest.raises(ValueError, match="API key"):

@@ -8,13 +8,15 @@ import java.util.List;
 /**
  * Configuration for RAG (Retrieval-Augmented Generation) indexing.
  * - enabled: whether RAG indexing is enabled for this project
- * - branch: the base branch to index (if null, uses defaultBranch or 'main')
+ * - branch: the base branch to index (if null, uses the configured project or
+ * repository default branch; indexing fails explicitly when none is available)
  * - includePatterns: list of glob patterns for paths to include in indexing (applied first)
  *   When non-empty, only files matching at least one pattern are considered.
  * - excludePatterns: list of glob patterns for paths to exclude from indexing (applied after include)
  *   Supports exact paths (e.g., "vendor/") and glob patterns (e.g., "app/code/**", "*.generated.ts")
- * - multiBranchEnabled: whether multi-branch context is enabled for PR analysis
- *   When enabled, PRs to non-main branches will include both main and target branch context
+ * - multiBranchEnabled: whether separately indexed non-main target branches may
+ *   be retained. PR retrieval still selects only the immutable VCS target branch;
+ *   source changes come from the exact PR overlay rather than a second branch.
  * - branchRetentionDays: how long to keep branch index metadata before auto-cleanup (default: 90 days)
  */
 @JsonIgnoreProperties(ignoreUnknown = true)

@@ -1,0 +1,150 @@
+{
+  "cases": [
+    {
+      "baseFiles": {
+        "app/export_policy.py": "class ExportPolicy:\n    @staticmethod\n    def can_export(user):\n        return (\n            user.active\n            and not user.suspended\n            and user.role in {\"admin\", \"auditor\"}\n        )\n",
+        "app/export_service.py": "from app.export_policy import ExportPolicy\n\n\ndef can_export(user):\n    return ExportPolicy.can_export(user)\n",
+        "tests/test_export_service.py": "from types import SimpleNamespace\n\nfrom app.export_service import can_export\n\n\ndef user(role, *, active=True, suspended=False):\n    return SimpleNamespace(\n        role=role, active=active, suspended=suspended\n    )\n\n\ndef test_regular_user_cannot_export():\n    assert can_export(user(\"member\")) is False\n\n\ndef test_active_auditor_can_export():\n    assert can_export(user(\"auditor\")) is True\n"
+      },
+      "candidatePlugins": [
+        "python"
+      ],
+      "caseId": "neutral-python-authorization",
+      "expectedDefects": [
+        {
+          "evidenceFiles": [
+            "app/export_policy.py",
+            "tests/test_export_service.py"
+          ],
+          "file": "app/export_service.py",
+          "id": "PY-AUTH-001",
+          "line": 5,
+          "summary": "The service bypasses ExportPolicy and grants export access to active non-privileged users."
+        }
+      ],
+      "frameworks": [],
+      "headReplacements": {
+        "app/export_service.py": "from app.export_policy import ExportPolicy\n\n\ndef can_export(user):\n    return user.active and not user.suspended\n"
+      },
+      "languages": [
+        "python"
+      ],
+      "requestPlugins": [
+        "python"
+      ]
+    },
+    {
+      "baseFiles": {
+        "src/main/java/example/Order.java": "package example;\n\npublic record Order(\n        boolean paid,\n        boolean fraudHold,\n        int ageDays\n) {}\n",
+        "src/main/java/example/RefundPolicy.java": "package example;\n\npublic final class RefundPolicy {\n    private RefundPolicy() {}\n\n    public static boolean canRefund(Order order) {\n        return order.paid()\n                && !order.fraudHold()\n                && order.ageDays() <= 30;\n    }\n}\n",
+        "src/main/java/example/RefundService.java": "package example;\n\npublic final class RefundService {\n    public boolean canRefund(Order order) {\n        return RefundPolicy.canRefund(order);\n    }\n}\n",
+        "src/test/java/example/RefundServiceTest.java": "package example;\n\nimport static org.junit.jupiter.api.Assertions.assertFalse;\n\nimport org.junit.jupiter.api.Test;\n\nclass RefundServiceTest {\n    @Test\n    void blocksOrdersOnFraudHold() {\n        Order order = new Order(true, true, 2);\n        assertFalse(new RefundService().canRefund(order));\n    }\n}\n"
+      },
+      "candidatePlugins": [
+        "java"
+      ],
+      "caseId": "neutral-java-refund-policy",
+      "expectedDefects": [
+        {
+          "evidenceFiles": [
+            "src/main/java/example/RefundPolicy.java",
+            "src/test/java/example/RefundServiceTest.java"
+          ],
+          "file": "src/main/java/example/RefundService.java",
+          "id": "JAVA-RISK-001",
+          "line": 5,
+          "summary": "The service bypasses RefundPolicy and permits refunds for orders that are under fraud hold."
+        }
+      ],
+      "frameworks": [],
+      "headReplacements": {
+        "src/main/java/example/RefundService.java": "package example;\n\npublic final class RefundService {\n    public boolean canRefund(Order order) {\n        return order.paid() && order.ageDays() <= 30;\n    }\n}\n"
+      },
+      "languages": [
+        "java"
+      ],
+      "requestPlugins": [
+        "java"
+      ]
+    },
+    {
+      "baseFiles": {
+        "src/downloadPolicy.ts": "export interface User {\n  id: string;\n  active: boolean;\n}\n\nexport interface Report {\n  ready: boolean;\n  ownerId: string;\n  sharedWith: string[];\n}\n\nexport const mayDownload = (report: Report, user: User): boolean =>\n  user.active &&\n  report.ready &&\n  (report.ownerId === user.id || report.sharedWith.includes(user.id));\n",
+        "src/reportService.ts": "import { mayDownload, type Report, type User } from './downloadPolicy';\n\nexport const canDownload = (report: Report, user: User): boolean =>\n  mayDownload(report, user);\n",
+        "test/reportService.test.ts": "import { canDownload } from '../src/reportService';\n\nconst report = {\n  ready: true,\n  ownerId: 'owner',\n  sharedWith: [],\n};\n\ntest('unrelated active users cannot download a report', () => {\n  expect(canDownload(report, { id: 'other', active: true })).toBe(false);\n});\n"
+      },
+      "candidatePlugins": [
+        "typescript"
+      ],
+      "caseId": "neutral-typescript-report-access",
+      "expectedDefects": [
+        {
+          "evidenceFiles": [
+            "src/downloadPolicy.ts",
+            "test/reportService.test.ts"
+          ],
+          "file": "src/reportService.ts",
+          "id": "TS-AUTH-001",
+          "line": 4,
+          "summary": "The service bypasses mayDownload and lets any active user download a ready report without ownership or sharing access."
+        }
+      ],
+      "frameworks": [],
+      "headReplacements": {
+        "src/reportService.ts": "import { mayDownload, type Report, type User } from './downloadPolicy';\n\nexport const canDownload = (report: Report, user: User): boolean =>\n  report.ready && user.active;\n"
+      },
+      "languages": [
+        "typescript"
+      ],
+      "requestPlugins": [
+        "typescript"
+      ]
+    },
+    {
+      "baseFiles": {
+        "backend/src/main/java/example/InvoicePayload.java": "package example;\n\nimport java.util.Map;\n\npublic final class InvoicePayload {\n    public Map<String, Object> serialize(long amountMinor, String currency) {\n        return Map.of(\"amountMinor\", amountMinor, \"currency\", currency);\n    }\n}\n",
+        "contract/invoice-payload.txt": "Invoice payload contract\namountMinor: integer amount in the currency's minor unit\ncurrency: ISO 4217 currency code\n",
+        "web/src/invoice.ts": "export interface InvoicePayload {\n  amountMinor: number;\n  currency: string;\n}\n\nexport const displayAmount = (payload: InvoicePayload): string =>\n  `${payload.currency} ${(payload.amountMinor / 100).toFixed(2)}`;\n",
+        "worker/invoice_ledger.py": "def ledger_amount(payload):\n    return int(payload[\"amountMinor\"])\n",
+        "worker/test_invoice_ledger.py": "from invoice_ledger import ledger_amount\n\n\ndef test_uses_minor_unit_contract():\n    assert ledger_amount({\"amountMinor\": 1299, \"currency\": \"EUR\"}) == 1299\n"
+      },
+      "candidatePlugins": [
+        "data-contracts",
+        "java",
+        "python",
+        "typescript"
+      ],
+      "caseId": "neutral-polyglot-invoice-contract",
+      "expectedDefects": [
+        {
+          "evidenceFiles": [
+            "contract/invoice-payload.txt",
+            "worker/invoice_ledger.py",
+            "worker/test_invoice_ledger.py"
+          ],
+          "file": "backend/src/main/java/example/InvoicePayload.java",
+          "id": "POLY-CONTRACT-001",
+          "line": 7,
+          "summary": "The partial payload rename emits amount while the fixed contract and Python ledger consumer still require amountMinor."
+        }
+      ],
+      "frameworks": [],
+      "headReplacements": {
+        "backend/src/main/java/example/InvoicePayload.java": "package example;\n\nimport java.util.Map;\n\npublic final class InvoicePayload {\n    public Map<String, Object> serialize(long amountMinor, String currency) {\n        return Map.of(\"amount\", amountMinor, \"currency\", currency);\n    }\n}\n",
+        "web/src/invoice.ts": "export interface InvoicePayload {\n  amount: number;\n  currency: string;\n}\n\nexport const displayAmount = (payload: InvoicePayload): string =>\n  `${payload.currency} ${(payload.amount / 100).toFixed(2)}`;\n",
+        "worker/invoice_ledger.py": "def ledger_amount(payload):\n    amount_minor = payload[\"amountMinor\"]\n    return int(amount_minor)\n"
+      },
+      "languages": [
+        "java",
+        "python",
+        "typescript"
+      ],
+      "requestPlugins": [
+        "java",
+        "python",
+        "typescript"
+      ]
+    }
+  ],
+  "kind": "codecrow-neutral-review-corpus"
+}

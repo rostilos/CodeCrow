@@ -23,80 +23,14 @@
             <artifactId>tree-sitter</artifactId>
         </dependency>
 
-        <!-- tree-sitter grammar JARs (each bundles native .so/.dylib/.dll) -->
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-java</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-python</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-javascript</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-typescript</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-go</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-rust</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-c</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-cpp</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-c-sharp</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-php</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-ruby</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-scala</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-bash</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-haskell</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-css</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-html</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.github.bonede</groupId>
-            <artifactId>tree-sitter-json</artifactId>
-        </dependency>
-
         <!-- Internal: IssueScope, LineHashSequence -->
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-plugin-contracts</artifactId>
         </dependency>
 
         <!-- Logging -->

@@ -1,12 +1,14 @@
 package org.rostilos.codecrow.pipelineagent.generic.processor;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchAnalysisGateService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
+import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.job.JobType;
@@ -19,10 +21,12 @@ import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Optional;
+import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -40,10 +44,18 @@ class WebhookAsyncProcessorBranchGateTest {
 
     @BeforeEach
     void setUp() {
+        System.setProperty(PromptDryRunMode.ENABLED_KEY, "false");
+        System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
         processor = new WebhookAsyncProcessor(
                 projectRepository, jobService, vcsServiceFactory,
                 branchAnalysisGateService, ragOperationsService);
         ReflectionTestUtils.setField(processor, "self", processor);
+    }
+
+    @AfterEach
+    void tearDown() {
+        System.clearProperty(PromptDryRunMode.ENABLED_KEY);
+        System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
     }
 
     @Test
@@ -78,5 +90,46 @@ class WebhookAsyncProcessorBranchGateTest {
         verify(handler, never()).handle(any(), any(), any());
         verify(jobService, never()).completeJob(any(Job.class));
         verify(ragOperationsService).deletePrFiles(project, 41);
+    }
+
+    @Test
+    void promptDryRunSuppressesEveryWebhookVcsMutationPath() {
+        System.setProperty(PromptDryRunMode.ENABLED_KEY, "true");
+        System.setProperty(PromptDryRunMode.PROJECT_IDS_KEY, "12");
+        when(project.getId()).thenReturn(12L);
+
+        Job job = new Job();
+        WebhookPayload payload = new WebhookPayload(
+                EVcsProvider.BITBUCKET_CLOUD,
+                "pullrequest:comment_created",
+                "repo-id",
+                "repository",
+                "workspace",
+                "41",
+                "feature/review",
+                "main",
+                null,
+                null);
+        WebhookHandler.WebhookResult result = WebhookHandler.WebhookResult.success(
+                "captured",
+                Map.of("commandType", "analyze", "content", "must not publish"));
+
+        ReflectionTestUtils.invokeMethod(
+                processor, "postPlaceholderComment",
+                EVcsProvider.BITBUCKET_CLOUD, project, payload, job);
+        ReflectionTestUtils.invokeMethod(
+                processor, "postResultToVcs",
+                EVcsProvider.BITBUCKET_CLOUD, project, payload, result, null, job);
+        ReflectionTestUtils.invokeMethod(
+                processor, "postErrorToVcs",
+                EVcsProvider.BITBUCKET_CLOUD, project, payload, "failure", null, job);
+        ReflectionTestUtils.invokeMethod(
+                processor, "postInfoToVcs",
+                EVcsProvider.BITBUCKET_CLOUD, project, payload, "skipped", null, job);
+        ReflectionTestUtils.invokeMethod(
+                processor, "deletePlaceholderComment",
+                EVcsProvider.BITBUCKET_CLOUD, project, payload, "comment-id");
+
+        verifyNoInteractions(vcsServiceFactory);
     }
 }

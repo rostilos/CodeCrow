@@ -1,0 +1,20 @@
+{
+  "id": "ruby",
+  "kind": "language",
+  "requires": [],
+  "capabilities": [
+    "syntax"
+  ],
+  "detection": {
+    "extensions": [
+      ".rb"
+    ],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.ruby.RubyPlugin"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "go",
+  "kind": "language",
+  "requires": [],
+  "capabilities": ["context", "graph", "index", "planning", "prompt", "syntax", "validation"],
+  "detection": {
+    "extensions": [
+      ".go"
+    ],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.go.GoPlugin",
+    "python": "codecrow_plugin_go:create_plugin"
+  }
+}

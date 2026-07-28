@@ -24,6 +24,14 @@ public class HttpAuthorizedClientFactory {
             String clientSecret,
             String gitPlatformId
     ) {
+        return createTransport(clientId, clientSecret, gitPlatformId).httpClient();
+    }
+
+    public AuthorizedVcsTransport createTransport(
+            String clientId,
+            String clientSecret,
+            String gitPlatformId
+    ) {
         validateSettings(clientId, clientSecret);
         EVcsProvider gitProvider = EVcsProvider.fromId(gitPlatformId);
         HttpAuthorizedClient delegate = delegateMap.get(gitProvider);
@@ -31,7 +39,7 @@ public class HttpAuthorizedClientFactory {
             throw new IllegalArgumentException("No factory for Git Provider: " + gitPlatformId);
         }
 
-        return delegate.createClient(clientId, clientSecret);
+        return delegate.createTransport(clientId, clientSecret);
     }
 
     /**
@@ -42,11 +50,15 @@ public class HttpAuthorizedClientFactory {
      * @return configured OkHttpClient with bearer token authentication
      */
     public OkHttpClient createClientWithBearerToken(String accessToken) {
+        return createTransportWithBearerToken(accessToken).httpClient();
+    }
+
+    public AuthorizedVcsTransport createTransportWithBearerToken(String accessToken) {
         if (accessToken == null || accessToken.isBlank()) {
             throw new IllegalArgumentException("Access token cannot be null or empty");
         }
         
-        return new OkHttpClient.Builder()
+        OkHttpClient client = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
                 .writeTimeout(60, TimeUnit.SECONDS)
@@ -58,6 +70,7 @@ public class HttpAuthorizedClientFactory {
                     return chain.proceed(authorized);
                 })
                 .build();
+        return AuthorizedVcsTransport.withAccessToken(client, accessToken);
     }
 
     /**

@@ -5,7 +5,7 @@ All models are defined here to avoid circular imports between routers
 and to keep the router files focused on endpoint logic.
 """
 import os
-from typing import List, Optional
+from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -18,6 +18,19 @@ def _validate_repo_path(path: str) -> str:
     return path
 
 
+def _validate_file_paths(paths: List[str]) -> List[str]:
+    for original in paths:
+        path = original.replace("\\", "/") if isinstance(original, str) else ""
+        if (
+            not path
+            or path.startswith("/")
+            or path.endswith("/")
+            or any(segment in {"", ".", ".."} for segment in path.split("/"))
+        ):
+            raise ValueError(f"Invalid repository-relative file path: {original!r}")
+    return paths
+
+
 # ── Index models ──
 
 class IndexRequest(BaseModel):
@@ -26,6 +39,8 @@ class IndexRequest(BaseModel):
     project: str
     branch: str
     commit: str
+    preserve_other_branches: bool = False
+    cleanup_repo_path: bool = False
     include_patterns: Optional[List[str]] = None
     exclude_patterns: Optional[List[str]] = None
 
@@ -48,12 +63,43 @@ class UpdateFilesRequest(BaseModel):
     def validate_repo_base(cls, v: str) -> str:
         return _validate_repo_path(v)
 
+    @field_validator("file_paths")
+    @classmethod
+    def validate_file_paths(cls, v: List[str]) -> List[str]:
+        return _validate_file_paths(v)
+
 
 class DeleteFilesRequest(BaseModel):
     file_paths: List[str]
     workspace: str
     project: str
     branch: str
+    commit: Optional[str] = None
+
+    @field_validator("file_paths")
+    @classmethod
+    def validate_file_paths(cls, v: List[str]) -> List[str]:
+        return _validate_file_paths(v)
+
+
+class ApplyChangesRequest(BaseModel):
+    updated_file_paths: List[str] = Field(default_factory=list)
+    deleted_file_paths: List[str] = Field(default_factory=list)
+    repo_base: Optional[str] = None
+    workspace: str
+    project: str
+    branch: str
+    commit: str
+
+    @field_validator("repo_base")
+    @classmethod
+    def validate_repo_base(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_repo_path(v) if v is not None else None
+
+    @field_validator("updated_file_paths", "deleted_file_paths")
+    @classmethod
+    def validate_file_paths(cls, v: List[str]) -> List[str]:
+        return _validate_file_paths(v)
 
 
 class DeleteBranchRequest(BaseModel):
@@ -65,8 +111,19 @@ class DeleteBranchRequest(BaseModel):
 class CleanupStaleBranchesRequest(BaseModel):
     workspace: str
     project: str
-    protected_branches: List[str] = ["main", "master", "develop"]
+    protected_branches: List[str] = Field(min_length=1)
     branches_to_keep: Optional[List[str]] = None
+
+    @field_validator("protected_branches", "branches_to_keep")
+    @classmethod
+    def validate_branch_names(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        if value is None:
+            return value
+        if any(not branch or branch != branch.strip() for branch in value):
+            raise ValueError("Branch names must be non-blank exact repository identities")
+        if len(set(value)) != len(value):
+            raise ValueError("Branch names must be unique")
+        return value
 
 
 class EstimateRequest(BaseModel):
@@ -182,10 +239,29 @@ class ParsedFileMetadata(BaseModel):
 # ── PR indexing models ──
 
 class PRFileInfo(BaseModel):
-    """Info about a single PR file."""
+    """Info about a single PR file.
+
+    ``partial_diff`` content is review evidence, not a complete repository
+    artifact. It must never be parsed or embedded as source code.
+    """
     path: str
     content: str
     change_type: str  # ADDED, MODIFIED, DELETED
+    content_state: Literal["complete", "partial_diff"] = "complete"
+
+    @field_validator("change_type")
+    @classmethod
+    def normalize_change_type(cls, value: str) -> str:
+        normalized = str(value or "").strip().upper()
+        if normalized not in {
+            "ADDED",
+            "MODIFIED",
+            "DELETED",
+            "RENAMED",
+            "BINARY",
+        }:
+            raise ValueError(f"Unsupported PR change type: {value!r}")
+        return normalized
 
 
 class PRIndexRequest(BaseModel):
@@ -194,6 +270,13 @@ class PRIndexRequest(BaseModel):
     project: str
     pr_number: int
     branch: str
+    base_branch: Optional[str] = None
+    source_revision: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    base_revision: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    repository_plugins: List[str] = Field(default_factory=list)
+    plugin_detection_evidence: Dict[str, List[str]] = Field(default_factory=dict)
+    plugin_fingerprint: str = "sha256:" + "0" * 64
+    plugin_descriptor_fingerprint: str = "sha256:" + "0" * 64
     files: List[PRFileInfo]
 
 

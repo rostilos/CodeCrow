@@ -56,14 +56,14 @@ class CollectionManager:
         else:
             logger.info(f"Collection {collection_name} already exists")
     
-    def create_versioned_collection(self, base_name: str) -> str:
-        """Create a new versioned collection for atomic swap indexing."""
+    def create_pending_collection(self, base_name: str) -> str:
+        """Create an unpublished collection for atomic index activation."""
         # Use milliseconds to avoid collisions in rapid calls
-        versioned_name = f"{base_name}_v{int(time.time() * 1000)}"
-        logger.info(f"Creating versioned collection: {versioned_name}")
+        pending_name = f"{base_name}_pending_{int(time.time() * 1000)}"
+        logger.info(f"Creating pending collection: {pending_name}")
         
         self.client.create_collection(
-            collection_name=versioned_name,
+            collection_name=pending_name,
             vectors_config=VectorParams(
                 size=self.embedding_dim,
                 distance=Distance.COSINE,
@@ -71,8 +71,8 @@ class CollectionManager:
             ),
             on_disk_payload=self.vectors_on_disk,
         )
-        self._ensure_payload_indexes(versioned_name)
-        return versioned_name
+        self._ensure_payload_indexes(pending_name)
+        return pending_name
     
     def _ensure_payload_indexes(self, collection_name: str) -> None:
         """Create payload indexes for efficient filtering on common fields."""
@@ -87,6 +87,28 @@ class CollectionManager:
             self.client.create_payload_index(
                 collection_name=collection_name,
                 field_name="branch",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+            # Architecture packets carry every repository path they connect.
+            # A keyword index makes changed-path graph expansion exact and cheap.
+            self.client.create_payload_index(
+                collection_name=collection_name,
+                field_name="architecture_paths",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+            self.client.create_payload_index(
+                collection_name=collection_name,
+                field_name="architecture_group",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+            self.client.create_payload_index(
+                collection_name=collection_name,
+                field_name="snapshot_plugin",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+            self.client.create_payload_index(
+                collection_name=collection_name,
+                field_name="snapshot_kind",
                 field_schema=PayloadSchemaType.KEYWORD,
             )
             logger.info(f"Payload indexes created for {collection_name}")
@@ -176,20 +198,20 @@ class CollectionManager:
             logger.warning(f"Failed to delete alias {alias_name}: {e}")
             return False
     
-    def cleanup_orphaned_versioned_collections(
+    def cleanup_orphaned_pending_collections(
         self,
         base_name: str,
         current_target: Optional[str] = None,
         exclude_name: Optional[str] = None
     ) -> int:
-        """Clean up orphaned versioned collections from failed indexing attempts."""
+        """Clean up unpublished collections left by interrupted indexing attempts."""
         cleaned = 0
         collection_names = self.get_collection_names()
         
         for coll_name in collection_names:
-            if coll_name.startswith(f"{base_name}_v") and coll_name != exclude_name:
+            if coll_name.startswith(f"{base_name}_pending_") and coll_name != exclude_name:
                 if current_target != coll_name:
-                    logger.info(f"Cleaning up orphaned versioned collection: {coll_name}")
+                    logger.info(f"Cleaning up orphaned pending collection: {coll_name}")
                     if self.delete_collection(coll_name):
                         cleaned += 1
         

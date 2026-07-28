@@ -24,6 +24,13 @@ class EnrichmentDtoTest {
             assertThat(dto.skipReason()).isNull();
         }
 
+        @Test void of_measuresUtf8Bytes() {
+            FileContentDto dto = FileContentDto.of("message.txt", "Привіт");
+
+            assertThat(dto.sizeBytes()).isEqualTo(
+                    "Привіт".getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+        }
+
         @Test void skipped_createsWithReason() {
             FileContentDto dto = FileContentDto.skipped("big.bin", "unsupported_extension");
             assertThat(dto.path()).isEqualTo("big.bin");

@@ -5,6 +5,8 @@ Covers: LLMFactory._normalize_provider, get_supported_providers,
         _check_unsupported_gemini_model, create_llm (all providers),
         QaDocumentationService._create_llm, _create_rag_client
 """
+import asyncio
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +20,7 @@ from llm.llm_factory import (
     UNSUPPORTED_GEMINI_THINKING_MODELS,
     GEMINI_MODEL_ALTERNATIVES,
     DEFAULT_TEMPERATURE,
+    forbid_llm_provider_construction,
     _coerce_openai_compatible_text_content,
     _is_cloudflare_base_url,
     _normalize_cloudflare_chat_payload,
@@ -103,6 +106,57 @@ class TestCheckUnsupportedGeminiModel:
 # ── LLMFactory.create_llm ───────────────────────────────────────
 
 class TestCreateLlm:
+    def test_provider_construction_guard_fails_closed_and_resets(self):
+        with forbid_llm_provider_construction("test dry run"):
+            with pytest.raises(
+                RuntimeError,
+                match="forbidden.*test dry run",
+            ):
+                LLMFactory.create_llm(
+                    ai_model="gpt-4o",
+                    ai_provider="openai",
+                    ai_api_key="test-key",
+                )
+
+        with patch("llm.llm_factory.ChatOpenAI") as constructor:
+            LLMFactory.create_llm(
+                ai_model="gpt-4o",
+                ai_provider="openai",
+                ai_api_key="test-key",
+            )
+        constructor.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_provider_construction_guard_is_task_local(self):
+        guarded_task_entered = asyncio.Event()
+        release_guarded_task = asyncio.Event()
+
+        async def guarded() -> None:
+            with forbid_llm_provider_construction("isolated dry run"):
+                guarded_task_entered.set()
+                await release_guarded_task.wait()
+                with pytest.raises(RuntimeError, match="isolated dry run"):
+                    LLMFactory.create_llm(
+                        ai_model="gpt-4o",
+                        ai_provider="openai",
+                        ai_api_key="test-key",
+                    )
+
+        async def normal() -> None:
+            await guarded_task_entered.wait()
+            try:
+                with patch("llm.llm_factory.ChatOpenAI") as constructor:
+                    LLMFactory.create_llm(
+                        ai_model="gpt-4o",
+                        ai_provider="openai",
+                        ai_api_key="test-key",
+                    )
+                constructor.assert_called_once()
+            finally:
+                release_guarded_task.set()
+
+        await asyncio.gather(guarded(), normal())
+
     def test_openrouter(self):
         llm = LLMFactory.create_llm(
             ai_model="google/gemini-2.0-flash",

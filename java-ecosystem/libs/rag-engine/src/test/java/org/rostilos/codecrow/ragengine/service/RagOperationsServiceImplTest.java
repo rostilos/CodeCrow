@@ -7,6 +7,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.core.model.analysis.RagIndexStatus;
+import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
@@ -29,6 +30,7 @@ import java.util.Set;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -115,6 +117,52 @@ class RagOperationsServiceImplTest {
         boolean result = service.isRagEnabled(testProject);
 
         assertThat(result).isTrue();
+    }
+
+    @Test
+    void getBaseBranchPrefersExplicitRagBranch() {
+        RagConfig ragConfig = new RagConfig(true, " release ");
+        testProject.setConfiguration(
+                new ProjectConfig(false, "configured", null, ragConfig));
+        VcsRepoBinding binding = new VcsRepoBinding();
+        binding.setDefaultBranch("provider-default");
+        testProject.setVcsRepoBinding(binding);
+
+        assertThat(service.getBaseBranch(testProject)).isEqualTo("release");
+    }
+
+    @Test
+    void getBaseBranchUsesConfiguredProjectBranch() {
+        testProject.setConfiguration(new ProjectConfig(false, "trunk"));
+
+        assertThat(service.getBaseBranch(testProject)).isEqualTo("trunk");
+    }
+
+    @Test
+    void getBaseBranchUsesRepositoryDefaultWhenConfigurationIsBlank() {
+        testProject.setConfiguration(new ProjectConfig(false, "  "));
+        VcsRepoBinding binding = new VcsRepoBinding();
+        binding.setDefaultBranch("synthetic-target");
+        testProject.setVcsRepoBinding(binding);
+
+        assertThat(service.getBaseBranch(testProject))
+                .isEqualTo("synthetic-target");
+    }
+
+    @Test
+    void getBaseBranchUsesPersistedBranchWhenOtherSourcesAreAbsent() {
+        Branch branch = new Branch();
+        branch.setBranchName("stable");
+        testProject.setDefaultBranch(branch);
+
+        assertThat(service.getBaseBranch(testProject)).isEqualTo("stable");
+    }
+
+    @Test
+    void getBaseBranchFailsWhenNoAuthoritativeIdentityExists() {
+        assertThatThrownBy(() -> service.getBaseBranch(testProject))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("No authoritative RAG base branch");
     }
 
     @Test

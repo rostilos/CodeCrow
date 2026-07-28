@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CodeCrow plugin descriptor",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "kind", "requires", "capabilities", "detection", "entrypoints"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "kind": {
+      "enum": ["language", "framework", "domain"]
+    },
+    "requires": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+      "uniqueItems": true
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "calibration",
+          "candidate-recipe",
+          "context",
+          "file-policy",
+          "graph",
+          "index",
+          "planning",
+          "prompt",
+          "syntax",
+          "validation"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["extensions", "filesAll", "filesAny", "contentMarkers", "alternatives"],
+      "properties": {
+        "extensions": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^\\.[a-z0-9][a-z0-9.+_-]*$"},
+          "uniqueItems": true
+        },
+        "filesAll": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "filesAny": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "contentMarkers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "contains"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1},
+              "contains": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "alternatives": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/detectionAlternative"},
+          "uniqueItems": true
+        }
+      }
+    },
+    "entrypoints": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "minLength": 1},
+      "propertyNames": {"enum": ["java", "python"]}
+    }
+  },
+  "$defs": {
+    "contentMarker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "contains"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "contains": {"type": "string", "minLength": 1}
+      }
+    },
+    "detectionAlternative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filesAll", "filesAny", "pathPatternsAll", "pathPatternsAny", "contentMarkers"],
+      "properties": {
+        "filesAll": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "filesAny": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "pathPatternsAll": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "pathPatternsAny": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "contentMarkers": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/contentMarker"},
+          "uniqueItems": true
+        },
+        "contentPatternMarkers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pathPattern", "contains"],
+            "properties": {
+              "pathPattern": {"type": "string", "minLength": 1},
+              "contains": {"type": "string", "minLength": 1}
+            }
+          },
+          "uniqueItems": true
+        }
+      },
+      "anyOf": [
+        {"properties": {"filesAll": {"minItems": 1}}},
+        {"properties": {"filesAny": {"minItems": 1}}},
+        {"properties": {"pathPatternsAll": {"minItems": 1}}},
+        {"properties": {"pathPatternsAny": {"minItems": 1}}},
+        {"properties": {"contentMarkers": {"minItems": 1}}}
+      ]
+    }
+  }
+}

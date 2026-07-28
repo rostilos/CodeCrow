@@ -26,8 +26,10 @@ public class GetCommitRangeDiffAction {
     /**
      * Fetches the diff between two commits.
      * 
-     * Bitbucket API: GET /repositories/{workspace}/{repo_slug}/diff/{spec}
-     * where spec can be "commit1..commit2" format
+     * Bitbucket API: GET /repositories/{workspace}/{repo_slug}/diff/{spec}?topic=true
+     * where spec uses Bitbucket's source..destination order. Bitbucket's order is
+     * the opposite of {@code git diff}; {@code topic=true} selects its
+     * merge-base-aware PR/topic diff.
      *
      * @param workspace workspace or team slug
      * @param repoSlug repository slug
@@ -40,9 +42,13 @@ public class GetCommitRangeDiffAction {
         String ws = Optional.ofNullable(workspace).orElse("");
         String displayWorkspace = ws.isEmpty() ? "(no-workspace)" : ws;
         
-        // Bitbucket uses the spec format: base..head
-        String spec = baseCommitHash + ".." + headCommitHash;
-        String apiUrl = String.format("%s/repositories/%s/%s/diff/%s",
+        // Bitbucket accepts two commits separated by "..", not Git's "..."
+        // syntax. It also defines the first commit as the source/topic and the
+        // second as the destination, which is the reverse of git diff order.
+        // topic=true makes the response merge-base-aware so destination-only
+        // changes are not reported as removals from the PR.
+        String spec = headCommitHash + ".." + baseCommitHash;
+        String apiUrl = String.format("%s/repositories/%s/%s/diff/%s?topic=true",
                 BitbucketCloudConfig.BITBUCKET_API_BASE, ws, repoSlug, spec);
 
         log.info("Fetching commit range diff: {}/{} from {} to {}",

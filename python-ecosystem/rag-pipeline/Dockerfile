@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY python-ecosystem/rag-pipeline/requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
@@ -23,8 +23,9 @@ RUN apt-get update && apt-get install -y \
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-COPY src/ ./src/
-COPY main.py .
+COPY python-ecosystem/rag-pipeline/src/ ./src/
+COPY python-ecosystem/rag-pipeline/main.py .
+COPY analysis-plugins/ ./plugins/
 
 RUN groupadd -r appgroup && useradd -r -g appgroup appuser
 
@@ -36,7 +37,8 @@ RUN mkdir -p /tmp/.tiktoken_cache /tmp/.transformers_cache /tmp/.huggingface /tm
 USER appuser
 
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app/src:/app/plugins/contracts/python
+ENV CODECROW_PLUGINS_ROOT=/app/plugins
 ENV HOME=/tmp
 ENV TIKTOKEN_CACHE_DIR=/tmp/.tiktoken_cache
 ENV TRANSFORMERS_CACHE=/tmp/.transformers_cache
@@ -55,4 +57,3 @@ ENV NUMEXPR_NUM_THREADS=4
 EXPOSE 8001
 
 CMD ["python", "main.py"]
-

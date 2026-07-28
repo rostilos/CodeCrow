@@ -8,10 +8,11 @@ from typing import Any, Dict, Optional
 from model.dtos import ReviewRequestDto
 from model.multi_stage import ReviewPlan, FileGroup, ReviewFile, FileToSkip
 from utils.prompts.prompt_builder import PromptBuilder
-from utils.diff_processor import ProcessedDiff
+from utils.diff_processor import HunkDisposition, ProcessedDiff
 from utils.task_context_builder import build_task_context
+from service.review.plugin_context import review_plugin_context
 
-from service.review.orchestrator.agents import extract_llm_response_text
+from utils.llm_response import extract_llm_response_text
 from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,40 @@ def _build_diff_lookup(processed_diff: Optional[ProcessedDiff]) -> Dict[str, Any
     return diff_by_path
 
 
+def _reviewable_planning_paths(
+    request: ReviewRequestDto,
+    processed_diff: Optional[ProcessedDiff],
+) -> list[str]:
+    """Return only paths whose host manifest still requires direct review."""
+    if processed_diff is None:
+        return list(dict.fromkeys(request.changedFiles or []))
+
+    reviewable = set()
+    for diff_file in processed_diff.files:
+        if diff_file.hunks:
+            if any(
+                hunk.disposition is HunkDisposition.REVIEWABLE
+                for hunk in diff_file.hunks
+            ):
+                reviewable.add(diff_file.path)
+            continue
+        if (
+            diff_file.plugin_disposition not in {"generated", "excluded"}
+            and _mechanical_skip_reason(diff_file) is None
+        ):
+            # Compatibility for callers/tests that construct DiffFile records
+            # without the parser-owned hunk manifest.
+            reviewable.add(diff_file.path)
+
+    ordered = [
+        path
+        for path in dict.fromkeys(request.changedFiles or [])
+        if path in reviewable
+    ]
+    ordered.extend(sorted(reviewable - set(ordered)))
+    return ordered
+
+
 async def execute_stage_0_planning(
     llm,
     request: ReviewRequestDto,
@@ -37,10 +72,11 @@ async def execute_stage_0_planning(
     use_local_planning: bool = False,
 ) -> ReviewPlan:
     diff_by_path = _build_diff_lookup(processed_diff)
+    planning_paths = _reviewable_planning_paths(request, processed_diff)
 
     changed_files_summary = []
-    if request.changedFiles:
-        for f in request.changedFiles:
+    if planning_paths:
+        for f in planning_paths:
             df = diff_by_path.get(f) or diff_by_path.get(f.rsplit('/', 1)[-1] if '/' in f else f)
             changed_files_summary.append(_summarize_file_for_planning(f, df))
 
@@ -63,19 +99,38 @@ async def execute_stage_0_planning(
             infer_cross_file_concerns=False,
         )
 
+    if processed_diff is not None and not planning_paths:
+        logger.info(
+            "Stage 0 provider call skipped: host manifest contains no reviewable paths"
+        )
+        return _build_fallback_review_plan(
+            request,
+            processed_diff,
+            analysis_summary=(
+                "No changed source hunks require direct review after deterministic "
+                "file-policy and mechanical disposition accounting."
+            ),
+            infer_cross_file_concerns=False,
+        )
+
     prompt = PromptBuilder.build_stage_0_planning_prompt(
         repo_slug=request.projectVcsRepoSlug,
         pr_id=str(request.pullRequestId),
         pr_title=request.prTitle or "",
         author=request.prAuthor or "Unknown",
-        branch_name=request.sourceBranchName or "source-branch",
-        target_branch=request.targetBranchName or "main",
-        commit_hash=request.commitHash or "HEAD",
+        branch_name=request.sourceBranchName or "",
+        target_branch=request.targetBranchName or "",
+        commit_hash=request.currentCommitHash or request.commitHash or "",
         task_context=(
             build_task_context(request.taskContext, max_description_length=4000)
-            or "No task context available."
+            or ""
         ),
         changed_files_json=json.dumps(changed_files_summary, indent=2) + refactoring_context,
+        plugin_context=review_plugin_context(
+            request,
+            planning_paths,
+            include_evidence_targets=False,
+        ),
     )
 
     if supports_structured_output(llm):
@@ -111,19 +166,26 @@ def _build_fallback_review_plan(
     Stage 0 is an optimization step. If a provider returns empty or malformed
     planning JSON, the review should still continue with all changed files.
     """
-    paths = list(dict.fromkeys(request.changedFiles or []))
+    paths = _reviewable_planning_paths(request, processed_diff)
     diff_by_path = _build_diff_lookup(processed_diff)
-
-    if not paths and processed_diff:
-        paths = [df.path for df in processed_diff.files]
+    manifest_paths = list(dict.fromkeys(request.changedFiles or []))
+    if processed_diff is not None:
+        manifest_set = {item.path for item in processed_diff.files}
+        manifest_paths = [path for path in manifest_paths if path in manifest_set]
+        manifest_paths.extend(sorted(manifest_set - set(manifest_paths)))
+    else:
+        manifest_paths = paths
 
     files = []
     files_to_skip = []
-    for path in paths:
+    reviewable_paths = set(paths)
+    for path in manifest_paths:
         diff_file = diff_by_path.get(path) or diff_by_path.get(path.rsplit('/', 1)[-1] if '/' in path else path)
         skip_reason = _mechanical_skip_reason(diff_file)
         if skip_reason:
             files_to_skip.append(FileToSkip(path=path, reason=skip_reason))
+            continue
+        if path not in reviewable_paths:
             continue
 
         focus_areas = []
@@ -162,6 +224,51 @@ def _build_fallback_review_plan(
         files_to_skip=files_to_skip,
         cross_file_concerns=_infer_cross_file_concerns(paths) if infer_cross_file_concerns else [],
     )
+
+
+def apply_mechanical_skip_constraints(
+    plan: ReviewPlan,
+    processed_diff: Optional[ProcessedDiff],
+) -> ReviewPlan:
+    """Make parser-proven non-source dispositions authoritative over planning."""
+    if processed_diff is None:
+        return plan
+
+    reasons = {
+        diff_file.path: reason
+        for diff_file in processed_diff.files
+        if (reason := _mechanical_skip_reason(diff_file))
+    }
+    if not reasons:
+        return plan
+
+    retained_groups = []
+    for group in plan.file_groups:
+        retained_files = [
+            review_file
+            for review_file in group.files
+            if review_file.path not in reasons
+        ]
+        if retained_files:
+            retained_groups.append(
+                group.model_copy(update={"files": retained_files})
+            )
+
+    existing_skips = {
+        item.path: item
+        for item in (plan.files_to_skip or [])
+        if item.path not in reasons
+    }
+    for diff_file in processed_diff.files:
+        if diff_file.path in reasons:
+            existing_skips[diff_file.path] = FileToSkip(
+                path=diff_file.path,
+                reason=reasons[diff_file.path],
+            )
+
+    plan.file_groups = retained_groups
+    plan.files_to_skip = list(existing_skips.values())
+    return plan
 
 
 def _summarize_file_for_planning(path: str, diff_file: Any = None) -> Dict[str, Any]:
@@ -210,8 +317,19 @@ def _mechanical_skip_reason(diff_file: Any = None) -> Optional[str]:
         return None
     reason = diff_file.skip_reason or ""
     reason_lower = reason.lower()
+    plugin_disposition = getattr(diff_file, "plugin_disposition", None)
+    if plugin_disposition in {"generated", "excluded"}:
+        return reason or f"Plugin file policy: {plugin_disposition}"
     if getattr(diff_file, "is_binary", False) or reason_lower == "binary file":
         return "Binary file has no text diff to review."
+    if (
+        getattr(diff_file, "is_gitlink", False)
+        or reason_lower == "git submodule pointer"
+    ):
+        return (
+            "Git submodule pointer contains commit identifiers, not source "
+            "content from the referenced repository."
+        )
     change_type = getattr(diff_file, "change_type", None)
     change_value = getattr(change_type, "value", "").lower()
     if change_value == "deleted" or reason_lower == "deleted file":

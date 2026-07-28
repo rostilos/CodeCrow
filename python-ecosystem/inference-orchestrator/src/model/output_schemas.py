@@ -69,7 +69,25 @@ class CodeReviewIssue(BaseModel):
     resolvedInCommit: Optional[str] = Field(default=None, description="Commit hash where the issue was resolved")
     # Additional fields preserved from previous issues during reconciliation
     visibility: Optional[str] = Field(default=None, description="Issue visibility status")
-    codeSnippet: str = Field(default="", description="CRITICAL — PRIMARY ANCHORING MECHANISM FOR NEW FINDINGS: exact current-source code copied VERBATIM from the diff/file context. New findings without it are discarded. An exact matched historical issue with isResolved=true may preserve its previous snippet or leave this empty when the fixed line is gone.")
+    codeSnippet: str = Field(default="", description="CRITICAL — PRIMARY ANCHORING MECHANISM FOR NEW FINDINGS: exact current-source code copied VERBATIM from a reviewable changed hunk. Full-file and retrieved code outside the hunk is supporting context, not a valid new-finding anchor. New findings without an in-hunk anchor are discarded. An exact matched historical issue with isResolved=true may preserve its previous snippet or leave this empty when the fixed line is gone.")
+    evidenceRefs: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Stable Evidence ID values copied from retrieved context that the "
+            "finding relies on. Leave empty when the finding relies only on "
+            "the current file/diff."
+        ),
+    )
+    claimKind: str = Field(
+        default="",
+        description=(
+            "Exact analysis-plugin evidence class named in the prompt for "
+            "this relationship claim. A non-empty value requires matching "
+            "evidenceRefs and plugin validation. Structural relationship "
+            "presence is context, not proof that the relationship is defective. "
+            "Leave empty for a generic defect proved directly by changed source."
+        ),
+    )
 
     @field_validator('codeSnippet', mode='before')
     @classmethod

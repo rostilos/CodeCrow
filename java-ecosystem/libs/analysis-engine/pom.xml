@@ -62,6 +62,10 @@
             <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-ast-parser</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-plugin-contracts</artifactId>
+        </dependency>
 
         <!-- Spring dependencies -->
         <dependency>

@@ -1,0 +1,20 @@
+{
+  "id": "tsx",
+  "kind": "language",
+  "requires": [],
+  "capabilities": [
+    "syntax"
+  ],
+  "detection": {
+    "extensions": [
+      ".tsx"
+    ],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.tsx.TsxPlugin"
+  }
+}

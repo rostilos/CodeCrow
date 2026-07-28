@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.vcsclient.AuthorizedVcsTransport;
 import org.rostilos.codecrow.vcsclient.HttpAuthorizedClient;
 import org.springframework.stereotype.Component;
 
@@ -33,10 +34,9 @@ public class BitbucketCloudHttpAuthorizedClient implements HttpAuthorizedClient 
 
 
     @Override
-    public OkHttpClient createClient(String clientId, String clientSecret) {
+    public AuthorizedVcsTransport createTransport(String clientId, String clientSecret) {
         String bearerToken = negotiateBearerToken(clientId, clientSecret, clientBuilder.build());
-        return createAuthorisingClient(bearerToken);
-
+        return AuthorizedVcsTransport.withAccessToken(createAuthorisingClient(bearerToken), bearerToken);
     }
 
     public OkHttpClient createAuthorisingClient(String bearerToken) {

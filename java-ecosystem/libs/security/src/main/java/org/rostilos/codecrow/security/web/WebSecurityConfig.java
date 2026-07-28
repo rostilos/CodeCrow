@@ -154,6 +154,7 @@ public class WebSecurityConfig {
                         .requestMatchers("/api/bitbucket/connect/enabled").permitAll()
                         .requestMatchers("/api/bitbucket/connect/disabled").permitAll()
                         .requestMatchers("/api/bitbucket/connect/status").permitAll()
+                        .requestMatchers("/api/bitbucket/connect/install/complete").permitAll()
                         .requestMatchers("/api/bitbucket/connect/configure").permitAll()
                         // Stripe webhooks (authenticate via signature verification, not JWT)
                         .requestMatchers("/api/webhooks/**").permitAll()

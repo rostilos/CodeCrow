@@ -119,7 +119,8 @@ class DocumentLoader:
         workspace: str,
         project: str,
         branch: str,
-        commit: str
+        commit: str,
+        strict: bool = False,
     ) -> List[Document]:
         """Load a batch of files as Documents.
         
@@ -153,11 +154,19 @@ class DocumentLoader:
                 if not text or not text.strip():
                     continue
 
-            except UnicodeDecodeError:
+            except UnicodeDecodeError as exception:
                 logger.warning(f"Cannot decode file, skipping: {relative_path_str}")
+                if strict:
+                    raise RuntimeError(
+                        f"Cannot decode repository file selected for indexing: {relative_path_str}"
+                    ) from exception
                 continue
             except Exception as e:
                 logger.error(f"Error reading file {relative_path_str}: {e}")
+                if strict:
+                    raise RuntimeError(
+                        f"Cannot read repository file selected for indexing: {relative_path_str}"
+                    ) from e
                 continue
 
             language = detect_language_from_path(str(full_path))
@@ -329,8 +338,10 @@ class DocumentLoader:
             language = detect_language_from_path(str(full_path))
             filetype = full_path.suffix.lstrip('.')
 
-            # Clean archive root prefix from path
-            clean_path = clean_archive_path(relative_path)
+            # Incremental callers already provide repository-relative VCS
+            # paths.  Archive-root heuristics would corrupt legitimate module
+            # directories whose names happen to resemble archive prefixes.
+            clean_path = relative_path.replace('\\', '/')
 
             metadata = {
                 "workspace": workspace,
@@ -352,4 +363,3 @@ class DocumentLoader:
             logger.debug(f"Loaded document: {clean_path}")
 
         return documents
-

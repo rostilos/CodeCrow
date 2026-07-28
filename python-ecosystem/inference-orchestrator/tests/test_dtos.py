@@ -81,13 +81,13 @@ class TestReviewRequestDto:
         req = _minimal_review_request(branch="main")
         assert req.targetBranchName == "main"
 
-    def test_get_rag_branch_with_pr(self):
+    def test_get_rag_branch_with_pr_uses_target_as_repository_truth(self):
         req = _minimal_review_request(
             pullRequestId=42,
             sourceBranchName="feat/x",
             targetBranchName="main",
         )
-        assert req.get_rag_branch() == "feat/x"
+        assert req.get_rag_branch() == "main"
 
     def test_get_rag_branch_without_pr(self):
         req = _minimal_review_request(targetBranchName="develop")
@@ -96,6 +96,13 @@ class TestReviewRequestDto:
     def test_get_rag_branch_pr_no_source(self):
         req = _minimal_review_request(pullRequestId=1, targetBranchName="main")
         assert req.get_rag_branch() == "main"
+
+    def test_get_rag_branch_pr_without_target_does_not_fall_back_to_source(self):
+        req = _minimal_review_request(
+            pullRequestId=1,
+            sourceBranchName="rejected-source",
+        )
+        assert req.get_rag_branch() is None
 
     def test_get_rag_base_branch_with_pr(self):
         req = _minimal_review_request(pullRequestId=1, targetBranchName="main")

@@ -24,8 +24,8 @@ import java.util.Objects;
  * and analysis.
  * IMPORTANT: This is the single source of truth for the project's main branch.
  * It should be set during
- * project creation and is used for: RAG base index, multi-branch context base,
- * and always included in
+ * project creation and is used for: the authoritative RAG default, branch
+ * indexing policy, and always included in
  * analysis patterns (PR targets and branch pushes).
  * - defaultBranch: (DEPRECATED - use mainBranch) optional default branch name
  * for the project.

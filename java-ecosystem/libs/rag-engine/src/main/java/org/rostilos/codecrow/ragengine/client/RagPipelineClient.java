@@ -124,6 +124,16 @@ public class RagPipelineClient {
             String project,
             String branch
     ) throws IOException {
+        return deleteFiles(filePaths, workspace, project, branch, null);
+    }
+
+    public Map<String, Object> deleteFiles(
+            List<String> filePaths,
+            String workspace,
+            String project,
+            String branch,
+            String commit
+    ) throws IOException {
         if (!ragEnabled) {
             return Map.of("status", "skipped", "reason", "RAG disabled");
         }
@@ -133,9 +143,40 @@ public class RagPipelineClient {
         payload.put("workspace", workspace);
         payload.put("project", project);
         payload.put("branch", branch);
+        if (commit != null && !commit.isBlank()) {
+            payload.put("commit", commit);
+        }
 
         String url = ragApiUrl + "/index/delete-files";
         return postLongRunning(url, payload);
+    }
+
+    public Map<String, Object> applyChanges(
+            List<String> updatedFilePaths,
+            List<String> deletedFilePaths,
+            String repoBase,
+            String workspace,
+            String project,
+            String branch,
+            String commit
+    ) throws IOException {
+        if (!ragEnabled) {
+            log.debug("RAG indexing disabled, skipping incremental change set");
+            return Map.of("status", "skipped", "reason", "RAG disabled");
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("updated_file_paths", updatedFilePaths);
+        payload.put("deleted_file_paths", deletedFilePaths);
+        if (repoBase != null && !repoBase.isBlank()) {
+            payload.put("repo_base", repoBase);
+        }
+        payload.put("workspace", workspace);
+        payload.put("project", project);
+        payload.put("branch", branch);
+        payload.put("commit", commit);
+
+        return postLongRunning(ragApiUrl + "/index/apply-changes", payload);
     }
 
     public Map<String, Object> getPRContext(
@@ -412,7 +453,8 @@ public class RagPipelineClient {
      * 
      * @param workspace The workspace
      * @param project The project
-     * @param protectedBranches Branches to never delete (default: main, master, develop)
+     * @param protectedBranches Explicit non-empty set of authoritative branches to
+     *                          never delete
      * @param branchesToKeep Additional branches to keep (e.g., active feature branches)
      * @return Map with cleanup results including deleted/failed branches
      */
@@ -422,12 +464,20 @@ public class RagPipelineClient {
         if (!ragEnabled) {
             return Map.of("status", "disabled", "message", "RAG is not enabled");
         }
+        if (protectedBranches == null || protectedBranches.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "protectedBranches must contain the authoritative repository branch");
+        }
+        validateExactBranchIdentities("protectedBranches", protectedBranches);
+        if (branchesToKeep != null) {
+            validateExactBranchIdentities("branchesToKeep", branchesToKeep);
+        }
         
         try {
             Map<String, Object> payload = new HashMap<>();
             payload.put("workspace", workspace);
             payload.put("project", project);
-            payload.put("protected_branches", protectedBranches != null ? protectedBranches : List.of("main", "master", "develop"));
+            payload.put("protected_branches", protectedBranches);
             if (branchesToKeep != null && !branchesToKeep.isEmpty()) {
                 payload.put("branches_to_keep", branchesToKeep);
             }
@@ -437,6 +487,18 @@ public class RagPipelineClient {
         } catch (IOException e) {
             log.error("Failed to cleanup stale branches: {}", e.getMessage());
             return Map.of("status", "error", "message", e.getMessage());
+        }
+    }
+
+    private static void validateExactBranchIdentities(String fieldName, List<String> branches) {
+        if (branches.stream().anyMatch(branch -> branch == null
+                || branch.isBlank()
+                || !branch.equals(branch.trim()))) {
+            throw new IllegalArgumentException(
+                    fieldName + " must contain non-blank exact repository branch identities");
+        }
+        if (branches.stream().distinct().count() != branches.size()) {
+            throw new IllegalArgumentException(fieldName + " must contain unique branch identities");
         }
     }
 

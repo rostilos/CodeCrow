@@ -93,9 +93,10 @@ CodeCrow backend serves this automatically from the `/api/bitbucket/connect/desc
 ### 6. Install the App
 
 #### Development/Testing
-Use the development installation URL:
+Use an application-initiated installation URL with a public completion endpoint
+under the descriptor `baseUrl`:
 ```
-https://bitbucket.org/site/addons/authorize?addon_key=codecrow-connect-app
+https://bitbucket.org/site/addons/authorize?addon_key=codecrow-connect-app&redirect_uri=https%3A%2F%2Fyour-domain.com%2Fapi%2Fbitbucket%2Fconnect%2Finstall%2Fcomplete%3Fstate%3D...
 ```
 
 Or install via workspace settings:
@@ -117,7 +118,21 @@ For production, list your app on the [Atlassian Marketplace](https://marketplace
 3. User authorizes the app permissions
 4. Bitbucket calls the `installed` lifecycle callback
 5. CodeCrow stores the installation (clientKey, sharedSecret, principal)
-6. Webhooks are automatically registered based on descriptor
+6. Bitbucket redirects the approving owner to CodeCrow's public completion page
+   with the exact installation client key
+7. CodeCrow reconciles that installation to the initiating workspace
+8. Webhooks are automatically registered based on the descriptor
+
+### Uninstallation
+
+After all projects have been removed or unbound, deleting the CodeCrow
+connection sends an installation-scoped JWT request to
+`DELETE https://api.bitbucket.org/2.0/addon`. This uninstalls only the exact
+linked Connect installation. If Bitbucket rejects the request, CodeCrow keeps
+the local connection so an administrator can retry cleanup.
+
+OAuth-consumer authorizations are separate from Connect installations and do
+not have an equivalent app-initiated revoke endpoint.
 
 ### Authentication
 

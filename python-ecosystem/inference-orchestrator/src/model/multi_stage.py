@@ -71,6 +71,18 @@ class CrossFileIssue(BaseModel):
     affected_files: List[str]
     description: str = Field(description="Concrete defect that remains in the post-change code; never a successful fix, praise, or optional standardization")
     evidence: str = Field(description="Visible post-change evidence proving the current harmful interaction")
+    evidenceRefs: List[str] = Field(
+        default_factory=list,
+        description="Stable Evidence ID values copied from retrieved context used by this issue",
+    )
+    claimKind: str = Field(
+        default="",
+        description=(
+            "Exact analysis-plugin evidence class named in the prompt; "
+            "requires matching evidenceRefs and plugin approval when non-empty. "
+            "Structural relationship presence alone is not defect proof."
+        ),
+    )
     business_impact: str = Field(description="Concrete behavior or operation that is currently broken")
     suggestion: str = Field(description="Code change still required; never work already present in the diff")
 

@@ -5,10 +5,12 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 
 from ...models.config import IndexStats
 from ..models import (
-    IndexRequest, UpdateFilesRequest, DeleteFilesRequest,
+    IndexRequest, UpdateFilesRequest, DeleteFilesRequest, ApplyChangesRequest,
     DeleteBranchRequest, CleanupStaleBranchesRequest,
     EstimateRequest, EstimateResponse,
 )
+from ...core.index_representation import IndexCompatibilityError
+from ...core.repository_overlay import IncrementalIndexPreconditionError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["index"])
@@ -88,6 +90,7 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
             project=request.project,
             branch=request.branch,
             commit=request.commit,
+            preserve_other_branches=request.preserve_other_branches,
             include_patterns=request.include_patterns,
             exclude_patterns=request.exclude_patterns
         )
@@ -114,6 +117,9 @@ def update_files(request: UpdateFilesRequest):
             commit=request.commit
         )
         return stats
+    except (IndexCompatibilityError, IncrementalIndexPreconditionError) as e:
+        logger.warning(f"Incremental update precondition failed: {e}")
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating files: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -128,11 +134,45 @@ def delete_files(request: DeleteFilesRequest):
             file_paths=request.file_paths,
             workspace=request.workspace,
             project=request.project,
-            branch=request.branch
+            branch=request.branch,
+            commit=request.commit,
         )
         return stats
+    except (IndexCompatibilityError, IncrementalIndexPreconditionError) as e:
+        logger.warning(f"Incremental delete precondition failed: {e}")
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting files: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/index/apply-changes", response_model=IndexStats)
+def apply_changes(request: ApplyChangesRequest):
+    """Atomically apply all updated and deleted files from one commit."""
+    _, index_manager = _get_singletons()
+    if request.updated_file_paths and request.repo_base is None:
+        raise HTTPException(
+            status_code=422,
+            detail="repo_base is required when updated_file_paths is not empty",
+        )
+    try:
+        return index_manager.apply_changes(
+            updated_file_paths=request.updated_file_paths,
+            deleted_file_paths=request.deleted_file_paths,
+            repo_base=request.repo_base,
+            workspace=request.workspace,
+            project=request.project,
+            branch=request.branch,
+            commit=request.commit,
+        )
+    except (IndexCompatibilityError, IncrementalIndexPreconditionError) as e:
+        logger.warning(f"Incremental change-set precondition failed: {e}")
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        logger.warning(f"Invalid incremental change set: {e}")
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error applying incremental change set: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

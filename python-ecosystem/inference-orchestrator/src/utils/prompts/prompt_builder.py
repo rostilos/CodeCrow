@@ -142,11 +142,12 @@ class PromptBuilder:
         commit_hash: str,
         changed_files_json: str,
         task_context: str = "No task context available.",
+        plugin_context: str = "",
     ) -> str:
         """
         Build prompt for Stage 0: Planning & Prioritization.
         """
-        return STAGE_0_PLANNING_PROMPT_TEMPLATE.format(
+        prompt = STAGE_0_PLANNING_PROMPT_TEMPLATE.format(
             repo_slug=repo_slug,
             pr_id=pr_id,
             pr_title=pr_title,
@@ -157,6 +158,9 @@ class PromptBuilder:
             task_context=task_context or "No task context available.",
             changed_files_json=changed_files_json
         )
+        if plugin_context:
+            prompt += f"\n\n## ANALYSIS PLUGIN EVIDENCE CONSTRAINTS\n{plugin_context}"
+        return prompt
 
     @staticmethod
     def build_stage_1_batch_prompt(
@@ -172,6 +176,7 @@ class PromptBuilder:
         task_context: str = "No task context available.",
         use_mcp_tools: bool = False,
         target_branch: str = "",
+        plugin_context: str = "",
     ) -> str:
         """
         Build prompt for Stage 1: Batch File Review.
@@ -227,6 +232,13 @@ The following files are being DELETED/REMOVED in this PR. Any RAG context refere
 Do NOT flag duplication or conflicts with code from these files — the code is being intentionally removed:
 {chr(10).join('- ' + fp for fp in deleted_files[:30])}
 {'... and ' + str(len(deleted_files) - 30) + ' more' if len(deleted_files) > 30 else ''}
+"""
+
+        if plugin_context:
+            deleted_files_context += f"""
+## ANALYSIS PLUGIN EVIDENCE CONSTRAINTS
+{plugin_context}
+These rules refine evidence collection only. Report a finding only when supplied code or configuration proves it.
 """
 
         prompt = STAGE_1_BATCH_PROMPT_TEMPLATE.format(

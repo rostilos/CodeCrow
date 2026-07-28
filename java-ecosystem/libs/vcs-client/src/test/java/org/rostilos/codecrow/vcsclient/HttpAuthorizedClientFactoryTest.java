@@ -34,9 +34,12 @@ class HttpAuthorizedClientFactoryTest {
         when(mockGitLabDelegate.getGitPlatform()).thenReturn(EVcsProvider.GITLAB);
         when(mockBitbucketDelegate.getGitPlatform()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
         
-        when(mockGitHubDelegate.createClient(anyString(), anyString())).thenReturn(mockClient);
-        when(mockGitLabDelegate.createClient(anyString(), anyString())).thenReturn(mockClient);
-        when(mockBitbucketDelegate.createClient(anyString(), anyString())).thenReturn(mockClient);
+        when(mockGitHubDelegate.createTransport(anyString(), anyString()))
+                .thenReturn(AuthorizedVcsTransport.httpOnly(mockClient));
+        when(mockGitLabDelegate.createTransport(anyString(), anyString()))
+                .thenReturn(AuthorizedVcsTransport.httpOnly(mockClient));
+        when(mockBitbucketDelegate.createTransport(anyString(), anyString()))
+                .thenReturn(AuthorizedVcsTransport.httpOnly(mockClient));
         
         factory = new HttpAuthorizedClientFactory(Arrays.asList(
                 mockGitHubDelegate, mockGitLabDelegate, mockBitbucketDelegate
@@ -48,7 +51,7 @@ class HttpAuthorizedClientFactoryTest {
         OkHttpClient result = factory.createClient("client-id", "client-secret", "github");
 
         assertThat(result).isNotNull();
-        verify(mockGitHubDelegate).createClient("client-id", "client-secret");
+        verify(mockGitHubDelegate).createTransport("client-id", "client-secret");
     }
 
     @Test
@@ -56,7 +59,7 @@ class HttpAuthorizedClientFactoryTest {
         OkHttpClient result = factory.createClient("client-id", "client-secret", "gitlab");
 
         assertThat(result).isNotNull();
-        verify(mockGitLabDelegate).createClient("client-id", "client-secret");
+        verify(mockGitLabDelegate).createTransport("client-id", "client-secret");
     }
 
     @Test
@@ -64,7 +67,7 @@ class HttpAuthorizedClientFactoryTest {
         OkHttpClient result = factory.createClient("client-id", "client-secret", "bitbucket-cloud");
 
         assertThat(result).isNotNull();
-        verify(mockBitbucketDelegate).createClient("client-id", "client-secret");
+        verify(mockBitbucketDelegate).createTransport("client-id", "client-secret");
     }
 
     @Test

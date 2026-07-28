@@ -95,6 +95,55 @@ class TestSplitIssuesIntoBatches:
                 assert all(i["file"] == "a.py" for i in batch if i["file"] == "a.py")
 
 
+class TestBatchedBranchReconciliation:
+    @pytest.mark.asyncio
+    async def test_failed_batch_rejects_partial_merged_result(self):
+        orchestrator = MultiStageReviewOrchestrator.__new__(
+            MultiStageReviewOrchestrator
+        )
+        orchestrator.llm = MagicMock()
+        orchestrator.client = MagicMock()
+        orchestrator.event_callback = MagicMock()
+        orchestrator._split_issues_into_batches = MagicMock(
+            return_value=[
+                [{"id": "old-1", "file": "a.py"}],
+                [{"id": "old-2", "file": "b.py"}],
+            ]
+        )
+
+        request = MagicMock()
+        request.reconciliationFileContents = {
+            "a.py": "first",
+            "b.py": "second",
+        }
+        request.rawDiff = None
+        metadata = {
+            "previousCodeAnalysisIssues": [
+                {"id": "old-1", "file": "a.py"},
+                {"id": "old-2", "file": "b.py"},
+            ]
+        }
+
+        with patch(
+            "service.review.orchestrator.orchestrator."
+            "execute_branch_reconciliation_direct",
+            new=AsyncMock(
+                side_effect=[
+                    {"issues": [{"id": "old-1"}], "comment": "first complete"},
+                    RuntimeError("provider failed"),
+                ]
+            ),
+        ):
+            with pytest.raises(
+                RuntimeError,
+                match=r"failed atomically at Batch 2/2",
+            ):
+                await orchestrator.execute_batched_branch_analysis(
+                    request,
+                    metadata,
+                )
+
+
 # ── _filter_diff_for_files ────────────────────────────────────
 
 

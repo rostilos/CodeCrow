@@ -9,6 +9,7 @@ import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.service.WebhookEventClassifier;
 import org.rostilos.codecrow.pipelineagent.generic.utils.CommentPlaceholders;
+import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
@@ -160,7 +161,9 @@ public class WebhookAsyncProcessor {
             }
             
             // Post placeholder comment immediately if this is a CodeCrow command on a PR
-            if (payload.hasCodecrowCommand() && payload.pullRequestId() != null) {
+            if (payload.hasCodecrowCommand()
+                    && payload.pullRequestId() != null
+                    && !PromptDryRunMode.isEnabledForProject(project.getId())) {
                 placeholderCommentId = postPlaceholderComment(provider, project, payload, job);
             }
             
@@ -379,6 +382,10 @@ public class WebhookAsyncProcessor {
      */
     private void postResultToVcs(EVcsProvider provider, Project project, WebhookPayload payload, 
                                   WebhookHandler.WebhookResult result, String placeholderCommentId, Job job) {
+        if (PromptDryRunMode.isEnabledForProject(project.getId())) {
+            log.info("Prompt dry run suppressing VCS result publication for project={}", project.getId());
+            return;
+        }
         try {
             // Only post for command results that have content
             String commandType = (String) result.data().get("commandType");
@@ -534,6 +541,10 @@ public class WebhookAsyncProcessor {
      */
     private void postErrorToVcs(EVcsProvider provider, Project project, WebhookPayload payload, 
                                  String errorMessage, String placeholderCommentId, Job job) {
+        if (PromptDryRunMode.isEnabledForProject(project.getId())) {
+            log.info("Prompt dry run suppressing VCS error publication for project={}", project.getId());
+            return;
+        }
         try {
             if (payload.pullRequestId() == null) {
                 return;
@@ -580,6 +591,10 @@ public class WebhookAsyncProcessor {
      */
     private void postInfoToVcs(EVcsProvider provider, Project project, WebhookPayload payload, 
                                String infoMessage, String placeholderCommentId, Job job) {
+        if (PromptDryRunMode.isEnabledForProject(project.getId())) {
+            log.info("Prompt dry run suppressing VCS info publication for project={}", project.getId());
+            return;
+        }
         try {
             if (payload.pullRequestId() == null) {
                 return;
@@ -699,6 +714,10 @@ public class WebhookAsyncProcessor {
      */
     private String postPlaceholderComment(EVcsProvider provider, Project project, 
                                           WebhookPayload payload, Job job) {
+        if (PromptDryRunMode.isEnabledForProject(project.getId())) {
+            log.info("Prompt dry run suppressing VCS placeholder publication for project={}", project.getId());
+            return null;
+        }
         try {
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
             
@@ -748,6 +767,10 @@ public class WebhookAsyncProcessor {
      */
     private void deletePlaceholderComment(EVcsProvider provider, Project project, 
                                           WebhookPayload payload, String commentId) {
+        if (PromptDryRunMode.isEnabledForProject(project.getId())) {
+            log.info("Prompt dry run suppressing VCS placeholder deletion for project={}", project.getId());
+            return;
+        }
         try {
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
             reportingService.deleteComment(project, Long.parseLong(payload.pullRequestId()), commentId);

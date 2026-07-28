@@ -5,6 +5,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import java.util.List;
 import java.util.Map;
+import org.rostilos.codecrow.plugins.ProjectCapabilities;
 
 public interface AiAnalysisRequest {
     Long getProjectId();
@@ -88,6 +89,8 @@ public interface AiAnalysisRequest {
 
     String getCurrentCommitHash();
 
+    default String getBaseCommitHash() { return null; }
+
     /**
      * Previous issues supplied to AI for incremental PR tracking or branch
      * reconciliation.
@@ -101,6 +104,10 @@ public interface AiAnalysisRequest {
      * fetch files via VCS tool calls.
      */
     default Map<String, String> getReconciliationFileContents() { return null; }
+
+    default ProjectCapabilities getProjectCapabilities() { return null; }
+
+    default String getProjectRules() { return null; }
 
     /**
      * The source branch name of the PR (the feature branch it comes FROM).

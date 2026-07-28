@@ -9,6 +9,7 @@ from service.review.orchestrator.inference_policy import (
     ReviewInferenceProfile,
     build_review_inference_profile,
     should_run_stage_2,
+    should_use_llm_dedup,
 )
 
 
@@ -38,6 +39,33 @@ def _fast_profile():
         fast_check_reason="test",
         caps={},
     )
+
+
+def _full_profile():
+    return ReviewInferenceProfile(
+        file_count=20,
+        changed_lines=4000,
+        diff_bytes=500_000,
+        size_class="large",
+        fast_check_enabled=False,
+        fast_check_reason="test",
+        caps={},
+    )
+
+
+def test_llm_dedup_is_disabled_by_default():
+    assert should_use_llm_dedup(_full_profile(), 20) is False
+
+
+def test_llm_dedup_requires_explicit_opt_in(monkeypatch):
+    monkeypatch.setattr(
+        "service.review.orchestrator.inference_policy.LLM_DEDUP_ENABLED",
+        True,
+    )
+
+    assert should_use_llm_dedup(_full_profile(), 20) is True
+    assert should_use_llm_dedup(_full_profile(), 1) is False
+    assert should_use_llm_dedup(_fast_profile(), 2) is False
 
 
 def test_task_context_forces_stage_2_in_fast_check():

@@ -146,6 +146,28 @@ class TestResolutionCompatibility:
         assert "historical isResolved record may preserve" in fix
 
 
+class TestClaimKind:
+
+    def test_defaults_to_untyped_local_claim(self):
+        issue = CodeReviewIssue(
+            severity="HIGH", category="BUG_RISK", file="a.py",
+            line=1, reason="r", suggestedFixDescription="f",
+        )
+
+        assert issue.claimKind == ""
+        assert issue.evidenceRefs == []
+
+    def test_preserves_typed_plugin_claim(self):
+        issue = CodeReviewIssue(
+            severity="HIGH", category="ARCHITECTURE", file="App.java",
+            line=1, reason="r", suggestedFixDescription="f",
+            claimKind="spring-component", evidenceRefs=["RAG-1"],
+        )
+
+        assert issue.claimKind == "spring-component"
+        assert issue.evidenceRefs == ["RAG-1"]
+
+
 # ── CodeReviewOutput ─────────────────────────────────────────────
 
 class TestCodeReviewOutput:

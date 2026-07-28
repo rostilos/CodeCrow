@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.analysisengine.aiclient;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -10,6 +11,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.ParsedFileMetadataDto;
@@ -205,6 +207,14 @@ class AiAnalysisClientTest {
         void setUp() throws Exception {
                 objectMapper = new ObjectMapper();
                 client = new AiAnalysisClient(restTemplate, queueService, objectMapper);
+                System.setProperty(PromptDryRunMode.ENABLED_KEY, "false");
+                System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
+        }
+
+        @AfterEach
+        void clearPromptDryRunProperties() {
+                System.clearProperty(PromptDryRunMode.ENABLED_KEY);
+                System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
         }
 
         @Nested
@@ -242,6 +252,41 @@ class AiAnalysisClientTest {
                         assertThat(response.get("comment")).isEqualTo("Code review comment");
                         assertThat(response.get("issues")).isInstanceOf(List.class);
                         assertThat((List<?>) response.get("issues")).hasSize(2);
+                }
+
+                @Test
+                @DisplayName("should route a selected project through prompt dry run")
+                void shouldRouteSelectedProjectThroughPromptDryRun() throws Exception {
+                        System.setProperty(PromptDryRunMode.ENABLED_KEY, "true");
+                        System.setProperty(PromptDryRunMode.PROJECT_IDS_KEY, "1");
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "final");
+                        finalEvent.put("result", Map.of(
+                                        "dryRun", true,
+                                        "status", "prompt_capture_completed",
+                                        "promptArtifact", Map.of(
+                                                        "filename", "capture.json",
+                                                        "containerPath", "/app/logs/prompt-dry-runs/capture.json")));
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        Map<String, Object> response = client.performAnalysis(mockRequest);
+
+                        assertThat(response).containsEntry("dryRun", true);
+                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> queued = objectMapper.readValue(
+                                        payloadCaptor.getValue(), Map.class);
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> requestPayload =
+                                        (Map<String, Object>) queued.get("request");
+                        assertThat(requestPayload).containsEntry("promptDryRun", true);
+                        assertThat(requestPayload).containsEntry(
+                                        "aiApiKey", "dry-run-provider-disabled");
+                        assertThat(requestPayload.get("promptDryRunId")).isEqualTo(queued.get("job_id"));
+                        assertThat(requestPayload.get("oAuthClient")).isNull();
+                        assertThat(requestPayload.get("accessToken")).isNull();
                 }
 
                 @Test
@@ -468,6 +513,82 @@ class AiAnalysisClientTest {
                         assertThat(capturedEvents.get(0).get("type")).isEqualTo("progress");
                         assertThat(capturedEvents.get(1).get("type")).isEqualTo("result");
                 }
+
+                @Test
+                @DisplayName("should supervise worker inactivity instead of total review duration")
+                void shouldAllowLongReviewWhileWorkerRemainsActive() throws Exception {
+                        AiAnalysisClient shortInactivityClient = new AiAnalysisClient(
+                                        restTemplate, queueService, objectMapper, 25L);
+                        String heartbeat = objectMapper.writeValueAsString(Map.of(
+                                        "type", "status",
+                                        "state", "processing",
+                                        "message", "Review pipeline is still processing"));
+                        String terminal = objectMapper.writeValueAsString(Map.of(
+                                        "type", "final",
+                                        "result", Map.of("comment", "done", "issues", List.of())));
+
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenAnswer(invocation -> {
+                                                Thread.sleep(10L);
+                                                return heartbeat;
+                                        })
+                                        .thenAnswer(invocation -> {
+                                                Thread.sleep(10L);
+                                                return heartbeat;
+                                        })
+                                        .thenAnswer(invocation -> {
+                                                Thread.sleep(10L);
+                                                return heartbeat;
+                                        })
+                                        .thenAnswer(invocation -> {
+                                                Thread.sleep(10L);
+                                                return terminal;
+                                        });
+
+                        Map<String, Object> response =
+                                        shortInactivityClient.performAnalysis(mockRequest);
+
+                        assertThat(response).containsEntry("comment", "done");
+                        verify(queueService, times(4)).rightPop(anyString(), eq(5L));
+                        verify(queueService).setExpiry(anyString(), eq(2L));
+                }
+
+                @Test
+                @DisplayName("should keep waiting while the exact job remains durably queued")
+                void shouldTreatExactQueueMembershipAsAdmissionLiveness() throws Exception {
+                        AiAnalysisClient shortInactivityClient = new AiAnalysisClient(
+                                        restTemplate, queueService, objectMapper, 20L);
+                        String terminal = objectMapper.writeValueAsString(Map.of(
+                                        "type", "final",
+                                        "result", Map.of("comment", "done", "issues", List.of())));
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenAnswer(invocation -> {
+                                                Thread.sleep(12L);
+                                                return null;
+                                        })
+                                        .thenAnswer(invocation -> {
+                                                Thread.sleep(12L);
+                                                return null;
+                                        })
+                                        .thenReturn(terminal);
+                        when(queueService.listContains(anyString(), anyString()))
+                                        .thenReturn(true);
+                        List<Map<String, Object>> capturedEvents = new ArrayList<>();
+
+                        Map<String, Object> response = shortInactivityClient.performAnalysis(
+                                        mockRequest,
+                                        capturedEvents::add);
+
+                        assertThat(response).containsEntry("comment", "done");
+                        assertThat(capturedEvents)
+                                        .anySatisfy(event -> {
+                                                assertThat(event).containsEntry("type", "status");
+                                                assertThat(event).containsEntry("state", "queued");
+                                        });
+                        verify(queueService).listContains(
+                                        eq("codecrow:analysis:jobs"),
+                                        anyString());
+                }
         }
 
         @Nested
@@ -526,6 +647,22 @@ class AiAnalysisClientTest {
                         assertThatThrownBy(() -> client.performAnalysis(mockRequest))
                                         .isInstanceOf(IOException.class)
                                         .hasMessageContaining("Analysis data missing required fields");
+                }
+
+                @Test
+                @DisplayName("should fail after worker inactivity")
+                void shouldThrowAfterWorkerInactivity() {
+                        AiAnalysisClient shortInactivityClient = new AiAnalysisClient(
+                                        restTemplate, queueService, objectMapper, 20L);
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenAnswer(invocation -> {
+                                                Thread.sleep(10L);
+                                                return null;
+                                        });
+
+                        assertThatThrownBy(() -> shortInactivityClient.performAnalysis(mockRequest))
+                                        .isInstanceOf(IOException.class)
+                                        .hasMessageContaining("no worker activity");
                 }
         }
 }

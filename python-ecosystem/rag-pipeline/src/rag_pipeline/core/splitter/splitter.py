@@ -153,7 +153,8 @@ class ASTCodeSplitter:
         min_chunk_size: int = DEFAULT_MIN_CHUNK_SIZE,
         chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
         parser_threshold: int = DEFAULT_PARSER_THRESHOLD,
-        enrich_embedding_text: bool = True
+        enrich_embedding_text: bool = True,
+        plugin_runtime: Any = None,
     ):
         """
         Initialize AST code splitter.
@@ -171,6 +172,7 @@ class ASTCodeSplitter:
         self.chunk_overlap = chunk_overlap
         self.parser_threshold = parser_threshold
         self.enrich_embedding_text = enrich_embedding_text
+        self._plugin_runtime = plugin_runtime
         
         # Components
         self._parser = get_parser()
@@ -187,7 +189,11 @@ class ASTCodeSplitter:
             length_function=len,
         )
     
-    def split_documents(self, documents: List[LlamaDocument]) -> List[TextNode]:
+    def split_documents(
+        self,
+        documents: List[LlamaDocument],
+        capabilities: Any = None,
+    ) -> List[TextNode]:
         """
         Split LlamaIndex documents using AST-based parsing.
         
@@ -202,44 +208,144 @@ class ASTCodeSplitter:
         for doc in documents:
             path = doc.metadata.get('path', 'unknown')
             language = get_language_from_path(path)
-            
+            syntax = None
+            syntax_diagnostics = ()
+            if self._plugin_runtime is not None and capabilities is not None:
+                syntax, syntax_diagnostics = (
+                    self._plugin_runtime.syntax_contribution(path, capabilities)
+                )
+
             line_count = doc.text.count('\n') + 1
-            use_ast = (
-                language is not None
-                and language in AST_SUPPORTED_LANGUAGES
-                and line_count >= self.parser_threshold
-                and self._parser.is_available()
-            )
+            if syntax is not None:
+                use_ast = (
+                    line_count >= self.parser_threshold
+                    and self._parser.is_available()
+                    and self._parser.get_plugin_language(syntax) is not None
+                )
+            else:
+                use_ast = (
+                    language is not None
+                    and language in AST_SUPPORTED_LANGUAGES
+                    and line_count >= self.parser_threshold
+                    and self._parser.is_available()
+                )
             
             if use_ast:
-                nodes = self._split_with_ast(doc, language)
+                nodes = self._split_with_ast(doc, language, syntax)
             else:
-                nodes = self._split_fallback(doc, language)
+                nodes = self._split_fallback(
+                    doc,
+                    language if syntax is None else None,
+                    extract_language_metadata=syntax is None,
+                )
+
+            if syntax is not None or syntax_diagnostics:
+                self._attach_syntax_metadata(
+                    nodes,
+                    syntax,
+                    syntax_diagnostics,
+                )
+
+            if self._plugin_runtime is not None and capabilities is not None:
+                self._enrich_with_plugin_facts(doc, nodes, capabilities)
             
             all_nodes.extend(nodes)
             logger.debug(f"Split {path} into {len(nodes)} chunks (AST={use_ast})")
         
         return all_nodes
+
+    @staticmethod
+    def _attach_syntax_metadata(
+        nodes: List[TextNode],
+        syntax: Any,
+        diagnostics: tuple,
+    ) -> None:
+        """Expose bounded selection diagnostics without placing them in chunk text."""
+        for node in nodes:
+            if syntax is not None:
+                node.metadata["plugin_syntax"] = {
+                    "plugin": syntax.plugin_id,
+                    "language": syntax.language_id,
+                }
+            if diagnostics:
+                node.metadata["plugin_syntax_diagnostics"] = [
+                    {
+                        "code": diagnostic.code,
+                        "plugin": diagnostic.plugin_id,
+                    }
+                    for diagnostic in diagnostics
+                ]
+
+    def _enrich_with_plugin_facts(
+        self,
+        document: LlamaDocument,
+        nodes: List[TextNode],
+        capabilities: Any,
+    ) -> None:
+        """Attach bounded typed facts without giving plugins storage or embedding access."""
+        if not nodes:
+            return
+        from codecrow_plugins import FileArtifact
+
+        path = document.metadata.get("path", "unknown")
+        facts, diagnostics = self._plugin_runtime.graph_facts(
+            FileArtifact(path=path, content=document.text),
+            capabilities,
+        )
+        bounded_facts = facts[:40]
+        fact_payload = [dict(fact.as_metadata()) for fact in bounded_facts]
+
+        active_ids = list(capabilities.repository_plugins)
+        for node in nodes:
+            node.metadata["plugin_ids"] = active_ids
+            node.metadata["plugin_fingerprint"] = capabilities.fingerprint
+            if fact_payload:
+                node.metadata["plugin_graph_facts"] = fact_payload
+                node.metadata["plugin_fact_kinds"] = sorted({fact.kind for fact in bounded_facts})
+                node.metadata["plugin_fact_sources"] = sorted({fact.source for fact in bounded_facts})
+                node.metadata["plugin_fact_targets"] = sorted({fact.target for fact in bounded_facts})
+            if diagnostics:
+                node.metadata["plugin_diagnostics"] = [
+                    {"code": diagnostic.code, "plugin": diagnostic.plugin_id}
+                    for diagnostic in diagnostics
+                ]
     
-    def _split_with_ast(self, doc: LlamaDocument, language: Language) -> List[TextNode]:
+    def _split_with_ast(
+        self,
+        doc: LlamaDocument,
+        language: Optional[Language],
+        syntax: Any = None,
+    ) -> List[TextNode]:
         """Split document using AST parsing with query-based extraction."""
         text = doc.text
         path = doc.metadata.get('path', 'unknown')
-        ts_lang = get_treesitter_name(language)
+        ts_lang = (
+            syntax.language_id
+            if syntax is not None
+            else get_treesitter_name(language)
+        )
         
         if not ts_lang:
-            return self._split_fallback(doc, language)
+            return self._split_fallback(
+                doc,
+                language if syntax is None else None,
+                extract_language_metadata=syntax is None,
+            )
         
         # Try query-based extraction first
-        chunks = self._extract_with_queries(text, ts_lang, path)
+        chunks = self._extract_with_queries(text, ts_lang, path, syntax)
         
         # If no queries available, fall back to traversal-based extraction
-        if not chunks and self._is_rich_ast_traversal_safe(ts_lang):
-            chunks = self._extract_with_traversal(text, ts_lang, path)
+        if not chunks and self._is_rich_ast_traversal_safe(ts_lang, syntax):
+            chunks = self._extract_with_traversal(text, ts_lang, path, syntax)
         
         # Still no chunks? Use fallback
         if not chunks:
-            return self._split_fallback(doc, language)
+            return self._split_fallback(
+                doc,
+                language if syntax is None else None,
+                extract_language_metadata=syntax is None,
+            )
         
         return self._process_chunks(chunks, doc, language, path)
     
@@ -247,17 +353,27 @@ class ASTCodeSplitter:
         self,
         text: str,
         lang_name: str,
-        path: str
+        path: str,
+        syntax: Any = None,
     ) -> List[ASTChunk]:
         """Extract chunks using tree-sitter query files with rich metadata."""
-        if not self._query_runner.has_query(lang_name):
+        if not self._query_runner.has_query(lang_name, syntax):
             return []
         
-        tree = self._parser.parse(text, lang_name)
+        tree = (
+            self._parser.parse_plugin(text, syntax)
+            if syntax is not None
+            else self._parser.parse(text, lang_name)
+        )
         if not tree:
             return []
         
-        matches = self._query_runner.run_query(text, lang_name, tree)
+        matches = self._query_runner.run_query(
+            text,
+            lang_name,
+            tree,
+            syntax,
+        )
         if not matches:
             return []
         
@@ -381,7 +497,7 @@ class ASTCodeSplitter:
                 # Some native tree-sitter bindings can segfault while walking large
                 # Java trees, so keep this optional and only run it for known-safe
                 # languages. Query captures still provide semantic Java chunks.
-                if self._is_rich_ast_traversal_safe(lang_name):
+                if self._is_rich_ast_traversal_safe(lang_name, syntax):
                     self._extract_rich_ast_details(chunk, tree, main_cap, lang_name)
                 
                 chunks.append(chunk)
@@ -555,10 +671,15 @@ class ASTCodeSplitter:
         self,
         text: str,
         lang_name: str,
-        path: str
+        path: str,
+        syntax: Any = None,
     ) -> List[ASTChunk]:
         """Fallback: extract chunks using manual AST traversal."""
-        tree = self._parser.parse(text, lang_name)
+        tree = (
+            self._parser.parse_plugin(text, syntax)
+            if syntax is not None
+            else self._parser.parse(text, lang_name)
+        )
         if not tree:
             return []
         
@@ -792,8 +913,14 @@ class ASTCodeSplitter:
             return None
         return find(root)
 
-    def _is_rich_ast_traversal_safe(self, language: str) -> bool:
+    def _is_rich_ast_traversal_safe(
+        self,
+        language: str,
+        syntax: Any = None,
+    ) -> bool:
         """Return whether recursive native tree-sitter traversal is safe for metadata enrichment."""
+        if syntax is not None:
+            return syntax.rich_traversal_safe
         return language not in self.RICH_AST_TRAVERSAL_UNSAFE_LANGUAGES
     
     def _get_rich_node_types(self, language: str) -> Dict[str, List[str]]:
@@ -987,7 +1114,7 @@ class ASTCodeSplitter:
         self,
         chunks: List[ASTChunk],
         doc: LlamaDocument,
-        language: Language,
+        language: Optional[Language],
         path: str
     ) -> List[TextNode]:
         """Process AST chunks into TextNodes, handling oversized chunks."""
@@ -1113,7 +1240,8 @@ class ASTCodeSplitter:
     def _split_fallback(
         self,
         doc: LlamaDocument,
-        language: Optional[Language] = None
+        language: Optional[Language] = None,
+        extract_language_metadata: bool = True,
     ) -> List[TextNode]:
         """Fallback splitting using RecursiveCharacterTextSplitter."""
         text = doc.text
@@ -1151,21 +1279,27 @@ class ASTCodeSplitter:
             metadata['start_line'] = start_line
             metadata['end_line'] = end_line
             
-            # Extract names via regex
-            names = self._metadata_extractor.extract_names_from_content(chunk, lang_str)
-            if names:
-                metadata['semantic_names'] = names
-                metadata['primary_name'] = names[0]
-            
-            # Extract inheritance
-            inheritance = self._metadata_extractor.extract_inheritance(chunk, lang_str)
-            if inheritance.get('extends'):
-                metadata['extends'] = inheritance['extends']
-                metadata['parent_types'] = inheritance['extends']
-            if inheritance.get('implements'):
-                metadata['implements'] = inheritance['implements']
-            if inheritance.get('imports'):
-                metadata['imports'] = inheritance['imports']
+            if extract_language_metadata:
+                # Legacy generic fallback when no selected plugin owns syntax.
+                names = self._metadata_extractor.extract_names_from_content(
+                    chunk,
+                    lang_str,
+                )
+                if names:
+                    metadata['semantic_names'] = names
+                    metadata['primary_name'] = names[0]
+
+                inheritance = self._metadata_extractor.extract_inheritance(
+                    chunk,
+                    lang_str,
+                )
+                if inheritance.get('extends'):
+                    metadata['extends'] = inheritance['extends']
+                    metadata['parent_types'] = inheritance['extends']
+                if inheritance.get('implements'):
+                    metadata['implements'] = inheritance['implements']
+                if inheritance.get('imports'):
+                    metadata['imports'] = inheritance['imports']
             
             # Compute information density for fallback chunks too
             metadata['information_density'] = self._compute_information_density(metadata)

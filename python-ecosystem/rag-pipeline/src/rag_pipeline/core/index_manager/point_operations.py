@@ -19,10 +19,17 @@ logger = logging.getLogger(__name__)
 class PointOperations:
     """Handles point embedding and upsert operations."""
     
-    def __init__(self, client: QdrantClient, embed_model, batch_size: int = 50):
+    def __init__(
+        self,
+        client: QdrantClient,
+        embed_model,
+        batch_size: int = 50,
+        embedding_dim: int | None = None,
+    ):
         self.client = client
         self.embed_model = embed_model
         self.batch_size = batch_size
+        self.embedding_dim = embedding_dim
     
     @staticmethod
     def generate_point_id(
@@ -84,21 +91,57 @@ class PointOperations:
         if not chunk_data:
             return []
         
-        # Batch embed all chunks at once
-        texts_to_embed = [chunk.text for _, chunk in chunk_data]
-        embeddings = self.embed_model.get_text_embedding_batch(texts_to_embed)
+        # Architecture packets are retrieved only through exact metadata edges.
+        # Giving them a zero vector avoids a paid embedding request and keeps
+        # them out of similarity ranking without creating a second storage API.
+        semantic_chunks = [
+            chunk
+            for _, chunk in chunk_data
+            if not (
+                chunk.metadata.get("architecture_context")
+                or chunk.metadata.get("architecture_source")
+                or chunk.metadata.get("repository_snapshot")
+                or chunk.metadata.get("repository_facts_state")
+            )
+        ]
+        semantic_embeddings = (
+            self.embed_model.get_text_embedding_batch(
+                [chunk.text for chunk in semantic_chunks]
+            )
+            if semantic_chunks
+            else []
+        )
+        embeddings = iter(semantic_embeddings)
         
         # Build points with embeddings
         points = []
-        for (point_id, chunk), embedding in zip(chunk_data, embeddings):
+        for point_id, chunk in chunk_data:
+            if (
+                chunk.metadata.get("architecture_context")
+                or chunk.metadata.get("architecture_source")
+                or chunk.metadata.get("repository_snapshot")
+                or chunk.metadata.get("repository_facts_state")
+            ):
+                if not self.embedding_dim:
+                    raise RuntimeError(
+                        "embedding dimension is required for architecture context storage"
+                    )
+                embedding = [0.0] * self.embedding_dim
+            else:
+                embedding = next(embeddings)
+            payload = {
+                **chunk.metadata,
+                "text": chunk.text,
+            }
+            if not (
+                chunk.metadata.get("repository_snapshot")
+                or chunk.metadata.get("repository_facts_state")
+            ):
+                payload["_node_content"] = chunk.text
             points.append(PointStruct(
                 id=point_id,
                 vector=embedding,
-                payload={
-                    **chunk.metadata,
-                    "text": chunk.text,
-                    "_node_content": chunk.text,
-                }
+                payload=payload,
             ))
         
         return points
@@ -148,8 +191,24 @@ class PointOperations:
             chunks, workspace, project, branch
         )
         
-        # Embed and create points
-        points = self.embed_and_create_points(chunk_data)
-        
-        # Upsert to collection
-        return self.upsert_points(collection_name, points)
+        successful = 0
+        failed = 0
+
+        # Embed and write bounded point slices. The collection is still pending
+        # and cannot become active until the index manager verifies the complete
+        # work count, but operators can now observe steady progress instead of
+        # waiting for every chunk from a 50-file document batch to finish.
+        for i in range(0, len(chunk_data), self.batch_size):
+            point_batch = self.embed_and_create_points(
+                chunk_data[i:i + self.batch_size]
+            )
+            batch_successful, batch_failed = self.upsert_points(
+                collection_name,
+                point_batch,
+            )
+            successful += batch_successful
+            failed += batch_failed
+            if batch_failed:
+                break
+
+        return successful, failed

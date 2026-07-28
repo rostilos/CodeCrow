@@ -8,7 +8,6 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.util.AnalysisLimitEnforcer;
-import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.AnalysisLimitsConfig;
@@ -18,8 +17,7 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 
 class PullRequestDiffPreparationServiceTest {
     private final PullRequestDiffPreparationService service =
-            new PullRequestDiffPreparationService(
-                    new DiffContentFilter(), new AnalysisLimitEnforcer());
+            new PullRequestDiffPreparationService(new AnalysisLimitEnforcer());
 
     @Test
     void isConstructedBySpringUsingItsProductionDependency() {

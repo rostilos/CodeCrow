@@ -1,0 +1,91 @@
+"""Neutral plugin types and deterministic registry for CodeCrow hosts."""
+
+from .api import (
+    ArchitecturePacket,
+    CandidateClaim,
+    Capability,
+    CodeCrowPlugin,
+    ContentMarker,
+    ContentPatternMarker,
+    DetectionAlternative,
+    DetectionRules,
+    EvidenceRequest,
+    FileArtifact,
+    FileDisposition,
+    GraphFact,
+    OutcomeStatus,
+    PluginDescriptor,
+    PluginDiagnostic,
+    PluginKind,
+    PluginOutcome,
+    ProjectCapabilities,
+    RepositoryAnalysisMode,
+    RepositoryFacts,
+    ReviewContribution,
+    RepositoryAnalysis,
+    RepositoryContext,
+    RepositorySnapshot,
+    SymbolDefinition,
+    SyntaxContribution,
+    ValidationDecision,
+    ValidationResult,
+)
+from .catalog import PluginCatalog
+from .facts import build_repository_facts, overlay_repository_facts
+from .import_graph import (
+    ImportBinding,
+    ImportFileRecord,
+    ImportGraphSession,
+    ImportedCall,
+)
+from .manifest import load_descriptor, load_descriptors
+from .registry import PluginRegistry
+from .resources import PluginResources
+from .runtime import PluginRuntime
+from .selection import ProjectSelector
+from .syntax_runtime import TreeSitterDocument
+
+__all__ = [
+    "ArchitecturePacket",
+    "CandidateClaim",
+    "Capability",
+    "CodeCrowPlugin",
+    "ContentMarker",
+    "ContentPatternMarker",
+    "DetectionAlternative",
+    "DetectionRules",
+    "EvidenceRequest",
+    "FileArtifact",
+    "FileDisposition",
+    "GraphFact",
+    "ImportBinding",
+    "ImportFileRecord",
+    "ImportGraphSession",
+    "ImportedCall",
+    "OutcomeStatus",
+    "PluginCatalog",
+    "PluginDescriptor",
+    "PluginDiagnostic",
+    "PluginKind",
+    "PluginOutcome",
+    "PluginRegistry",
+    "PluginResources",
+    "PluginRuntime",
+    "ProjectCapabilities",
+    "ProjectSelector",
+    "RepositoryAnalysisMode",
+    "RepositoryFacts",
+    "ReviewContribution",
+    "RepositoryAnalysis",
+    "RepositoryContext",
+    "RepositorySnapshot",
+    "SymbolDefinition",
+    "SyntaxContribution",
+    "TreeSitterDocument",
+    "ValidationDecision",
+    "ValidationResult",
+    "build_repository_facts",
+    "overlay_repository_facts",
+    "load_descriptor",
+    "load_descriptors",
+]

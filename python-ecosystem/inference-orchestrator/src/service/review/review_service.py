@@ -14,12 +14,29 @@ from utils.response_parser import ResponseParser
 from service.rag.rag_client import RagClient, RAG_DEFAULT_TOP_K
 from service.rag.llm_reranker import LLMReranker
 from service.review.issue_processor import post_process_analysis_result
+from service.review.plugin_context import apply_plugin_file_policy
+from service.review.quality_capture import (
+    ReviewQualityCaptureSession,
+    create_quality_capture_session,
+    review_response_indicates_failure,
+    wrap_quality_capture_llm,
+)
 from utils.context_builder import (RAGMetrics, get_rag_cache)
 from utils.diff_processor import DiffProcessor
+from utils.hunk_coverage import validate_acquired_diff_manifest
 from utils.error_sanitizer import create_user_friendly_error
 from service.review.orchestrator import MultiStageReviewOrchestrator
+from service.review.snapshot_identity import validate_review_snapshot_identity
 
 logger = logging.getLogger(__name__)
+
+
+def select_review_evidence_diff(request: ReviewRequestDto) -> Optional[str]:
+    """Return the diff whose manifest and hunks belong to this execution."""
+    if request.analysisMode == "INCREMENTAL" and request.deltaDiff:
+        return request.deltaDiff
+    return request.rawDiff
+
 
 class ReviewService:
     """Service class for handling code review requests with streaming support."""
@@ -62,19 +79,118 @@ class ReviewService:
         Returns:
             Dict with "result" key containing the analysis result or error
         """
+        # Validate before provider construction, global RAG scheduling, MCP
+        # startup, or dry-run dispatch. Every review mode must describe the
+        # same exact immutable repository snapshot.
+        validate_review_snapshot_identity(request)
         async with self._review_semaphore:
-            return await self._process_review(
-                request=request,
-                repo_path=None,
-                event_callback=event_callback
+            if request.promptDryRun:
+                return await self._process_prompt_dry_run(request, event_callback)
+            quality_capture = create_quality_capture_session(request)
+            review_event_callback = (
+                quality_capture.wrap_event_callback(event_callback)
+                if quality_capture is not None
+                else event_callback
             )
+            try:
+                response = await self._process_review(
+                    request=request,
+                    repo_path=None,
+                    event_callback=review_event_callback,
+                    quality_capture=quality_capture,
+                )
+            except BaseException as exception:
+                if quality_capture is not None:
+                    await quality_capture.complete(None, exception)
+                raise
+            if quality_capture is not None:
+                await quality_capture.complete(
+                    response,
+                    failed=review_response_indicates_failure(response),
+                )
+            return response
+
+    async def _process_prompt_dry_run(
+            self,
+            request: ReviewRequestDto,
+            event_callback: Optional[Callable[[Dict], None]],
+    ) -> Dict[str, Any]:
+        """Run real context assembly with a capturing model and store its prompts."""
+        enabled = os.environ.get(
+            "ANALYSIS_PROMPT_DRY_RUN_ENABLED", "false"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            raise ValueError(
+                "promptDryRun was requested while ANALYSIS_PROMPT_DRY_RUN_ENABLED is false"
+            )
+
+        try:
+            simulated_findings = int(os.environ.get(
+                "ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_PER_FILE", "6"
+            ))
+        except ValueError as exception:
+            raise ValueError(
+                "ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_PER_FILE must be an integer"
+            ) from exception
+        try:
+            simulated_findings_max_total = int(os.environ.get(
+                "ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_MAX_TOTAL", "24"
+            ))
+        except ValueError as exception:
+            raise ValueError(
+                "ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_MAX_TOTAL must be an integer"
+            ) from exception
+
+        self._emit_event(event_callback, {
+            "type": "status",
+            "state": "prompt_dry_run_started",
+            "message": (
+                "Prompt dry run started: real project context will be assembled "
+                "without calling the review LLM"
+            ),
+        })
+        logger.info(
+            "prompt_dry_run_started project=%s pr=%s job=%s",
+            request.projectId,
+            request.pullRequestId,
+            request.promptDryRunId,
+        )
+
+        from service.review.prompt_dry_run import capture_and_store_review_prompts
+
+        summary = await capture_and_store_review_prompts(
+            request,
+            self.rag_client,
+            simulated_findings_per_file=simulated_findings,
+            simulated_findings_max_total=simulated_findings_max_total,
+            event_callback=event_callback,
+        )
+        self._emit_event(event_callback, {
+            "type": "status",
+            "state": "prompt_dry_run_completed",
+            "message": (
+                "Prompt dry run completed; artifact: "
+                f"{summary['promptArtifact']['containerPath']}"
+            ),
+            "promptArtifact": summary["promptArtifact"],
+        })
+        logger.info(
+            "prompt_dry_run_completed project=%s pr=%s job=%s artifact=%s "
+            "provider_calls=0",
+            request.projectId,
+            request.pullRequestId,
+            request.promptDryRunId,
+            summary["promptArtifact"]["containerPath"],
+        )
+        return {"result": summary}
 
     async def _process_review(
             self,
             request: ReviewRequestDto,
             repo_path: Optional[str] = None,
             max_allowed_tokens: Optional[int] = None,
-            event_callback: Optional[Callable[[Dict], None]] = None
+            event_callback: Optional[Callable[[Dict], None]] = None,
+            quality_capture: Optional[ReviewQualityCaptureSession] = None,
     ) -> Dict[str, Any]:
         """
         Internal method that handles both regular and local repo reviews.
@@ -96,8 +212,11 @@ class ReviewService:
         """
         jar_path = self.default_jar_path
 
-        # Check if we have rawDiff - changes prompt building, not MCP usage
-        has_raw_diff = bool(request.rawDiff)
+        # An incremental execution owns the delta manifest. The full PR diff is
+        # still carried as snapshot context, but must not be validated or
+        # planned as though every historical PR path belonged to this run.
+        review_evidence_diff = select_review_evidence_diff(request)
+        has_raw_diff = bool(review_evidence_diff)
 
         # ── MCP-free branch reconciliation fast path ──
         # When Java provides pre-fetched file contents AND there are previous
@@ -111,6 +230,40 @@ class ReviewService:
         is_branch_reconciliation = request.analysisType == "BRANCH_ANALYSIS"
         has_file_contents = bool(request.reconciliationFileContents)
         has_previous_issues = bool(request.previousCodeAnalysisIssues)
+        needs_multistage_review = not (
+            is_branch_reconciliation and has_previous_issues
+        )
+
+        # Parse and prove the acquired diff before MCP startup, provider
+        # construction, or any embedding-backed fallback query. Reconciliation
+        # requests intentionally carry an issue-scoped diff rather than the
+        # complete changed-file manifest, so their separate direct path is not
+        # subject to this full-review equality check.
+        processed_diff = None
+        if has_raw_diff and needs_multistage_review:
+            diff_processor = DiffProcessor()
+            processed_diff = diff_processor.process(review_evidence_diff)
+            processed_diff = apply_plugin_file_policy(
+                request,
+                processed_diff,
+            )
+            validate_acquired_diff_manifest(
+                request.changedFiles or (),
+                request.deletedFiles or (),
+                processed_diff,
+            )
+
+            logger.info(
+                f"Diff pre-processed: {processed_diff.total_files} files, "
+                f"+{processed_diff.total_additions}/-{processed_diff.total_deletions}, "
+                f"skipped: {processed_diff.skipped_files}"
+            )
+
+            if processed_diff.truncated:
+                self._emit_event(event_callback, {
+                    "type": "warning",
+                    "message": processed_diff.truncation_reason
+                })
 
         if is_branch_reconciliation and has_file_contents and has_previous_issues:
             try:
@@ -125,7 +278,7 @@ class ReviewService:
                         "message": f"Direct reconciliation mode ({len(request.reconciliationFileContents)} files pre-fetched)"
                     })
 
-                    llm = self._create_llm(request)
+                    llm = self._create_llm(request, quality_capture)
                     pr_metadata = self._build_pr_metadata(request)
                     num_issues = len(pr_metadata.get("previousCodeAnalysisIssues", []))
                     logger.info(f"Branch reconciliation: {num_issues} previous issues to process (MCP-free)")
@@ -203,7 +356,7 @@ class ReviewService:
                 client = self._create_mcp_client(config)
 
                 # Create LLM instance
-                llm = self._create_llm(request)
+                llm = self._create_llm(request, quality_capture)
                 
                 # Create a per-request reranker (not shared across concurrent requests)
                 llm_reranker = LLMReranker(llm_client=llm)
@@ -212,10 +365,6 @@ class ReviewService:
                 # Per-batch RAG is richer and remains the primary path; this
                 # task is only awaited if a batch cannot obtain per-batch
                 # context. Branch reconciliation does not need it.
-                needs_multistage_review = not (
-                    request.analysisType == "BRANCH_ANALYSIS"
-                    and request.previousCodeAnalysisIssues
-                )
                 if needs_multistage_review:
                     rag_context_task = asyncio.create_task(
                         self._fetch_rag_context(
@@ -224,24 +373,6 @@ class ReviewService:
                             llm_reranker=llm_reranker,
                         )
                     )
-
-                # Build processed_diff if rawDiff is available to optimize Stage 1
-                processed_diff = None
-                if has_raw_diff:
-                    diff_processor = DiffProcessor()
-                    processed_diff = diff_processor.process(request.rawDiff)
-                    
-                    logger.info(
-                        f"Diff pre-processed: {processed_diff.total_files} files, "
-                        f"+{processed_diff.total_additions}/-{processed_diff.total_deletions}, "
-                        f"skipped: {processed_diff.skipped_files}"
-                    )
-                    
-                    if processed_diff.truncated:
-                        self._emit_event(event_callback, {
-                            "type": "warning",
-                            "message": processed_diff.truncation_reason
-                        })
 
                 self._emit_event(event_callback, {
                     "type": "status",
@@ -518,8 +649,23 @@ class ReviewService:
 
             return None
 
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Global fallback RAG query exceeded %ss; continuing without it",
+                self.GLOBAL_RAG_QUERY_TIMEOUT_SECONDS,
+            )
+            self._emit_event(event_callback, {
+                "type": "status",
+                "state": "rag_skipped",
+                "message": "RAG fallback timed out; per-batch retrieval remains active",
+            })
+            return None
         except Exception as e:
-            logger.warning(f"Failed to fetch RAG context: {e}")
+            logger.warning(
+                "Failed to fetch global RAG context (%s): %s",
+                type(e).__name__,
+                e,
+            )
             self._emit_event(event_callback, {
                 "type": "status",
                 "state": "rag_skipped",
@@ -534,7 +680,11 @@ class ReviewService:
         except Exception as e:
             raise Exception(f"Failed to construct MCPClient: {str(e)}")
 
-    def _create_llm(self, request: ReviewRequestDto):
+    def _create_llm(
+        self,
+        request: ReviewRequestDto,
+        quality_capture: Optional[ReviewQualityCaptureSession] = None,
+    ):
         """Create LLM instance from request parameters."""
         try:
             # Log the model being used for this request
@@ -554,7 +704,7 @@ class ReviewService:
                 ai_custom_parameters=getattr(request, 'aiCustomParameters', None),
             )
             
-            return llm
+            return wrap_quality_capture_llm(llm, quality_capture)
         except Exception as e:
             raise Exception(f"Failed to create LLM instance: {str(e)}")
 

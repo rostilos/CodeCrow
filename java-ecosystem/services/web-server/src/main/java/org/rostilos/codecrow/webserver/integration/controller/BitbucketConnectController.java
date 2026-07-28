@@ -27,6 +27,7 @@ import java.security.GeneralSecurityException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -76,9 +77,22 @@ public class BitbucketConnectController {
      */
     @PostMapping("/install/start")
     @PreAuthorize("isAuthenticated() && @workspaceSecurity.hasOwnerOrAdminRights(#workspaceId, authentication)")
-    public ResponseEntity<Map<String, String>> startInstall(
+    public ResponseEntity<Map<String, Object>> startInstall(
             @RequestParam Long workspaceId,
             @RequestParam(required = false) String workspaceSlug) {
+
+        Optional<VcsConnectionDTO> restored =
+                connectService.reconnectExistingWorkspaceInstallation(workspaceId);
+        if (restored.isPresent()) {
+            VcsConnectionDTO connection = restored.get();
+            Map<String, Object> response = new HashMap<>();
+            response.put("status", "completed");
+            response.put("connectionId", connection.id());
+            response.put("workspaceSlug", connection.externalWorkspaceSlug());
+            log.info("Restored Bitbucket Connect installation as connection {} in workspace {}",
+                    connection.id(), workspaceId);
+            return ResponseEntity.ok(response);
+        }
         
         // Generate unique state token
         String state = UUID.randomUUID().toString();
@@ -90,18 +104,94 @@ public class BitbucketConnectController {
         cleanupOldPendingInstalls();
         
         // Build install URL with state
-        String installUrl = String.format(
-            "https://bitbucket.org/site/addons/authorize?addon_key=codecrow-connect-app&state=%s",
-            URLEncoder.encode(state, StandardCharsets.UTF_8)
-        );
+        String completionUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl()
+                + "/api/bitbucket/connect/install/complete?state="
+                + URLEncoder.encode(state, StandardCharsets.UTF_8);
+        String installUrl = "https://bitbucket.org/site/addons/authorize"
+                + "?addon_key=codecrow-connect-app"
+                + "&redirect_uri=" + URLEncoder.encode(completionUrl, StandardCharsets.UTF_8);
         
-        Map<String, String> response = new HashMap<>();
+        Map<String, Object> response = new HashMap<>();
+        response.put("status", "pending");
         response.put("installUrl", installUrl);
         response.put("state", state);
         
         log.info("Started Connect App install flow for workspace {} with state {}", workspaceId, state);
         
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Browser return endpoint for application-initiated Bitbucket installation.
+     * Bitbucket calls the installed lifecycle endpoint synchronously before
+     * redirecting here and supplies the exact client key for reconciliation.
+     */
+    @GetMapping("/install/complete")
+    public ResponseEntity<Void> completeInstall(
+            @RequestParam String state,
+            @RequestParam(name = "client_key", required = false) String snakeCaseClientKey,
+            @RequestParam(name = "clientKey", required = false) String camelCaseClientKey,
+            @RequestParam(required = false) String jwt,
+            @RequestParam(required = false) String error) {
+        PendingInstall pending = pendingInstalls.get(state);
+        String status = "error";
+        String errorCode = error;
+        String clientKey = snakeCaseClientKey != null
+                ? snakeCaseClientKey
+                : camelCaseClientKey;
+
+        if (pending == null
+                || System.currentTimeMillis() - pending.createdAt > 600_000) {
+            pendingInstalls.remove(state);
+            errorCode = "expired_installation_state";
+        } else if (error != null) {
+            pendingInstalls.remove(state);
+        } else if (clientKey == null || clientKey.isBlank()) {
+            errorCode = "missing_client_key";
+        } else {
+            try {
+                if (jwt != null && !jwt.isBlank()) {
+                    Claims claims = connectService.verifyJwt(jwt);
+                    if (claims == null || !clientKey.equals(claims.getIssuer())) {
+                        throw new IntegrationException(
+                                "Bitbucket installation return signature is invalid");
+                    }
+                }
+                BitbucketConnectInstallation installation = connectService.findByClientKey(clientKey)
+                        .orElseThrow(() -> new IntegrationException(
+                                "Bitbucket installation callback has not been received"));
+                VcsConnectionDTO connection = connectService.linkToCodecrowWorkspace(
+                        installation.getId(), pending.workspaceId);
+                pending.completed = true;
+                pending.installationId = installation.getId();
+                pending.connectionId = connection.id();
+                pending.bitbucketWorkspaceSlug = installation.getBitbucketWorkspaceSlug();
+                status = "connected";
+                errorCode = null;
+            } catch (Exception e) {
+                log.warn("Could not complete Bitbucket installation for state {}: {}",
+                        state, e.getMessage());
+                errorCode = "installation_reconciliation_failed";
+            }
+        }
+
+        StringBuilder redirect = new StringBuilder(getFrontendUrl())
+                .append("/integrations/app-installed?provider=bitbucket-cloud")
+                .append("&status=").append(status);
+        if (pending != null && pending.workspaceSlug != null) {
+            redirect.append("&workspace=")
+                    .append(URLEncoder.encode(pending.workspaceSlug, StandardCharsets.UTF_8));
+        }
+        if (pending != null && pending.connectionId != null) {
+            redirect.append("&connectionId=").append(pending.connectionId);
+        }
+        if (errorCode != null && !errorCode.isBlank()) {
+            redirect.append("&error=")
+                    .append(URLEncoder.encode(errorCode, StandardCharsets.UTF_8));
+        }
+        return ResponseEntity.status(HttpStatus.FOUND)
+                .location(java.net.URI.create(redirect.toString()))
+                .build();
     }
     
     /**
@@ -624,7 +714,13 @@ public class BitbucketConnectController {
         
         try {
             // Verify user has access to this installation's Bitbucket workspace
-            if (!connectService.canUserAccessInstallation(userDetails.getId(), installationId)) {
+            boolean retainedForTargetWorkspace = connectService
+                    .getInstallationsForWorkspace(workspaceId).stream()
+                    .anyMatch(installation -> installation.getId().equals(installationId)
+                            && installation.isEnabled()
+                            && installation.getVcsConnection() == null);
+            if (!retainedForTargetWorkspace
+                    && !connectService.canUserAccessInstallation(userDetails.getId(), installationId)) {
                 log.warn("User {} attempted to link installation {} without access", 
                         userDetails.getId(), installationId);
                 return ResponseEntity.status(HttpStatus.FORBIDDEN).build();

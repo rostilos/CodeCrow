@@ -95,6 +95,9 @@ class TestQueryRunner:
         runner, _ = self._make_runner()
         assert runner is not None
         assert runner._query_cache == {}
+        assert runner.uses_custom_query("php") is True
+        assert runner.uses_custom_query("c_sharp") is True
+        assert runner.uses_custom_query("brainfuck") is False
 
     def test_get_compiled_query_python(self):
         runner, mock_parser = self._make_runner()
@@ -130,6 +133,41 @@ class TestQueryRunner:
                 assert q1 is q2
                 # Should only compile once (second call uses cache)
                 mock_compile.assert_called_once()
+
+    def test_selected_plugin_owns_grammar_and_query_resource(self):
+        from codecrow_plugins import SyntaxContribution
+
+        runner, mock_parser = self._make_runner()
+        syntax = SyntaxContribution(
+            plugin_id="typescript",
+            language_id="typescript",
+            grammar_module="tree_sitter_typescript",
+            grammar_factory="language_typescript",
+            query_resource="python/resources/rag-chunks.scm",
+        )
+        query_path = MagicMock()
+        query_path.read_text.return_value = "(function_declaration) @function"
+        runner._plugin_resources = MagicMock()
+        runner._plugin_resources.path.return_value = query_path
+        mock_parser.get_plugin_language.return_value = MagicMock()
+
+        with patch.object(
+            runner,
+            "_try_compile_query",
+            return_value=MagicMock(),
+        ):
+            query = runner._get_compiled_query("typescript", syntax)
+
+        assert query is not None
+        mock_parser.get_plugin_language.assert_called_once_with(syntax)
+        runner._plugin_resources.path.assert_called_once_with(
+            "typescript",
+            "python/resources/rag-chunks.scm",
+        )
+        assert (
+            "plugin:typescript:typescript:python/resources/rag-chunks.scm"
+            in runner._query_cache
+        )
 
     def test_run_query_no_compiled_query_returns_empty(self):
         runner, mock_parser = self._make_runner()

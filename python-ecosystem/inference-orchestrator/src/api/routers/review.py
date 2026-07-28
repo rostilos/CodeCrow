@@ -23,6 +23,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 @router.post("/review", response_model=ReviewResponseDto, deprecated=True)
 async def review_endpoint(req: ReviewRequestDto, request: Request):
     """

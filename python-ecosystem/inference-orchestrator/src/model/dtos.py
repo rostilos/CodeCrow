@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field, AliasChoices
 from datetime import datetime
 
 from model.enrichment import PrEnrichmentDataDto
+from model.plugins import ProjectCapabilitiesDto
 
 
 class IssueDTO(BaseModel):
@@ -101,8 +102,24 @@ class ReviewRequestDto(BaseModel):
     deltaDiff: Optional[str] = Field(default=None, description="Delta diff between previous and current commit (only for INCREMENTAL mode)")
     previousCommitHash: Optional[str] = Field(default=None, description="Previously analyzed commit hash")
     currentCommitHash: Optional[str] = Field(default=None, description="Current commit hash being analyzed")
+    baseCommitHash: Optional[str] = Field(default=None, description="Immutable pull-request base commit hash")
     # File enrichment data (full file contents + pre-computed dependency graph)
     enrichmentData: Optional[PrEnrichmentDataDto] = Field(default=None, description="Pre-computed file contents and dependency relationships from Java")
+    projectCapabilities: Optional[ProjectCapabilitiesDto] = Field(
+        default=None,
+        description="Deterministically selected capabilities for the pinned repository snapshot",
+    )
+    promptDryRun: bool = Field(
+        default=False,
+        description=(
+            "Testing-only request marker: execute normal context assembly with a "
+            "capturing model and persist prompts instead of calling an LLM."
+        ),
+    )
+    promptDryRunId: Optional[str] = Field(
+        default=None,
+        description="Opaque job identifier used only to name a prompt dry-run artifact.",
+    )
     # MCP tools for enhanced context in Stage 1 and issue verification in Stage 3
     useMcpTools: Optional[bool] = Field(default=False, description="Enable LLM to call VCS tools for context gaps and issue verification")
     # Custom project review rules (JSON array of enabled rules from ProjectRulesConfig)
@@ -111,8 +128,10 @@ class ReviewRequestDto(BaseModel):
     reconciliationFileContents: Optional[Dict[str, str]] = Field(default=None, description="Pre-fetched file contents for MCP-free reconciliation. Map of filePath to full file content.")
 
     def get_rag_branch(self) -> Optional[str]:
-        if self.pullRequestId:
-            return self.sourceBranchName or self.targetBranchName
+        # The indexed PR source branch is never repository truth. A review is
+        # assembled from the immutable target branch plus the exact PR overlay;
+        # accepting source-branch vectors here can mix stale or rejected branch
+        # state into otherwise current changed-file evidence.
         return self.targetBranchName
 
     def get_rag_base_branch(self) -> Optional[str]:

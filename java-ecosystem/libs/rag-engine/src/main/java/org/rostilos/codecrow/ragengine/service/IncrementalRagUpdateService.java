@@ -15,7 +15,6 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.*;
 import java.util.concurrent.*;
@@ -34,9 +33,6 @@ public class IncrementalRagUpdateService {
 
     @Value("${codecrow.rag.parallel.requests:10}")
     private int parallelRequests;
-
-    @Value("${codecrow.rag.incremental.update-batch-size:25}")
-    private int updateBatchSize;
 
     @Value("${codecrow.rag.incremental.archive-file-threshold:25}")
     private int archiveFileThreshold;
@@ -107,27 +103,24 @@ public class IncrementalRagUpdateService {
         result.put("branch", branch);
         result.put("commitHash", commitHash);
 
-        if (!deletedFiles.isEmpty()) {
-            executeDeleteBatches(
-                    sortedList(deletedFiles),
-                    projectWorkspace,
-                    projectNamespace,
-                    branch);
-            result.put("deletedFiles", deletedFiles.size());
-            log.info("Deleted {} files from RAG index", deletedFiles.size());
+        Set<String> addedOrModifiedFiles = new LinkedHashSet<>();
+        addedOrModifiedFiles.addAll(addedFiles);
+        addedOrModifiedFiles.addAll(modifiedFiles);
+        List<String> orderedAddedOrModifiedFiles = sortedList(addedOrModifiedFiles);
+        List<String> orderedDeletedFiles = sortedList(deletedFiles);
+        if (orderedAddedOrModifiedFiles.isEmpty() && orderedDeletedFiles.isEmpty()) {
+            result.put("status", "completed");
+            return result;
         }
 
-        if (!addedFiles.isEmpty() || !modifiedFiles.isEmpty()) {
-            Set<String> addedOrModifiedFiles = new LinkedHashSet<>();
-            addedOrModifiedFiles.addAll(addedFiles);
-            addedOrModifiedFiles.addAll(modifiedFiles);
-            List<String> orderedAddedOrModifiedFiles = sortedList(addedOrModifiedFiles);
-
-            Path tempDir = Files.createTempDirectory("codecrow-rag-incremental-",
+        Path tempDir = null;
+        try {
+            String revision = commitHash != null && !commitHash.isBlank() ? commitHash : branch;
+            String repoBase = null;
+            if (!orderedAddedOrModifiedFiles.isEmpty()) {
+                tempDir = Files.createTempDirectory("codecrow-rag-incremental-",
                     PosixFilePermissions.asFileAttribute(
                             PosixFilePermissions.fromString("rwxrwxrwx")));
-            try {
-                String revision = commitHash != null && !commitHash.isBlank() ? commitHash : branch;
                 int effectiveArchiveFileThreshold = Math.max(0, archiveFileThreshold);
                 boolean useArchive = orderedAddedOrModifiedFiles.size() > effectiveArchiveFileThreshold;
                 Set<String> fetchedFilePaths;
@@ -153,68 +146,46 @@ public class IncrementalRagUpdateService {
                             orderedAddedOrModifiedFiles,
                             tempDir);
                 }
-                List<String> fetchedFiles = orderedAddedOrModifiedFiles.stream()
-                        .filter(fetchedFilePaths::contains)
+                List<String> missingFiles = orderedAddedOrModifiedFiles.stream()
+                        .filter(path -> !fetchedFilePaths.contains(path))
                         .toList();
-
-                Map<String, Object> updateResult = fetchedFiles.isEmpty()
-                        ? Map.of()
-                        : executeUpdateBatches(
-                                fetchedFiles,
-                                projectWorkspace,
-                                projectNamespace,
-                                branch,
-                                commitHash,
-                                tempDir.toString());
-
-                result.put("updatedFiles", fetchedFiles.size());
-                long fetchedAddedFiles = fetchedFiles.stream().filter(addedFiles::contains).count();
-                result.put("addedFilesCount", Math.toIntExact(fetchedAddedFiles));
+                if (!missingFiles.isEmpty()) {
+                    throw new IOException(
+                            "Incremental RAG update aborted before mutation; "
+                                    + "changed files were not fetched at revision "
+                                    + revision + ": " + String.join(", ", missingFiles));
+                }
+                repoBase = tempDir.toString();
+                result.put("updatedFiles", orderedAddedOrModifiedFiles.size());
+                result.put("addedFilesCount", addedFiles.size());
                 result.put("fileFetchMode", useArchive ? "archive" : "per-file");
-                result.putAll(updateResult);
-                log.info("Updated {} files in RAG index", fetchedFiles.size());
+            }
 
-            } finally {
+            String changeSetRepoBase = repoBase;
+            Map<String, Object> updateResult = executeWithRetry(
+                    "apply incremental RAG change set",
+                    () -> ragPipelineClient.applyChanges(
+                            orderedAddedOrModifiedFiles,
+                            orderedDeletedFiles,
+                            changeSetRepoBase,
+                            projectWorkspace,
+                            projectNamespace,
+                            branch,
+                            revision));
+            result.put("deletedFiles", orderedDeletedFiles.size());
+            result.putAll(updateResult);
+            log.info(
+                    "Applied one incremental RAG change set: {} updated, {} deleted",
+                    orderedAddedOrModifiedFiles.size(),
+                    orderedDeletedFiles.size());
+        } finally {
+            if (tempDir != null) {
                 deleteDirectory(tempDir.toFile());
             }
         }
 
         result.put("status", "completed");
         return result;
-    }
-
-    private void executeDeleteBatches(
-            List<String> deletedFiles,
-            String projectWorkspace,
-            String projectNamespace,
-            String branch) throws IOException {
-        for (List<String> batch : partition(deletedFiles)) {
-            executeWithRetry("delete RAG files", () -> ragPipelineClient.deleteFiles(
-                    batch,
-                    projectWorkspace,
-                    projectNamespace,
-                    branch));
-        }
-    }
-
-    private Map<String, Object> executeUpdateBatches(
-            List<String> updatedFiles,
-            String projectWorkspace,
-            String projectNamespace,
-            String branch,
-            String commitHash,
-            String tempDir) throws IOException {
-        Map<String, Object> lastResult = Map.of();
-        for (List<String> batch : partition(updatedFiles)) {
-            lastResult = executeWithRetry("update RAG files", () -> ragPipelineClient.updateFiles(
-                        batch,
-                        tempDir,
-                        projectWorkspace,
-                        projectNamespace,
-                        branch,
-                        commitHash));
-        }
-        return lastResult;
     }
 
     @FunctionalInterface
@@ -267,18 +238,6 @@ public class IncrementalRagUpdateService {
             Thread.currentThread().interrupt();
             throw new IOException("Interrupted while waiting to retry RAG API call", e);
         }
-    }
-
-    private List<List<String>> partition(List<String> filePaths) {
-        if (filePaths.isEmpty()) {
-            return List.of();
-        }
-        int batchSize = updateBatchSize > 0 ? updateBatchSize : filePaths.size();
-        List<List<String>> batches = new ArrayList<>();
-        for (int i = 0; i < filePaths.size(); i += batchSize) {
-            batches.add(filePaths.subList(i, Math.min(i + batchSize, filePaths.size())));
-        }
-        return batches;
     }
 
     private List<String> sortedList(Collection<String> values) {
@@ -385,8 +344,9 @@ public class IncrementalRagUpdateService {
         String currentFile = null;
         boolean isDelete = false;
         boolean fileProcessed = false;
-        // Track rename operations: old path -> delete, new path -> add
-        String renameFrom = null;
+        // Track path-preserving copies separately from path-moving renames.
+        String sourcePath = null;
+        boolean copyOperation = false;
 
         for (String line : lines) {
             if (line.startsWith("diff --git")) {
@@ -407,7 +367,8 @@ public class IncrementalRagUpdateService {
                 }
                 isDelete = false;
                 fileProcessed = false;
-                renameFrom = null;
+                sourcePath = null;
+                copyOperation = false;
             } else if (line.startsWith("deleted file mode")) {
                 isDelete = true;
                 if (currentFile != null) {
@@ -419,22 +380,23 @@ public class IncrementalRagUpdateService {
                     added.add(currentFile);
                     fileProcessed = true;
                 }
-            } else if (line.startsWith("rename from ") || line.startsWith("copy from ")) {
-                // Git rename/copy: "rename from old/path.java"
-                // The old path should be deleted from the index
-                renameFrom = line.substring(line.indexOf(' ', line.indexOf(' ') + 1) + 1).trim();
+            } else if (line.startsWith("rename from ")) {
+                sourcePath = line.substring("rename from ".length()).trim();
+                copyOperation = false;
+            } else if (line.startsWith("copy from ")) {
+                sourcePath = line.substring("copy from ".length()).trim();
+                copyOperation = true;
             } else if (line.startsWith("rename to ") || line.startsWith("copy to ")) {
-                // Git rename/copy: "rename to new/path.java"
-                // The new path should be added/indexed
                 String renameTo = line.substring(line.indexOf(' ', line.indexOf(' ') + 1) + 1).trim();
-                if (renameFrom != null && !renameFrom.isEmpty()) {
-                    deleted.add(renameFrom);
+                if (!copyOperation && sourcePath != null && !sourcePath.isEmpty()) {
+                    deleted.add(sourcePath);
                 }
                 if (!renameTo.isEmpty()) {
                     added.add(renameTo);
                 }
                 fileProcessed = true;
-                renameFrom = null;
+                sourcePath = null;
+                copyOperation = false;
             }
         }
 

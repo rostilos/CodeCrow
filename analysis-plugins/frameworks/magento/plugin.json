@@ -1,0 +1,53 @@
+{
+  "id": "magento",
+  "kind": "framework",
+  "requires": ["php"],
+  "capabilities": ["candidate-recipe", "context", "file-policy", "graph", "planning", "prompt", "validation"],
+  "detection": {
+    "extensions": [],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": [
+      {
+        "filesAll": ["app/etc/config.php", "bin/magento", "composer.json"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": []
+      },
+      {
+        "filesAll": ["app/etc/di.xml", "bin/magento", "composer.json"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": []
+      },
+      {
+        "filesAll": ["app/etc/env.php", "bin/magento", "composer.json"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": []
+      },
+      {
+        "filesAll": ["composer.json"],
+        "filesAny": [],
+        "pathPatternsAll": ["**/etc/module.xml", "**/registration.php"],
+        "pathPatternsAny": [],
+        "contentMarkers": []
+      },
+      {
+        "filesAll": ["composer.json", "etc/module.xml", "registration.php"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": []
+      }
+    ]
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.magento.MagentoPlugin",
+    "python": "codecrow_plugin_magento:create_plugin"
+  }
+}

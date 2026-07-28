@@ -133,9 +133,14 @@ class BaseOrchestrator(ABC):
                 branch=branch,
                 files=files,
             )
-            if result.get("status") == "indexed":
+            if result.get("status") in {"indexed", "reused"}:
                 self._pr_indexed = True
-                logger.info("Indexed PR #%s: %s chunks", pr_number, result.get("chunks_indexed", 0))
+                logger.info(
+                    "%s PR #%s overlay: %s chunks",
+                    "Reused" if result.get("status") == "reused" else "Indexed",
+                    pr_number,
+                    result.get("chunks_indexed", 0),
+                )
             else:
                 logger.warning("Failed to index PR files: %s", result)
         except Exception as e:

@@ -48,12 +48,12 @@ class TestCollectionManager:
         cm.ensure_collection_exists("alias_name")
         cm.client.create_collection.assert_not_called()
 
-    def test_create_versioned_collection(self):
+    def test_create_pending_collection(self):
         cm = self._make()
         cm.client.create_collection = MagicMock()
 
-        name = cm.create_versioned_collection("base_name")
-        assert name.startswith("base_name_v")
+        name = cm.create_pending_collection("base_name")
+        assert name.startswith("base_name_pending_")
         cm.client.create_collection.assert_called_once()
 
     def test_delete_collection(self):

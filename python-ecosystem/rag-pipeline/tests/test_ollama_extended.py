@@ -21,7 +21,12 @@ MODEL = "test-model"
 BASE_URL = "http://localhost:11434"
 
 
-def _build_embedding(max_retries=0, retry_base_delay=0.0, max_chars=100):
+def _build_embedding(
+    max_retries=0,
+    retry_base_delay=0.0,
+    max_chars=100,
+    max_batch_chars=12000,
+):
     """
     Construct an OllamaEmbedding instance with all external I/O mocked out.
     """
@@ -34,6 +39,7 @@ def _build_embedding(max_retries=0, retry_base_delay=0.0, max_chars=100):
         "embed_batch_size": 10,
         "embedding_dim": DIM,
         "max_chars": max_chars,
+        "max_batch_chars": max_batch_chars,
         "max_retries": max_retries,
         "retry_base_delay": retry_base_delay,
     })
@@ -198,6 +204,40 @@ class TestGetTextEmbeddings:
 
         result = emb._get_text_embeddings(["abcdefghij"])
         assert len(result) == 1
+
+    def test_batch_partition_is_bounded_by_total_characters(self):
+        emb, client = _build_embedding(max_batch_chars=10)
+
+        def response_for_call(*args, **kwargs):
+            response = MagicMock()
+            response.raise_for_status = MagicMock()
+            inputs = kwargs["json"]["input"]
+            response.json.return_value = {
+                "embeddings": [[0.1] * DIM for _ in inputs]
+            }
+            return response
+
+        client.post.side_effect = response_for_call
+
+        result = emb._get_text_embeddings(["aaaaaa", "bbbbbb", "cc"])
+
+        assert len(result) == 3
+        assert [call.kwargs["json"]["input"] for call in client.post.call_args_list] == [
+            ["aaaaaa"],
+            ["bbbbbb", "cc"],
+        ]
+
+    def test_single_text_may_exceed_total_character_budget(self):
+        emb, client = _build_embedding(max_batch_chars=5)
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.json.return_value = {"embeddings": [[0.1] * DIM]}
+        client.post.return_value = response
+
+        result = emb._get_text_embeddings(["abcdefgh"])
+
+        assert len(result) == 1
+        assert client.post.call_args.kwargs["json"]["input"] == ["abcdefgh"]
 
 
 # ─────────────────────────────────────────────────────────────

@@ -37,6 +37,29 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _http_error_detail(error: httpx.HTTPError) -> tuple[Optional[int], str]:
+    if not isinstance(error, httpx.HTTPStatusError):
+        detail = str(error).strip()
+        if not detail:
+            request = getattr(error, "request", None)
+            request_target = (
+                f" for {request.method} {request.url}"
+                if request is not None
+                else ""
+            )
+            detail = f"{type(error).__name__}{request_target}"
+        return None, detail
+    response = error.response
+    detail = ""
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            detail = str(payload.get("detail") or payload.get("error") or "")
+    except (ValueError, TypeError):
+        detail = response.text.strip()
+    return response.status_code, detail or str(error)
+
+
 class RagClient:
     """Client for interacting with the RAG Pipeline API."""
 
@@ -180,11 +203,24 @@ class RagClient:
             return result
 
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to retrieve PR context from RAG: {e}")
-            return {"context": {"relevant_code": []}}
+            status_code, detail = _http_error_detail(e)
+            logger.warning(
+                "Failed to retrieve PR context from RAG: status=%s detail=%s",
+                status_code or "transport-error",
+                detail,
+            )
+            return {
+                "status": "error",
+                "status_code": status_code,
+                "error": detail,
+            }
         except Exception as e:
             logger.error(f"Unexpected error querying RAG: {e}")
-            return {"context": {"relevant_code": []}}
+            return {
+                "status": "error",
+                "status_code": None,
+                "error": str(e),
+            }
 
     async def semantic_search(
         self,
@@ -232,11 +268,26 @@ class RagClient:
             return response.json()
 
         except httpx.HTTPError as e:
-            logger.warning(f"Semantic search failed: {e}")
-            return {"results": []}
+            status_code, detail = _http_error_detail(e)
+            logger.warning(
+                "Semantic search failed: status=%s detail=%s",
+                status_code or "transport-error",
+                detail,
+            )
+            return {
+                "status": "error",
+                "status_code": status_code,
+                "error": detail,
+                "results": [],
+            }
         except Exception as e:
             logger.error(f"Unexpected error in semantic search: {e}")
-            return {"results": []}
+            return {
+                "status": "error",
+                "status_code": None,
+                "error": str(e),
+                "results": [],
+            }
 
     async def is_healthy(self) -> bool:
         """
@@ -449,11 +500,24 @@ class RagClient:
             return result
 
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to retrieve deterministic context: {e}")
-            return {"context": {"chunks": [], "changed_files": {}, "related_definitions": {}}}
+            status_code, detail = _http_error_detail(e)
+            logger.warning(
+                "Failed to retrieve deterministic context: status=%s detail=%s",
+                status_code or "transport-error",
+                detail,
+            )
+            return {
+                "status": "error",
+                "status_code": status_code,
+                "error": detail,
+            }
         except Exception as e:
             logger.error(f"Unexpected error in deterministic RAG query: {e}")
-            return {"context": {"chunks": [], "changed_files": {}, "related_definitions": {}}}
+            return {
+                "status": "error",
+                "status_code": None,
+                "error": str(e),
+            }
 
     # =========================================================================
     # PR File Indexing Methods (for PR-specific RAG layer)
@@ -465,7 +529,14 @@ class RagClient:
         project: str,
         pr_number: int,
         branch: str,
-        files: List[Dict[str, str]]
+        files: List[Dict[str, str]],
+        base_branch: Optional[str] = None,
+        source_revision: Optional[str] = None,
+        base_revision: Optional[str] = None,
+        repository_plugins: Optional[List[str]] = None,
+        plugin_detection_evidence: Optional[Dict[str, List[str]]] = None,
+        plugin_fingerprint: str = "sha256:" + "0" * 64,
+        plugin_descriptor_fingerprint: str = "sha256:" + "0" * 64,
     ) -> Dict[str, Any]:
         """
         Index PR files into the main collection with PR-specific metadata.
@@ -473,14 +544,21 @@ class RagClient:
         Files are indexed with metadata (pr=true, pr_number=X) to enable
         hybrid queries that prioritize PR data over branch data.
         
-        Existing PR points for the same pr_number are deleted first.
+        An exact persisted generation may be reused by the RAG service. A
+        changed generation replaces prior points only after preparation.
 
         Args:
             workspace: Workspace identifier
             project: Project identifier
             pr_number: PR number for metadata tagging
             branch: Source branch name
-            files: List of {path: str, content: str, change_type: str}
+            files: List of {
+                path: str,
+                content: str,
+                change_type: str,
+                content_state: "complete" | "partial_diff",
+            }. Partial diff content is identity/evidence only and is not
+            eligible for source parsing or semantic embedding.
 
         Returns:
             Dict with indexing status and chunk counts
@@ -493,12 +571,23 @@ class RagClient:
             logger.debug("No files to index for PR")
             return {"status": "skipped", "chunks_indexed": 0}
 
+        index_timeout = max(
+            30.0,
+            _env_float("REVIEW_PR_INDEX_TIMEOUT_SECONDS", 1200.0),
+        )
         try:
             payload = {
                 "workspace": workspace,
                 "project": project,
                 "pr_number": pr_number,
                 "branch": branch,
+                "base_branch": base_branch or branch,
+                "source_revision": source_revision,
+                "base_revision": base_revision,
+                "repository_plugins": repository_plugins or [],
+                "plugin_detection_evidence": plugin_detection_evidence or {},
+                "plugin_fingerprint": plugin_fingerprint,
+                "plugin_descriptor_fingerprint": plugin_descriptor_fingerprint,
                 "files": files
             }
 
@@ -506,17 +595,34 @@ class RagClient:
             response = await client.post(
                 f"{self.base_url}/index/pr-files",
                 json=payload,
-                timeout=120.0  # Longer timeout for indexing
+                timeout=index_timeout,
             )
             response.raise_for_status()
             result = response.json()
             
-            logger.info(f"Indexed PR #{pr_number}: {result.get('chunks_indexed', 0)} chunks from {result.get('files_processed', 0)} files")
+            logger.info(
+                "%s PR #%s overlay: %s chunks from %s files (%s partial)",
+                "Reused" if result.get("status") == "reused" else "Indexed",
+                pr_number,
+                result.get("chunks_indexed", 0),
+                result.get("files_processed", 0),
+                len(result.get("partial_files") or ()),
+            )
             return result
 
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to index PR files: {e}")
-            return {"status": "error", "error": str(e)}
+            status_code, detail = _http_error_detail(e)
+            logger.warning(
+                "Failed to index PR files: status=%s detail=%s timeout=%.1fs",
+                status_code or "transport-error",
+                detail,
+                index_timeout,
+            )
+            return {
+                "status": "error",
+                "status_code": status_code,
+                "error": detail,
+            }
         except Exception as e:
             logger.error(f"Unexpected error indexing PR files: {e}")
             return {"status": "error", "error": str(e)}

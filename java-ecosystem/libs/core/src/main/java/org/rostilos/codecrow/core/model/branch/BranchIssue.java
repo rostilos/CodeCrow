@@ -6,6 +6,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.DetectionSource;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueScope;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
+import org.rostilos.codecrow.core.util.tracking.AnchoredIssueIdentity;
 import org.rostilos.codecrow.core.util.tracking.ReconcilableIssue;
 import org.rostilos.codecrow.core.util.tracking.TrackingConfidence;
 
@@ -20,7 +21,9 @@ import java.time.OffsetDateTime;
  * branch reconciliation.  All line-number shifts, resolution tracking, and
  * content updates happen exclusively on this entity.
  * <p>
- * Deduplication key: {@code (branch_id, content_fingerprint)}.
+ * The partial unique key {@code (branch_id, content_fingerprint)} stores a
+ * path-aware, source-anchored branch identity. Unanchored findings keep this
+ * column null and are never collapsed by the database index.
  */
 @Entity
 @Table(name = "branch_issue")
@@ -148,8 +151,12 @@ public class BranchIssue implements ReconcilableIssue {
     private String issueFingerprint;
 
     /**
-     * Category-agnostic fingerprint: SHA-256 of (lineHash + normalizedTitle).
-     * Primary dedup key for the (branch_id, content_fingerprint) unique constraint.
+     * Path-aware, category-agnostic, source-anchored storage identity.
+     * <p>
+     * Historical rows may contain the older raw
+     * {@code SHA-256(lineHash + normalizedTitle)} value. Mapping code recomputes
+     * the exact identity from source fields, so those rows remain readable without
+     * a release-versioned schema migration.
      */
     @Column(name = "content_fingerprint", length = 64)
     private String contentFingerprint;
@@ -240,7 +247,9 @@ public class BranchIssue implements ReconcilableIssue {
         bi.setLineHash(cai.getLineHash());
         bi.setLineHashContext(cai.getLineHashContext());
         bi.setIssueFingerprint(cai.getIssueFingerprint());
-        bi.setContentFingerprint(cai.getContentFingerprint());
+        bi.setContentFingerprint(bi.isResolved()
+                ? null
+                : AnchoredIssueIdentity.forBranchStorage(cai));
         bi.setCodeSnippet(cai.getCodeSnippet());
 
         // Initialize current position from detection position
@@ -332,7 +341,15 @@ public class BranchIssue implements ReconcilableIssue {
     public void setIssueCategory(IssueCategory issueCategory) { this.issueCategory = issueCategory; }
 
     public boolean isResolved() { return resolved; }
-    public void setResolved(boolean resolved) { this.resolved = resolved; }
+    public void setResolved(boolean resolved) {
+        this.resolved = resolved;
+        if (resolved) {
+            // The partial unique index represents active branch identities.
+            // Releasing it on resolution allows a later real recurrence to be
+            // stored as a new lifecycle record.
+            this.contentFingerprint = null;
+        }
+    }
 
     public Long getFirstDetectedPrNumber() { return firstDetectedPrNumber; }
     public void setFirstDetectedPrNumber(Long firstDetectedPrNumber) { this.firstDetectedPrNumber = firstDetectedPrNumber; }

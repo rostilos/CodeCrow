@@ -7,7 +7,7 @@ public enum IssueCategory {
     BUG_RISK("Bug Risk", "Potential bugs, edge cases, null pointer risks"),
     STYLE("Style", "Code style, formatting, naming conventions"),
     DOCUMENTATION("Documentation", "Missing or inadequate documentation"),
-    BEST_PRACTICES("Best Practices", "Violations of language/framework best practices"),
+    BEST_PRACTICES("Best Practices", "Violations of language, framework, or domain best practices"),
     ERROR_HANDLING("Error Handling", "Improper exception handling, missing error checks"),
     TESTING("Testing", "Test coverage issues, untestable code"),
     ARCHITECTURE("Architecture", "Design issues, coupling problems, SOLID violations");

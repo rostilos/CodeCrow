@@ -15,6 +15,13 @@ from ...utils.utils import make_namespace, make_project_namespace
 from ..splitter import ASTCodeSplitter
 from ..loader import DocumentLoader
 from ..embedding_factory import create_embedding_model, get_embedding_model_info
+from ..index_representation import (
+    branch_splitter_kwargs,
+    index_representation_fingerprint,
+)
+from ..pr_overlay_representation import (
+    pr_overlay_representation_fingerprint,
+)
 
 from .collection_manager import CollectionManager
 from .branch_manager import BranchManager
@@ -33,6 +40,32 @@ class RAGIndexManager:
 
     def __init__(self, config: RAGConfig):
         self.config = config
+        self.index_representation_fingerprint = (
+            index_representation_fingerprint(config)
+        )
+        self.pr_overlay_representation_fingerprint = (
+            pr_overlay_representation_fingerprint(config)
+        )
+
+        plugin_catalog = None
+        plugin_runtime = None
+        plugin_selector = None
+        try:
+            from codecrow_plugins import PluginRuntime, ProjectSelector
+            from codecrow_plugins.bootstrap import discover_builtin_plugins
+
+            plugin_catalog = discover_builtin_plugins()
+            plugin_runtime = PluginRuntime(plugin_catalog)
+            plugin_selector = ProjectSelector(plugin_catalog.registry)
+            logger.info("Loaded plugins: %s", ", ".join(plugin_catalog.registry.ordered_ids))
+        except ModuleNotFoundError as exception:
+            if exception.name != "codecrow_plugins":
+                raise
+            logger.warning("Plugin package is not installed; using the generic RAG fallback")
+
+        self.plugin_catalog = plugin_catalog
+        self.plugin_runtime = plugin_runtime
+        self.plugin_selector = plugin_selector
 
         # Qdrant client
         self.qdrant_client = QdrantClient(
@@ -56,10 +89,8 @@ class RAGIndexManager:
         # Splitter and loader
         logger.info("Using ASTCodeSplitter for code chunking (tree-sitter query-based)")
         self.splitter = ASTCodeSplitter(
-            max_chunk_size=config.chunk_size,
-            min_chunk_size=min(200, config.chunk_size // 4),
-            chunk_overlap=config.chunk_overlap,
-            parser_threshold=10
+            **branch_splitter_kwargs(config),
+            plugin_runtime=plugin_runtime,
         )
         self.loader = DocumentLoader(config)
 
@@ -69,7 +100,10 @@ class RAGIndexManager:
         )
         self._branch_manager = BranchManager(self.qdrant_client)
         self._point_ops = PointOperations(
-            self.qdrant_client, self.embed_model, batch_size=50
+            self.qdrant_client,
+            self.embed_model,
+            batch_size=50,
+            embedding_dim=config.embedding_dim,
         )
         self._stats_manager = StatsManager(
             self.qdrant_client, config.qdrant_collection_prefix
@@ -83,7 +117,10 @@ class RAGIndexManager:
             point_ops=self._point_ops,
             stats_manager=self._stats_manager,
             splitter=self.splitter,
-            loader=self.loader
+            loader=self.loader,
+            plugin_catalog=plugin_catalog,
+            plugin_runtime=plugin_runtime,
+            plugin_selector=plugin_selector,
         )
         self._file_ops = FileOperations(
             client=self.qdrant_client,
@@ -91,7 +128,13 @@ class RAGIndexManager:
             collection_manager=self._collection_manager,
             stats_manager=self._stats_manager,
             splitter=self.splitter,
-            loader=self.loader
+            loader=self.loader,
+            plugin_catalog=plugin_catalog,
+            plugin_runtime=plugin_runtime,
+            plugin_selector=plugin_selector,
+            representation_fingerprint=(
+                self.index_representation_fingerprint
+            ),
         )
 
     # Collection naming
@@ -119,6 +162,7 @@ class RAGIndexManager:
         project: str,
         branch: str,
         commit: str,
+        preserve_other_branches: bool = False,
         include_patterns: Optional[List[str]] = None,
         exclude_patterns: Optional[List[str]] = None
     ) -> IndexStats:
@@ -131,6 +175,7 @@ class RAGIndexManager:
             branch=branch,
             commit=commit,
             alias_name=alias_name,
+            preserve_other_branches=preserve_other_branches,
             include_patterns=include_patterns,
             exclude_patterns=exclude_patterns
         )
@@ -163,7 +208,8 @@ class RAGIndexManager:
         file_paths: List[str],
         workspace: str,
         project: str,
-        branch: str
+        branch: str,
+        commit: Optional[str] = None,
     ) -> IndexStats:
         """Delete specific files from the index for a specific branch."""
         collection_name = self._get_project_collection_name(workspace, project)
@@ -172,7 +218,31 @@ class RAGIndexManager:
             workspace=workspace,
             project=project,
             branch=branch,
-            collection_name=collection_name
+            collection_name=collection_name,
+            commit=commit,
+        )
+
+    def apply_changes(
+        self,
+        updated_file_paths: List[str],
+        deleted_file_paths: List[str],
+        repo_base: Optional[str],
+        workspace: str,
+        project: str,
+        branch: str,
+        commit: str,
+    ) -> IndexStats:
+        """Apply a complete commit change set through one RAG mutation."""
+        collection_name = self._get_project_collection_name(workspace, project)
+        return self._file_ops.apply_changes(
+            updated_file_paths=updated_file_paths,
+            deleted_file_paths=deleted_file_paths,
+            repo_base=repo_base,
+            workspace=workspace,
+            project=project,
+            branch=branch,
+            commit=commit,
+            collection_name=collection_name,
         )
 
     # Branch operations

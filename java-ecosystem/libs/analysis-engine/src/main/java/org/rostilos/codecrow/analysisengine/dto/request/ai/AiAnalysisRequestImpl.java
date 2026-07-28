@@ -8,6 +8,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
+import org.rostilos.codecrow.plugins.ProjectCapabilities;
 
 import java.util.List;
 import java.util.Map;
@@ -53,6 +54,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String deltaDiff;
     protected final String previousCommitHash;
     protected final String currentCommitHash;
+    protected final String baseCommitHash;
 
     // File enrichment data (full file contents + dependency graph)
     protected final PrEnrichmentDataDto enrichmentData;
@@ -62,6 +64,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
     // Pre-fetched file contents for MCP-free branch reconciliation
     protected final Map<String, String> reconciliationFileContents;
+    protected final ProjectCapabilities projectCapabilities;
 
     protected AiAnalysisRequestImpl(Builder<?> builder) {
         this.projectId = builder.projectId;
@@ -99,12 +102,14 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.deltaDiff = builder.deltaDiff;
         this.previousCommitHash = builder.previousCommitHash;
         this.currentCommitHash = builder.currentCommitHash;
+        this.baseCommitHash = builder.baseCommitHash;
         // File enrichment data
         this.enrichmentData = builder.enrichmentData;
         // Custom project review rules
         this.projectRules = builder.projectRules;
         // Pre-fetched file contents for MCP-free reconciliation
         this.reconciliationFileContents = builder.reconciliationFileContents;
+        this.projectCapabilities = builder.projectCapabilities;
     }
 
     public Long getProjectId() {
@@ -244,10 +249,16 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return currentCommitHash;
     }
 
+    @Override
+    public String getBaseCommitHash() {
+        return baseCommitHash;
+    }
+
     public PrEnrichmentDataDto getEnrichmentData() {
         return enrichmentData;
     }
 
+    @Override
     public String getProjectRules() {
         return projectRules;
     }
@@ -255,6 +266,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     @Override
     public Map<String, String> getReconciliationFileContents() {
         return reconciliationFileContents;
+    }
+
+    @Override
+    public ProjectCapabilities getProjectCapabilities() {
+        return projectCapabilities;
     }
 
     public static Builder<?> builder() {
@@ -298,12 +314,14 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String deltaDiff;
         private String previousCommitHash;
         private String currentCommitHash;
+        private String baseCommitHash;
         // File enrichment data
         private PrEnrichmentDataDto enrichmentData;
         // Custom project review rules (JSON string)
         private String projectRules;
         // Pre-fetched file contents for MCP-free reconciliation
         private Map<String, String> reconciliationFileContents;
+        private ProjectCapabilities projectCapabilities;
 
         protected Builder() {
         }
@@ -554,6 +572,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             return self();
         }
 
+        public T withBaseCommitHash(String baseCommitHash) {
+            this.baseCommitHash = baseCommitHash;
+            return self();
+        }
+
         public T withProjectMetadata(String workspace, String namespace) {
             this.projectWorkspace = workspace;
             this.projectNamespace = namespace;
@@ -612,6 +635,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withReconciliationFileContents(Map<String, String> reconciliationFileContents) {
             this.reconciliationFileContents = reconciliationFileContents;
+            return self();
+        }
+
+        public T withProjectCapabilities(ProjectCapabilities projectCapabilities) {
+            this.projectCapabilities = projectCapabilities;
             return self();
         }
 

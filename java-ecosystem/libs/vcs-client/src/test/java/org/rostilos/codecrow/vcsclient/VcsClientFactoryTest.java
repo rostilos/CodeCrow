@@ -27,7 +27,8 @@ class VcsClientFactoryTest {
         factory = new VcsClientFactory(mockHttpClientFactory);
         
         when(mockHttpClientFactory.createClientWithBearerToken(anyString())).thenReturn(mockHttpClient);
-        when(mockHttpClientFactory.createClient(anyString(), anyString(), anyString())).thenReturn(mockHttpClient);
+        when(mockHttpClientFactory.createTransport(anyString(), anyString(), anyString()))
+                .thenReturn(AuthorizedVcsTransport.withAccessToken(mockHttpClient, "oauth-token"));
     }
 
     @Test
@@ -100,7 +101,8 @@ class VcsClientFactoryTest {
         VcsClient result = factory.createClientWithOAuth(EVcsProvider.BITBUCKET_CLOUD, "key", "secret");
 
         assertThat(result).isInstanceOf(BitbucketCloudClient.class);
-        verify(mockHttpClientFactory).createClient("key", "secret", EVcsProvider.BITBUCKET_CLOUD.getId());
+        verify(mockHttpClientFactory).createTransport(
+                "key", "secret", EVcsProvider.BITBUCKET_CLOUD.getId());
     }
 
     @Test

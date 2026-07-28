@@ -104,13 +104,12 @@ class TestSystemRoot:
     """GET / — service identity."""
 
     async def test_root_returns_service_info(self, client, auth_headers):
-        """Root endpoint returns name and version."""
+        """Root endpoint returns the unreleased service identity."""
         resp = await client.get("/", headers=auth_headers)
         assert resp.status_code == 200
         body = resp.json()
         assert "message" in body
         assert "RAG" in body["message"]
-        assert "version" in body
 
 
 @pytest.mark.asyncio

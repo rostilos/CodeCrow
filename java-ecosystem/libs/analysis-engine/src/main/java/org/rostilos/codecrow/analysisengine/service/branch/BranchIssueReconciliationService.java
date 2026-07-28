@@ -872,6 +872,18 @@ public class BranchIssueReconciliationService {
                     }
                 });
 
+                if (AiAnalysisClient.isPromptDryRunResult(aiResponse)) {
+                    log.warn(
+                            "Prompt dry run completed for branch reconciliation project={}, branch={}; artifact={}",
+                            project.getId(), request.getTargetBranchName(), aiResponse.get("promptArtifact"));
+                    consumer.accept(Map.of(
+                            "type", "info",
+                            "state", "prompt_dry_run_completed",
+                            "message", "Prompt dry run completed without reconciling issue state",
+                            "promptArtifact", aiResponse.getOrDefault("promptArtifact", Map.of())));
+                    continue;
+                }
+
                 aiResolvedCount += processAiResponse(aiResponse, branch,
                         request.getCommitHash(), request.getSourcePrNumber());
             }

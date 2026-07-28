@@ -6,6 +6,7 @@ import traceback
 from typing import Dict, Any, Optional
 import redis.asyncio as redis
 from pydantic import ValidationError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from model.dtos import SummarizeRequestDto, AskRequestDto
 from service.command.command_service import CommandService
@@ -43,7 +44,13 @@ class CommandQueueConsumer:
             return
             
         logger.info(f"Starting Command Queue Consumer connected to {self.redis_url}")
-        self._redis = redis.from_url(self.redis_url, decode_responses=True)
+        self._redis = redis.from_url(
+            self.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=30,
+            health_check_interval=30,
+        )
         self.is_running = True
         self._task = asyncio.create_task(self._consume_loop())
 
@@ -76,6 +83,9 @@ class CommandQueueConsumer:
                 
             except asyncio.CancelledError:
                 break
+            except RedisTimeoutError as error:
+                logger.warning("Redis command queue read timed out; retrying: %s", error)
+                await asyncio.sleep(1)
             except Exception as e:
                 logger.error(f"Error in Command Queue consume loop: {e}", exc_info=True)
                 await asyncio.sleep(2)
@@ -205,12 +215,12 @@ class CommandQueueConsumer:
         error = cls._get_result_value(result, "error")
         return error is not None and str(error).strip() != ""
 
-    @staticmethod
-    def _has_usable_text(value: Any) -> bool:
+    @classmethod
+    def _has_usable_text(cls, value: Any) -> bool:
         if value is None:
             return False
         text = str(value).strip()
-        return bool(text) and text.lower() not in CommandQueueConsumer.EMPTY_RESULT_SENTINELS
+        return bool(text) and text.lower() not in cls.EMPTY_RESULT_SENTINELS
 
     @staticmethod
     def _string_or_empty(value: Any) -> str:

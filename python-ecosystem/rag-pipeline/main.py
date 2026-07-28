@@ -75,7 +75,7 @@ def validate_environment():
             logger.error("=" * 60)
             sys.exit(1)
 
-        logger.info(f"OPENROUTER_API_KEY: {openrouter_key[:15]}...{openrouter_key[-4:]} ✓")
+        logger.info("OPENROUTER_API_KEY: configured ✓")
         logger.info("=" * 60)
         logger.info("Using OpenRouter for cloud embeddings ✓")
         logger.info("=" * 60)
@@ -103,4 +103,3 @@ if __name__ == "__main__":
         port=8001,
         workers=workers
     )
-

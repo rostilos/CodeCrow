@@ -9,8 +9,13 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.utils.utils import secret_from_env
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+from llm.provider_guard import (
+    forbid_llm_provider_construction,
+    provider_construction_block_reason,
+)
 
 logger = logging.getLogger(__name__)
+
 
 # Default temperature from env or 0.0 for deterministic results
 DEFAULT_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.0"))
@@ -637,6 +642,13 @@ class LLMFactory:
         Returns:
             LangChain chat model instance
         """
+        blocked_reason = provider_construction_block_reason()
+        if blocked_reason is not None:
+            raise RuntimeError(
+                "LLM provider construction is forbidden in this execution "
+                f"context: {blocked_reason}"
+            )
+
         if temperature is None:
             temperature = DEFAULT_TEMPERATURE
         

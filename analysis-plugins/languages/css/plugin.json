@@ -1,0 +1,20 @@
+{
+  "id": "css",
+  "kind": "language",
+  "requires": [],
+  "capabilities": [
+    "syntax"
+  ],
+  "detection": {
+    "extensions": [
+      ".css"
+    ],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.css.CssPlugin"
+  }
+}

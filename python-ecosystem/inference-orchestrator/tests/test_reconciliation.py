@@ -54,6 +54,14 @@ class TestIssueMatchesFiles:
         issue = _make_issue(file="module_a/utils.py")
         assert issue_matches_files(issue, ["module_b/utils.py"]) is False
 
+    def test_bare_basename_is_not_a_repository_identity(self):
+        issue = _make_issue(file="module_a/utils.py")
+        assert issue_matches_files(issue, ["utils.py"]) is False
+
+    def test_absolute_checkout_prefix_matches_repository_relative_path(self):
+        issue = _make_issue(file="/tmp/checkout/module_a/utils.py")
+        assert issue_matches_files(issue, ["module_a/utils.py"]) is True
+
     def test_empty_file_paths(self):
         issue = _make_issue(file="src/app.py")
         assert issue_matches_files(issue, []) is False
@@ -250,32 +258,111 @@ class TestDeduplicateFinalIssues:
         result = deduplicate_final_issues(issues)
         assert len(result) == 2
 
-    def test_tier1_structural_dedup(self):
-        """Same file + line + category → keep first."""
+    def test_same_location_and_category_preserves_distinct_root_causes(self):
         issues = [
             _make_issue(file="a.py", line=10, category="SECURITY", reason="First"),
             _make_issue(file="a.py", line=10, category="SECURITY", reason="Second"),
         ]
         result = deduplicate_final_issues(issues)
-        assert len(result) == 1
+        assert len(result) == 2
 
-    def test_tier2_whole_file_absorbs(self):
-        """line=0 issue absorbs same file+category at specific line."""
+    def test_file_scope_does_not_absorb_distinct_specific_finding(self):
         issues = [
             _make_issue(file="a.py", line=0, category="CODE_QUALITY", reason="File-level"),
             _make_issue(file="a.py", line=42, category="CODE_QUALITY", reason="Specific-line"),
         ]
         result = deduplicate_final_issues(issues)
-        assert len(result) == 1
+        assert len(result) == 2
 
-    def test_tier3_semantic_dedup(self):
-        """Similar reasons in same file → keep first."""
+    def test_similar_prose_at_distinct_locations_is_not_identity(self):
         issues = [
             _make_issue(file="a.py", line=10, category="SECURITY", reason="Missing null check in user lookup"),
-            _make_issue(file="a.py", line=20, category="BUG_RISK", reason="Missing null check in user lookup method"),
+            _make_issue(file="a.py", line=20, category="SECURITY", reason="Missing null check in user lookup method"),
         ]
         result = deduplicate_final_issues(issues)
-        assert len(result) == 1
+        assert len(result) == 2
+
+    def test_same_source_snippet_survives_line_drift_and_deduplicates(self):
+        issues = [
+            _make_issue(
+                file="a.py",
+                line=10,
+                category="SECURITY",
+                reason="Missing null check in user lookup",
+                codeSnippet="user = lookup(user_id)",
+            ),
+            _make_issue(
+                file="a.py",
+                line=13,
+                category="SECURITY",
+                reason="Missing null check in user lookup method",
+                codeSnippet="user = lookup(user_id)",
+            ),
+        ]
+
+        assert len(deduplicate_final_issues(issues)) == 1
+
+    def test_exact_plugin_proof_deduplicates_across_prose_and_anchors(self):
+        issues = [
+            _make_issue(
+                file="app/code/Vendor/Module/etc/di.xml",
+                line=12,
+                category="ARCHITECTURE",
+                reason="The scoped preference selects the wrong implementation.",
+                codeSnippet='<preference for="Api" type="Broken"/>',
+                claimKind="magento-di-effective-preference",
+                evidenceRefs=["RAG-proof-2", "RAG-proof-1"],
+            ),
+            _make_issue(
+                file="app/code/Vendor/Module/etc/di.xml",
+                line=45,
+                category="BUG_RISK",
+                reason="Another batch describes the same effective binding.",
+                codeSnippet="<argument name=\"service\">Api</argument>",
+                claimKind="magento-di-effective-preference",
+                evidenceRefs=["RAG-proof-1", "RAG-proof-2"],
+            ),
+        ]
+
+        assert deduplicate_final_issues(issues) == [issues[0]]
+
+    def test_distinct_plugin_proofs_remain_distinct(self):
+        issues = [
+            _make_issue(
+                file="app/code/Vendor/Module/etc/di.xml",
+                line=12,
+                reason="First preference defect.",
+                codeSnippet='<preference for="ApiOne" type="Broken"/>',
+                claimKind="magento-di-effective-preference",
+                evidenceRefs=["RAG-proof-1"],
+            ),
+            _make_issue(
+                file="app/code/Vendor/Module/etc/di.xml",
+                line=13,
+                reason="Second preference defect.",
+                codeSnippet='<preference for="ApiTwo" type="Broken"/>',
+                claimKind="magento-di-effective-preference",
+                evidenceRefs=["RAG-proof-2"],
+            ),
+        ]
+
+        assert deduplicate_final_issues(issues) == issues
+
+    def test_same_plugin_proof_in_different_files_remains_distinct(self):
+        issues = [
+            _make_issue(
+                file="module-a/etc/di.xml",
+                claimKind="magento-di-effective-preference",
+                evidenceRefs=["RAG-proof-1"],
+            ),
+            _make_issue(
+                file="module-b/etc/di.xml",
+                claimKind="magento-di-effective-preference",
+                evidenceRefs=["RAG-proof-1"],
+            ),
+        ]
+
+        assert deduplicate_final_issues(issues) == issues
 
     def test_different_files_not_deduped(self):
         """Same reason in DIFFERENT files should NOT be deduped."""
@@ -309,6 +396,36 @@ class TestDeduplicateCrossBatchIssues:
         ]
         result = deduplicate_cross_batch_issues(issues)
         assert len(result) == 1
+
+    def test_similar_wording_in_different_files_is_not_deduplicated(self):
+        issues = [
+            _make_issue(
+                file="module_a/service.py",
+                reason="Missing null check in user lookup",
+            ),
+            _make_issue(
+                file="module_b/service.py",
+                reason="Missing null check in user lookup method",
+            ),
+        ]
+
+        assert len(deduplicate_cross_batch_issues(issues)) == 2
+
+    def test_similar_wording_at_different_anchors_is_not_deduplicated(self):
+        issues = [
+            _make_issue(
+                file="service.py",
+                line=10,
+                reason="Missing null check in user lookup",
+            ),
+            _make_issue(
+                file="service.py",
+                line=30,
+                reason="Missing null check in user lookup method",
+            ),
+        ]
+
+        assert len(deduplicate_cross_batch_issues(issues)) == 2
 
 
 # ── _build_batches ───────────────────────────────────────────────

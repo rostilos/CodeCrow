@@ -1,0 +1,26 @@
+{
+  "id": "cpp",
+  "kind": "language",
+  "requires": [],
+  "capabilities": [
+    "syntax"
+  ],
+  "detection": {
+    "extensions": [
+      ".cc",
+      ".cpp",
+      ".cxx",
+      ".h",
+      ".hh",
+      ".hpp",
+      ".hxx"
+    ],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.cpp.CppPlugin"
+  }
+}

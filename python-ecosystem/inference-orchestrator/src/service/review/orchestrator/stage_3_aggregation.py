@@ -12,7 +12,7 @@ from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import ProcessedDiff
 from utils.task_context_builder import build_task_context
 
-from service.review.orchestrator.agents import extract_llm_response_text
+from utils.llm_response import extract_llm_response_text
 from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
 
 logger = logging.getLogger(__name__)

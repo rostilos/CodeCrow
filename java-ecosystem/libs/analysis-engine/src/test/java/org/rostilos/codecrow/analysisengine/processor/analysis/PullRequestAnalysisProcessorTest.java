@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.analysisengine.processor.analysis;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -19,6 +20,7 @@ import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
+import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
@@ -29,6 +31,7 @@ import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.pr.PrIssueTrackingService;
+import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.io.IOException;
@@ -104,6 +107,8 @@ class PullRequestAnalysisProcessorTest {
 
         @BeforeEach
         void setUp() {
+                System.setProperty(PromptDryRunMode.ENABLED_KEY, "false");
+                System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
                 processor = new PullRequestAnalysisProcessor(
                                 pullRequestService,
                                 codeAnalysisService,
@@ -119,6 +124,12 @@ class PullRequestAnalysisProcessorTest {
                                 eventPublisher);
         }
 
+        @AfterEach
+        void clearPromptDryRunProperties() {
+                System.clearProperty(PromptDryRunMode.ENABLED_KEY);
+                System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
+        }
+
         private PrProcessRequest createRequest() {
                 PrProcessRequest request = new PrProcessRequest();
                 request.projectId = 1L;
@@ -132,6 +143,54 @@ class PullRequestAnalysisProcessorTest {
         @Nested
         @DisplayName("process()")
         class ProcessTests {
+
+                @Test
+                @DisplayName("should persist only the provider-canonicalized full PR head")
+                void shouldPersistProviderCanonicalizedFullPrHead() throws Exception {
+                        PrProcessRequest request = createRequest();
+                        request.commitHash = "eb59a730e565";
+                        String fullHead = "eb59a730e56532cc96d0e9fbb6b7616d6ca9897e";
+                        PullRequestAnalysisProcessor.EventConsumer consumer = mock(
+                                        PullRequestAnalysisProcessor.EventConsumer.class);
+
+                        VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+                        when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+                        when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+                        when(project.getId()).thenReturn(1L);
+                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+                        when(analysisLockService.acquireLockWithWait(
+                                        any(), anyString(), any(), anyString(), anyLong(), any()))
+                                        .thenReturn(Optional.of("lock-key-123"));
+                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(reportingService);
+                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(aiClientService);
+                        when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong()))
+                                        .thenReturn(List.of());
+                        when(pullRequestService.createOrUpdatePullRequest(
+                                        anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                                        .thenReturn(pullRequest);
+                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
+                                        .thenAnswer(invocation -> {
+                                                PrProcessRequest acquired =
+                                                        invocation.getArgument(1, PrProcessRequest.class);
+                                                acquired.commitHash = fullHead;
+                                                return List.of();
+                                        });
+
+                        Map<String, Object> result = processor.process(request, consumer, project);
+
+                        assertThat(result).containsEntry("status", "ignored");
+                        assertThat(request.commitHash).isEqualTo(fullHead);
+                        verify(pullRequestService).createOrUpdatePullRequest(
+                                        eq(1L),
+                                        eq(42L),
+                                        eq(fullHead),
+                                        eq("feature-branch"),
+                                        eq("main"),
+                                        eq(project));
+                        verify(analysisLockService).releaseLock("lock-key-123");
+                }
 
                 @Test
                 @DisplayName("should successfully process PR analysis")
@@ -209,6 +268,131 @@ class PullRequestAnalysisProcessorTest {
                 }
 
                 @Test
+                @DisplayName("should run full preparation but not persist or publish a prompt dry run")
+                void shouldNotPersistOrPublishPromptDryRun() throws Exception {
+                        System.setProperty(PromptDryRunMode.ENABLED_KEY, "true");
+                        System.setProperty(PromptDryRunMode.PROJECT_IDS_KEY, "1");
+                        PrProcessRequest request = createRequest();
+                        PullRequestAnalysisProcessor.EventConsumer consumer = mock(
+                                        PullRequestAnalysisProcessor.EventConsumer.class);
+                        VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+                        when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+                        when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+                        when(project.getId()).thenReturn(1L);
+                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+                        when(analysisLockService.acquireLockWithWait(
+                                        any(), anyString(), any(), anyString(), anyLong(), any()))
+                                        .thenReturn(Optional.of("lock-key-123"));
+                        when(pullRequestService.createOrUpdatePullRequest(
+                                        anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                                        .thenReturn(pullRequest);
+                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(reportingService);
+                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(aiClientService);
+                        when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong()))
+                                        .thenReturn(List.of());
+                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
+                                        .thenReturn(List.of(aiAnalysisRequest));
+                        when(aiAnalysisRequest.getRawDiff()).thenReturn("diff");
+                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        Map<String, Object> dryRunResponse = Map.of(
+                                        "dryRun", true,
+                                        "status", "prompt_capture_completed",
+                                        "promptArtifact", Map.of(
+                                                        "filename", "capture.json",
+                                                        "containerPath",
+                                                        "/app/logs/prompt-dry-runs/capture.json"));
+                        when(analysisLockService.getLeaseMinutes(AnalysisLockType.PR_ANALYSIS))
+                                        .thenReturn(30);
+                        when(analysisLockService.renewLock("lock-key-123", 30))
+                                        .thenReturn(true);
+                        when(aiAnalysisClient.performAnalysis(any(), any()))
+                                        .thenAnswer(invocation -> {
+                                                @SuppressWarnings("unchecked")
+                                                java.util.function.Consumer<Map<String, Object>> eventHandler =
+                                                                invocation.getArgument(1);
+                                                eventHandler.accept(Map.of(
+                                                                "type", "status",
+                                                                "state", "processing",
+                                                                "message",
+                                                                "Review pipeline is still processing"));
+                                                return dryRunResponse;
+                                        });
+
+                        Map<String, Object> result = processor.process(request, consumer, project);
+
+                        assertThat(result).isEqualTo(dryRunResponse);
+                        verify(codeAnalysisService, never()).getCodeAnalysisCache(
+                                        anyLong(), anyString(), anyLong());
+                        verify(codeAnalysisService, never()).createAnalysisFromAiResponse(
+                                        any(), any(), anyLong(), anyString(), anyString(), anyString(),
+                                        any(), any(), any(), any(), any(), any());
+                        verify(analysisLockService).renewLock("lock-key-123", 30);
+                        verify(reportingService, never()).postAnalysisResults(
+                                        any(), any(), anyLong(), any(), any());
+                }
+
+                @Test
+                @DisplayName("should reject a completed review after lock lease ownership is lost")
+                void shouldRejectCompletedReviewAfterLockLeaseIsLost() throws Exception {
+                        PrProcessRequest request = createRequest();
+                        PullRequestAnalysisProcessor.EventConsumer consumer = mock(
+                                        PullRequestAnalysisProcessor.EventConsumer.class);
+                        VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+                        when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+                        when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+                        when(project.getId()).thenReturn(1L);
+                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+                        when(analysisLockService.acquireLockWithWait(
+                                        any(), anyString(), any(), anyString(), anyLong(), any()))
+                                        .thenReturn(Optional.of("lock-key-123"));
+                        when(pullRequestService.createOrUpdatePullRequest(
+                                        anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                                        .thenReturn(pullRequest);
+                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(reportingService);
+                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(aiClientService);
+                        when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong()))
+                                        .thenReturn(List.of());
+                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
+                                        .thenReturn(List.of(aiAnalysisRequest));
+                        when(aiAnalysisRequest.getRawDiff()).thenReturn("diff");
+                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        when(analysisLockService.getLeaseMinutes(AnalysisLockType.PR_ANALYSIS))
+                                        .thenReturn(30);
+                        when(analysisLockService.renewLock("lock-key-123", 30))
+                                        .thenReturn(false);
+                        when(aiAnalysisClient.performAnalysis(any(), any()))
+                                        .thenAnswer(invocation -> {
+                                                @SuppressWarnings("unchecked")
+                                                java.util.function.Consumer<Map<String, Object>> eventHandler =
+                                                                invocation.getArgument(1);
+                                                eventHandler.accept(Map.of(
+                                                                "type", "status",
+                                                                "state", "processing"));
+                                                return Map.of(
+                                                                "comment", "must not be published",
+                                                                "issues", List.of());
+                                        });
+
+                        Map<String, Object> result = processor.process(request, consumer, project);
+
+                        assertThat(result)
+                                        .containsEntry("status", "error")
+                                        .containsEntry(
+                                                        "message",
+                                                        "PR analysis lost its lock lease while the review worker was active");
+                        verify(codeAnalysisService, never()).createAnalysisFromAiResponse(
+                                        any(), any(), anyLong(), anyString(), anyString(), anyString(),
+                                        any(), any(), any(), any(), any(), any());
+                        verify(reportingService, never()).postAnalysisResults(
+                                        any(), any(), anyLong(), any(), any());
+                        verify(analysisLockService).releaseLock("lock-key-123");
+                }
+
+                @Test
                 @DisplayName("should throw AnalysisLockedException when lock cannot be acquired")
                 void shouldThrowAnalysisLockedExceptionWhenLockCannotBeAcquired() {
                         PrProcessRequest request = createRequest();
@@ -251,8 +435,18 @@ class PullRequestAnalysisProcessorTest {
 
                         when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
                                         .thenReturn(reportingService);
+                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(aiClientService);
+                        when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong())).thenReturn(List.of());
+                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
+                                        .thenReturn(List.of(aiAnalysisRequest));
+                        when(aiAnalysisRequest.getRawDiff()).thenReturn(
+                                        "diff --git a/file.java b/file.java\n@@ -1 +1 @@\n-old\n+new\n");
+                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        String reviewIdentity = processor.computeReviewIdentity(aiAnalysisRequest);
                         when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
                                         .thenReturn(Optional.of(codeAnalysis));
+                        when(codeAnalysis.getDiffFingerprint()).thenReturn(reviewIdentity);
 
                         Map<String, Object> result = processor.process(request, consumer, project);
 
@@ -332,13 +526,22 @@ class PullRequestAnalysisProcessorTest {
                         when(pullRequest.getId()).thenReturn(100L);
                         when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
                                         .thenReturn(reportingService);
+                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(aiClientService);
+                        when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong())).thenReturn(List.of());
+                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
+                                        .thenReturn(List.of(aiAnalysisRequest));
+                        when(aiAnalysisRequest.getRawDiff()).thenReturn(
+                                        "diff --git a/file.java b/file.java\n@@ -1 +1 @@\n-old\n+new\n");
+                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        String reviewIdentity = processor.computeReviewIdentity(aiAnalysisRequest);
 
                         // No exact cache match, but commit hash matches from another PR
                         when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
                                         .thenReturn(Optional.empty());
                         CodeAnalysis sourceAnalysis = mock(CodeAnalysis.class);
                         when(sourceAnalysis.getPrNumber()).thenReturn(99L);
-                        when(sourceAnalysis.getDiffFingerprint()).thenReturn("fp123");
+                        when(sourceAnalysis.getDiffFingerprint()).thenReturn(reviewIdentity);
                         when(codeAnalysisService.getAnalysisByCommitHash(1L, "abc123"))
                                         .thenReturn(Optional.of(sourceAnalysis));
 
@@ -352,7 +555,7 @@ class PullRequestAnalysisProcessorTest {
                         assertThat(result).containsEntry("status", "cached_by_commit");
                         assertThat(result).containsEntry("cached", true);
                         verify(codeAnalysisService).cloneAnalysisForPr(eq(sourceAnalysis), eq(project), eq(42L),
-                                        eq("abc123"), eq("main"), eq("feature-branch"), eq("fp123"));
+                                        eq("abc123"), eq("main"), eq("feature-branch"), eq(reviewIdentity));
                         verify(reportingService).postAnalysisResults(eq(clonedAnalysis), any(), anyLong(), any(),
                                         any());
                         verify(analysisLockService).releaseLock("lock-key");
@@ -532,12 +735,21 @@ class PullRequestAnalysisProcessorTest {
                         when(pullRequest.getId()).thenReturn(100L);
                         when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
                                         .thenReturn(reportingService);
+                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(aiClientService);
+                        when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong())).thenReturn(List.of());
+                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
+                                        .thenReturn(List.of(aiAnalysisRequest));
+                        when(aiAnalysisRequest.getRawDiff()).thenReturn(
+                                        "diff --git a/file.java b/file.java\n@@ -1 +1 @@\n-old\n+new\n");
+                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        String reviewIdentity = processor.computeReviewIdentity(aiAnalysisRequest);
 
                         when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
                                         .thenReturn(Optional.empty());
                         CodeAnalysis sourceAnalysis = mock(CodeAnalysis.class);
                         when(sourceAnalysis.getPrNumber()).thenReturn(99L);
-                        when(sourceAnalysis.getDiffFingerprint()).thenReturn("fp");
+                        when(sourceAnalysis.getDiffFingerprint()).thenReturn(reviewIdentity);
                         when(codeAnalysisService.getAnalysisByCommitHash(1L, "abc123"))
                                         .thenReturn(Optional.of(sourceAnalysis));
                         CodeAnalysis clonedAnalysis = mock(CodeAnalysis.class);
@@ -565,11 +777,12 @@ class PullRequestAnalysisProcessorTest {
                         when(project.getId()).thenReturn(1L);
                         when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
                                         .thenReturn(Optional.of(codeAnalysis));
+                        when(codeAnalysis.getDiffFingerprint()).thenReturn("identity");
                         when(pullRequest.getId()).thenReturn(100L);
 
                         PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
                                         project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
-                                        "main", "feature-branch");
+                                        "main", "feature-branch", "identity");
 
                         assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.EXACT);
                         verify(reportingService).postAnalysisResults(eq(codeAnalysis), eq(project), eq(42L), eq(100L),
@@ -587,10 +800,33 @@ class PullRequestAnalysisProcessorTest {
 
                         PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
                                         project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
-                                        "main", "feature-branch");
+                                        "main", "feature-branch", "identity");
 
                         assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.NONE);
                         verify(reportingService, never()).postAnalysisResults(any(), any(), anyLong(), any(), any());
+                }
+
+                @Test
+                @DisplayName("should reject stale exact and commit caches with a different review identity")
+                void shouldRejectCacheEntriesWithDifferentReviewIdentity() throws IOException {
+                        when(project.getId()).thenReturn(1L);
+                        CodeAnalysis staleExact = mock(CodeAnalysis.class);
+                        CodeAnalysis staleCommit = mock(CodeAnalysis.class);
+                        when(staleExact.getDiffFingerprint()).thenReturn("old-identity");
+                        when(staleCommit.getDiffFingerprint()).thenReturn("old-identity");
+                        when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
+                                        .thenReturn(Optional.of(staleExact));
+                        when(codeAnalysisService.getAnalysisByCommitHash(1L, "abc123"))
+                                        .thenReturn(Optional.of(staleCommit));
+
+                        PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
+                                        project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
+                                        "main", "feature-branch", "current-identity");
+
+                        assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.NONE);
+                        verify(reportingService, never()).postAnalysisResults(any(), any(), anyLong(), any(), any());
+                        verify(codeAnalysisService, never()).cloneAnalysisForPr(
+                                        any(), any(), anyLong(), anyString(), anyString(), anyString(), anyString());
                 }
 
                 @Test
@@ -599,13 +835,14 @@ class PullRequestAnalysisProcessorTest {
                         when(project.getId()).thenReturn(1L);
                         when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
                                         .thenReturn(Optional.of(codeAnalysis));
+                        when(codeAnalysis.getDiffFingerprint()).thenReturn("identity");
                         when(pullRequest.getId()).thenReturn(100L);
                         doThrow(new IOException("Post error")).when(reportingService).postAnalysisResults(any(), any(),
                                         anyLong(), any(), any());
 
                         PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
                                         project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
-                                        "main", "feature-branch");
+                                        "main", "feature-branch", "identity");
 
                         // Should still return EXACT (cache existed)
                         assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.EXACT);

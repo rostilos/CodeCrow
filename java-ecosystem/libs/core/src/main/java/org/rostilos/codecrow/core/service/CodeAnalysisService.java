@@ -328,7 +328,8 @@ public class CodeAnalysisService {
                             && !DiffSanitizer.NO_FIX_PLACEHOLDER.equals(i.getSuggestedFixDiff()))
                     .count();
 
-            // De-duplicate issues at ingestion time (3-tier: structural, whole-file wildcard, fingerprint)
+            // De-duplicate only exact anchored identities. Location alone and FILE scope
+            // are not identities because independent findings can share them.
             List<CodeAnalysisIssue> deduplicated = issueDeduplicationService.deduplicateAtIngestion(
                     savedAnalysis.getIssues());
             int deduped = rawIssueCount - deduplicated.size();
@@ -848,11 +849,12 @@ public class CodeAnalysisService {
                     : null;
             boolean hasAvailableFileContent = availableFileContent != null && !availableFileContent.isEmpty();
 
-            if (!explicitFileScope && hasAvailableFileContent) {
+            if (hasAvailableFileContent) {
                 if (!hasCodeSnippet) {
                     if (!historicalResolution) {
-                        log.warn("Rejecting non-FILE issue without codeSnippet: file={}, line={}, title={}",
-                                issue.getFilePath(), issue.getLineNumber(), issue.getTitle());
+                        log.warn("Rejecting new issue without codeSnippet: file={}, line={}, scope={}, title={}",
+                                issue.getFilePath(), issue.getLineNumber(),
+                                issue.getIssueScope(), issue.getTitle());
                         return null;
                     }
                     log.info("Keeping historical resolution without codeSnippet: originalIssue={}, file={}, line={}",
@@ -866,13 +868,14 @@ public class CodeAnalysisService {
 
                         if (!anchor.shouldOverrideLine()) {
                             if (!historicalResolution) {
-                                log.warn("Rejecting non-FILE issue with unanchorable codeSnippet: file={}, line={}, title={}",
-                                        issue.getFilePath(), issue.getLineNumber(), issue.getTitle());
+                                log.warn("Rejecting new issue with unanchorable codeSnippet: file={}, line={}, scope={}, title={}",
+                                        issue.getFilePath(), issue.getLineNumber(),
+                                        issue.getIssueScope(), issue.getTitle());
                                 return null;
                             }
                             log.info("Keeping historical resolution with stale codeSnippet: originalIssue={}, file={}, line={}",
                                     originalIssue.getId(), issue.getFilePath(), issue.getLineNumber());
-                        } else {
+                        } else if (!explicitFileScope) {
                             int oldLine = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
                             issue.setLineNumber(anchor.startLine());
 
@@ -881,6 +884,9 @@ public class CodeAnalysisService {
                                         filePath, oldLine, anchor.startLine(),
                                         anchor.matchStrategy(), anchor.confidence());
                             }
+                        } else {
+                            log.debug("Validated FILE-scoped issue anchor in {} using {}",
+                                    filePath, anchor.matchStrategy());
                         }
                     } catch (Exception e) {
                         if (!historicalResolution) {

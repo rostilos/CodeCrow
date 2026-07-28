@@ -99,7 +99,7 @@ class RAGConfig(BaseModel):
                 logger.error("OPENROUTER_API_KEY is not set but embedding_provider is 'openrouter'!")
                 raise ValueError("OPENROUTER_API_KEY is required when using OpenRouter provider")
             logger.info(f"Using OpenRouter embeddings with model: {self.openrouter_model}")
-            logger.info(f"OpenRouter API key loaded: {self.openrouter_api_key[:10]}...{self.openrouter_api_key[-4:]}")
+            logger.info("OpenRouter API key loaded")
         elif self.embedding_provider == "ollama":
             logger.info(f"Using Ollama local embeddings with model: {self.ollama_model}")
             logger.info(f"Ollama base URL: {self.ollama_base_url}")

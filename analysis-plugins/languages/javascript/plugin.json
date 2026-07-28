@@ -1,0 +1,22 @@
+{
+  "id": "javascript",
+  "kind": "language",
+  "requires": [],
+  "capabilities": ["context", "graph", "index", "planning", "prompt", "syntax", "validation"],
+  "detection": {
+    "extensions": [
+      ".cjs",
+      ".js",
+      ".jsx",
+      ".mjs"
+    ],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.javascript.JavascriptPlugin",
+    "python": "codecrow_plugin_javascript:create_plugin"
+  }
+}

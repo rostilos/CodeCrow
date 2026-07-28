@@ -90,24 +90,22 @@ class IssueDeduplicationServiceTest {
         }
     }
 
-    // ── Tier 1: Structural key dedup ─────────────────────────────────────
+    // ── Location is not an issue identity ────────────────────────────────
 
     @Nested
-    @DisplayName("Tier 1: Structural dedup (file:line:category)")
-    class StructuralDedup {
+    @DisplayName("Location preservation")
+    class LocationPreservation {
 
         @Test
-        @DisplayName("should remove exact file:line:category duplicate")
-        void shouldRemoveExactDuplicate() {
+        @DisplayName("should keep distinct issues at the same file, line, and category")
+        void shouldKeepDistinctIssuesAtSameLocation() {
             List<CodeAnalysisIssue> input = new ArrayList<>(List.of(
                     createIssue("App.java", 10, IssueCategory.BUG_RISK, IssueSeverity.MEDIUM, "Null check v1"),
                     createIssue("App.java", 10, IssueCategory.BUG_RISK, IssueSeverity.HIGH, "Null check v2")
             ));
             List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(input);
 
-            assertThat(result).hasSize(1);
-            // Higher severity should win
-            assertThat(result.get(0).getSeverity()).isEqualTo(IssueSeverity.HIGH);
+            assertThat(result).hasSize(2);
         }
 
         @Test
@@ -133,11 +131,15 @@ class IssueDeduplicationServiceTest {
         }
 
         @Test
-        @DisplayName("should keep best diff when merging duplicates")
-        void shouldKeepBestDiff() {
+        @DisplayName("should keep best representation after exact fingerprint match")
+        void shouldKeepBestRepresentationForExactIdentity() {
             CodeAnalysisIssue noDiff = createIssue("App.java", 10, IssueCategory.BUG_RISK, IssueSeverity.HIGH, "A", "No suggested fix provided");
             CodeAnalysisIssue withDiff = createIssue("App.java", 10, IssueCategory.BUG_RISK, IssueSeverity.MEDIUM, "B",
                     "--- a/App.java\n+++ b/App.java\n@@ -10,3 +10,3 @@\n- bad\n+ good");
+            noDiff.setIssueFingerprint("same-exact-identity");
+            withDiff.setIssueFingerprint("same-exact-identity");
+            noDiff.setLineHash("same-anchored-line");
+            withDiff.setLineHash("same-anchored-line");
 
             List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(new ArrayList<>(List.of(noDiff, withDiff)));
 
@@ -148,36 +150,34 @@ class IssueDeduplicationServiceTest {
         }
     }
 
-    // ── Tier 2: Whole-file wildcard ──────────────────────────────────────
+    // ── FILE scope is not a wildcard ─────────────────────────────────────
 
     @Nested
-    @DisplayName("Tier 2: Whole-file wildcard (line ≤ 1)")
-    class WholeFileWildcard {
+    @DisplayName("FILE-scope preservation")
+    class FileScopePreservation {
 
         @Test
-        @DisplayName("should absorb specific-line issue when whole-file entry exists first")
-        void shouldAbsorbSpecificLineWhenWholeFileFirst() {
+        @DisplayName("should retain distinct FILE and line findings when FILE appears first")
+        void shouldRetainDistinctIssuesWhenFileScopeFirst() {
             List<CodeAnalysisIssue> input = new ArrayList<>(List.of(
                     createIssue("App.java", 0, IssueCategory.CODE_QUALITY, IssueSeverity.MEDIUM, "Whole file issue"),
                     createIssue("App.java", 42, IssueCategory.CODE_QUALITY, IssueSeverity.LOW, "Specific line issue")
             ));
             List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(input);
 
-            assertThat(result).hasSize(1);
-            assertThat(result.get(0).getTitle()).isEqualTo("Whole file issue");
+            assertThat(result).hasSize(2);
         }
 
         @Test
-        @DisplayName("should discard whole-file entry when specific-line exists first")
-        void shouldDiscardWholeFileWhenSpecificExists() {
+        @DisplayName("should retain distinct line and FILE findings when line appears first")
+        void shouldRetainDistinctIssuesWhenLineScopeFirst() {
             List<CodeAnalysisIssue> input = new ArrayList<>(List.of(
                     createIssue("App.java", 42, IssueCategory.CODE_QUALITY, IssueSeverity.MEDIUM, "Specific line issue"),
                     createIssue("App.java", 1, IssueCategory.CODE_QUALITY, IssueSeverity.LOW, "Whole file issue")
             ));
             List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(input);
 
-            assertThat(result).hasSize(1);
-            assertThat(result.get(0).getLineNumber()).isEqualTo(42);
+            assertThat(result).hasSize(2);
         }
 
         @Test
@@ -191,18 +191,6 @@ class IssueDeduplicationServiceTest {
             assertThat(result).hasSize(2);
         }
 
-        @Test
-        @DisplayName("whole-file wildcard should promote severity from absorbed issue")
-        void shouldPromoteSeverityFromAbsorbed() {
-            List<CodeAnalysisIssue> input = new ArrayList<>(List.of(
-                    createIssue("App.java", 0, IssueCategory.BUG_RISK, IssueSeverity.LOW, "Whole file"),
-                    createIssue("App.java", 42, IssueCategory.BUG_RISK, IssueSeverity.HIGH, "Specific line")
-            ));
-            List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(input);
-
-            assertThat(result).hasSize(1);
-            // The surviving whole-file entry should have been promoted to HIGH
-        }
     }
 
     // ── Tier 3: Fingerprint-based ────────────────────────────────────────
@@ -220,6 +208,8 @@ class IssueDeduplicationServiceTest {
             String sharedFp = "shared_fingerprint_abc123";
             issue1.setIssueFingerprint(sharedFp);
             issue2.setIssueFingerprint(sharedFp);
+            issue1.setLineHash("same-anchored-line");
+            issue2.setLineHash("same-anchored-line");
 
             List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(new ArrayList<>(List.of(issue1, issue2)));
 
@@ -250,6 +240,37 @@ class IssueDeduplicationServiceTest {
             List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(new ArrayList<>(List.of(issue1, issue2)));
             assertThat(result).hasSize(2);
         }
+
+        @Test
+        @DisplayName("should preserve deterministic order when fingerprints are missing")
+        void shouldPreserveOrderWhenFingerprintMissing() {
+            CodeAnalysisIssue first = createIssue("App.java", 10, IssueCategory.BUG_RISK, IssueSeverity.HIGH, "First");
+            CodeAnalysisIssue second = createIssue("App.java", 10, IssueCategory.BUG_RISK, IssueSeverity.HIGH, "Second");
+            first.setIssueFingerprint(null);
+            second.setIssueFingerprint(null);
+
+            List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(
+                    new ArrayList<>(List.of(first, second)));
+
+            assertThat(result).extracting(CodeAnalysisIssue::getTitle)
+                    .containsExactly("First", "Second");
+        }
+
+        @Test
+        @DisplayName("should not merge matching placeholder fingerprints without source anchors")
+        void shouldNotMergePlaceholderFingerprintWithoutAnchor() {
+            CodeAnalysisIssue first = createIssue("App.java", 10, IssueCategory.BUG_RISK,
+                    IssueSeverity.HIGH, "Same generic title");
+            CodeAnalysisIssue second = createIssue("App.java", 20, IssueCategory.BUG_RISK,
+                    IssueSeverity.MEDIUM, "Same generic title");
+            first.setIssueFingerprint("same-no-hash-fingerprint");
+            second.setIssueFingerprint("same-no-hash-fingerprint");
+
+            List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(
+                    new ArrayList<>(List.of(first, second)));
+
+            assertThat(result).hasSize(2);
+        }
     }
 
     @Nested
@@ -267,6 +288,8 @@ class IssueDeduplicationServiceTest {
             bugRisk.setIssueFingerprint("bug-specific");
             quality.setContentFingerprint("same-content-anchor");
             bugRisk.setContentFingerprint("same-content-anchor");
+            quality.setLineHash("same-anchored-line");
+            bugRisk.setLineHash("same-anchored-line");
 
             List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(
                     new ArrayList<>(List.of(quality, bugRisk)));
@@ -314,16 +337,16 @@ class IssueDeduplicationServiceTest {
         }
     }
 
-    // ── Integration: multi-tier ──────────────────────────────────────────
+    // ── Integration: exact identities ────────────────────────────────────
 
     @Nested
-    @DisplayName("Multi-tier integration")
-    class MultiTierIntegration {
+    @DisplayName("Exact-identity integration")
+    class ExactIdentityIntegration {
 
         @Test
-        @DisplayName("should handle mix of structural + fingerprint duplicates")
+        @DisplayName("should merge exact fingerprints while retaining colocated findings")
         void shouldHandleMixedDuplicates() {
-            // Structural dup: same file:line:category
+            // Same location/category but different identities: both must survive.
             CodeAnalysisIssue a1 = createIssue("App.java", 10, IssueCategory.BUG_RISK, IssueSeverity.HIGH, "A1");
             CodeAnalysisIssue a2 = createIssue("App.java", 10, IssueCategory.BUG_RISK, IssueSeverity.MEDIUM, "A2");
 
@@ -333,6 +356,8 @@ class IssueDeduplicationServiceTest {
             String sharedFp = "shared_fp_security";
             b1.setIssueFingerprint(sharedFp);
             b2.setIssueFingerprint(sharedFp);
+            b1.setLineHash("same-security-anchor");
+            b2.setLineHash("same-security-anchor");
 
             // Unique issue
             CodeAnalysisIssue c = createIssue("App.java", 50, IssueCategory.PERFORMANCE, IssueSeverity.LOW, "C");
@@ -340,15 +365,15 @@ class IssueDeduplicationServiceTest {
             List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(
                     new ArrayList<>(List.of(a1, a2, b1, b2, c)));
 
-            // a1+a2 → 1 (structural), b1+b2 → 1 (fingerprint), c → 1
-            assertThat(result).hasSize(3);
+            // a1+a2 → 2, b1+b2 → 1 (exact fingerprint), c → 1
+            assertThat(result).hasSize(4);
         }
 
         @Test
-        @DisplayName("should handle large duplicate set")
-        void shouldHandleLargeDuplicateSet() {
+        @DisplayName("should keep a large set of colocated but distinct findings")
+        void shouldKeepLargeDistinctSet() {
             List<CodeAnalysisIssue> input = new ArrayList<>();
-            // 10 duplicates at same file:line:category
+            // Ten independent titles at the same location and category.
             for (int i = 0; i < 10; i++) {
                 input.add(createIssue("Massive.java", 42, IssueCategory.CODE_QUALITY,
                         i < 3 ? IssueSeverity.HIGH : IssueSeverity.LOW, "Dup " + i));
@@ -361,8 +386,7 @@ class IssueDeduplicationServiceTest {
 
             List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(input);
 
-            // 10 dupes → 1, 5 unique → 5 = 6 total
-            assertThat(result).hasSize(6);
+            assertThat(result).hasSize(15);
         }
     }
 }

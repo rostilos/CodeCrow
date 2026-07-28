@@ -1,0 +1,10 @@
+**
+!java-ecosystem/
+!java-ecosystem/services/
+!java-ecosystem/services/pipeline-agent/
+!java-ecosystem/services/pipeline-agent/target/
+!java-ecosystem/services/pipeline-agent/target/codecrow-pipeline-agent-1.0.jar
+!analysis-plugins/
+!analysis-plugins/build/
+!analysis-plugins/build/java/
+!analysis-plugins/build/java/*.jar

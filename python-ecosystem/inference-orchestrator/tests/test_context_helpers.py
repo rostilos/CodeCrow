@@ -8,6 +8,7 @@ from service.review.orchestrator.context_helpers import (
     extract_diff_snippets,
     get_diff_snippets_for_batch,
     format_rag_context,
+    rag_evidence_id,
 )
 
 
@@ -123,6 +124,264 @@ class TestFormatRagContext:
         assert "src/proc.py" in result
         assert "def process(): pass" in result
 
+    def test_retrieved_chunk_has_stable_citation_id(self):
+        chunk = {
+            "text": "exact relation",
+            "metadata": {
+                "path": "__analysis_architecture__/relation.context",
+                "architecture_key": "relation-key",
+            },
+            "_match_type": "architecture_relation",
+        }
+
+        first = rag_evidence_id(chunk)
+        second = rag_evidence_id(dict(chunk))
+        result = format_rag_context({"relevant_code": [chunk]})
+
+        assert first == second
+        assert first.startswith("RAG-")
+        assert f"Evidence ID: {first}" in result
+
+    def test_prompt_visible_semantic_chunk_is_available_as_citation(self):
+        chunk = {
+            "text": "def process(): pass",
+            "score": 0.90,
+            "metadata": {"path": "src/proc.py"},
+            "_source": "semantic",
+        }
+        visible = {}
+
+        result = format_rag_context(
+            {"relevant_code": [chunk]},
+            visible_evidence_by_id=visible,
+        )
+
+        evidence_id = rag_evidence_id(chunk)
+        assert f"Evidence ID: {evidence_id}" in result
+        assert visible == {evidence_id: ()}
+
+    def test_prompt_visible_semantic_graph_fact_is_available_to_validation(self):
+        fact = {
+            "kind": "java-type",
+            "source": "com.example.App",
+            "relation": "declares",
+            "target": "App",
+            "path": "src/App.java",
+            "line": 1,
+        }
+        chunk = {
+            "text": (
+                "[java-type] com.example.App declares App\n"
+                "public class App {}"
+            ),
+            "score": 0.95,
+            "metadata": {
+                "path": "src/App.java",
+                "plugin_graph_facts": [fact],
+            },
+            "_source": "semantic",
+        }
+        visible = {}
+
+        result = format_rag_context(
+            {"relevant_code": [chunk]},
+            visible_evidence_by_id=visible,
+        )
+
+        assert "[java-type]" in result
+        assert visible == {rag_evidence_id(chunk): (fact,)}
+
+    def test_repeated_file_fact_prefix_is_rendered_once_without_losing_source(self):
+        fact = {
+            "kind": "java-type",
+            "source": "com.example.App",
+            "relation": "declares",
+            "target": "App",
+            "path": "src/App.java",
+            "line": 1,
+        }
+        fact_line = "[java-type] com.example.App declares App"
+        first = {
+            "text": (
+                "Plugin graph facts:\n"
+                f"{fact_line}\n\n"
+                "public class App {"
+            ),
+            "score": 0.95,
+            "metadata": {
+                "path": "src/App.java",
+                "plugin_graph_facts": [fact],
+            },
+            "_match_type": "definition",
+            "_source": "deterministic",
+        }
+        second = {
+            "text": (
+                "Plugin graph facts:\n"
+                f"{fact_line}\n\n"
+                "void execute() {}"
+            ),
+            "score": 0.94,
+            "metadata": {
+                "path": "src/App.java",
+                "plugin_graph_facts": [fact],
+            },
+            "_match_type": "definition",
+            "_source": "deterministic",
+        }
+        visible = {}
+
+        result = format_rag_context(
+            {"relevant_code": [first, second]},
+            visible_evidence_by_id=visible,
+        )
+
+        assert result.count(fact_line) == 1
+        assert "public class App {" in result
+        assert "void execute() {}" in result
+        assert visible == {
+            rag_evidence_id(first): (fact,),
+            rag_evidence_id(second): (),
+        }
+
+    def test_metadata_facts_are_rendered_once_without_mutating_stored_source(self):
+        fact = {
+            "kind": "python-call",
+            "source": "service.review",
+            "relation": "calls",
+            "target": "validate",
+            "path": "src/service.py",
+            "line": 10,
+        }
+        fact_line = "[python-call] service.review calls validate"
+        first = {
+            "text": "def review():\n    validate()",
+            "score": 0.95,
+            "metadata": {
+                "path": "src/service.py",
+                "plugin_graph_facts": [fact],
+            },
+            "_match_type": "changed_file",
+            "_source": "deterministic",
+        }
+        second = {
+            "text": "def validate():\n    return True",
+            "score": 0.94,
+            "metadata": {
+                "path": "src/service.py",
+                "plugin_graph_facts": [fact],
+            },
+            "_match_type": "definition",
+            "_source": "deterministic",
+        }
+        visible = {}
+
+        result = format_rag_context(
+            {"relevant_code": [first, second]},
+            visible_evidence_by_id=visible,
+        )
+
+        assert result.count(fact_line) == 1
+        assert "def review()" in result
+        assert "def validate()" in result
+        assert visible == {
+            rag_evidence_id(first): (),
+            rag_evidence_id(second): (fact,),
+        }
+
+    def test_omitted_fact_prefix_does_not_hide_later_visible_copy(self):
+        fact = {
+            "kind": "java-type",
+            "source": "com.example.App",
+            "relation": "declares",
+            "target": "App",
+            "path": "src/App.java",
+            "line": 1,
+        }
+        fact_line = "[java-type] com.example.App declares App"
+        oversized = {
+            "text": (
+                "Plugin graph facts:\n"
+                + ("[java-call] com.example.App calls helper\n" * 30)
+                + f"{fact_line}\n\n"
+                + ("x" * 1_000)
+            ),
+            "score": 0.95,
+            "metadata": {
+                "path": "src/App.java",
+                "plugin_graph_facts": [fact],
+            },
+            "_match_type": "definition",
+            "_source": "deterministic",
+        }
+        later = {
+            "text": (
+                "Plugin graph facts:\n"
+                f"{fact_line}\n\n"
+                "public class App {}"
+            ),
+            "score": 0.94,
+            "metadata": {
+                "path": "src/App.java",
+                "plugin_graph_facts": [fact],
+            },
+            "_match_type": "definition",
+            "_source": "deterministic",
+        }
+        visible = {}
+
+        result = format_rag_context(
+            {"relevant_code": [oversized, later]},
+            max_chars=2_400,
+            max_chunk_chars=1_300,
+            visible_evidence_by_id=visible,
+        )
+
+        assert fact_line in result
+        assert visible[rag_evidence_id(later)] == (fact,)
+
+    def test_metadata_fact_hidden_by_chunk_truncation_cannot_validate(self):
+        visible_fact = {
+            "kind": "magento-effective-route",
+            "source": "checkout",
+            "relation": "handled-by-module",
+            "target": "Acme_Checkout",
+            "path": "app/code/Acme/Checkout/etc/frontend/routes.xml",
+            "line": 1,
+        }
+        hidden_fact = {
+            "kind": "magento-webapi-route",
+            "source": "POST /V1/cart",
+            "relation": "invokes",
+            "target": "Acme\\Api\\CartInterface::save",
+            "path": "app/code/Acme/Checkout/etc/webapi.xml",
+            "line": 1,
+        }
+        chunk = {
+            "text": (
+                "[magento-effective-route] checkout handled-by-module "
+                "Acme_Checkout\n"
+                + ("x" * 2_000)
+                + "\n[magento-webapi-route] POST /V1/cart invokes "
+                "Acme\\Api\\CartInterface::save"
+            ),
+            "score": 1.0,
+            "metadata": {
+                "path": "__analysis_architecture__/magento/routes.context",
+                "plugin_graph_facts": [visible_fact, hidden_fact],
+            },
+            "_match_type": "architecture_relation",
+        }
+        visible = {}
+
+        format_rag_context(
+            {"relevant_code": [chunk]},
+            max_chunk_chars=512,
+            visible_evidence_by_id=visible,
+        )
+
+        assert visible[rag_evidence_id(chunk)] == (visible_fact,)
+
     def test_filters_deleted_files(self):
         rag = {
             "relevant_code": [
@@ -158,9 +417,209 @@ class TestFormatRagContext:
         ]
         rag = {"relevant_code": chunks}
         result = format_rag_context(rag)
-        # Tier 1 budget is 8, so at least 8 should appear
         count = sum(1 for i in range(12) if f"src/base{i}.py" in result)
-        assert count >= 8
+        assert count == 12
+
+    def test_focused_architecture_relations_are_not_cut_at_eight(self):
+        rag = {
+            "relevant_code": [
+                {
+                    "text": f"[graph-fact] Source{index} resolves-to Target{index}",
+                    "score": 0.95,
+                    "metadata": {
+                        "path": f"__analysis_architecture__/packet-{index}.context",
+                        "architecture_kind": f"kind-{index % 4}",
+                    },
+                    "_match_type": "architecture_relation",
+                    "_source": "pr_indexed",
+                }
+                for index in range(20)
+            ],
+        }
+
+        result = format_rag_context(rag)
+
+        assert sum(
+            f"Source{index} resolves-to Target{index}" in result
+            for index in range(20)
+        ) == 20
+        assert len(result) <= 32_000
+
+    def test_exact_architecture_relations_are_not_silently_cut_at_sixty_four(self):
+        rag = {
+            "relevant_code": [
+                {
+                    "text": (
+                        f"[graph-fact] Source{index} resolves-to Target{index}"
+                    ),
+                    "score": 0.95,
+                    "metadata": {
+                        "path": (
+                            "__analysis_architecture__/"
+                            f"packet-{index}.context"
+                        ),
+                        "architecture_kind": f"kind-{index % 5}",
+                    },
+                    "_match_type": "architecture_relation",
+                    "_source": "pr_indexed",
+                }
+                for index in range(65)
+            ],
+        }
+
+        result = format_rag_context(rag)
+
+        assert "Source64 resolves-to Target64" in result
+        assert sum(
+            f"Source{index} resolves-to Target{index}" in result
+            for index in range(65)
+        ) == 65
+        assert len(result) <= 32_000
+
+    def test_character_budget_keeps_structural_context_first(self):
+        rag = {
+            "relevant_code": [
+                {
+                    "text": "class RequiredBase:\n" + ("x = 1\n" * 500),
+                    "score": 1.0,
+                    "metadata": {"path": "src/RequiredBase.py"},
+                    "_match_type": "definition",
+                    "_source": "deterministic",
+                },
+                {
+                    "text": "def merely_similar():\n" + ("return 1\n" * 500),
+                    "score": 0.99,
+                    "metadata": {"path": "src/Similar.py"},
+                    "_source": "semantic",
+                },
+            ]
+        }
+
+        result = format_rag_context(
+            rag,
+            max_chars=1_600,
+            max_chunk_chars=1_200,
+        )
+
+        assert len(result) <= 1_600
+        assert "src/RequiredBase.py" in result
+        assert "src/Similar.py" not in result
+        assert "Context chunk truncated by deterministic prompt budget" in result
+        assert result.count("```") == 2
+
+    def test_character_budget_caps_multiple_large_chunks(self):
+        rag = {
+            "relevant_code": [
+                {
+                    "text": f"class Base{index}:\n" + (f"value_{index} = 1\n" * 600),
+                    "score": 1.0,
+                    "metadata": {"path": f"src/Base{index}.py"},
+                    "_match_type": "definition",
+                    "_source": "deterministic",
+                }
+                for index in range(8)
+            ]
+        }
+
+        result = format_rag_context(
+            rag,
+            max_chars=5_000,
+            max_chunk_chars=2_000,
+        )
+
+        assert len(result) <= 5_000
+        assert "src/Base0.py" in result
+        assert "src/Base7.py" not in result
+        assert result.count("```") % 2 == 0
+
+    def test_complete_current_file_chunk_is_removed_but_related_file_remains(self):
+        rag = {
+            "relevant_code": [
+                {
+                    "text": "class Reviewed:\n    pass",
+                    "score": 1.0,
+                    "metadata": {"path": "src/Reviewed.py"},
+                    "_match_type": "changed_file",
+                    "_source": "pr_indexed",
+                },
+                {
+                    "text": "class Dependency:\n    pass",
+                    "score": 0.95,
+                    "metadata": {"path": "src/Dependency.py"},
+                    "_match_type": "definition",
+                    "_source": "deterministic",
+                },
+            ]
+        }
+
+        result = format_rag_context(
+            rag,
+            current_file_complete_paths={"src/Reviewed.py"},
+        )
+
+        assert "src/Reviewed.py" not in result
+        assert "src/Dependency.py" in result
+
+    def test_complete_current_file_keeps_exact_architecture_evidence(self):
+        fact = {
+            "kind": "python-call",
+            "source": "src.reviewed",
+            "relation": "calls",
+            "target": "dependency",
+            "path": "src/Reviewed.py",
+            "related_paths": ["src/Dependency.py"],
+            "attributes": {},
+        }
+        rag = {
+            "relevant_code": [
+                {
+                    "text": (
+                        "[python-call] src.reviewed calls dependency\n"
+                        "implementation details"
+                    ),
+                    "score": 1.0,
+                    "metadata": {
+                        "path": "src/Reviewed.py",
+                        "architecture_key": "python-file:src/Reviewed.py",
+                        "plugin_graph_facts": [fact],
+                    },
+                    "_match_type": "architecture_relation",
+                    "_source": "pr_indexed",
+                },
+            ]
+        }
+        visible = {}
+
+        result = format_rag_context(
+            rag,
+            current_file_complete_paths={"src/Reviewed.py"},
+            visible_evidence_by_id=visible,
+        )
+
+        assert "src/Reviewed.py" in result
+        assert "[python-call] src.reviewed calls dependency" in result
+        assert tuple(visible.values()) == ((fact,),)
+
+    def test_truncated_current_file_chunk_is_retained(self):
+        rag = {
+            "relevant_code": [
+                {
+                    "text": "middle_of_large_file()",
+                    "score": 1.0,
+                    "metadata": {"path": "src/Large.py"},
+                    "_match_type": "changed_file",
+                    "_source": "pr_indexed",
+                },
+            ]
+        }
+
+        result = format_rag_context(
+            rag,
+            current_file_complete_paths=set(),
+        )
+
+        assert "src/Large.py" in result
+        assert "middle_of_large_file()" in result
 
     def test_low_score_documentation_chunk_preserved(self):
         rag = {
@@ -178,7 +637,7 @@ class TestFormatRagContext:
         assert "readme content" in result
 
     def test_deduplication(self):
-        """Chunks with same basename+content should be deduplicated."""
+        """Repeated retrieval of the same full evidence identity is deduplicated."""
         rag = {
             "relevant_code": [
                 {
@@ -190,14 +649,67 @@ class TestFormatRagContext:
                 {
                     "text": "same content here",
                     "score": 0.88,
-                    "metadata": {"path": "src/b/util.py"},
+                    "metadata": {"path": "src/a/util.py"},
                     "_source": "semantic",
                 },
             ]
         }
         result = format_rag_context(rag)
-        # Should only include one
         assert result.count("same content here") == 1
+
+    def test_same_basename_and_content_in_distinct_paths_are_not_deduplicated(self):
+        rag = {
+            "relevant_code": [
+                {
+                    "text": "same content here",
+                    "score": 0.90,
+                    "metadata": {"path": "src/a/util.py"},
+                },
+                {
+                    "text": "same content here",
+                    "score": 0.88,
+                    "metadata": {"path": "src/b/util.py"},
+                },
+            ]
+        }
+
+        result = format_rag_context(rag)
+
+        assert "src/a/util.py" in result
+        assert "src/b/util.py" in result
+        assert result.count("same content here") == 2
+
+    def test_magento_module_di_files_with_identical_prefixes_remain_distinct(self):
+        shared_prefix = "<config>" + (" " * 350)
+        rag = {
+            "relevant_code": [
+                {
+                    "text": shared_prefix + "<preference for='Cart' type='CartImpl'/></config>",
+                    "score": 1.0,
+                    "metadata": {
+                        "path": "app/code/Acme/Cart/etc/di.xml",
+                        "architecture_key": "Acme_Cart:global",
+                    },
+                    "_match_type": "architecture_relation",
+                },
+                {
+                    "text": shared_prefix + "<type name='Checkout'><plugin name='tax'/></type></config>",
+                    "score": 1.0,
+                    "metadata": {
+                        "path": "app/code/Acme/Checkout/etc/di.xml",
+                        "architecture_key": "Acme_Checkout:global",
+                    },
+                    "_match_type": "architecture_relation",
+                },
+            ]
+        }
+
+        result = format_rag_context(rag)
+
+        assert "app/code/Acme/Cart/etc/di.xml" in result
+        assert "app/code/Acme/Checkout/etc/di.xml" in result
+        assert "CartImpl" in result
+        assert "name='tax'" in result
 
     def test_stale_chunk_from_modified_file_low_score(self):
         rag = {
@@ -227,3 +739,50 @@ class TestFormatRagContext:
         }
         result = format_rag_context(rag, pr_changed_files=["modified.py"])
         assert "fresh indexed code" in result
+
+    def test_base_architecture_packet_touching_modified_source_is_filtered(self):
+        rag = {
+            "relevant_code": [{
+                "text": "old effective DI relation",
+                "score": 1.0,
+                "metadata": {
+                    "path": "__analysis_architecture__/magento/packet.context",
+                    "architecture_context": True,
+                    "architecture_paths": [
+                        "app/code/Acme/Checkout/etc/di.xml",
+                        "app/code/Acme/Checkout/Plugin/OldPlugin.php",
+                    ],
+                },
+                "_source": "deterministic",
+                "_match_type": "architecture_relation",
+            }]
+        }
+
+        result = format_rag_context(
+            rag,
+            pr_changed_files=["app/code/Acme/Checkout/etc/di.xml"],
+        )
+
+        assert result == ""
+
+    def test_pr_architecture_packet_touching_modified_source_is_retained(self):
+        rag = {
+            "relevant_code": [{
+                "text": "new DI relation",
+                "score": 1.0,
+                "metadata": {
+                    "path": "__analysis_architecture__/magento/packet.context",
+                    "architecture_context": True,
+                    "architecture_paths": ["app/code/Acme/Checkout/etc/di.xml"],
+                },
+                "_source": "pr_indexed",
+                "_match_type": "architecture_relation",
+            }]
+        }
+
+        result = format_rag_context(
+            rag,
+            pr_changed_files=["app/code/Acme/Checkout/etc/di.xml"],
+        )
+
+        assert "new DI relation" in result

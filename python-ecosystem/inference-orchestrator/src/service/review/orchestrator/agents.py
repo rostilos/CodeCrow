@@ -2,35 +2,10 @@
 Custom MCP Agent with increased recursion limit.
 """
 import logging
-from typing import Any
 from mcp_use import MCPAgent
+from utils.llm_response import extract_llm_response_text
 
 logger = logging.getLogger(__name__)
-
-
-def extract_llm_response_text(response: Any) -> str:
-    """
-    Extract text content from LLM response, handling different response formats.
-    Some LLM providers return content as a list of objects instead of a string.
-    """
-    if hasattr(response, 'content'):
-        content = response.content
-        if isinstance(content, list):
-            # Handle list content (e.g., from Gemini or other providers)
-            text_parts = []
-            for item in content:
-                if isinstance(item, str):
-                    text_parts.append(item)
-                elif isinstance(item, dict):
-                    if 'text' in item:
-                        text_parts.append(item['text'])
-                    elif 'content' in item:
-                        text_parts.append(item['content'])
-                elif hasattr(item, 'text'):
-                    text_parts.append(item.text)
-            return "".join(text_parts)
-        return str(content)
-    return str(response)
 
 
 # Prevent duplicate logs from mcp_use

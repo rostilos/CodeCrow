@@ -1,8 +1,9 @@
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from server.command_queue_consumer import CommandQueueConsumer
 
@@ -117,3 +118,51 @@ async def test_empty_summarize_result_is_published_as_error_without_final():
         for event in events
     )
     assert not any(event["type"] == "final" for event in events)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_start_uses_blocking_read_safe_redis_timeouts():
+    command_service = MagicMock()
+    redis_client = MagicMock()
+    redis_client.aclose = AsyncMock()
+    consumer = CommandQueueConsumer(command_service)
+    consumer._consume_loop = AsyncMock()
+
+    with patch(
+        "server.command_queue_consumer.redis.from_url",
+        return_value=redis_client,
+    ) as from_url:
+        await consumer.start()
+        await asyncio.sleep(0)
+        await consumer.stop()
+
+    assert from_url.call_args.kwargs == {
+        "decode_responses": True,
+        "socket_connect_timeout": 5,
+        "socket_timeout": 30,
+        "health_check_interval": 30,
+    }
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_blocking_read_timeout_is_retried_without_consumer_failure():
+    consumer = CommandQueueConsumer(MagicMock())
+    consumer._redis = MagicMock()
+    consumer._redis.brpop = AsyncMock(
+        side_effect=RedisTimeoutError("temporary read deadline")
+    )
+    consumer.is_running = True
+
+    async def stop_after_backoff(_seconds):
+        consumer.is_running = False
+
+    with (
+        patch(
+            "server.command_queue_consumer.asyncio.sleep",
+            side_effect=stop_after_backoff,
+        ),
+        patch("server.command_queue_consumer.logger.warning") as warning,
+    ):
+        await consumer._consume_loop()
+
+    warning.assert_called_once()

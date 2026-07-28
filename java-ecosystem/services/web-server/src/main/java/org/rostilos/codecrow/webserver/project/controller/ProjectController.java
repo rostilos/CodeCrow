@@ -833,7 +833,7 @@ public class ProjectController {
          * PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/vcs-connection
          * Changes the VCS connection for a project.
          * This will update the VCS binding and optionally setup webhooks.
-         * Warning: Changing VCS connection may require manual cleanup of old webhooks.
+         * The exact webhook recorded on the previous binding is removed first.
          */
         @PutMapping("/{projectNamespace}/vcs-connection")
         @HasOwnerOrAdminRights

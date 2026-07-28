@@ -200,3 +200,58 @@ async def test_estimate_repository(client, auth_headers, rag_app, tmp_path):
             os.environ.pop("ALLOWED_REPO_ROOT", None)
         else:
             os.environ["ALLOWED_REPO_ROOT"] = old_root
+
+
+@pytest.mark.asyncio
+async def test_apply_changes_endpoint_forwards_one_commit(
+    client,
+    auth_headers,
+    rag_app,
+    tmp_path,
+):
+    import rag_pipeline.api.api as api_module
+    from rag_pipeline.models.config import IndexStats
+
+    api_module.index_manager.apply_changes.return_value = IndexStats(
+        namespace="ws1__proj1__main",
+        document_count=2,
+        chunk_count=4,
+        last_updated="2025-01-01T00:00:00Z",
+        workspace="ws1",
+        project="proj1",
+        branch="main",
+    )
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    old_root = os.environ.get("ALLOWED_REPO_ROOT")
+    os.environ["ALLOWED_REPO_ROOT"] = str(tmp_path)
+    try:
+        response = await client.post(
+            "/index/apply-changes",
+            json={
+                "updated_file_paths": ["src/A.py"],
+                "deleted_file_paths": ["src/B.py"],
+                "repo_base": str(repository),
+                "workspace": "ws1",
+                "project": "proj1",
+                "branch": "main",
+                "commit": "abc123",
+            },
+            headers=auth_headers,
+        )
+    finally:
+        if old_root is None:
+            os.environ.pop("ALLOWED_REPO_ROOT", None)
+        else:
+            os.environ["ALLOWED_REPO_ROOT"] = old_root
+
+    assert response.status_code == 200
+    api_module.index_manager.apply_changes.assert_called_once_with(
+        updated_file_paths=["src/A.py"],
+        deleted_file_paths=["src/B.py"],
+        repo_base=str(repository),
+        workspace="ws1",
+        project="proj1",
+        branch="main",
+        commit="abc123",
+    )

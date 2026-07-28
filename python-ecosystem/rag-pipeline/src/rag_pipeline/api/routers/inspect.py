@@ -26,6 +26,14 @@ PAYLOAD_FIELDS = [
     "extends", "implements", "imports", "calls", "referenced_types", "signature",
     "methods", "properties", "parameters", "return_type", "decorators", "modifiers",
     "variables", "constants", "type_parameters",
+    "architecture_context", "architecture_source", "architecture_plugin",
+    "architecture_kind", "architecture_source_path", "architecture_group",
+    "architecture_key", "architecture_keys", "architecture_paths",
+    "architecture_identifiers", "plugin_graph_facts",
+    "repository_snapshot", "snapshot_plugin", "snapshot_kind",
+    "repository_facts_state", "facts_part", "facts_parts",
+    "facts_content_sha256", "plugin_ids", "plugin_fingerprint",
+    "plugin_descriptor_fingerprint", "plugin_implementation_fingerprint",
     "indexed_at", "fragment_of", "text", "_node_content",
 ]
 GRAPH_TEXT_LIMIT = 280
@@ -176,6 +184,18 @@ def _truncate_text(value: Any, limit: int) -> str:
 
 
 def _node_title(payload: Dict[str, Any]) -> str:
+    if payload.get("architecture_context"):
+        plugin = payload.get("architecture_plugin") or "plugin"
+        kind = payload.get("architecture_kind") or "architecture"
+        source = payload.get("architecture_source_path")
+        return f"{plugin}: {kind}" + (f" — {source}" if source else "")
+    if payload.get("repository_facts_state"):
+        return "Repository detection facts"
+    if payload.get("repository_snapshot"):
+        return (
+            f"{payload.get('snapshot_plugin') or 'plugin'}: "
+            f"{payload.get('snapshot_kind') or 'repository snapshot'}"
+        )
     primary = _first_string(payload.get("primary_name")) or _first_string(payload.get("semantic_names"))
     if primary:
         return primary
@@ -190,6 +210,14 @@ def _node_title(payload: Dict[str, Any]) -> str:
 def _node_kind(payload: Dict[str, Any]) -> str:
     if payload.get("pr"):
         return "pr_chunk"
+    if payload.get("architecture_context"):
+        return "architecture_context"
+    if payload.get("architecture_source"):
+        return "architecture_source"
+    if payload.get("repository_snapshot"):
+        return "repository_snapshot"
+    if payload.get("repository_facts_state"):
+        return "repository_facts"
     if payload.get("node_type"):
         return str(payload["node_type"])
     if payload.get("content_type"):

@@ -1,0 +1,21 @@
+{
+  "id": "scala",
+  "kind": "language",
+  "requires": [],
+  "capabilities": [
+    "syntax"
+  ],
+  "detection": {
+    "extensions": [
+      ".sc",
+      ".scala"
+    ],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.scala.ScalaPlugin"
+  }
+}

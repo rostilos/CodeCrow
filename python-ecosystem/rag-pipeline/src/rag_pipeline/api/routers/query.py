@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from qdrant_client.models import Filter, FieldCondition, MatchAny, MatchValue
 
 from ..models import QueryRequest, PRContextRequest, DeterministicContextRequest
+from ...core.index_representation import IndexCompatibilityError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["query"])
@@ -14,6 +15,19 @@ def _get_singletons():
     """Get lifecycle-managed singletons from the api module."""
     from ..api import index_manager, query_service
     return index_manager, query_service
+
+
+def _authoritative_pr_branch(request: PRContextRequest) -> Optional[str]:
+    """Return target-branch truth for hybrid PR retrieval.
+
+    Older inference clients sent the PR source as ``branch`` and the target as
+    ``base_branch``. Once a PR number is present, the overlay already represents
+    source changes, so querying source-branch repository vectors would mix a
+    second, potentially stale representation into the review.
+    """
+    if request.pr_number and request.base_branch:
+        return request.base_branch
+    return request.branch
 
 
 @router.post("/query/search")
@@ -30,6 +44,9 @@ def semantic_search(request: QueryRequest):
             filter_language=request.filter_language
         )
         return {"results": results}
+    except IndexCompatibilityError as e:
+        logger.warning("Rejected search against incompatible index: %s", e)
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"Error performing search: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -47,7 +64,8 @@ def get_pr_context(request: PRContextRequest):
     """
     index_manager, query_service = _get_singletons()
     try:
-        if not request.branch:
+        authoritative_branch = _authoritative_pr_branch(request)
+        if not authoritative_branch:
             logger.warning("Branch not provided in PR context request, returning empty context")
             return {
                 "context": {
@@ -63,11 +81,22 @@ def get_pr_context(request: PRContextRequest):
             }
 
         pr_results = []
+        collection_name = index_manager._get_project_collection_name(
+            request.workspace,
+            request.project,
+        )
+        preflight_branches = [authoritative_branch]
+        if query_service._collection_or_alias_exists(collection_name):
+            query_service._require_compatible_branches(
+                collection_name,
+                preflight_branches,
+            )
 
         # HYBRID MODE: Query PR-indexed data first if pr_number is provided
         if request.pr_number:
             pr_results = _query_pr_indexed_data(
                 index_manager=index_manager,
+                query_service=query_service,
                 workspace=request.workspace,
                 project=request.project,
                 pr_number=request.pr_number,
@@ -82,7 +111,7 @@ def get_pr_context(request: PRContextRequest):
         context = query_service.get_context_for_pr(
             workspace=request.workspace,
             project=request.project,
-            branch=request.branch,
+            branch=authoritative_branch,
             changed_files=request.changed_files,
             diff_snippets=request.diff_snippets or [],
             pr_title=request.pr_title,
@@ -90,7 +119,9 @@ def get_pr_context(request: PRContextRequest):
             top_k=request.top_k,
             enable_priority_reranking=request.enable_priority_reranking,
             min_relevance_score=request.min_relevance_score,
-            base_branch=request.base_branch,
+            # Hybrid PR retrieval is target branch + PR overlay. The source
+            # branch must not enter the repository branch query a second time.
+            base_branch=None if request.pr_number else request.base_branch,
             deleted_files=request.deleted_files or [],
             exclude_pr_files=(request.all_pr_changed_files or []) if request.pr_number else []
         )
@@ -107,7 +138,12 @@ def get_pr_context(request: PRContextRequest):
                     pr_paths.add(path)
 
             for branch_chunk in context.get("relevant_code", []):
-                path = branch_chunk.get("path", "")
+                metadata = branch_chunk.get("metadata")
+                path = branch_chunk.get("path", "") or (
+                    metadata.get("path", "")
+                    if isinstance(metadata, dict)
+                    else ""
+                )
                 if path not in pr_paths:
                     merged_code.append(branch_chunk)
 
@@ -125,6 +161,9 @@ def get_pr_context(request: PRContextRequest):
         }
 
         return {"context": context}
+    except IndexCompatibilityError as e:
+        logger.warning("Rejected PR context against incompatible index: %s", e)
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting PR context: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -132,6 +171,7 @@ def get_pr_context(request: PRContextRequest):
 
 def _query_pr_indexed_data(
     index_manager,
+    query_service,
     workspace: str,
     project: str,
     pr_number: int,
@@ -168,6 +208,7 @@ def _query_pr_indexed_data(
 
         direct_file_results = _fetch_direct_pr_file_chunks(
             index_manager=index_manager,
+            query_service=query_service,
             collection_name=collection_name,
             pr_filter=pr_filter,
             changed_files=changed_files,
@@ -177,11 +218,12 @@ def _query_pr_indexed_data(
             results, _ = index_manager.qdrant_client.scroll(
                 collection_name=collection_name,
                 scroll_filter=pr_filter,
-                limit=top_k,
+                limit=max(top_k * 4, top_k),
                 with_payload=True,
                 with_vectors=False
             )
-            formatted = _format_pr_results(results)
+            compatible = query_service._filter_plugin_compatible_points(results)
+            formatted = _format_pr_results(compatible[:top_k])
             return _merge_pr_results(direct_file_results, formatted)
 
         query_text = " ".join(query_parts)
@@ -192,10 +234,12 @@ def _query_pr_indexed_data(
             collection_name=collection_name,
             query=query_embedding,
             query_filter=pr_filter,
-            limit=top_k,
+            limit=max(top_k * 4, top_k),
             with_payload=True,
         )
-        results = response.points
+        results = query_service._filter_plugin_compatible_points(
+            response.points
+        )[:top_k]
 
         formatted = _format_pr_results(results)
 
@@ -222,7 +266,13 @@ def _normalize_changed_file_candidates(changed_files: List[str]) -> List[str]:
     return candidates
 
 
-def _fetch_direct_pr_file_chunks(index_manager, collection_name: str, pr_filter: Filter, changed_files: List[str]) -> List[Dict]:
+def _fetch_direct_pr_file_chunks(
+    index_manager,
+    query_service,
+    collection_name: str,
+    pr_filter: Filter,
+    changed_files: List[str],
+) -> List[Dict]:
     path_candidates = _normalize_changed_file_candidates(changed_files)
     if not path_candidates:
         return []
@@ -234,16 +284,21 @@ def _fetch_direct_pr_file_chunks(index_manager, collection_name: str, pr_filter:
         ]
     )
 
-    limit = max(32, len(path_candidates) * 8)
+    result_limit = max(32, len(path_candidates) * 8)
     results, _ = index_manager.qdrant_client.scroll(
         collection_name=collection_name,
         scroll_filter=direct_filter,
-        limit=limit,
+        limit=result_limit * 4,
         with_payload=True,
         with_vectors=False,
     )
 
-    formatted = _format_pr_results(results, forced_match_type="changed_file", forced_score=1.0)
+    compatible = query_service._filter_plugin_compatible_points(results)
+    formatted = _format_pr_results(
+        compatible[:result_limit],
+        forced_match_type="changed_file",
+        forced_score=1.0,
+    )
     if formatted:
         logger.info("Hybrid mode: force-including %d PR-indexed chunk(s) for %d changed file(s)", len(formatted), len(path_candidates))
     return formatted
@@ -316,6 +371,12 @@ def get_deterministic_context(request: DeterministicContextRequest):
             additional_identifiers=request.additional_identifiers
         )
         return {"context": context}
+    except IndexCompatibilityError as e:
+        logger.warning(
+            "Rejected deterministic context against incompatible index: %s",
+            e,
+        )
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting deterministic context: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -4,13 +4,19 @@ Deterministic context retrieval module for RAG query service.
 Retrieves code context using metadata-based (non-semantic) queries against
 tree-sitter extracted metadata: identifiers, parent classes, namespaces, imports.
 """
+import os
 import re
 from typing import Dict, List, Optional
 import logging
 
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny, MatchText
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny
 
 from .base import RAGQueryBase
+from rag_pipeline.utils.path_identity import (
+    normalize_repository_path,
+    repository_path_suffix_candidates,
+    repository_paths_match,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +26,27 @@ COMMON_RELATION_IDENTIFIERS = {
     "new", "none", "null", "object", "print", "return", "run", "set",
     "str", "string", "this", "true", "void",
 }
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Invalid integer for %s=%r; using %s", name, value, default)
+        return default
+
+
+ARCHITECTURE_SCROLL_PAGE_SIZE = max(
+    32,
+    _env_int("RAG_DETERMINISTIC_ARCHITECTURE_SCROLL_PAGE_SIZE", 256),
+)
+ARCHITECTURE_MAX_MATCHING_POINTS = max(
+    ARCHITECTURE_SCROLL_PAGE_SIZE,
+    _env_int("RAG_DETERMINISTIC_ARCHITECTURE_MAX_MATCHING_POINTS", 5000),
+)
 
 
 def _simple_relation_identifier(value: object) -> Optional[str]:
@@ -39,6 +66,152 @@ def _simple_relation_identifier(value: object) -> Optional[str]:
         ):
             return part
     return None
+
+
+def _point_sort_key(point) -> tuple:
+    payload = point.payload or {}
+    return (
+        str(payload.get("path", "")),
+        int(payload.get("start_line", 0) or 0),
+        int(payload.get("end_line", 0) or 0),
+        str(payload.get("primary_name", "")),
+        str(getattr(point, "id", "")),
+    )
+
+
+def _failure(stage: str, exception: Exception, path: Optional[str] = None) -> Dict[str, str]:
+    result = {
+        "stage": stage,
+        "error_type": type(exception).__name__,
+        "message": str(exception)[:500],
+    }
+    if path:
+        result["path"] = path
+    return result
+
+
+def _graph_fact_paths(fact: object) -> set[str]:
+    if not isinstance(fact, dict):
+        return set()
+    paths = set()
+    path = fact.get("path")
+    if isinstance(path, str) and path:
+        paths.add(path)
+    related_paths = fact.get("related_paths")
+    if isinstance(related_paths, (list, tuple)):
+        paths.update(
+            value for value in related_paths
+            if isinstance(value, str) and value
+        )
+    return paths
+
+
+def _graph_fact_retrieval_identifiers(fact: object) -> set[str]:
+    """
+    Read neutral plugin-nominated exact lookup identifiers.
+
+    Plugins may attach ``retrievalIdentifier:<stable-name>`` attributes to a
+    graph fact. RAG treats only the values as primary-name lookup candidates;
+    it does not interpret a plugin-specific attribute name.
+    """
+    if not isinstance(fact, dict):
+        return set()
+    attributes = fact.get("attributes")
+    if not isinstance(attributes, dict):
+        return set()
+    return {
+        value
+        for key, value in attributes.items()
+        if (
+            isinstance(key, str)
+            and key.startswith("retrievalIdentifier:")
+            and isinstance(value, str)
+            and value.strip()
+        )
+    }
+
+
+def _focused_architecture_payload(
+        payload: Dict,
+        requested_paths: set[str],
+) -> Optional[Dict]:
+    """Project a compacted graph node onto facts touching the requested paths.
+
+    Architecture storage intentionally packs multiple graph facts into one
+    Qdrant point. A metadata match therefore identifies a candidate point, not
+    permission to forward every co-located fact into the review prompt.
+    """
+    facts = payload.get("plugin_graph_facts")
+    if not isinstance(facts, list):
+        return dict(payload)
+
+    focused_facts = [
+        fact for fact in facts
+        if _graph_fact_paths(fact).intersection(requested_paths)
+    ]
+    if not focused_facts:
+        return None
+
+    focused_paths = sorted({
+        path for fact in focused_facts for path in _graph_fact_paths(fact)
+    })
+    focused_identifiers = sorted({
+        value
+        for fact in focused_facts
+        for value in (
+            fact.get("source"),
+            fact.get("target"),
+            *_graph_fact_retrieval_identifiers(fact),
+        )
+        if isinstance(value, str) and value
+    })
+    packet_keys = sorted({
+        str(fact.get("packetKey"))
+        for fact in focused_facts
+        if fact.get("packetKey")
+    })
+
+    focused = dict(payload)
+    focused["plugin_graph_facts"] = focused_facts
+    focused["architecture_paths"] = focused_paths
+    focused["architecture_identifiers"] = focused_identifiers
+    if packet_keys:
+        focused["architecture_keys"] = packet_keys
+    return focused
+
+
+def _render_focused_architecture_text(payload: Dict, matched_paths: List[str]) -> str:
+    """Render only exact selected graph facts, preserving their provenance."""
+    facts = payload.get("plugin_graph_facts")
+    if not isinstance(facts, list):
+        return str(payload.get("text", payload.get("_node_content", "")))
+
+    lines = [
+        "Deterministic repository architecture context",
+        f"Plugin: {payload.get('architecture_plugin', 'unknown')}",
+        f"Kind: {payload.get('architecture_kind', 'unknown')}",
+        "Matched paths: " + ", ".join(matched_paths),
+        "Facts:",
+    ]
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        attributes = fact.get("attributes")
+        attribute_text = ""
+        if isinstance(attributes, dict) and attributes:
+            attribute_text = " {" + ", ".join(
+                f"{key}={attributes[key]}" for key in sorted(attributes)
+            ) + "}"
+        packet_key = fact.get("packetKey")
+        packet_text = f"Packet {packet_key}: " if packet_key else ""
+        lines.append(
+            f"- {packet_text}[{fact.get('kind', 'relation')}] "
+            f"{fact.get('source', '')} {fact.get('relation', '')} "
+            f"{fact.get('target', '')} "
+            f"({fact.get('path', 'unknown')}:{fact.get('line', 1)})"
+            f"{attribute_text}"
+        )
+    return "\n".join(lines)
 
 
 class DeterministicContextMixin:
@@ -104,8 +277,19 @@ class DeterministicContextMixin:
             logger.warning(f"Collection {collection_name} does not exist")
             return {"chunks": [], "changed_files": {}, "related_definitions": {},
                     "class_context": {}, "namespace_context": {},
-                    "_metadata": {"error": "collection_not_found"}}
+                    "_metadata": {
+                        "error": "collection_not_found",
+                        "retrieval_state": "unavailable",
+                        "failures": [{
+                            "stage": "collection",
+                            "error_type": "CollectionNotFound",
+                            "message": f"Collection {collection_name} does not exist",
+                        }],
+                    }}
 
+        file_paths = sorted({path.lstrip("/") for path in file_paths if path})
+        branches = list(dict.fromkeys(branch for branch in branches if branch))
+        self._require_compatible_branches(collection_name, branches)
         logger.info(f"Deterministic context: files={file_paths[:5]}, branches={branches}")
 
         # ── Build branch filter ──
@@ -132,9 +316,13 @@ class DeterministicContextMixin:
         # ── Tracking state ──
         all_chunks = []
         changed_files_chunks = {}
+        architecture_context = {}
+        architecture_related = {}
         related_definitions = {}
         class_context = {}
         namespace_context = {}
+        failures = []
+        file_status = {}
 
         identifiers_to_find = set()
         parent_classes = set()
@@ -142,7 +330,12 @@ class DeterministicContextMixin:
         imports_raw = set()
         extends_raw = set()
 
-        changed_file_paths = set()
+        # The request is the authority for invalidating materialized branch
+        # context.  Do not rely on finding a PR-indexed chunk: deleted files and
+        # architecture-only files legitimately have no replacement code chunk.
+        changed_file_paths = {
+            path.lstrip("/") for path in (pr_changed_files or []) if path
+        }
         seen_texts = set()
         target_branch_paths = set()
 
@@ -156,13 +349,50 @@ class DeterministicContextMixin:
                     namespaces, imports_raw, extends_raw, all_chunks
                 )
                 changed_files_chunks[file_path] = chunks_for_file
+                file_status[file_path] = "hit" if chunks_for_file else "miss"
             except Exception as e:
                 logger.warning(f"Error querying file '{file_path}': {e}")
+                file_status[file_path] = "error"
+                failures.append(_failure("changed_file", e, file_path))
 
         logger.info(f"Step 1: {len(all_chunks)} chunks from changed files. "
                    f"Extracted: {len(identifiers_to_find)} identifiers, "
                    f"{len(parent_classes)} parent_classes, {len(namespaces)} namespaces, "
                    f"{len(imports_raw)} imports, {len(extends_raw)} extends")
+
+        # ========== STEP 1b: Expand exact repository architecture edges ==========
+        # Framework plugins index bounded architecture packets keyed by every path
+        # participating in a relation. This query is metadata-only and introduces
+        # no model call or similarity-dependent behavior.
+        architecture_retrieval = {}
+        if file_paths:
+            try:
+                architecture_retrieval = self._query_architecture_context(
+                    collection_name,
+                    branch_filter,
+                    file_paths,
+                    limit_per_file,
+                    branches,
+                    target_branch,
+                    target_branch_paths,
+                    changed_file_paths,
+                    seen_texts,
+                    all_chunks,
+                    architecture_context,
+                    architecture_related,
+                    identifiers_to_find,
+                )
+                if architecture_retrieval.get("truncated"):
+                    failures.append({
+                        "stage": "architecture_context",
+                        "error_type": "ResultLimit",
+                        "message": (
+                            "Exact architecture retrieval reached its configured "
+                            "matching-point limit; context is explicitly partial"
+                        ),
+                    })
+            except Exception as exception:
+                failures.append(_failure("architecture_context", exception))
 
         # ── Inject enrichment-supplied identifiers (extends, implements, calls) ──
         # These come from the orchestrator's Java-side AST parse and guarantee
@@ -170,7 +400,7 @@ class DeterministicContextMixin:
         # if they don't appear in the changed files' Qdrant payloads.
         if additional_identifiers:
             pre_count = len(identifiers_to_find | imports_raw | extends_raw)
-            for name in additional_identifiers:
+            for name in sorted(additional_identifiers):
                 name = name.strip()
                 if name and len(name) > 1:
                     identifiers_to_find.add(name)
@@ -181,18 +411,21 @@ class DeterministicContextMixin:
         # ========== STEP 2: Find definitions by primary_name ==========
         all_to_find = identifiers_to_find | imports_raw | extends_raw
         if all_to_find:
-            self._query_definitions(
-                collection_name, branch_filter, all_to_find,
-                branches, target_branch, target_branch_paths,
-                changed_file_paths, seen_texts, all_chunks, related_definitions
-            )
+            try:
+                self._query_definitions(
+                    collection_name, branch_filter, all_to_find,
+                    branches, target_branch, target_branch_paths,
+                    changed_file_paths, seen_texts, all_chunks, related_definitions
+                )
+            except Exception as exception:
+                failures.append(_failure("definitions", exception))
 
         # ========== STEP 2b: Transitive parent type resolution ==========
         # Extract extends/implements/parent_class from the definitions found
         # in Step 2, then do one more hop to find THEIR parent types.
         # This ensures the full inheritance chain is visible (depth=2).
         transitive_parents = set()
-        for def_name, def_chunks in related_definitions.items():
+        for def_name, def_chunks in sorted(related_definitions.items()):
             for chunk in def_chunks:
                 meta = chunk.get("metadata", {})
                 if isinstance(meta.get("extends"), list):
@@ -206,27 +439,36 @@ class DeterministicContextMixin:
         transitive_parents = {p for p in transitive_parents if p and len(p) > 1}
 
         if transitive_parents:
-            self._query_transitive_parents(
-                collection_name, branch_filter, transitive_parents,
-                branches, target_branch, target_branch_paths,
-                changed_file_paths, seen_texts, all_chunks, related_definitions
-            )
+            try:
+                self._query_transitive_parents(
+                    collection_name, branch_filter, transitive_parents,
+                    branches, target_branch, target_branch_paths,
+                    changed_file_paths, seen_texts, all_chunks, related_definitions
+                )
+            except Exception as exception:
+                failures.append(_failure("transitive_parents", exception))
 
         # ========== STEP 3: Find other methods in same parent_class ==========
         if parent_classes:
-            self._query_class_context(
-                collection_name, branch_filter, parent_classes,
-                branches, target_branch, target_branch_paths,
-                changed_file_paths, seen_texts, all_chunks, class_context
-            )
+            try:
+                self._query_class_context(
+                    collection_name, branch_filter, parent_classes,
+                    branches, target_branch, target_branch_paths,
+                    changed_file_paths, seen_texts, all_chunks, class_context
+                )
+            except Exception as exception:
+                failures.append(_failure("class_context", exception))
 
         # ========== STEP 4: Find related code in same namespace ==========
         if namespaces:
-            self._query_namespace_context(
-                collection_name, branch_filter, namespaces,
-                branches, target_branch, target_branch_paths,
-                changed_file_paths, seen_texts, all_chunks, namespace_context
-            )
+            try:
+                self._query_namespace_context(
+                    collection_name, branch_filter, namespaces,
+                    branches, target_branch, target_branch_paths,
+                    changed_file_paths, seen_texts, all_chunks, namespace_context
+                )
+            except Exception as exception:
+                failures.append(_failure("namespace_context", exception))
 
         logger.info(f"Deterministic context complete: {len(all_chunks)} total chunks "
                    f"(changed: {sum(len(v) for v in changed_files_chunks.values())}, "
@@ -237,6 +479,8 @@ class DeterministicContextMixin:
         return {
             "chunks": all_chunks,
             "changed_files": changed_files_chunks,
+            "architecture_context": architecture_context,
+            "architecture_related": architecture_related,
             "related_definitions": related_definitions,
             "class_context": class_context,
             "namespace_context": namespace_context,
@@ -244,16 +488,260 @@ class DeterministicContextMixin:
                 "branches_searched": branches,
                 "target_branch": target_branch,
                 "files_requested": file_paths,
-                "identifiers_extracted": list(identifiers_to_find)[:30],
-                "parent_classes_found": list(parent_classes),
-                "namespaces_found": list(namespaces),
-                "imports_extracted": list(imports_raw)[:30],
-                "extends_extracted": list(extends_raw)[:20],
-                "target_branch_paths_found": len(target_branch_paths)
+                "identifiers_extracted": sorted(identifiers_to_find)[:30],
+                "parent_classes_found": sorted(parent_classes),
+                "namespaces_found": sorted(namespaces),
+                "imports_extracted": sorted(imports_raw)[:30],
+                "extends_extracted": sorted(extends_raw)[:20],
+                "architecture_packets_found": sum(len(value) for value in architecture_context.values()),
+                "architecture_related_found": sum(len(value) for value in architecture_related.values()),
+                "architecture_retrieval": architecture_retrieval,
+                "target_branch_paths_found": len(target_branch_paths),
+                "file_status": file_status,
+                "retrieval_state": (
+                    "complete" if not failures else "partial" if all_chunks else "failed"
+                ),
+                "failures": failures,
             }
         }
 
     # ── Internal helpers ──
+
+    def _query_architecture_context(
+            self, collection_name, branch_filter, file_paths, limit_per_file,
+            branches, target_branch, target_branch_paths, changed_file_paths,
+            seen_texts, all_chunks, architecture_context, architecture_related,
+            identifiers_to_find
+    ) -> Dict[str, object]:
+        """Retrieve exact framework relations and their concrete source files."""
+        packet_points = {}
+        batch_size = 64
+        packet_scan_truncated = False
+        for offset in range(0, len(file_paths), batch_size):
+            path_batch = file_paths[offset:offset + batch_size]
+            remaining = ARCHITECTURE_MAX_MATCHING_POINTS - len(packet_points)
+            if remaining <= 0:
+                packet_scan_truncated = True
+                break
+            results, truncated = self._scroll_bounded(
+                collection_name,
+                Filter(must=[
+                    branch_filter,
+                    FieldCondition(
+                        key="architecture_paths",
+                        match=MatchAny(any=path_batch),
+                    ),
+                ]),
+                remaining,
+            )
+            packet_scan_truncated = packet_scan_truncated or truncated
+            for point in results:
+                packet_points[str(point.id)] = point
+
+        selected_packets = self._apply_branch_priority(
+            list(packet_points.values()),
+            target_branch,
+            branches,
+            target_branch_paths,
+        )
+        related_paths = set()
+        preferred_identifiers_by_path = {}
+        requested_paths = set(file_paths)
+        for point in selected_packets:
+            payload = _focused_architecture_payload(
+                point.payload or {},
+                requested_paths,
+            )
+            if payload is None:
+                continue
+            packet_paths = {
+                path for path in payload.get("architecture_paths", [])
+                if isinstance(path, str) and path
+            }
+            # A branch architecture packet is a materialized view of every
+            # source path listed in its payload.  If the PR replaces any one
+            # of those paths, the packet is no longer evidence for the reviewed
+            # revision.  PR-scoped architecture packets, when present, are the
+            # only safe replacement.
+            if (
+                not payload.get("pr")
+                and packet_paths.intersection(changed_file_paths)
+            ):
+                continue
+            matched_paths = sorted(packet_paths & requested_paths)
+            text = _render_focused_architecture_text(payload, matched_paths)
+            if not text or text in seen_texts:
+                continue
+            seen_texts.add(text)
+            related_paths.update(packet_paths - requested_paths)
+            for fact in payload.get("plugin_graph_facts", []) or []:
+                if not isinstance(fact, dict):
+                    continue
+                identifiers = {
+                    identifier.casefold()
+                    for identifier in _graph_fact_retrieval_identifiers(fact)
+                    if identifier
+                }
+                if not identifiers:
+                    continue
+                for path in _graph_fact_paths(fact) - requested_paths:
+                    preferred_identifiers_by_path.setdefault(
+                        path,
+                        set(),
+                    ).update(identifiers)
+            for identifier in payload.get("architecture_identifiers", []):
+                name = _simple_relation_identifier(identifier)
+                if name:
+                    identifiers_to_find.add(name)
+            key = str(payload.get("architecture_key", "architecture"))
+            chunk = {
+                "text": text,
+                "metadata": {
+                    key: value for key, value in payload.items()
+                    if key not in ("text", "_node_content")
+                },
+                "_match_type": "architecture_relation",
+                "_match_priority": 0,
+                "_matched_on": ",".join(matched_paths),
+            }
+            all_chunks.append(chunk)
+            architecture_context.setdefault(key, []).append(chunk)
+
+        related_paths = sorted(
+            path for path in related_paths
+            if not path.startswith("__analysis_architecture__/")
+        )
+        if not related_paths:
+            return {
+                "packet_candidates": len(packet_points),
+                "packet_chunks": sum(len(value) for value in architecture_context.values()),
+                "related_candidates": 0,
+                "related_chunks": 0,
+                "truncated": packet_scan_truncated,
+            }
+
+        related_points = {}
+        related_scan_truncated = False
+        for offset in range(0, len(related_paths), batch_size):
+            path_batch = related_paths[offset:offset + batch_size]
+            remaining = ARCHITECTURE_MAX_MATCHING_POINTS - len(related_points)
+            if remaining <= 0:
+                related_scan_truncated = True
+                break
+            results, truncated = self._scroll_bounded(
+                collection_name,
+                Filter(must=[
+                    branch_filter,
+                    FieldCondition(key="path", match=MatchAny(any=path_batch)),
+                ]),
+                remaining,
+            )
+            related_scan_truncated = related_scan_truncated or truncated
+            for point in results:
+                related_points[str(point.id)] = point
+
+        selected_related = self._apply_branch_priority(
+            list(related_points.values()),
+            target_branch,
+            branches,
+            target_branch_paths,
+        )
+        selected_related = sorted(
+            selected_related,
+            key=lambda point: (
+                str((point.payload or {}).get("path", "")),
+                (
+                    0
+                    if str(
+                        (point.payload or {}).get("primary_name", "")
+                    ).casefold()
+                    in preferred_identifiers_by_path.get(
+                        str((point.payload or {}).get("path", "")),
+                        set(),
+                    )
+                    else 1
+                ),
+                _point_sort_key(point),
+            ),
+        )
+        per_path_counts = {}
+        for point in selected_related:
+            payload = point.payload or {}
+            path = payload.get("path", "")
+            if not path or per_path_counts.get(path, 0) >= limit_per_file:
+                continue
+            text = payload.get("text", payload.get("_node_content", ""))
+            if not text or text in seen_texts:
+                continue
+            seen_texts.add(text)
+            per_path_counts[path] = per_path_counts.get(path, 0) + 1
+            chunk = {
+                "text": text,
+                "metadata": {
+                    key: value for key, value in payload.items()
+                    if key not in ("text", "_node_content")
+                },
+                "_match_type": "architecture_related",
+                "_match_priority": 1,
+                "_matched_on": path,
+            }
+            all_chunks.append(chunk)
+            architecture_related.setdefault(path, []).append(chunk)
+
+        logger.info(
+            "Architecture expansion: %s relation chunks, %s related code chunks from %s paths",
+            sum(len(value) for value in architecture_context.values()),
+            sum(len(value) for value in architecture_related.values()),
+            len(related_paths),
+        )
+        return {
+            "packet_candidates": len(packet_points),
+            "packet_chunks": sum(len(value) for value in architecture_context.values()),
+            "related_candidates": len(related_points),
+            "related_chunks": sum(len(value) for value in architecture_related.values()),
+            "truncated": packet_scan_truncated or related_scan_truncated,
+        }
+
+    def _scroll_bounded(
+            self,
+            collection_name: str,
+            scroll_filter,
+            max_points: int,
+    ) -> tuple[list, bool]:
+        """Paginate an exact Qdrant lookup and report an explicit safety cap."""
+        points = []
+        offset = None
+        seen_offsets = set()
+
+        while len(points) < max_points:
+            page_limit = min(
+                ARCHITECTURE_SCROLL_PAGE_SIZE,
+                max_points - len(points),
+            )
+            kwargs = {
+                "collection_name": collection_name,
+                "scroll_filter": scroll_filter,
+                "limit": page_limit,
+                "with_payload": True,
+                "with_vectors": False,
+            }
+            if offset is not None:
+                kwargs["offset"] = offset
+            page, next_offset = self.qdrant_client.scroll(**kwargs)
+            points.extend(self._filter_plugin_compatible_points(page))
+            if next_offset is None:
+                return points, False
+            offset_key = repr(next_offset)
+            if offset_key in seen_offsets:
+                logger.warning(
+                    "Qdrant exact scroll repeated offset %s; returning partial context",
+                    offset_key,
+                )
+                return points, True
+            seen_offsets.add(offset_key)
+            offset = next_offset
+
+        return points, offset is not None
 
     def _apply_branch_priority(
             self,
@@ -263,18 +751,19 @@ class DeterministicContextMixin:
             target_branch_paths: set
     ) -> list:
         """Filter points to prioritize: PR-indexed > target branch > base branch."""
+        points = self._filter_plugin_compatible_points(points)
         if not points:
             return points
 
         by_path = {}
-        for p in points:
+        for p in sorted(points, key=_point_sort_key):
             path = p.payload.get("path", "")
             if path not in by_path:
                 by_path[path] = []
             by_path[path].append(p)
 
         result = []
-        for path, path_points in by_path.items():
+        for path, path_points in sorted(by_path.items()):
             pr_points = [p for p in path_points if p.payload.get("pr") is True]
             if pr_points:
                 result.extend(pr_points)
@@ -291,7 +780,7 @@ class DeterministicContextMixin:
             elif path not in target_branch_paths:
                 result.extend(branch_points)
 
-        return result
+        return sorted(result, key=_point_sort_key)
 
     def _query_changed_file(
             self, collection_name, branch_filter, file_path, limit_per_file,
@@ -300,8 +789,7 @@ class DeterministicContextMixin:
             namespaces, imports_raw, extends_raw, all_chunks
     ) -> List[Dict]:
         """Query chunks for a single changed file and extract metadata."""
-        normalized_path = file_path.lstrip("/")
-        filename = normalized_path.rsplit("/", 1)[-1] if "/" in normalized_path else normalized_path
+        normalized_path = normalize_repository_path(file_path)
 
         # Try exact path match
         results, _ = self.qdrant_client.scroll(
@@ -315,18 +803,41 @@ class DeterministicContextMixin:
             with_vectors=False
         )
 
-        # Fallback: try with filename only
+        # If the caller included an archive/checkout root, try only exact
+        # multi-segment suffixes. A basename query is unsafe in framework
+        # repositories where hundreds of modules may contain ``etc/di.xml``.
         if not results:
-            results, _ = self.qdrant_client.scroll(
-                collection_name=collection_name,
-                scroll_filter=Filter(must=[
-                    branch_filter,
-                    FieldCondition(key="path", match=MatchText(text=filename))
-                ]),
-                limit=limit_per_file * len(branches),
-                with_payload=True,
-                with_vectors=False
+            suffix_candidates = repository_path_suffix_candidates(
+                normalized_path
+            )[1:]
+            if suffix_candidates:
+                results, _ = self.qdrant_client.scroll(
+                    collection_name=collection_name,
+                    scroll_filter=Filter(must=[
+                        branch_filter,
+                        FieldCondition(
+                            key="path",
+                            match=MatchAny(any=suffix_candidates),
+                        ),
+                    ]),
+                    limit=limit_per_file * len(branches),
+                    with_payload=True,
+                    with_vectors=False,
+                )
+
+        results = [
+            point
+            for point in results
+            if repository_paths_match(
+                point.payload.get("path", ""),
+                normalized_path,
             )
+        ]
+
+        results = sorted(
+            self._filter_plugin_compatible_points(results),
+            key=_point_sort_key,
+        )
 
         # Apply branch priority
         if target_branch and len(branches) > 1:
@@ -379,9 +890,15 @@ class DeterministicContextMixin:
                         imports_raw.add(name)
 
             if isinstance(payload.get("extends"), list):
-                extends_raw.update(payload["extends"])
+                for value in payload["extends"]:
+                    name = _simple_relation_identifier(value)
+                    if name:
+                        extends_raw.add(name)
             if isinstance(payload.get("implements"), list):
-                extends_raw.update(payload["implements"])
+                for value in payload["implements"]:
+                    name = _simple_relation_identifier(value)
+                    if name:
+                        extends_raw.add(name)
             if isinstance(payload.get("referenced_types"), list):
                 for type_name in payload["referenced_types"][:30]:
                     name = _simple_relation_identifier(type_name)
@@ -394,6 +911,14 @@ class DeterministicContextMixin:
                         identifiers_to_find.add(name)
             if payload.get("parent_class"):
                 extends_raw.add(payload["parent_class"])
+            if isinstance(payload.get("plugin_graph_facts"), list):
+                for fact in payload["plugin_graph_facts"]:
+                    if not isinstance(fact, dict):
+                        continue
+                    for value in (fact.get("source"), fact.get("target")):
+                        name = _simple_relation_identifier(value)
+                        if name:
+                            identifiers_to_find.add(name)
 
         return chunks_for_file
 
@@ -404,7 +929,7 @@ class DeterministicContextMixin:
     ):
         """STEP 2: Find definitions by primary_name."""
         try:
-            batch = list(all_to_find)[:self.config.max_identifiers_per_query]
+            batch = sorted(all_to_find)[:self.config.max_identifiers_per_query]
             results, _ = self.qdrant_client.scroll(
                 collection_name=collection_name,
                 scroll_filter=Filter(must=[
@@ -446,6 +971,7 @@ class DeterministicContextMixin:
 
         except Exception as e:
             logger.warning(f"Error in primary_name query: {e}")
+            raise
 
     def _query_transitive_parents(
             self, collection_name, branch_filter, transitive_parents,
@@ -459,7 +985,7 @@ class DeterministicContextMixin:
         Results are capped at 50 to control context budget.
         """
         try:
-            batch = list(transitive_parents)[:50]
+            batch = sorted(transitive_parents)[:50]
             results, _ = self.qdrant_client.scroll(
                 collection_name=collection_name,
                 scroll_filter=Filter(must=[
@@ -504,6 +1030,7 @@ class DeterministicContextMixin:
 
         except Exception as e:
             logger.warning(f"Error in transitive parent query: {e}")
+            raise
 
     def _query_class_context(
             self, collection_name, branch_filter, parent_classes,
@@ -512,7 +1039,7 @@ class DeterministicContextMixin:
     ):
         """STEP 3: Find other methods in same parent_class."""
         try:
-            batch = list(parent_classes)[:self.config.max_parent_classes_per_query]
+            batch = sorted(parent_classes)[:self.config.max_parent_classes_per_query]
             results, _ = self.qdrant_client.scroll(
                 collection_name=collection_name,
                 scroll_filter=Filter(must=[
@@ -554,6 +1081,7 @@ class DeterministicContextMixin:
 
         except Exception as e:
             logger.warning(f"Error in parent_class query: {e}")
+            raise
 
     def _query_namespace_context(
             self, collection_name, branch_filter, namespaces,
@@ -562,7 +1090,7 @@ class DeterministicContextMixin:
     ):
         """STEP 4: Find related code in same namespace."""
         try:
-            batch = list(namespaces)[:self.config.max_namespaces_per_query]
+            batch = sorted(namespaces)[:self.config.max_namespaces_per_query]
             results, _ = self.qdrant_client.scroll(
                 collection_name=collection_name,
                 scroll_filter=Filter(must=[
@@ -604,3 +1132,4 @@ class DeterministicContextMixin:
 
         except Exception as e:
             logger.warning(f"Error in namespace query: {e}")
+            raise

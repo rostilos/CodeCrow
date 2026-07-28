@@ -352,6 +352,36 @@ class AnalysisLockServiceTest {
     }
 
     @Test
+    void testRenewLock_UsesLeaseFromCurrentTime() {
+        String lockKey = "lock-1-main-RAG_INDEXING";
+        AnalysisLock lock = mock(AnalysisLock.class);
+        when(lock.isExpired()).thenReturn(false);
+        when(lockRepository.findByLockKey(lockKey)).thenReturn(Optional.of(lock));
+        OffsetDateTime before = OffsetDateTime.now().plusMinutes(29);
+
+        boolean result = lockService.renewLock(lockKey, 30);
+
+        assertThat(result).isTrue();
+        ArgumentCaptor<OffsetDateTime> expiry = ArgumentCaptor.forClass(OffsetDateTime.class);
+        verify(lock).setExpiresAt(expiry.capture());
+        assertThat(expiry.getValue()).isAfter(before);
+        assertThat(expiry.getValue()).isBefore(OffsetDateTime.now().plusMinutes(31));
+        verify(lockRepository).save(lock);
+    }
+
+    @Test
+    void testRenewLock_RefusesMissingOrExpiredOwnership() {
+        AnalysisLock expiredLock = mock(AnalysisLock.class);
+        when(expiredLock.isExpired()).thenReturn(true);
+        when(lockRepository.findByLockKey("missing")).thenReturn(Optional.empty());
+        when(lockRepository.findByLockKey("expired")).thenReturn(Optional.of(expiredLock));
+
+        assertThat(lockService.renewLock("missing", 30)).isFalse();
+        assertThat(lockService.renewLock("expired", 30)).isFalse();
+        verify(lockRepository, never()).save(any());
+    }
+
+    @Test
     void testIsLocked_ReturnsTrue_WhenActiveLockExists() {
         Long projectId = 1L;
         String branchName = "main";
