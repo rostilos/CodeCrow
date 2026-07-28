@@ -50,6 +50,8 @@ public interface AiAnalysisRequest {
 
     boolean getUseMcpTools();
 
+    default boolean getRagEnabled() { return true; }
+
     AnalysisType getAnalysisType();
 
     String getVcsProvider();

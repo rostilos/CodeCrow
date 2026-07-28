@@ -636,6 +636,7 @@ public class PullRequestAnalysisProcessor {
         putIdentity(inputs, "maxTokens", request.getMaxAllowedTokens());
         putIdentity(inputs, "useLocalMcp", request.getUseLocalMcp());
         putIdentity(inputs, "useMcpTools", request.getUseMcpTools());
+        putIdentity(inputs, "ragEnabled", request.getRagEnabled());
         putIdentity(inputs, "analysisType", request.getAnalysisType());
         putIdentity(inputs, "analysisMode", request.getAnalysisMode());
         putIdentity(inputs, "projectRules", request.getProjectRules());

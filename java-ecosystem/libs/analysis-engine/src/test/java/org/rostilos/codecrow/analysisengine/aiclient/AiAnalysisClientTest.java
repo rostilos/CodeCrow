@@ -313,6 +313,7 @@ class AiAnalysisClientTest {
                         assertThat(requestPayload.get("targetBranchName")).isEqualTo("main");
                         assertThat(requestPayload.get("projectWorkspace")).isEqualTo("Codecrow");
                         assertThat(requestPayload.get("projectNamespace")).isEqualTo("codecrow-garden");
+                        assertThat(requestPayload.get("ragEnabled")).isEqualTo(true);
                 }
 
                 @Test

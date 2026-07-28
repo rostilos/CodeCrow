@@ -250,6 +250,7 @@ public class AiAnalysisClient {
         payload.put("maxAllowedTokens", request.getMaxAllowedTokens());
         payload.put("useLocalMcp", request.getUseLocalMcp());
         payload.put("useMcpTools", request.getUseMcpTools());
+        payload.put("ragEnabled", request.getRagEnabled());
         payload.put("analysisType", request.getAnalysisType());
         payload.put("vcsProvider", request.getVcsProvider());
         payload.put("prTitle", request.getPrTitle());

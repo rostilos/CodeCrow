@@ -122,6 +122,13 @@ class ReviewRequestDto(BaseModel):
     )
     # MCP tools for enhanced context in Stage 1 and issue verification in Stage 3
     useMcpTools: Optional[bool] = Field(default=False, description="Enable LLM to call VCS tools for context gaps and issue verification")
+    ragEnabled: bool = Field(
+        default=True,
+        description=(
+            "Whether this project review may index or retrieve RAG context. "
+            "False disables RAG for this request even when the service is globally enabled."
+        ),
+    )
     # Custom project review rules (JSON array of enabled rules from ProjectRulesConfig)
     projectRules: Optional[str] = Field(default=None, description="JSON array of enabled custom project review rules")
     # Pre-fetched file contents for MCP-free branch reconciliation (filePath → content)

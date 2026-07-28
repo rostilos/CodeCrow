@@ -120,6 +120,11 @@ class TestReviewRequestDto:
         assert req.previousCodeAnalysisIssues == []
         assert req.analysisMode == "FULL"
         assert req.useMcpTools is False
+        assert req.ragEnabled is True
+
+    def test_project_can_disable_rag_for_one_review(self):
+        req = _minimal_review_request(ragEnabled=False)
+        assert req.ragEnabled is False
 
     def test_enrichment_data_none(self):
         req = _minimal_review_request()

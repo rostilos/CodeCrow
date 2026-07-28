@@ -160,7 +160,7 @@ class ReviewService:
 
         summary = await capture_and_store_review_prompts(
             request,
-            self.rag_client,
+            self._rag_client_for_request(request),
             simulated_findings_per_file=simulated_findings,
             simulated_findings_max_total=simulated_findings_max_total,
             event_callback=event_callback,
@@ -365,7 +365,8 @@ class ReviewService:
                 # Per-batch RAG is richer and remains the primary path; this
                 # task is only awaited if a batch cannot obtain per-batch
                 # context. Branch reconciliation does not need it.
-                if needs_multistage_review:
+                request_rag_client = self._rag_client_for_request(request)
+                if needs_multistage_review and request_rag_client is not None:
                     rag_context_task = asyncio.create_task(
                         self._fetch_rag_context(
                             request,
@@ -391,7 +392,7 @@ class ReviewService:
                 orchestrator = MultiStageReviewOrchestrator(
                     llm=llm,
                     mcp_client=client,
-                    rag_client=self.rag_client,
+                    rag_client=request_rag_client,
                     event_callback=event_callback,
                     llm_reranker=llm_reranker
                 )
@@ -545,6 +546,9 @@ class ReviewService:
         Returns:
             Dict with RAG context or None if RAG is disabled/failed
         """
+        if self._rag_client_for_request(request) is None:
+            return None
+
         start_time = datetime.now()
         cache_hit = False
         
@@ -672,6 +676,22 @@ class ReviewService:
                 "message": "RAG context retrieval skipped (non-critical)"
             })
             return None
+
+    def _rag_client_for_request(
+            self,
+            request: ReviewRequestDto,
+    ) -> Optional[RagClient]:
+        """Apply global and project-scoped RAG enablement without shared mutation."""
+        if not request.ragEnabled:
+            logger.info(
+                "RAG disabled for project request: project=%s PR=%s",
+                request.projectId,
+                request.pullRequestId or "n/a",
+            )
+            return None
+        if not bool(getattr(self.rag_client, "enabled", True)):
+            return None
+        return self.rag_client
 
     def _create_mcp_client(self, config: Dict[str, Any]) -> MCPClient:
         """Create MCP client from configuration."""

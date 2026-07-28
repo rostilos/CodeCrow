@@ -764,6 +764,11 @@ async def capture_review_prompts(
             )
 
     safe_request = request.model_copy(update={"useMcpTools": False})
+    full_pipeline_rag_enabled = (
+        full_pipeline_context
+        and rag_client is not None
+        and bool(getattr(rag_client, "enabled", True))
+    )
     session = PromptCaptureSession(
         request=safe_request,
         simulated_findings_per_file=simulated_findings_per_file,
@@ -842,7 +847,9 @@ async def capture_review_prompts(
             None if full_pipeline_context else dry_rag.deterministic_requests
         ),
         deterministic_rag_enabled=(
-            True if full_pipeline_context else include_deterministic_rag
+            full_pipeline_rag_enabled
+            if full_pipeline_context
+            else include_deterministic_rag
         ),
         mcp_requested=bool(request.useMcpTools),
         full_pipeline_context=full_pipeline_context,

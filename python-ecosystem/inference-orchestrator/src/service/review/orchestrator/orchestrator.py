@@ -239,6 +239,9 @@ class MultiStageReviewOrchestrator:
         as a complete repository artifact.
         """
         self._repository_review_groups = ()
+        if not request.ragEnabled:
+            logger.info("PR file indexing skipped because project RAG is disabled")
+            return
         if not INTERNAL_PR_INDEX_ENABLED:
             logger.info("PR file indexing disabled by REVIEW_INTERNAL_PR_INDEX_ENABLED")
             return

@@ -145,6 +145,7 @@ class IsolatedReviewProducerReplayTest {
                     .isEqualTo(baseRevision);
             assertThat(reviewRequest.getCurrentCommitHash())
                     .isEqualTo(headRevision);
+            assertThat(reviewRequest.getRagEnabled()).isFalse();
             assertThat(reviewRequest.getChangedFiles())
                     .containsExactlyElementsOf(new ArrayList<>(headFiles.keySet()));
             assertThat(reviewRequest.getProjectCapabilities())
@@ -181,6 +182,7 @@ class IsolatedReviewProducerReplayTest {
                     .isEqualTo(baseRevision);
             assertThat(queuedRequest.path("currentCommitHash").asText())
                     .isEqualTo(headRevision);
+            assertThat(queuedRequest.path("ragEnabled").asBoolean()).isFalse();
             assertThat(queuedRequest.path("aiApiKey").asText())
                     .isEqualTo("dry-run-provider-disabled");
             assertThat(queuedRequest.path("accessToken").isNull()).isTrue();

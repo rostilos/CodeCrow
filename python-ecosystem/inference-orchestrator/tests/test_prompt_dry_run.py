@@ -745,6 +745,24 @@ async def test_review_service_rejects_diff_manifest_before_provider_construction
 
 
 @pytest.mark.asyncio
+async def test_project_disabled_rag_skips_pr_overlay():
+    rag = DeterministicRagSpy()
+    request = _request().model_copy(update={"ragEnabled": False})
+    orchestrator = MultiStageReviewOrchestrator(
+        llm=object(),
+        mcp_client=None,
+        rag_client=rag,
+    )
+
+    await orchestrator._index_pr_files(
+        request,
+        DiffProcessor().process(request.rawDiff),
+    )
+
+    assert rag.index_requests == []
+
+
+@pytest.mark.asyncio
 async def test_pr_overlay_receives_one_exact_snapshot_identity():
     rag = DeterministicRagSpy()
     request = _request()

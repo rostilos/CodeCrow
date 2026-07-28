@@ -289,6 +289,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             AnalysisProcessRequest request,
             RepositoryInfo repository,
             AIConnection aiConnection) throws GeneralSecurityException {
+        var effectiveConfig = project.getEffectiveConfig();
+        var ragConfig = effectiveConfig.ragConfig();
         return AiAnalysisRequestImpl.builder()
                 .withProjectId(project.getId())
                 .withProjectAiConnection(aiConnection)
@@ -296,12 +298,13 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withProjectAiConnectionTokenDecrypted(
                         tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
-                .withUseMcpTools(project.getEffectiveConfig().useMcpTools())
-                .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
+                .withUseMcpTools(effectiveConfig.useMcpTools())
+                .withRagEnabled(ragConfig != null && ragConfig.enabled())
+                .withMaxAllowedTokens(effectiveConfig.maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
                 .withVcsProvider(providerKey())
-                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
+                .withProjectRules(effectiveConfig.getProjectRulesConfig().toEnabledRulesJson());
     }
 
     private PrEnrichmentDataDto enrichFiles(
