@@ -146,21 +146,22 @@ def resolve_project_capabilities(request: ReviewRequestDto):
     catalog, _, selector = host
     payload = getattr(request, "projectCapabilities", None)
     if isinstance(payload, ProjectCapabilitiesDto):
-        from codecrow_plugins import ProjectCapabilities
-
         requested = tuple(payload.repositoryPlugins)
         resolved = tuple(descriptor.id for descriptor in catalog.registry.resolve(requested))
         if resolved != requested:
             raise ValueError("project capability plugins are not in dependency-stable order")
-        capabilities = ProjectCapabilities(
+        return selector.project(
+            revision=_request_revision(request),
             repository_plugins=requested,
-            file_plugins={path: tuple(ids) for path, ids in payload.filePlugins.items()},
-            detection_evidence={plugin_id: tuple(values) for plugin_id, values in payload.detectionEvidence.items()},
+            file_plugins={
+                path: tuple(ids) for path, ids in payload.filePlugins.items()
+            },
+            detection_evidence={
+                plugin_id: tuple(values)
+                for plugin_id, values in payload.detectionEvidence.items()
+            },
             unavailable_capabilities=tuple(payload.unavailableCapabilities),
-            fingerprint=payload.fingerprint,
-            descriptor_fingerprint=payload.descriptorFingerprint,
         )
-        return selector.validate(capabilities, _request_revision(request))
 
     # Transitional fallback: select only from immutable request evidence. It is
     # intentionally conservative when Java did not supply repository markers.
@@ -191,9 +192,9 @@ def apply_effective_project_capabilities(
     """Accept the complete-repository plugin projection attested by RAG.
 
     Java contributes immutable changed-file/marker evidence. RAG contributes
-    the selected plugin set from the complete indexed target repository. The
-    RAG response is accepted only when the local catalog verifies descriptor,
-    implementation, dependency order, source revision, and projection digest.
+    the selected plugin set from the complete indexed target repository.
+    Fingerprints in the RAG response are provenance only. The local catalog
+    validates structural plugin order and projection membership.
     """
     requested = tuple(
         request.projectCapabilities.repositoryPlugins
@@ -224,17 +225,6 @@ def apply_effective_project_capabilities(
             "RAG effective capabilities contain unknown fields: "
             + ", ".join(unknown)
         )
-    implementation_fingerprint = payload.get(
-        "implementationFingerprint"
-    )
-    if (
-        not isinstance(implementation_fingerprint, str)
-        or not implementation_fingerprint
-    ):
-        raise ValueError(
-            "RAG effective capabilities omit implementation identity"
-        )
-
     dto = ProjectCapabilitiesDto.model_validate({
         key: value
         for key, value in payload.items()
@@ -264,13 +254,6 @@ def apply_effective_project_capabilities(
             "RAG effective capabilities removed request-selected plugins: "
             + ", ".join(missing_requested)
         )
-    expected_implementation = catalog.implementation_fingerprint(effective)
-    if implementation_fingerprint != expected_implementation:
-        raise ValueError(
-            "RAG effective plugin implementation content does not match "
-            "the inference runtime"
-        )
-
     request.projectCapabilities = dto
     return resolve_project_capabilities(request)
 

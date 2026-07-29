@@ -5,13 +5,12 @@ import pytest
 
 from rag_pipeline.core.index_representation import (
     INDEX_REPRESENTATION_PAYLOAD_KEY,
-    IndexCompatibilityError,
     _REPRESENTATION_DEPENDENCIES,
     _REPRESENTATION_SOURCE_PATHS,
     branch_splitter_kwargs,
     compute_index_representation_fingerprint,
+    observe_branch_representation,
     read_branch_index_representation,
-    require_compatible_branch_representation,
 )
 from rag_pipeline.core.pr_overlay_representation import (
     _PR_OVERLAY_DEPENDENCIES,
@@ -196,7 +195,7 @@ def test_branch_identity_distinguishes_absent_legacy_and_current_points():
         "collection",
         "main",
     ) == (True, None)
-    assert require_compatible_branch_representation(
+    assert observe_branch_representation(
         client,
         "collection",
         "main",
@@ -209,7 +208,7 @@ def test_branch_identity_distinguishes_absent_legacy_and_current_points():
         })],
         None,
     )
-    assert require_compatible_branch_representation(
+    assert observe_branch_representation(
         client,
         "collection",
         "main",
@@ -222,7 +221,7 @@ def test_branch_identity_distinguishes_absent_legacy_and_current_points():
         })],
         None,
     )
-    assert require_compatible_branch_representation(
+    assert observe_branch_representation(
         client,
         "collection",
         "main",

@@ -62,33 +62,6 @@ class TestSemanticSearch:
             semantic_search(req)
         assert exc_info.value.status_code == 500
 
-    @patch("rag_pipeline.api.routers.query._get_singletons")
-    def test_incompatible_index_raises_actionable_409(self, mock_get):
-        from rag_pipeline.core.index_representation import (
-            IndexCompatibilityError,
-        )
-
-        _, qs = MagicMock(), MagicMock()
-        qs.semantic_search.side_effect = IndexCompatibilityError(
-            "branch 'main' requires a full reindex"
-        )
-        mock_get.return_value = (_, qs)
-
-        from rag_pipeline.api.routers.query import semantic_search
-
-        req = MagicMock(
-            query="test",
-            workspace="ws",
-            project="proj",
-            branch="main",
-            top_k=5,
-            filter_language=None,
-        )
-        with pytest.raises(HTTPException) as exc_info:
-            semantic_search(req)
-        assert exc_info.value.status_code == 409
-        assert "full reindex" in exc_info.value.detail
-
 
 # ─────────────────────────────────────────────────────────────
 # _normalize_changed_file_candidates
@@ -414,42 +387,6 @@ class TestGetPRContext:
         with pytest.raises(HTTPException):
             get_pr_context(req)
 
-    @patch("rag_pipeline.api.routers.query._get_singletons")
-    def test_incompatible_branch_raises_actionable_409(self, mock_get):
-        from rag_pipeline.core.index_representation import (
-            IndexCompatibilityError,
-        )
-
-        im, qs = MagicMock(), MagicMock()
-        qs.get_context_for_pr.side_effect = IndexCompatibilityError(
-            "branch 'main' requires a full reindex"
-        )
-        mock_get.return_value = (im, qs)
-
-        from rag_pipeline.api.routers.query import get_pr_context
-
-        req = MagicMock(
-            branch="feat",
-            workspace="ws",
-            project="proj",
-            changed_files=[],
-            diff_snippets=[],
-            pr_title=None,
-            pr_description=None,
-            top_k=10,
-            enable_priority_reranking=True,
-            min_relevance_score=0.7,
-            base_branch="main",
-            deleted_files=[],
-            pr_number=None,
-            all_pr_changed_files=[],
-        )
-
-        with pytest.raises(HTTPException) as exc_info:
-            get_pr_context(req)
-        assert exc_info.value.status_code == 409
-        assert "full reindex" in exc_info.value.detail
-
 
 # ─────────────────────────────────────────────────────────────
 # _query_pr_indexed_data
@@ -626,33 +563,3 @@ class TestGetDeterministicContext:
 
         with pytest.raises(HTTPException):
             get_deterministic_context(req)
-
-    @patch("rag_pipeline.api.routers.query._get_singletons")
-    def test_incompatible_index_raises_actionable_409(self, mock_get):
-        from rag_pipeline.core.index_representation import (
-            IndexCompatibilityError,
-        )
-
-        _, qs = MagicMock(), MagicMock()
-        qs.get_deterministic_context.side_effect = IndexCompatibilityError(
-            "branch 'main' requires a full reindex"
-        )
-        mock_get.return_value = (_, qs)
-
-        from rag_pipeline.api.routers.query import get_deterministic_context
-
-        req = MagicMock(
-            workspace="ws",
-            project="proj",
-            branches=["main"],
-            file_paths=[],
-            limit_per_file=10,
-            pr_number=None,
-            pr_changed_files=None,
-            additional_identifiers=None,
-        )
-
-        with pytest.raises(HTTPException) as exc_info:
-            get_deterministic_context(req)
-        assert exc_info.value.status_code == 409
-        assert "full reindex" in exc_info.value.detail

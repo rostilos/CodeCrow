@@ -262,44 +262,38 @@ def test_rag_effective_projection_activates_complete_repository_plugin():
     assert "navigation evidence only" in context
 
 
-def test_rag_effective_projection_rejects_implementation_drift():
+def test_rag_effective_projection_accepts_implementation_provenance_drift():
     plugin_context._plugin_host.cache_clear()
     request = _request_with_capabilities()
     capabilities = request.projectCapabilities
     payload = capabilities.model_dump()
     payload["implementationFingerprint"] = "sha256:" + "0" * 64
 
-    with pytest.raises(ValueError, match="implementation content"):
-        plugin_context.apply_effective_project_capabilities(
-            request,
-            payload,
-        )
+    resolved = plugin_context.apply_effective_project_capabilities(
+        request,
+        payload,
+    )
+
+    assert resolved.repository_plugins == tuple(capabilities.repositoryPlugins)
 
 
-@pytest.mark.parametrize(
-    ("field", "message"),
-    [
-        ("descriptorFingerprint", "descriptor fingerprint"),
-        ("fingerprint", "immutable revision"),
-    ],
-)
-def test_cross_runtime_plugin_fingerprint_mismatch_fails_closed(
-    field,
-    message,
-):
+@pytest.mark.parametrize("field", ["descriptorFingerprint", "fingerprint"])
+def test_cross_runtime_plugin_fingerprint_mismatch_is_provenance_only(field):
     plugin_context._plugin_host.cache_clear()
     request = _request_with_capabilities()
+    expected_plugins = tuple(request.projectCapabilities.repositoryPlugins)
     setattr(
         request.projectCapabilities,
         field,
         "sha256:" + "0" * 64,
     )
 
-    with pytest.raises(ValueError, match=message):
-        plugin_context.review_plugin_context(
-            request,
-            request.changedFiles,
-        )
+    resolved = plugin_context.resolve_project_capabilities(request)
+
+    assert resolved.repository_plugins == expected_plugins
+    assert resolved.fingerprint != request.projectCapabilities.fingerprint or (
+        field == "descriptorFingerprint"
+    )
 
 
 def test_magento_does_not_inject_static_prompt_rules():

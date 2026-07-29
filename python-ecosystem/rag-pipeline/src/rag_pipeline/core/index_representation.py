@@ -64,10 +64,6 @@ _REPRESENTATION_DEPENDENCIES = (
 )
 
 
-class IndexCompatibilityError(RuntimeError):
-    """The persisted branch cannot be interpreted by this RAG build."""
-
-
 def _installed_dependency_versions() -> dict[str, str]:
     versions = {}
     for distribution in _REPRESENTATION_DEPENDENCIES:
@@ -175,8 +171,7 @@ def read_branch_index_representation(
 ) -> tuple[bool, Optional[str]]:
     """Read one repository point's representation identity for a branch.
 
-    Full branch replacement is atomic and incremental writes are rejected when
-    identity differs, so one non-PR repository point is the branch sentinel.
+    One non-PR repository point is sufficient to observe branch provenance.
     The boolean distinguishes an absent branch from a legacy point with no
     identity.
     """
@@ -207,7 +202,7 @@ def read_branch_index_representation(
             return False, None
 
 
-def require_compatible_branch_representation(
+def observe_branch_representation(
     client,
     collection_name: str,
     branch: str,
@@ -220,7 +215,7 @@ def require_compatible_branch_representation(
     deliberately not a compatibility boundary: operational changes to the RAG
     host must not force customers to rebuild otherwise usable embeddings.
     Structural incompatibilities are enforced by Qdrant and by the persisted
-    plugin descriptor/snapshot contracts at the points where they are used.
+    snapshot integrity at the points where stored state is used.
     """
     exists, stored = read_branch_index_representation(
         client,

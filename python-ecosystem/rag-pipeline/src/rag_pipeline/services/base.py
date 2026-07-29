@@ -17,7 +17,7 @@ from ..utils.utils import make_project_namespace
 from ..core.embedding_factory import create_embedding_model, get_embedding_model_info
 from ..core.index_representation import (
     index_representation_fingerprint,
-    require_compatible_branch_representation,
+    observe_branch_representation,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,6 @@ class RAGQueryBase:
             index_representation_fingerprint(config)
         )
         self._compatible_branch_cache: set[tuple[str, str]] = set()
-        self._plugin_identity_cache: Dict[tuple[str, ...], str] = {}
         self.qdrant_client = QdrantClient(
             url=config.qdrant_url,
             api_key=config.qdrant_api_key or None,
@@ -57,32 +56,6 @@ class RAGQueryBase:
         self._index_cache: Dict[str, VectorStoreIndex] = {}
         self._index_cache_lock = threading.Lock()
 
-    def _plugin_identity_compatible(self, metadata: Dict[str, Any]) -> bool:
-        """Validate durable plugin descriptors, not deployment source hashes."""
-        if self.plugin_catalog is None:
-            return True
-
-        plugin_ids = metadata.get("plugin_ids")
-        if not isinstance(plugin_ids, (list, tuple)) or not all(
-            isinstance(plugin_id, str) and plugin_id
-            for plugin_id in plugin_ids
-        ):
-            return False
-        normalized_ids = tuple(plugin_ids)
-        expected = self._plugin_identity_cache.get(normalized_ids)
-        if expected is None:
-            try:
-                expected = self.plugin_catalog.registry.fingerprint_for(
-                    normalized_ids
-                )
-            except (KeyError, TypeError, ValueError):
-                return False
-            self._plugin_identity_cache[normalized_ids] = expected
-
-        return (
-            metadata.get("plugin_descriptor_fingerprint") == expected
-        )
-
     def _require_compatible_branches(
         self,
         collection_name: str,
@@ -93,7 +66,7 @@ class RAGQueryBase:
             cache_key = (collection_name, branch)
             if cache_key in self._compatible_branch_cache:
                 continue
-            exists = require_compatible_branch_representation(
+            exists = observe_branch_representation(
                 self.qdrant_client,
                 collection_name,
                 branch,
@@ -103,19 +76,8 @@ class RAGQueryBase:
                 self._compatible_branch_cache.add(cache_key)
 
     def _filter_plugin_compatible_points(self, points: List[Any]) -> List[Any]:
-        compatible = [
-            point
-            for point in points
-            if self._plugin_identity_compatible(point.payload or {})
-        ]
-        omitted = len(points) - len(compatible)
-        if omitted:
-            logger.warning(
-                "Discarded %d indexed point(s) with stale or unknown plugin "
-                "descriptor identity",
-                omitted,
-            )
-        return compatible
+        """Return stored points without build-identity eligibility filtering."""
+        return list(points)
 
     def _collection_or_alias_exists(self, name: str) -> bool:
         """Check if a collection or alias with the given name exists."""
