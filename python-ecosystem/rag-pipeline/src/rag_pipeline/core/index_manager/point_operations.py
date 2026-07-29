@@ -5,6 +5,7 @@ Handles embedding generation, point creation, and batch upsert operations.
 """
 
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import List, Dict, Tuple
@@ -25,11 +26,21 @@ class PointOperations:
         embed_model,
         batch_size: int = 50,
         embedding_dim: int | None = None,
+        upsert_max_attempts: int = 3,
+        upsert_retry_base_seconds: float = 0.25,
     ):
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        if upsert_max_attempts <= 0:
+            raise ValueError("upsert_max_attempts must be positive")
+        if upsert_retry_base_seconds < 0:
+            raise ValueError("upsert_retry_base_seconds cannot be negative")
         self.client = client
         self.embed_model = embed_model
         self.batch_size = batch_size
         self.embedding_dim = embedding_dim
+        self.upsert_max_attempts = upsert_max_attempts
+        self.upsert_retry_base_seconds = upsert_retry_base_seconds
     
     @staticmethod
     def generate_point_id(
@@ -161,17 +172,136 @@ class PointOperations:
         
         for i in range(0, len(points), self.batch_size):
             batch = points[i:i + self.batch_size]
+            batch_successful, batch_failed = self._upsert_resilient(
+                collection_name,
+                batch,
+                batch_offset=i,
+            )
+            successful += batch_successful
+            failed += batch_failed
+
+        return successful, failed
+
+    @staticmethod
+    def _status_code(exception: Exception) -> int | None:
+        status_code = getattr(exception, "status_code", None)
+        if isinstance(status_code, int):
+            return status_code
+        response = getattr(exception, "response", None)
+        status_code = getattr(response, "status_code", None)
+        return status_code if isinstance(status_code, int) else None
+
+    @classmethod
+    def _is_batch_shape_failure(cls, exception: Exception | None) -> bool:
+        """Return whether a smaller request can isolate a rejected point."""
+        if exception is None:
+            return False
+        status_code = cls._status_code(exception)
+        if status_code in {400, 413, 422}:
+            return True
+        message = str(exception).casefold()
+        return any(
+            marker in message
+            for marker in (
+                "bad request",
+                "payload too large",
+                "request entity too large",
+                "request too large",
+                "validation error",
+                "vector dimension",
+                "wrong input",
+            )
+        )
+
+    @staticmethod
+    def _point_label(point: PointStruct) -> str:
+        payload = point.payload or {}
+        path = payload.get("path", "<unknown>")
+        return f"id={point.id} path={path}"
+
+    def _upsert_resilient(
+        self,
+        collection_name: str,
+        points: List[PointStruct],
+        *,
+        batch_offset: int,
+    ) -> tuple[int, int]:
+        """Write a batch with bounded retry and rejected-request subdivision."""
+        if not points:
+            return 0, 0
+
+        error = None
+        for attempt in range(1, self.upsert_max_attempts + 1):
             try:
                 self.client.upsert(
                     collection_name=collection_name,
-                    points=batch
+                    points=points,
                 )
-                successful += len(batch)
-            except Exception as e:
-                logger.error(f"Failed to upsert batch starting at {i}: {e}")
-                failed += len(batch)
-        
-        return successful, failed
+                return len(points), 0
+            except Exception as exception:
+                error = exception
+                if self._is_batch_shape_failure(exception):
+                    break
+                if attempt >= self.upsert_max_attempts:
+                    logger.error(
+                        "Qdrant upsert failed after %s attempts at point "
+                        "offset %s (%s points): %s",
+                        self.upsert_max_attempts,
+                        batch_offset,
+                        len(points),
+                        exception,
+                    )
+                    return 0, len(points)
+                delay = self.upsert_retry_base_seconds * (2 ** (attempt - 1))
+                logger.warning(
+                    "Qdrant upsert failed at point offset %s "
+                    "(%s points, attempt %s/%s); retrying in %.2fs: %s",
+                    batch_offset,
+                    len(points),
+                    attempt,
+                    self.upsert_max_attempts,
+                    delay,
+                    exception,
+                )
+                if delay:
+                    time.sleep(delay)
+
+        if len(points) == 1:
+            logger.error(
+                "Qdrant rejected one exact index point after bounded recovery "
+                "(%s): %s",
+                self._point_label(points[0]),
+                error,
+            )
+            return 0, 1
+
+        midpoint = len(points) // 2
+        left = points[:midpoint]
+        right = points[midpoint:]
+
+        logger.warning(
+            "Qdrant rejected a %s-point request at offset %s; "
+            "isolating it into %s and %s points: %s",
+            len(points),
+            batch_offset,
+            len(left),
+            len(right),
+            error,
+        )
+        left_result = self._upsert_resilient(
+            collection_name,
+            left,
+            batch_offset=batch_offset,
+        )
+        right_result = self._upsert_resilient(
+            collection_name,
+            right,
+            batch_offset=batch_offset + midpoint,
+        )
+        return (
+            left_result[0] + right_result[0],
+            left_result[1] + right_result[1],
+        )
     
     def process_and_upsert_chunks(
         self,

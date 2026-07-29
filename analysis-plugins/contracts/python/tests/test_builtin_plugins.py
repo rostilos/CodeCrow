@@ -689,6 +689,48 @@ def test_magento_rejects_xml_entities_without_resolution():
     assert [diagnostic.code for diagnostic in diagnostics] == ["magento-unsafe-xml"]
 
 
+def test_magento_keeps_custom_entity_bearing_xml_outside_architecture_analysis():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    runtime = PluginRuntime(catalog)
+    capabilities = ProjectSelector(catalog.registry).select(_facts())
+    path = "app/code/Punchout/Gateway/etc/samples/cxml_inv_po.xml"
+    artifact = FileArtifact(
+        path,
+        """<?xml version="1.0"?>
+<!DOCTYPE cXML SYSTEM "http://xml.cxml.org/schemas/cXML/1.2.014/InvoiceDetail.dtd">
+<cXML payloadID="sample"><Response /></cXML>
+""",
+    )
+
+    assert runtime.file_disposition(
+        path,
+        capabilities,
+    ) is FileDisposition.FULL
+
+    handle = runtime.start_repository_analysis(
+        capabilities,
+        "0123456789abcdef",
+    )
+    handle.ingest(tuple(sorted((
+        artifact,
+        FileArtifact(
+            "app/code/Punchout/Gateway/etc/module.xml",
+            '<config><module name="Punchout_Gateway" /></config>',
+        ),
+        FileArtifact(
+            "app/etc/config.php",
+            "<?php return ['modules' => ['Punchout_Gateway' => 1]];",
+        ),
+    ), key=lambda value: value.path)))
+    analysis, diagnostics = handle.finish()
+
+    assert diagnostics == ()
+    assert all(
+        path not in packet.paths
+        for packet in analysis.packets
+    )
+
+
 def test_magento_file_policy_keeps_architecture_without_vendor_test_vectors():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)

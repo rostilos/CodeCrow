@@ -26,6 +26,7 @@ from .architecture import (
     PacketGraph,
     attrs,
     config_area,
+    is_magento_config_xml,
     line,
     safe_xml,
     tag,
@@ -6485,7 +6486,7 @@ class MagentoRepositoryResolver:
             for fact in packet.facts
         }
         for path in sorted(self.artifacts):
-            if not path.endswith(".xml") or "/etc/" not in f"/{path}":
+            if not is_magento_config_xml(path):
                 continue
             module = self._module_for_path(path, modules)
             is_application_config = path.startswith("app/etc/")
@@ -6916,7 +6917,7 @@ class MagentoRepositorySession:
                 self.artifacts.pop(path, None)
                 continue
             filename = PurePosixPath(path).name
-            is_config = path.endswith(".xml") and "/etc/" in f"/{path}"
+            is_config = is_magento_config_xml(path)
             is_schema_whitelist = (
                 filename == "db_schema_whitelist.json"
                 and "/etc/" in f"/{path}"
