@@ -135,7 +135,7 @@ class PRContextMixin:
             branches_to_search.append(base_branch)
 
         branches_to_search = list(dict.fromkeys(branches_to_search))
-        self._require_compatible_branches(collection_name, branches_to_search)
+        self._observe_branches(collection_name, branches_to_search)
 
         logger.info(
             f"Smart RAG: Multi-branch query for {len(changed_files)} files "

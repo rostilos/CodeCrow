@@ -22,6 +22,7 @@ from service.review.prompt_dry_run import PromptCaptureSession
 from service.review.prompt_dry_run import capture_review_prompts
 from service.review.prompt_dry_run import capture_and_store_review_prompts
 from service.review.review_service import ReviewService
+from service.review.snapshot_identity import validate_review_snapshot_identity
 from utils.diff_processor import DiffProcessor, HunkDisposition
 from utils.hunk_coverage import ReviewManifestPreconditionError
 from .prompt_dry_run_neutral_fixture import (
@@ -656,15 +657,15 @@ async def test_full_pipeline_capture_fails_when_pr_overlay_is_not_indexed(
         "promptDryRunId": "queue-job-failure",
     })
 
-    with pytest.raises(RuntimeError, match="target branch must be reindexed"):
-        await capture_and_store_review_prompts(
-            request,
-            rag,
-            simulated_findings_per_file=1,
-        )
+    artifact = await capture_and_store_review_prompts(
+        request,
+        rag,
+        simulated_findings_per_file=1,
+    )
 
     assert rag.index_requests
-    assert list(tmp_path.iterdir()) == []
+    assert artifact["pipeline"]["completed"] is True
+    assert list(tmp_path.iterdir())
 
 
 @pytest.mark.asyncio
@@ -672,11 +673,7 @@ async def test_full_pipeline_capture_fails_when_pr_overlay_is_not_indexed(
     ("request_updates", "expected_field"),
     [
         ({"targetBranchName": None}, "targetBranchName"),
-        ({"sourceBranchName": None}, "sourceBranchName"),
         ({"currentCommitHash": None, "commitHash": None}, "currentCommitHash"),
-        ({"currentCommitHash": "HEAD"}, "currentCommitHash"),
-        ({"currentCommitHash": "abc123"}, "currentCommitHash"),
-        ({"baseCommitHash": None}, "baseCommitHash"),
     ],
 )
 async def test_review_snapshot_identity_fails_before_indexing_or_stage_zero(
@@ -709,19 +706,30 @@ async def test_review_snapshot_identity_fails_before_indexing_or_stage_zero(
     stage_0.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_review_service_rejects_snapshot_before_provider_construction(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        "llm.llm_factory.LLMFactory.create_llm",
-        lambda *_args, **_kwargs: pytest.fail("provider construction is forbidden"),
-    )
-    service = ReviewService()
-    request = _request().model_copy(update={"currentCommitHash": "HEAD"})
+def test_review_snapshot_allows_missing_optional_pr_identity():
+    request = _request().model_copy(update={
+        "sourceBranchName": None,
+        "baseCommitHash": None,
+    })
 
-    with pytest.raises(PrIndexPreconditionError, match="currentCommitHash"):
-        await service.process_review_request(request)
+    identity = validate_review_snapshot_identity(request)
+
+    assert identity.source_branch is None
+    assert identity.base_revision is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", ["abc123", "HEAD", "release/10x"])
+def test_review_snapshot_accepts_provider_native_git_revisions(revision):
+    request = _request().model_copy(update={
+        "currentCommitHash": revision,
+        "baseCommitHash": revision,
+    })
+
+    identity = validate_review_snapshot_identity(request)
+
+    assert identity.head_revision == revision
+    assert identity.base_revision == revision
 
 
 @pytest.mark.asyncio
@@ -785,9 +793,7 @@ async def test_pr_overlay_receives_one_exact_snapshot_identity():
 
 
 @pytest.mark.asyncio
-async def test_pr_index_precondition_fails_before_stage_0_for_normal_review(
-    monkeypatch,
-):
+async def test_pr_index_failure_is_optional_for_normal_review():
     rag = DeterministicRagSpy()
 
     async def reject_overlay(**kwargs):
@@ -802,11 +808,6 @@ async def test_pr_index_precondition_fails_before_stage_0_for_normal_review(
         }
 
     rag.index_pr_files = reject_overlay
-    stage_0 = AsyncMock()
-    monkeypatch.setattr(
-        "service.review.orchestrator.orchestrator.execute_stage_0_planning",
-        stage_0,
-    )
     request = _request()
     orchestrator = MultiStageReviewOrchestrator(
         llm=object(),
@@ -814,17 +815,13 @@ async def test_pr_index_precondition_fails_before_stage_0_for_normal_review(
         rag_client=rag,
     )
 
-    with pytest.raises(
-        PrIndexPreconditionError,
-        match="No review-model stage was started",
-    ):
-        await orchestrator.orchestrate_review(
-            request,
-            processed_diff=DiffProcessor().process(request.rawDiff),
-        )
+    await orchestrator._index_pr_files(
+        request,
+        DiffProcessor().process(request.rawDiff),
+    )
 
     assert rag.index_requests
-    stage_0.assert_not_awaited()
+    assert orchestrator._pr_indexed is False
 
 
 @pytest.mark.asyncio

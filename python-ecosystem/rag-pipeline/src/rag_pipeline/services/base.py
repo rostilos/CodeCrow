@@ -40,7 +40,7 @@ class RAGQueryBase:
         self.index_representation_fingerprint = (
             index_representation_fingerprint(config)
         )
-        self._compatible_branch_cache: set[tuple[str, str]] = set()
+        self._observed_branch_cache: set[tuple[str, str]] = set()
         self.qdrant_client = QdrantClient(
             url=config.qdrant_url,
             api_key=config.qdrant_api_key or None,
@@ -56,7 +56,7 @@ class RAGQueryBase:
         self._index_cache: Dict[str, VectorStoreIndex] = {}
         self._index_cache_lock = threading.Lock()
 
-    def _require_compatible_branches(
+    def _observe_branches(
         self,
         collection_name: str,
         branches: List[str],
@@ -64,7 +64,7 @@ class RAGQueryBase:
         """Confirm branch presence; build fingerprints are provenance only."""
         for branch in dict.fromkeys(branches):
             cache_key = (collection_name, branch)
-            if cache_key in self._compatible_branch_cache:
+            if cache_key in self._observed_branch_cache:
                 continue
             exists = observe_branch_representation(
                 self.qdrant_client,
@@ -73,9 +73,9 @@ class RAGQueryBase:
                 expected_fingerprint=self.index_representation_fingerprint,
             )
             if exists:
-                self._compatible_branch_cache.add(cache_key)
+                self._observed_branch_cache.add(cache_key)
 
-    def _filter_plugin_compatible_points(self, points: List[Any]) -> List[Any]:
+    def _accept_stored_points(self, points: List[Any]) -> List[Any]:
         """Return stored points without build-identity eligibility filtering."""
         return list(points)
 

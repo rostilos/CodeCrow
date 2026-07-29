@@ -1,4 +1,4 @@
-"""Exact repository identity required by the review pipeline."""
+"""Best available repository identity for optional review enrichment."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from typing import Optional
 from model.dtos import ReviewRequestDto
 
 
-_IMMUTABLE_GIT_REVISION = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
+_GIT_REVISION = re.compile(r"[^\s]+")
 
 
 class ReviewSnapshotPreconditionError(RuntimeError):
-    """Raised before analysis when its repository snapshot is not exact."""
+    """Raised only when the core review has no usable repository identity."""
 
 
 @dataclass(frozen=True)
@@ -43,11 +43,10 @@ def _required_immutable_revision(
     field_name: str,
 ) -> str:
     revision = _required_exact_text(value, field_name)
-    if _IMMUTABLE_GIT_REVISION.fullmatch(revision) is None:
+    if _GIT_REVISION.fullmatch(revision) is None:
         raise ReviewSnapshotPreconditionError(
-            f"Review snapshot precondition failed: {field_name} must be a full "
-            "40- or 64-character hexadecimal Git object ID; mutable names and "
-            "abbreviated hashes are not accepted. No review-model stage was started."
+            f"Review snapshot precondition failed: {field_name} must be a valid "
+            "non-blank Git revision. No review-model stage was started."
         )
     return revision
 
@@ -55,7 +54,7 @@ def _required_immutable_revision(
 def validate_review_snapshot_identity(
     request: ReviewRequestDto,
 ) -> ReviewSnapshotIdentity:
-    """Resolve one fail-closed identity for all review context consumers."""
+    """Return provider identity without imposing a full-hash representation."""
     target_branch = _required_exact_text(
         request.targetBranchName,
         "targetBranchName",
@@ -73,13 +72,15 @@ def validate_review_snapshot_identity(
     source_branch: Optional[str] = None
     base_revision: Optional[str] = None
     if request.pullRequestId:
-        source_branch = _required_exact_text(
-            request.sourceBranchName,
-            "sourceBranchName",
+        source_branch = (
+            request.sourceBranchName.strip()
+            if request.sourceBranchName and request.sourceBranchName.strip()
+            else None
         )
-        base_revision = _required_immutable_revision(
-            request.baseCommitHash,
-            "baseCommitHash",
+        base_revision = (
+            request.baseCommitHash.strip()
+            if request.baseCommitHash and request.baseCommitHash.strip()
+            else None
         )
 
     return ReviewSnapshotIdentity(

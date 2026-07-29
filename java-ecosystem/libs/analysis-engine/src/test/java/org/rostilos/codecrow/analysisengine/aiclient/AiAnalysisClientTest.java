@@ -512,9 +512,8 @@ class AiAnalysisClientTest {
                         verify(queueService, times(3)).rightPop(anyString(), anyLong());
 
                         assertThat(response.get("comment")).isEqualTo("All good");
-                        assertThat(capturedEvents).hasSize(2);
+                        assertThat(capturedEvents).hasSize(1);
                         assertThat(capturedEvents.get(0).get("type")).isEqualTo("progress");
-                        assertThat(capturedEvents.get(1).get("type")).isEqualTo("result");
                 }
 
                 @Test
@@ -588,6 +587,9 @@ class AiAnalysisClientTest {
                                                 assertThat(event).containsEntry("type", "status");
                                                 assertThat(event).containsEntry("state", "queued");
                                         });
+                        assertThat(capturedEvents)
+                                        .noneMatch(event -> "final".equals(event.get("type"))
+                                                        || "result".equals(event.get("type")));
                         verify(queueService).listContains(
                                         eq("codecrow:analysis:jobs"),
                                         anyString());

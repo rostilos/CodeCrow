@@ -1,11 +1,14 @@
 package org.rostilos.codecrow.pipelineagent.generic.dto.webhook;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 
 /**
  * Parsed webhook payload common fields.
  * Provider-specific parsers convert raw webhook payloads into this common format.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record WebhookPayload(
     EVcsProvider provider,
 
@@ -147,6 +150,7 @@ public record WebhookPayload(
     /**
      * Check if this is a pull request event.
      */
+    @JsonIgnore
     public boolean isPullRequestEvent() {
         return pullRequestId != null;
     }
@@ -154,6 +158,7 @@ public record WebhookPayload(
     /**
      * Check if this is a push event.
      */
+    @JsonIgnore
     public boolean isPushEvent() {
         return eventType != null && (
             eventType.contains("push") || 
@@ -164,6 +169,7 @@ public record WebhookPayload(
     /**
      * Check if this is a comment event.
      */
+    @JsonIgnore
     public boolean isCommentEvent() {
         return commentData != null;
     }
@@ -178,6 +184,7 @@ public record WebhookPayload(
     /**
      * Get the CodeCrow command from this comment, if present.
      */
+    @JsonIgnore
     public CodecrowCommand getCodecrowCommand() {
         return commentData != null ? commentData.parseCommand() : null;
     }
@@ -185,6 +192,7 @@ public record WebhookPayload(
     /**
      * Get the full repository name (workspace/repo).
      */
+    @JsonIgnore
     public String getFullRepoName() {
         if (workspaceSlug != null && repoSlug != null) {
             return workspaceSlug + "/" + repoSlug;
@@ -263,6 +271,7 @@ public record WebhookPayload(
     /**
      * Check if the comment author is the PR author.
      */
+    @JsonIgnore
     public boolean isCommentByPrAuthor() {
         if (commentData == null || prAuthorId == null) {
             return false;

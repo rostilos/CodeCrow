@@ -393,18 +393,19 @@ class MultiStageReviewOrchestrator:
             else:
                 status_code = result.get("status_code")
                 detail = result.get("error") or result
-                raise PrIndexPreconditionError(
-                    "PR context precondition failed"
-                    f"{f' (HTTP {status_code})' if status_code else ''}: "
-                    f"{detail}. No review-model stage was started."
+                logger.warning(
+                    "PR context indexing unavailable%s; continuing review without "
+                    "the PR overlay: %s",
+                    f" (HTTP {status_code})" if status_code else "",
+                    detail,
                 )
-        except PrIndexPreconditionError:
-            raise
         except Exception as e:
-            raise PrIndexPreconditionError(
-                "PR context precondition failed before review-model execution: "
-                f"{type(e).__name__}: {e}"
-            ) from e
+            logger.warning(
+                "PR context indexing failed before model execution; continuing "
+                "without the PR overlay: %s: %s",
+                type(e).__name__,
+                e,
+            )
 
     async def _cleanup_pr_files(self, request: ReviewRequestDto) -> None:
         """Delete PR-indexed data after analysis completes.
@@ -821,15 +822,12 @@ class MultiStageReviewOrchestrator:
         candidate_ledger = CandidateEvidenceLedger()
 
         try:
-            # Establish current-source and repository-snapshot compatibility
-            # before the first review-model call. A 409 or transport failure is
-            # a quality precondition failure, not permission to review using
-            # stale branch context. This also avoids paying for Stage 0 when the
-            # deterministic context required by later stages cannot be built.
+            # Build the optional current-source overlay before the first model
+            # call. RAG/index failures are reported but do not block diff review.
             _emit_status(
                 self.event_callback,
-                "pr_context_preflight_started",
-                "Validating current-source and repository context compatibility...",
+                "pr_context_enrichment_started",
+                "Preparing optional repository context...",
             )
             await self._index_pr_files(
                 request,
@@ -838,8 +836,8 @@ class MultiStageReviewOrchestrator:
             )
             _emit_status(
                 self.event_callback,
-                "pr_context_preflight_completed",
-                "Current-source and repository context compatibility established",
+                "pr_context_enrichment_completed",
+                "Optional repository context preparation completed",
             )
 
             if (

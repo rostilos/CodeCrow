@@ -31,6 +31,7 @@ import java.util.function.Consumer;
 public class JobService {
 
     private static final Logger log = LoggerFactory.getLogger(JobService.class);
+    private static final String WEBHOOK_DISPATCH_STEP = "webhook_dispatch";
 
     private final JobRepository jobRepository;
     private final JobLogRepository jobLogRepository;
@@ -122,6 +123,45 @@ public class JobService {
         addLog(job, JobLogLevel.INFO, "init", "Job created for branch: " + branchName);
 
         return job;
+    }
+
+    /**
+     * Persist the executable webhook work before handing it to an async worker.
+     * A process restart can then replay the same normalized payload.
+     */
+    @Transactional
+    public Job queueWebhookJob(Job job, String webhookPayload) {
+        Job persisted = jobRepository.findById(job.getId()).orElseThrow(
+                () -> new IllegalArgumentException("Job not found: " + job.getId()));
+        persisted.setStatus(JobStatus.QUEUED);
+        persisted.setCurrentStep("Waiting for pipeline worker");
+        persisted = jobRepository.save(persisted);
+        addLog(persisted, JobLogLevel.INFO, "queued",
+                "Webhook work persisted and queued for pipeline processing");
+        addLog(persisted, JobLogLevel.DEBUG, WEBHOOK_DISPATCH_STEP,
+                "Durable webhook dispatch payload",
+                Map.of("payload", webhookPayload));
+        return persisted;
+    }
+
+    public Optional<String> findWebhookDispatchPayload(Long jobId) {
+        List<JobLog> entries =
+                jobLogRepository.findByJobIdAndStep(jobId, WEBHOOK_DISPATCH_STEP);
+        if (entries.isEmpty()) {
+            return Optional.empty();
+        }
+        String metadata = entries.get(entries.size() - 1).getMetadata();
+        if (metadata == null || metadata.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.ofNullable(
+                    objectMapper.readTree(metadata).path("payload").textValue());
+        } catch (JsonProcessingException malformedMetadata) {
+            log.warn("Could not read durable webhook payload for job {}: {}",
+                    jobId, malformedMetadata.getMessage());
+            return Optional.empty();
+        }
     }
 
     /**
@@ -433,6 +473,7 @@ public class JobService {
         logEntry.setSequenceNumber(jobLogRepository.getNextSequenceNumber(job.getId()));
 
         logEntry = jobLogRepository.save(logEntry);
+        touchJobActivity(job);
 
         // Notify SSE subscribers
         notifySubscribers(job.getExternalId(), logEntry);
@@ -456,6 +497,7 @@ public class JobService {
         logEntry.setSequenceNumber(jobLogRepository.getNextSequenceNumber(job.getId()));
 
         logEntry = jobLogRepository.save(logEntry);
+        touchJobActivity(job);
 
         // Notify SSE subscribers
         notifySubscribers(job.getExternalId(), logEntry);
@@ -485,6 +527,7 @@ public class JobService {
         }
 
         logEntry = jobLogRepository.save(logEntry);
+        touchJobActivity(job);
         notifySubscribers(job.getExternalId(), logEntry);
 
         return logEntry;
@@ -665,5 +708,39 @@ public class JobService {
             failJob(job, reason);
         }
         return stuckJobs;
+    }
+
+    public List<Job> findRecoverableWebhookJobs(OffsetDateTime threshold, int limit) {
+        return jobRepository.findRecoverableWebhookJobs(
+                threshold, PageRequest.of(0, Math.max(1, limit)));
+    }
+
+    public List<Job> findAbandonedRunningWebhookJobs(OffsetDateTime threshold, int limit) {
+        return jobRepository.findAbandonedRunningWebhookJobs(
+                threshold, PageRequest.of(0, Math.max(1, limit)));
+    }
+
+    @Transactional
+    public boolean claimRecoverableWebhookJob(Long jobId, OffsetDateTime threshold) {
+        return jobRepository.claimRecoverableWebhookJob(
+                jobId, threshold, OffsetDateTime.now()) == 1;
+    }
+
+    @Transactional
+    public boolean claimAbandonedRunningWebhookJob(Long jobId, OffsetDateTime threshold) {
+        return jobRepository.claimAbandonedRunningWebhookJob(
+                jobId, threshold, OffsetDateTime.now()) == 1;
+    }
+
+    private void touchJobActivity(Job job) {
+        if (job == null || job.getId() == null) {
+            return;
+        }
+        try {
+            jobRepository.touchJob(job.getId(), OffsetDateTime.now());
+        } catch (Exception touchError) {
+            log.debug("Could not update activity timestamp for job {}: {}",
+                    job.getExternalId(), touchError.getMessage());
+        }
     }
 }

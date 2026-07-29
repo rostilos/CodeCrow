@@ -15,6 +15,7 @@ import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitRangeDiffAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestDiffAction;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -45,11 +46,10 @@ public class BitbucketAiClientService extends AbstractVcsAiClientService {
             long pullRequestId) throws IOException {
         GetPullRequestAction.PullRequestMetadata metadata = new GetPullRequestAction(client).getPullRequest(
                 repository.workspace(), repository.repoSlug(), String.valueOf(pullRequestId));
-        GetCommitAction commitAction = new GetCommitAction(client);
-        String destinationCommit = commitAction.resolveCommitHash(
-                repository.workspace(), repository.repoSlug(), metadata.getDestinationCommit());
-        String sourceCommit = commitAction.resolveCommitHash(
-                repository.workspace(), repository.repoSlug(), metadata.getSourceCommit());
+        String destinationCommit = resolveIfAbbreviated(
+                client, repository, metadata.getDestinationCommit());
+        String sourceCommit = resolveIfAbbreviated(
+                client, repository, metadata.getSourceCommit());
         return pullRequestData(
                 metadata.getTitle(),
                 metadata.getDescription(),
@@ -66,5 +66,25 @@ public class BitbucketAiClientService extends AbstractVcsAiClientService {
             String headCommit) throws IOException {
         return new GetCommitRangeDiffAction(client).getCommitRangeDiff(
                 repository.workspace(), repository.repoSlug(), baseCommit, headCommit);
+    }
+
+    @Override
+    protected String fetchPullRequestDiff(
+            OkHttpClient client,
+            RepositoryInfo repository,
+            long pullRequestId) throws IOException {
+        return new GetPullRequestDiffAction(client).getPullRequestDiff(
+                repository.workspace(), repository.repoSlug(), String.valueOf(pullRequestId));
+    }
+
+    private String resolveIfAbbreviated(
+            OkHttpClient client,
+            RepositoryInfo repository,
+            String commit) throws IOException {
+        if (isFullGitObjectId(commit) || commit == null || commit.isBlank()) {
+            return commit;
+        }
+        return new GetCommitAction(client).resolveCommitHash(
+                repository.workspace(), repository.repoSlug(), commit);
     }
 }
