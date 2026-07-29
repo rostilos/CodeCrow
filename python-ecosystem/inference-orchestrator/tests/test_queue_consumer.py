@@ -156,8 +156,8 @@ async def test_neutral_mixed_language_dry_run_traverses_queue_handler(
     assert {
         "acknowledged",
         "prompt_dry_run_started",
-        "pr_context_preflight_started",
-        "pr_context_preflight_completed",
+        "pr_context_enrichment_started",
+        "pr_context_enrichment_completed",
         "stage_0_started",
         "stage_1_started",
         "verification_started",

@@ -76,7 +76,7 @@ class SemanticSearchMixin:
                 logger.warning(f"Collection {collection_name} does not exist")
                 return []
 
-            self._require_compatible_branches(collection_name, branches)
+            self._observe_branches(collection_name, branches)
 
             # Get or create cached VectorStoreIndex
             index = self._get_or_create_index(collection_name)

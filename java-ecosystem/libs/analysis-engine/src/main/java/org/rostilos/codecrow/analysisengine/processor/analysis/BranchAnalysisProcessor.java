@@ -430,20 +430,13 @@ public class BranchAnalysisProcessor {
 					changedFiles, existingFiles, refreshedBranch, project,
 					request, consumer, archiveContents, rawDiff);
 
-			// ── Deterministic sweep: catch stale issues in non-diff files ────
-			// The normal reconciliation above only checks files in the diff.
-			// The sweep checks ALL remaining unresolved issues that have reliable
-			// content anchors (codeSnippet/lineHash). Zero AI cost.
-			int sweptCount = directPushLimited ? 0
-					: branchIssueReconciliationService.sweepDeterministicResolutions(
-							changedFiles, refreshedBranch, project, request, archiveContents);
-			if (directPushLimited) {
-				log.info("Skipping all-files deterministic sweep for oversized direct push "
-						+ "(project={}, branch={})", project.getId(), request.getTargetBranchName());
-			}
-			if (sweptCount > 0) {
-				refreshedBranch = refreshAndSaveIssueCounts(refreshedBranch);
-			}
+			// An incremental push can only change issues in the files present in its
+			// diff. Repository-wide issue checks belong to the explicit full
+			// reconciliation operation; doing them here caused a sequential VCS read
+			// for every unrelated unresolved file and could hold a one-file job for
+			// nearly an hour.
+			EventNotificationEmitter.emitStatus(consumer, "finalizing_branch_state",
+					"Saving changed-file reconciliation results");
 
 			branchFileOperationsService.updateFileSnapshotsForBranch(existingFiles, project, request,
 					archiveContents);

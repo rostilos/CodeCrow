@@ -518,6 +518,14 @@ class IsolatedReviewProducerReplayTest {
         }
 
         @Override
+        protected String fetchPullRequestDiff(
+                OkHttpClient client,
+                RepositoryInfo repository,
+                long pullRequestId) {
+            return rawDiff;
+        }
+
+        @Override
         public EVcsProvider getProvider() {
             return EVcsProvider.GITHUB;
         }

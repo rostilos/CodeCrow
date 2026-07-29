@@ -82,7 +82,7 @@ def get_pr_context(request: PRContextRequest):
         )
         preflight_branches = [authoritative_branch]
         if query_service._collection_or_alias_exists(collection_name):
-            query_service._require_compatible_branches(
+            query_service._observe_branches(
                 collection_name,
                 preflight_branches,
             )
@@ -214,8 +214,8 @@ def _query_pr_indexed_data(
                 with_payload=True,
                 with_vectors=False
             )
-            compatible = query_service._filter_plugin_compatible_points(results)
-            formatted = _format_pr_results(compatible[:top_k])
+            accepted = query_service._accept_stored_points(results)
+            formatted = _format_pr_results(accepted[:top_k])
             return _merge_pr_results(direct_file_results, formatted)
 
         query_text = " ".join(query_parts)
@@ -229,7 +229,7 @@ def _query_pr_indexed_data(
             limit=max(top_k * 4, top_k),
             with_payload=True,
         )
-        results = query_service._filter_plugin_compatible_points(
+        results = query_service._accept_stored_points(
             response.points
         )[:top_k]
 
@@ -285,9 +285,9 @@ def _fetch_direct_pr_file_chunks(
         with_vectors=False,
     )
 
-    compatible = query_service._filter_plugin_compatible_points(results)
+    accepted = query_service._accept_stored_points(results)
     formatted = _format_pr_results(
-        compatible[:result_limit],
+        accepted[:result_limit],
         forced_match_type="changed_file",
         forced_score=1.0,
     )

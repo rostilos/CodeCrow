@@ -118,7 +118,7 @@ class TestRAGQueryBase:
             "index_representation_fingerprint": "sha256:older-host",
         })
 
-        assert base._filter_plugin_compatible_points([legacy]) == [legacy]
+        assert base._accept_stored_points([legacy]) == [legacy]
         catalog.registry.fingerprint_for.assert_not_called()
         catalog.implementation_fingerprint.assert_not_called()
 
@@ -143,7 +143,7 @@ class TestRAGQueryService:
         point = SimpleNamespace(payload={
             "plugin_descriptor_fingerprint": "sha256:legacy",
         })
-        assert service._filter_plugin_compatible_points([point]) == [point]
+        assert service._accept_stored_points([point]) == [point]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ class TestSemanticSearchDedup:
         mixin._get_project_collection_name = MagicMock(return_value="rag_ws__project")
         mixin._collection_or_alias_exists = MagicMock(return_value=True)
         mixin._get_or_create_index = MagicMock(return_value=index)
-        mixin._require_compatible_branches = MagicMock()
+        mixin._observe_branches = MagicMock()
         mixin._supports_instructions = False
         results = mixin.semantic_search_multi_branch(
             query="service",
@@ -241,7 +241,7 @@ class TestSemanticSearchDedup:
         mixin._get_project_collection_name = MagicMock(return_value="rag_ws__project")
         mixin._collection_or_alias_exists = MagicMock(return_value=True)
         mixin._get_or_create_index = MagicMock(return_value=index)
-        mixin._require_compatible_branches = MagicMock()
+        mixin._observe_branches = MagicMock()
         mixin._supports_instructions = False
         results = mixin.semantic_search_multi_branch(
             query="service",

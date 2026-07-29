@@ -71,7 +71,7 @@ def _build_service(plugin_catalog=None):
 
         config = _mock_config()
         service = TestService(config, plugin_catalog=plugin_catalog)
-        service._require_compatible_branches = MagicMock()
+        service._observe_branches = MagicMock()
         return service
 
 

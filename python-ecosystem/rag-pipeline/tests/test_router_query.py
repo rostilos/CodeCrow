@@ -188,7 +188,7 @@ class TestFetchDirectPRFileChunks:
         )
         im.qdrant_client.scroll.return_value = ([stale, current], None)
         qs = MagicMock()
-        qs._filter_plugin_compatible_points.side_effect = (
+        qs._accept_stored_points.side_effect = (
             lambda points: [
                 point
                 for point in points
@@ -319,7 +319,7 @@ class TestGetPRContext:
             item.get("path") or item.get("metadata", {}).get("path")
             for item in ctx["relevant_code"]
         ] == ["a.java", "b.java"]
-        qs._require_compatible_branches.assert_called_once_with(
+        qs._observe_branches.assert_called_once_with(
             im._get_project_collection_name.return_value,
             ["main"],
         )
@@ -400,7 +400,7 @@ class TestQueryPRIndexedData:
         mock_fetch.return_value = []
         im = MagicMock()
         qs = MagicMock()
-        qs._filter_plugin_compatible_points.side_effect = lambda points: points
+        qs._accept_stored_points.side_effect = lambda points: points
         im._get_project_collection_name.return_value = "coll"
         im._collection_manager.collection_exists.return_value = True
 
@@ -429,7 +429,7 @@ class TestQueryPRIndexedData:
         mock_fetch.return_value = []
         im = MagicMock()
         qs = MagicMock()
-        qs._filter_plugin_compatible_points.side_effect = lambda points: points
+        qs._accept_stored_points.side_effect = lambda points: points
         im._get_project_collection_name.return_value = "coll"
         im._collection_manager.collection_exists.return_value = True
         im.embed_model.get_text_embedding.return_value = [0.1] * 768
@@ -493,7 +493,7 @@ class TestQueryPRIndexedData:
         )
         im.qdrant_client.scroll.return_value = ([stale, current], None)
         qs = MagicMock()
-        qs._filter_plugin_compatible_points.side_effect = (
+        qs._accept_stored_points.side_effect = (
             lambda points: [
                 point
                 for point in points

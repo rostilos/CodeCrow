@@ -15,6 +15,7 @@ import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.github.actions.GetCommitRangeDiffAction;
 import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestAction;
+import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestDiffAction;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -62,5 +63,14 @@ public class GitHubAiClientService extends AbstractVcsAiClientService {
             String headCommit) throws IOException {
         return new GetCommitRangeDiffAction(client).getCommitRangeDiff(
                 repository.workspace(), repository.repoSlug(), baseCommit, headCommit);
+    }
+
+    @Override
+    protected String fetchPullRequestDiff(
+            OkHttpClient client,
+            RepositoryInfo repository,
+            long pullRequestId) throws IOException {
+        return new GetPullRequestDiffAction(client).getPullRequestDiff(
+                repository.workspace(), repository.repoSlug(), Math.toIntExact(pullRequestId));
     }
 }

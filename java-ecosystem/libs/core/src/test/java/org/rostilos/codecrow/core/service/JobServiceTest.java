@@ -127,6 +127,31 @@ class JobServiceTest {
     }
 
     @Nested
+    @DisplayName("queueWebhookJob()")
+    class QueueWebhookJobTests {
+
+        @Test
+        void persistsExecutablePayloadBeforeAsyncDispatch() {
+            Job job = new Job();
+            setField(job, "id", 104L);
+            when(jobRepository.findById(104L)).thenReturn(Optional.of(job));
+            when(jobRepository.save(job)).thenReturn(job);
+            when(jobLogRepository.save(any(JobLog.class)))
+                    .thenAnswer(inv -> inv.getArgument(0));
+
+            Job queued = jobService.queueWebhookJob(job, "{\"eventType\":\"push\"}");
+
+            assertThat(queued.getStatus()).isEqualTo(JobStatus.QUEUED);
+            assertThat(queued.getCurrentStep()).isEqualTo("Waiting for pipeline worker");
+            verify(jobLogRepository).save(argThat(log ->
+                    "queued".equals(log.getStep())));
+            verify(jobLogRepository).save(argThat(log ->
+                    "webhook_dispatch".equals(log.getStep())
+                            && log.getMetadata().contains("\\\"eventType\\\":\\\"push\\\"")));
+        }
+    }
+
+    @Nested
     @DisplayName("createRagIndexJob()")
     class CreateRagIndexJobTests {
 

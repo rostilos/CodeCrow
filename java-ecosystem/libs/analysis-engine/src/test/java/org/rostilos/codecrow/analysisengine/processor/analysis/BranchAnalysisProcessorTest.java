@@ -453,6 +453,8 @@ class BranchAnalysisProcessorTest {
             verify(branchIssueReconciliationService).reconcileIssueLineNumbers(eq(rawDiff), anySet(), eq(savedBranch));
             verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
                     anySet(), anySet(), eq(savedBranch), eq(project), eq(request), eq(consumer), eq(archiveContents), eq(rawDiff));
+            verify(branchIssueReconciliationService, never()).sweepDeterministicResolutions(
+                    anySet(), any(), any(), any(), anyMap());
             verify(branchFileOperationsService).updateFileSnapshotsForBranch(anySet(), eq(project), eq(request), eq(archiveContents));
             verify(branchIssueReconciliationService).verifyIssueLineNumbersWithSnippets(anySet(), eq(project), any());
             verify(analysisLockService).releaseLock("lock-key");

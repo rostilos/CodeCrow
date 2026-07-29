@@ -195,13 +195,10 @@ public class AiAnalysisClient {
 
                 try {
                     Map<String, Object> event = objectMapper.readValue(eventJson, Map.class);
-
-                    // Forward event to caller if handler provided
-                    forwardEvent(eventHandler, event);
-
                     Object type = event.get("type");
 
                     if ("error".equals(type) || "failed".equals(type)) {
+                        forwardEvent(eventHandler, event);
                         String errMsg = String.valueOf(event.get("message"));
                         throw new IOException("AI service returned error: " + errMsg);
                     }
@@ -225,6 +222,11 @@ public class AiAnalysisClient {
                             throw new IOException("AI service returned final event without a valid result payload");
                         }
                     }
+
+                    // Terminal result envelopes do not carry a progress message. Forwarding
+                    // them made the UI append a misleading trailing "Processing..." event
+                    // after the orchestrator had already completed.
+                    forwardEvent(eventHandler, event);
                 } catch (IOException ex) {
                     throw ex; // Re-throw fatal IO exceptions
                 } catch (Exception ex) {

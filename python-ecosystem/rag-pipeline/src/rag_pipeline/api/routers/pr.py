@@ -634,7 +634,7 @@ def index_pr_files(request: PRIndexRequest):
     except HTTPException:
         raise
     except IncrementalIndexPreconditionError as e:
-        logger.warning("Rejected PR indexing against incompatible index: %s", e)
+        logger.warning("Rejected PR indexing against invalid repository state: %s", e)
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         logger.warning(f"Invalid request for PR indexing: {e}")
