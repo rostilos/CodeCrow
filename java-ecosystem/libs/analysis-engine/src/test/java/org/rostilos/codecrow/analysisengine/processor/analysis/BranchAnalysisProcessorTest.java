@@ -26,6 +26,7 @@ import org.rostilos.codecrow.commitgraph.service.BranchCommitService;
 import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestStatusSyncService;
@@ -419,9 +420,10 @@ class BranchAnalysisProcessorTest {
 
             // Support services return values
             Map<String, String> archiveContents = Map.of("src/App.java", "file content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("src/App.java"));
 
             Branch savedBranch = mock(Branch.class);
@@ -443,8 +445,8 @@ class BranchAnalysisProcessorTest {
             assertThat(result).containsEntry("cached", false);
 
             // Verify orchestration calls to support services
-            verify(branchFileOperationsService).downloadBranchArchive(any(), eq("new-commit"), anySet());
-            verify(branchFileOperationsService).updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents));
+            verify(branchFileOperationsService).downloadBranchFileSnapshot(any(), eq("new-commit"), anySet());
+            verify(branchFileOperationsService).updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot));
             verify(branchFileOperationsService).createOrUpdateProjectBranch(eq(project), eq(request), any());
             verify(branchDiffFetcher).fetchDiff(
                     any(), any(), any(), any(), any(), any(), isNull(), any());
@@ -452,10 +454,12 @@ class BranchAnalysisProcessorTest {
                     anySet(), anySet(), eq(savedBranch), eq(project), eq(Set.of(40L, 41L, 42L)));
             verify(branchIssueReconciliationService).reconcileIssueLineNumbers(eq(rawDiff), anySet(), eq(savedBranch));
             verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
-                    anySet(), anySet(), eq(savedBranch), eq(project), eq(request), eq(consumer), eq(archiveContents), eq(rawDiff));
+                    anySet(), anySet(), eq(savedBranch), eq(project), eq(request), eq(consumer),
+                    eq(archiveContents), eq(rawDiff), eq(false));
             verify(branchIssueReconciliationService, never()).sweepDeterministicResolutions(
                     anySet(), any(), any(), any(), anyMap());
-            verify(branchFileOperationsService).updateFileSnapshotsForBranch(anySet(), eq(project), eq(request), eq(archiveContents));
+            verify(branchFileOperationsService).updateFileSnapshotsForBranch(
+                    anySet(), eq(project), eq(request), eq(archiveSnapshot));
             verify(branchIssueReconciliationService).verifyIssueLineNumbersWithSnippets(anySet(), eq(project), any());
             verify(analysisLockService).releaseLock("lock-key");
         }
@@ -500,9 +504,10 @@ class BranchAnalysisProcessorTest {
 
             // Support services
             Map<String, String> archiveContents = Map.of("src/App.java", "content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("src/App.java"));
             when(branchFileOperationsService.createOrUpdateProjectBranch(eq(project), eq(request), any()))
                     .thenReturn(existingBranch);
@@ -580,10 +585,11 @@ class BranchAnalysisProcessorTest {
                     .thenReturn(Set.of("src/Issue.java"));
 
             Map<String, String> archiveContents = Map.of("src/Issue.java", "new issue code");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
             when(branchFileOperationsService.updateBranchFiles(
-                    anySet(), eq(project), eq("feature-x"), eq(archiveContents)))
+                    anySet(), eq(project), eq("feature-x"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("src/Issue.java"));
             when(branchFileOperationsService.createOrUpdateProjectBranch(eq(project), eq(request), any()))
                     .thenReturn(existingBranch);
@@ -602,13 +608,13 @@ class BranchAnalysisProcessorTest {
                     assertThat(event).containsEntry("state", "direct_push_analysis_skipped_limit"));
             verify(aiAnalysisClient, never()).performAnalysis(any(), any());
             verify(commitCoverageService, never()).checkCoverage(any(), any(), anyList());
-            verify(branchFileOperationsService).downloadBranchArchive(
+            verify(branchFileOperationsService).downloadBranchFileSnapshot(
                     any(), eq("new-commit"), eq(Set.of("src/Issue.java")));
             verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
                     eq(Set.of("src/Issue.java")), eq(Set.of("src/Issue.java")),
                     eq(existingBranch), eq(project), eq(request), any(), eq(archiveContents),
                     argThat(diff -> diff.contains("src/Issue.java")
-                            && !diff.contains("src/Unrelated.java")));
+                            && !diff.contains("src/Unrelated.java")), eq(false));
             verify(branchIssueReconciliationService, never()).sweepDeterministicResolutions(
                     anySet(), any(), any(), any(), anyMap());
             verify(ragOperationsService).triggerIncrementalUpdate(
@@ -654,9 +660,10 @@ class BranchAnalysisProcessorTest {
 
             // Support services
             Map<String, String> archiveContents = Map.of("README.md", "content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("README.md"));
 
             Branch savedBranch = mock(Branch.class);
@@ -707,9 +714,10 @@ class BranchAnalysisProcessorTest {
                     .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("f.java", "content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("f.java"));
 
             Branch savedBranch = mock(Branch.class);
@@ -770,9 +778,10 @@ class BranchAnalysisProcessorTest {
                     .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("f.java", "content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("feature-x"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("feature-x"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("f.java"));
 
             Branch savedBranch = mock(Branch.class);
@@ -837,9 +846,10 @@ class BranchAnalysisProcessorTest {
                     .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("f.java", "content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("f.java"));
             when(branchFileOperationsService.createOrUpdateProjectBranch(eq(project), eq(request), any()))
                     .thenReturn(existingBranch);
@@ -904,9 +914,10 @@ class BranchAnalysisProcessorTest {
                     .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("src/App.java", "content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("merge-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("merge-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("src/App.java"));
             when(branchFileOperationsService.createOrUpdateProjectBranch(eq(project), eq(request), any()))
                     .thenReturn(existingBranch);
@@ -949,6 +960,12 @@ class BranchAnalysisProcessorTest {
         // These are tested through process() behavior since the method is private.
         // The key scenarios: ragOperationsService null, rag not enabled, rag index not ready,
         // main branch vs non-main branch are all covered indirectly.
+    }
+
+    private static BranchFileOperationsService.BranchFileSnapshot archiveSnapshot(
+            Map<String, String> contents) {
+        return BranchFileOperationsService.BranchFileSnapshot.fromArchive(
+                new BranchArchiveService.ArchiveSnapshot(contents, contents.keySet()));
     }
 
     @Nested

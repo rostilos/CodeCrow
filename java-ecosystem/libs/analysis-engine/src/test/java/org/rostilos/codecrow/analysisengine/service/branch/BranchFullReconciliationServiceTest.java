@@ -9,6 +9,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestStatusSyncService;
 import org.rostilos.codecrow.core.model.branch.Branch;
@@ -36,6 +37,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -151,9 +153,12 @@ class BranchFullReconciliationServiceTest {
                     .thenReturn(Set.of("src/App.java"));
 
             Map<String, String> syncArchive = Map.of("src/App.java", "dangerousCall();");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("abc123"), eq(Set.of("src/App.java"))))
-                    .thenReturn(syncArchive);
-            when(branchFileOperationsService.updateBranchFiles(eq(Set.of("src/App.java")), eq(project), eq("main"), eq(syncArchive)))
+            var syncSnapshot = archiveSnapshot(syncArchive);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(
+                    any(), eq("abc123"), eq(Set.of("src/App.java"))))
+                    .thenReturn(syncSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(
+                    eq(Set.of("src/App.java")), eq(project), eq("main"), eq(syncSnapshot)))
                     .thenReturn(Set.of("src/App.java"));
             when(branchIssueRepository.countAllByBranchId(10L)).thenReturn(0L, 1L);
 
@@ -228,9 +233,11 @@ class BranchFullReconciliationServiceTest {
             Map<String, String> archiveContents = Map.of(
                     "src/App.java", "safeCall();",
                     "src/Open.java", "dangerousCall();");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("abc123"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("abc123"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(
+                    anySet(), eq(project), eq("main"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("src/App.java", "src/Open.java"));
 
             Map<String, Object> result = service.fullReconcile(1L, "main", consumer);
@@ -244,7 +251,8 @@ class BranchFullReconciliationServiceTest {
             assertThat(result).containsEntry("totalIssues", 1L);
             assertThat((String) result.get("message")).contains("1 newly resolved");
             verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
-                    anySet(), anySet(), eq(existingBranch), eq(project), any(), eq(consumer), eq(archiveContents));
+                    anySet(), anySet(), eq(existingBranch), eq(project), any(), eq(consumer),
+                    eq(archiveContents), isNull(), eq(false));
             verify(analysisLockService).releaseLock("lock-key");
         }
     }
@@ -255,6 +263,12 @@ class BranchFullReconciliationServiceTest {
         when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
         when(repoInfo.getRepoWorkspace()).thenReturn("ws");
         when(repoInfo.getRepoSlug()).thenReturn("repo");
+    }
+
+    private static BranchFileOperationsService.BranchFileSnapshot archiveSnapshot(
+            Map<String, String> contents) {
+        return BranchFileOperationsService.BranchFileSnapshot.fromArchive(
+                new BranchArchiveService.ArchiveSnapshot(contents, contents.keySet()));
     }
 
     private Branch branch(String branchName, String commitHash, Long id) {

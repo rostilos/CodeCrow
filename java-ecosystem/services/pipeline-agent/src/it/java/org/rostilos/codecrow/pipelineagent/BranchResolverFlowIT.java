@@ -116,8 +116,11 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
                 .thenAnswer(inv -> diffForCommit(inv.getArgument(0, org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest.class)
                         .getCommitHash()));
 
-        when(branchArchiveService.downloadAndExtractFiles(any(), anyString(), anyString(), anyString(), anySet()))
-                .thenAnswer(inv -> archiveForCommit(inv.getArgument(3)));
+        when(branchArchiveService.downloadSnapshot(any(), anyString(), anyString(), anyString(), anySet()))
+                .thenAnswer(inv -> {
+                    Map<String, String> contents = archiveForCommit(inv.getArgument(3));
+                    return new BranchArchiveService.ArchiveSnapshot(contents, contents.keySet());
+                });
 
         when(vcsAiClientService.buildAiAnalysisRequestsForBranchReconciliation(
                 any(Project.class), any(AnalysisProcessRequest.class), anyList(), anyMap(), any()))

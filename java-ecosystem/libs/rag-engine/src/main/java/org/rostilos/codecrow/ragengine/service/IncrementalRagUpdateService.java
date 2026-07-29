@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.ragengine.service;
 
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
+import org.rostilos.codecrow.analysisengine.service.VcsFileRetrievalPolicy;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -18,6 +19,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 public class IncrementalRagUpdateService {
@@ -27,15 +29,13 @@ public class IncrementalRagUpdateService {
     private final RagPipelineClient ragPipelineClient;
     private final RagIndexTrackingService ragIndexTrackingService;
     private final BranchArchiveService branchArchiveService;
+    private final VcsFileRetrievalPolicy fileRetrievalPolicy;
 
     @Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
 
     @Value("${codecrow.rag.parallel.requests:10}")
     private int parallelRequests;
-
-    @Value("${codecrow.rag.incremental.archive-file-threshold:25}")
-    private int archiveFileThreshold;
 
     @Value("${codecrow.rag.incremental.max-attempts:3}")
     private int ragApiMaxAttempts;
@@ -47,11 +47,13 @@ public class IncrementalRagUpdateService {
             VcsClientProvider vcsClientProvider,
             RagPipelineClient ragPipelineClient,
             RagIndexTrackingService ragIndexTrackingService,
-            BranchArchiveService branchArchiveService) {
+            BranchArchiveService branchArchiveService,
+            VcsFileRetrievalPolicy fileRetrievalPolicy) {
         this.vcsClientProvider = vcsClientProvider;
         this.ragPipelineClient = ragPipelineClient;
         this.ragIndexTrackingService = ragIndexTrackingService;
         this.branchArchiveService = branchArchiveService;
+        this.fileRetrievalPolicy = fileRetrievalPolicy;
     }
 
     public boolean shouldPerformIncrementalUpdate(Project project) {
@@ -121,9 +123,11 @@ public class IncrementalRagUpdateService {
                 tempDir = Files.createTempDirectory("codecrow-rag-incremental-",
                     PosixFilePermissions.asFileAttribute(
                             PosixFilePermissions.fromString("rwxrwxrwx")));
-                int effectiveArchiveFileThreshold = Math.max(0, archiveFileThreshold);
-                boolean useArchive = orderedAddedOrModifiedFiles.size() > effectiveArchiveFileThreshold;
+                int effectiveArchiveFileThreshold = fileRetrievalPolicy.archiveFileThreshold();
+                boolean useArchive =
+                        fileRetrievalPolicy.shouldUseArchive(orderedAddedOrModifiedFiles.size());
                 Set<String> fetchedFilePaths;
+                String fileFetchMode;
                 if (useArchive) {
                     log.info("Using one repository archive at revision {} for {} incremental RAG files "
                                     + "(threshold: {})",
@@ -135,16 +139,34 @@ public class IncrementalRagUpdateService {
                             revision,
                             new LinkedHashSet<>(orderedAddedOrModifiedFiles),
                             tempDir);
+                    fileFetchMode = "archive";
                 } else {
                     log.info("Using per-file VCS retrieval for {} incremental RAG files (threshold: {})",
                             orderedAddedOrModifiedFiles.size(), effectiveArchiveFileThreshold);
-                    fetchedFilePaths = fetchFilesToTempDir(
+                    PerFileFetchResult perFileResult = fetchFilesToTempDir(
                             vcsConnection,
                             workspaceSlug,
                             repoSlug,
                             revision,
                             orderedAddedOrModifiedFiles,
                             tempDir);
+                    if (perFileResult.rateLimited()) {
+                        log.warn("Per-file VCS retrieval hit a provider rate limit after {} of {} files; "
+                                        + "switching the batch to one repository archive",
+                                perFileResult.fetchedFiles().size(),
+                                orderedAddedOrModifiedFiles.size());
+                        fetchedFilePaths = branchArchiveService.downloadAndExtractFilesToDirectory(
+                                vcsConnection,
+                                workspaceSlug,
+                                repoSlug,
+                                revision,
+                                new LinkedHashSet<>(orderedAddedOrModifiedFiles),
+                                tempDir);
+                        fileFetchMode = "archive-after-rate-limit";
+                    } else {
+                        fetchedFilePaths = perFileResult.fetchedFiles();
+                        fileFetchMode = "per-file";
+                    }
                 }
                 List<String> missingFiles = orderedAddedOrModifiedFiles.stream()
                         .filter(path -> !fetchedFilePaths.contains(path))
@@ -158,7 +180,7 @@ public class IncrementalRagUpdateService {
                 repoBase = tempDir.toString();
                 result.put("updatedFiles", orderedAddedOrModifiedFiles.size());
                 result.put("addedFilesCount", addedFiles.size());
-                result.put("fileFetchMode", useArchive ? "archive" : "per-file");
+                result.put("fileFetchMode", fileFetchMode);
             }
 
             String changeSetRepoBase = repoBase;
@@ -248,7 +270,7 @@ public class IncrementalRagUpdateService {
                 .toList();
     }
 
-    private Set<String> fetchFilesToTempDir(
+    private PerFileFetchResult fetchFilesToTempDir(
             VcsConnection vcsConnection,
             String workspaceSlug,
             String repoSlug,
@@ -259,11 +281,15 @@ public class IncrementalRagUpdateService {
 
         int workerCount = Math.min(Math.max(1, parallelRequests), filePaths.size());
         ExecutorService executor = Executors.newFixedThreadPool(workerCount);
+        AtomicBoolean rateLimited = new AtomicBoolean(false);
         try {
             List<CompletableFuture<Boolean>> futures = new ArrayList<>();
 
             for (String filePath : filePaths) {
                 CompletableFuture<Boolean> future = CompletableFuture.supplyAsync(() -> {
+                    if (rateLimited.get()) {
+                        return false;
+                    }
                     try {
                         String content = vcsClient.getFileContent(
                                 workspaceSlug, repoSlug, filePath, branchOrCommit);
@@ -287,7 +313,13 @@ public class IncrementalRagUpdateService {
                         }
                         return false;
                     } catch (IOException e) {
-                        log.warn("Failed to fetch file {}: {}", filePath, e.getMessage());
+                        if (fileRetrievalPolicy.isRateLimited(e)) {
+                            rateLimited.set(true);
+                            log.warn("Rate limited while fetching {}; stopping new per-file VCS calls",
+                                    filePath);
+                        } else {
+                            log.warn("Failed to fetch file {}: {}", filePath, e.getMessage());
+                        }
                         return false;
                     }
                 }, executor);
@@ -305,7 +337,7 @@ public class IncrementalRagUpdateService {
                 }
             }
 
-            return fetchedFiles;
+            return new PerFileFetchResult(fetchedFiles, rateLimited.get());
         } finally {
             executor.shutdownNow();
             try {
@@ -317,6 +349,9 @@ public class IncrementalRagUpdateService {
                 log.warn("Interrupted while awaiting executor termination");
             }
         }
+    }
+
+    private record PerFileFetchResult(Set<String> fetchedFiles, boolean rateLimited) {
     }
 
     private Path resolveTargetPath(Path tempDir, String filePath) {

@@ -399,13 +399,14 @@ public class BranchAnalysisProcessor {
 			EventNotificationEmitter.emitStatus(consumer, "analyzing_files",
 					"Analyzing " + changedFiles.size() + " changed files");
 
-			Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
+			BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
+					branchFileOperationsService.downloadBranchFileSnapshot(
 					vcsRepoInfoImpl, request.getCommitHash(), changedFiles);
 			log.info("Branch archive: {} files extracted for {} changed files",
-					archiveContents.size(), changedFiles.size());
+					branchFileSnapshot.contents().size(), changedFiles.size());
 
 			Set<String> existingFiles = branchFileOperationsService.updateBranchFiles(
-					changedFiles, project, request.getTargetBranchName(), archiveContents);
+					changedFiles, project, request.getTargetBranchName(), branchFileSnapshot);
 
 			Branch branch = branchFileOperationsService.createOrUpdateProjectBranch(
 					project, request, existingBranchOpt.orElse(null));
@@ -428,7 +429,8 @@ public class BranchAnalysisProcessor {
 
 			branchIssueReconciliationService.reanalyzeCandidateIssues(
 					changedFiles, existingFiles, refreshedBranch, project,
-					request, consumer, archiveContents, rawDiff);
+					request, consumer, branchFileSnapshot.contents(), rawDiff,
+					branchFileSnapshot.allowContentApiFallback());
 
 			// An incremental push can only change issues in the files present in its
 			// diff. Repository-wide issue checks belong to the explicit full
@@ -439,7 +441,7 @@ public class BranchAnalysisProcessor {
 					"Saving changed-file reconciliation results");
 
 			branchFileOperationsService.updateFileSnapshotsForBranch(existingFiles, project, request,
-					archiveContents);
+					branchFileSnapshot);
 
 			Branch branchForVerify = branchRepository.findByProjectIdAndBranchName(
 					project.getId(), request.getTargetBranchName()).orElse(refreshedBranch);
@@ -495,10 +497,11 @@ public class BranchAnalysisProcessor {
 			AnalysisScopeFilter.retainIncluded(branchFiles, project);
 
 			if (!branchFiles.isEmpty()) {
-				Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
+				BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
+						branchFileOperationsService.downloadBranchFileSnapshot(
 						vcsRepoInfoImpl, request.getCommitHash(), branchFiles);
 				branchFileOperationsService.updateFileSnapshotsForBranch(
-						branchFiles, project, request, archiveContents);
+						branchFiles, project, request, branchFileSnapshot);
 			}
 		} catch (Exception snapEx) {
 			log.warn("Failed to refresh file snapshots on skip path (non-critical): {}",
@@ -756,10 +759,11 @@ public class BranchAnalysisProcessor {
 			// computation
 			try {
 				VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
-				Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
+				BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
+						branchFileOperationsService.downloadBranchFileSnapshot(
 						vcsRepoInfoImpl, request.getCommitHash(), changedFiles);
-				if (!archiveContents.isEmpty()) {
-					fileContents = archiveContents;
+				if (!branchFileSnapshot.contents().isEmpty()) {
+					fileContents = branchFileSnapshot.contents();
 				}
 			} catch (Exception e) {
 				log.warn("Failed to download archive for direct push analysis file contents (non-critical): {}",
