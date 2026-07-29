@@ -23,6 +23,7 @@ _REPRESENTATION_SOURCE_PATHS = (
     "core/index_manager/collection_manager.py",
     "core/index_manager/indexer.py",
     "core/index_manager/point_operations.py",
+    "core/generation_manifest.py",
     "core/index_representation.py",
     "core/loader.py",
     "core/repository_overlay.py",

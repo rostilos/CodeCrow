@@ -36,6 +36,7 @@ def pr_overlay_generation_fingerprint(
     base_branch: str,
     source_revision: str,
     base_revision: str,
+    base_generation_manifest_sha256: str,
     files: Iterable[object],
     requested_plugin_ids: Sequence[str],
     repository_plugin_ids: Sequence[str],
@@ -59,6 +60,10 @@ def pr_overlay_generation_fingerprint(
         ("base_branch", base_branch),
         ("source_revision", source_revision),
         ("base_revision", base_revision),
+        (
+            "base_generation_manifest_sha256",
+            base_generation_manifest_sha256,
+        ),
         ("request_plugin_fingerprint", request_plugin_fingerprint),
         ("target_plugin_fingerprint", target_plugin_fingerprint),
         ("capability_fingerprint", capability_fingerprint),

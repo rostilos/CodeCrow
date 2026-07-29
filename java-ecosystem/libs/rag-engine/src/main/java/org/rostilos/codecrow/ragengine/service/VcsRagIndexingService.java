@@ -39,6 +39,7 @@ import java.util.function.Consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rostilos.codecrow.queue.RedisQueueService;
+import org.rostilos.codecrow.ragengine.source.RepositorySourceTreeIdentity;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Async;
@@ -240,6 +241,8 @@ public class VcsRagIndexingService {
                     // Extract the downloaded archive locally
                     jobService.logToJob(job, JobLogLevel.INFO, "extraction", "Extracting repository archive...");
                     extractArchiveFileAndCleanup(tempArchiveFile, tempDir);
+                    String sourceTreeSha256 =
+                            RepositorySourceTreeIdentity.sha256(tempDir);
 
                     if (includePatterns != null && !includePatterns.isEmpty()) {
                         log.info("Using {} include patterns from project config", includePatterns.size());
@@ -262,6 +265,7 @@ public class VcsRagIndexingService {
                             "project", project.getNamespace(),
                             "branch", branch,
                             "commit", commitHash,
+                            "source_tree_sha256", sourceTreeSha256,
                             "preserve_other_branches", config.ragConfig().isMultiBranchEnabled(),
                             "cleanup_repo_path", true,
                             "include_patterns", includePatterns != null ? includePatterns : java.util.List.of(),

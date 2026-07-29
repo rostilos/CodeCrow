@@ -13,7 +13,12 @@ from requests.exceptions import RequestException, Timeout
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(
+    0,
+    str(Path(__file__).resolve().parents[4]),
+)
 from config import RAG_API_URL, API_TIMEOUT, INDEXING_TIMEOUT
+from tools.source_tree_identity import compute_repository_source_tree_sha256
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +191,9 @@ class RAGAPIClient:
             "project": project,
             "branch": branch,
             "commit": commit,
+            "source_tree_sha256": compute_repository_source_tree_sha256(
+                repo_path
+            ),
             "exclude_patterns": exclude_patterns or []
         }
         return self._request('POST', '/index/repository', data=data, timeout=INDEXING_TIMEOUT)

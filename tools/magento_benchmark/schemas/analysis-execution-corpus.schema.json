@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "analysis-execution-corpus.schema.json",
+  "title": "CodeCrow Magento 2 label-free analysis execution corpus",
+  "description": "A digest-bound projection emitted by the label custodian from a strict released corpus. This is the only corpus-shaped input allowed for pre-unseal H replay and analysis operations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "generatedAt",
+    "corpusId",
+    "corpusDigest",
+    "repository",
+    "defaultBranch",
+    "cases",
+    "executionCorpusDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-analysis-execution-corpus"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "corpusId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "corpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "repository": {
+      "const": "magento/magento2"
+    },
+    "defaultBranch": {
+      "const": "2.4-develop"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 50,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    },
+    "executionCorpusDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha1": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "partition",
+        "sizeBand",
+        "snapshot",
+        "replay"
+      ],
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "partition": {
+          "enum": [
+            "development",
+            "sealed"
+          ]
+        },
+        "sizeBand": {
+          "enum": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        "snapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "baseSha",
+            "headSha",
+            "fileCount",
+            "changedPaths",
+            "diffSha256"
+          ],
+          "properties": {
+            "baseSha": {
+              "$ref": "#/$defs/sha1"
+            },
+            "headSha": {
+              "$ref": "#/$defs/sha1"
+            },
+            "fileCount": {
+              "type": "integer",
+              "minimum": 3,
+              "maximum": 80
+            },
+            "changedPaths": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 80,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "diffSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "replay": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "baseRef",
+            "headRef"
+          ],
+          "properties": {
+            "baseRef": {
+              "type": "string",
+              "minLength": 1
+            },
+            "headRef": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}

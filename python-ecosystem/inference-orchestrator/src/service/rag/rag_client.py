@@ -15,6 +15,10 @@ RAG_MIN_RELEVANCE_SCORE = float(os.environ.get("RAG_MIN_RELEVANCE_SCORE", "0.7")
 RAG_DEFAULT_TOP_K = int(os.environ.get("RAG_DEFAULT_TOP_K", "15"))
 
 
+class RagRetrievalError(RuntimeError):
+    """A required revision-bound RAG retrieval could not be completed."""
+
+
 def _env_int(name: str, default: int) -> int:
     value = os.environ.get(name)
     if value is None or not value.strip():
@@ -119,7 +123,12 @@ class RagClient:
         base_branch: Optional[str] = None,
         deleted_files: Optional[List[str]] = None,
         pr_number: Optional[int] = None,
-        all_pr_changed_files: Optional[List[str]] = None
+        all_pr_changed_files: Optional[List[str]] = None,
+        source_revision: Optional[str] = None,
+        base_revision: Optional[str] = None,
+        base_generation_manifest_sha256: Optional[str] = None,
+        pr_generation_fingerprint: Optional[str] = None,
+        pr_overlay_generation_manifest_sha256: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get relevant context for PR review with multi-branch support.
@@ -185,6 +194,22 @@ class RagClient:
                 payload["pr_number"] = pr_number
             if all_pr_changed_files:
                 payload["all_pr_changed_files"] = all_pr_changed_files
+            if source_revision:
+                payload["source_revision"] = source_revision
+            if base_revision:
+                payload["base_revision"] = base_revision
+            if base_generation_manifest_sha256:
+                payload["base_generation_manifest_sha256"] = (
+                    base_generation_manifest_sha256
+                )
+            if pr_generation_fingerprint:
+                payload["pr_generation_fingerprint"] = (
+                    pr_generation_fingerprint
+                )
+            if pr_overlay_generation_manifest_sha256:
+                payload["pr_overlay_generation_manifest_sha256"] = (
+                    pr_overlay_generation_manifest_sha256
+                )
 
             client = await self._get_client()
             response = await client.post(
@@ -229,7 +254,9 @@ class RagClient:
         project: str,
         branch: str,
         top_k: int = 5,
-        filter_language: Optional[str] = None
+        filter_language: Optional[str] = None,
+        repository_revision: Optional[str] = None,
+        repository_generation_manifest_sha256: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Perform semantic search in the repository.
@@ -258,6 +285,12 @@ class RagClient:
             }
             if filter_language:
                 payload["filter_language"] = filter_language
+            if repository_revision:
+                payload["repository_revision"] = repository_revision
+            if repository_generation_manifest_sha256:
+                payload["repository_generation_manifest_sha256"] = (
+                    repository_generation_manifest_sha256
+                )
 
             client = await self._get_client()
             response = await client.post(
@@ -314,7 +347,9 @@ class RagClient:
         branch: str,
         queries: List[str],
         top_k: int = 8,
-        base_branch: Optional[str] = None
+        base_branch: Optional[str] = None,
+        repository_revision: Optional[str] = None,
+        repository_generation_manifest_sha256: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Perform duplication-oriented semantic search to find existing implementations
@@ -336,6 +371,16 @@ class RagClient:
         """
         if not self.enabled or not queries:
             return []
+        exact_binding_values = (
+            repository_revision,
+            repository_generation_manifest_sha256,
+        )
+        exact_binding_active = any(exact_binding_values)
+        if exact_binding_active and not all(exact_binding_values):
+            raise RagRetrievalError(
+                "revision-bound duplication search requires both repository "
+                "revision and generation receipt"
+            )
 
         max_queries = max(1, _env_int("REVIEW_DUPLICATION_RAG_MAX_QUERIES", 8))
         query_timeout = max(
@@ -368,6 +413,12 @@ class RagClient:
                 }
                 if base_branch:
                     payload["base_branch"] = base_branch
+                if repository_revision:
+                    payload["repository_revision"] = repository_revision
+                if repository_generation_manifest_sha256:
+                    payload["repository_generation_manifest_sha256"] = (
+                        repository_generation_manifest_sha256
+                    )
 
                 async with semaphore:
                     started_at = datetime.now()
@@ -383,12 +434,20 @@ class RagClient:
                         result = response.json()
                     except asyncio.TimeoutError:
                         elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000
-                        logger.debug(
-                            "Duplication search query timed out after %.0fms",
-                            elapsed_ms,
+                        message = (
+                            "revision-bound duplication search query timed out "
+                            f"after {elapsed_ms:.0f}ms"
                         )
+                        if exact_binding_active:
+                            raise RagRetrievalError(message)
+                        logger.debug(message)
                         return []
                     except Exception as e:
+                        if exact_binding_active:
+                            raise RagRetrievalError(
+                                "revision-bound duplication search query failed: "
+                                f"{type(e).__name__}: {e}"
+                            ) from e
                         logger.debug(f"Duplication search query failed: {e}")
                         return []
 
@@ -401,7 +460,7 @@ class RagClient:
 
             result_groups = await asyncio.gather(
                 *(_run_query(query_text) for query_text in selected_queries),
-                return_exceptions=True,
+                return_exceptions=not exact_binding_active,
             )
             all_results: List[Dict[str, Any]] = []
             for group in result_groups:
@@ -421,7 +480,14 @@ class RagClient:
             )
             return all_results
 
+        except RagRetrievalError:
+            raise
         except Exception as e:
+            if exact_binding_active:
+                raise RagRetrievalError(
+                    "revision-bound duplication search failed: "
+                    f"{type(e).__name__}: {e}"
+                ) from e
             logger.warning(f"Failed duplication search: {e}")
             return []
 
@@ -434,7 +500,12 @@ class RagClient:
         limit_per_file: int = 10,
         pr_number: Optional[int] = None,
         pr_changed_files: Optional[List[str]] = None,
-        additional_identifiers: Optional[List[str]] = None
+        additional_identifiers: Optional[List[str]] = None,
+        source_revision: Optional[str] = None,
+        base_revision: Optional[str] = None,
+        base_generation_manifest_sha256: Optional[str] = None,
+        pr_generation_fingerprint: Optional[str] = None,
+        pr_overlay_generation_manifest_sha256: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get context using DETERMINISTIC metadata-based retrieval.
@@ -481,6 +552,22 @@ class RagClient:
                 payload["pr_changed_files"] = pr_changed_files
             if additional_identifiers:
                 payload["additional_identifiers"] = additional_identifiers
+            if source_revision:
+                payload["source_revision"] = source_revision
+            if base_revision:
+                payload["base_revision"] = base_revision
+            if base_generation_manifest_sha256:
+                payload["base_generation_manifest_sha256"] = (
+                    base_generation_manifest_sha256
+                )
+            if pr_generation_fingerprint:
+                payload["pr_generation_fingerprint"] = (
+                    pr_generation_fingerprint
+                )
+            if pr_overlay_generation_manifest_sha256:
+                payload["pr_overlay_generation_manifest_sha256"] = (
+                    pr_overlay_generation_manifest_sha256
+                )
 
             client = await self._get_client()
             response = await client.post(

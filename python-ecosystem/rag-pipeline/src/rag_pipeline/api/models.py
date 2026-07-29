@@ -39,6 +39,7 @@ class IndexRequest(BaseModel):
     project: str
     branch: str
     commit: str
+    source_tree_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     preserve_other_branches: bool = False
     cleanup_repo_path: bool = False
     include_patterns: Optional[List[str]] = None
@@ -126,6 +127,29 @@ class CleanupStaleBranchesRequest(BaseModel):
         return value
 
 
+class RevisionPreflightResponse(BaseModel):
+    workspace: str
+    project: str
+    branch: str
+    commit: str
+    point_count: int = Field(gt=0)
+    repository_revision: str
+    repository_facts_sha256: str
+    plugin_ids: List[str]
+    plugin_fingerprint: str
+    plugin_descriptor_fingerprint: str
+    plugin_implementation_fingerprint: str
+    index_representation_fingerprint: str
+    generation_schema: str
+    generation_member_count: int = Field(gt=0)
+    generation_members_sha256: str
+    generation_manifest_sha256: str
+    source_tree_sha256: str
+    index_include_patterns: List[str]
+    index_exclude_patterns: List[str]
+    index_selection_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class EstimateRequest(BaseModel):
     repo_path: str
     include_patterns: Optional[List[str]] = None
@@ -155,6 +179,15 @@ class QueryRequest(BaseModel):
     branch: str
     top_k: Optional[int] = 10
     filter_language: Optional[str] = None
+    repository_revision: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+    repository_generation_manifest_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
 
 
 class PRContextRequest(BaseModel):
@@ -172,6 +205,28 @@ class PRContextRequest(BaseModel):
     deleted_files: Optional[List[str]] = Field(default_factory=list)
     pr_number: Optional[int] = None
     all_pr_changed_files: Optional[List[str]] = Field(default_factory=list)
+    source_revision: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+    base_revision: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+    base_generation_manifest_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    pr_generation_fingerprint: Optional[str] = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    pr_overlay_generation_manifest_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
 
     @field_validator('changed_files')
     @classmethod
@@ -204,6 +259,28 @@ class DeterministicContextRequest(BaseModel):
         default=None,
         description="Extra type/function names to look up (from AST enrichment: extends, implements, calls). "
                     "Injected directly into Step 2 definition lookup alongside Qdrant-extracted identifiers."
+    )
+    source_revision: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+    base_revision: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+    base_generation_manifest_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    pr_generation_fingerprint: Optional[str] = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    pr_overlay_generation_manifest_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
     )
 
 

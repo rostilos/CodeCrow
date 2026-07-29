@@ -28,6 +28,9 @@ from model.dtos import ReviewRequestDto
 logger = logging.getLogger(__name__)
 
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9_.-]+")
+_IMMUTABLE_GIT_REVISION = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+_SHA256_FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}")
 _SECRET_KEYS = {
     "access_token",
     "accesstoken",
@@ -358,6 +361,43 @@ def _selected_project_ids() -> set[int]:
     return selected
 
 
+def _provider_reported_models(value: Any) -> list[str]:
+    """Return model IDs explicitly reported inside a provider callback result."""
+
+    observed: set[str] = set()
+
+    def inspect_metadata(current: Any) -> None:
+        if not isinstance(current, dict):
+            return
+        for key, child in current.items():
+            normalized = str(key).strip().casefold().replace("-", "_")
+            if normalized in {"model", "model_id", "model_name"}:
+                if isinstance(child, str) and child.strip():
+                    observed.add(child.strip())
+            elif normalized in {
+                "llm_output",
+                "metadata",
+                "response_metadata",
+            }:
+                inspect_metadata(child)
+
+    if isinstance(value, dict):
+        inspect_metadata(value.get("llm_output"))
+        generations = value.get("generations")
+        if isinstance(generations, list):
+            for group in generations:
+                if not isinstance(group, list):
+                    continue
+                for generation in group:
+                    if not isinstance(generation, dict):
+                        continue
+                    inspect_metadata(generation.get("generation_info"))
+                    message = generation.get("message")
+                    if isinstance(message, dict):
+                        inspect_metadata(message.get("response_metadata"))
+    return sorted(observed)
+
+
 class _ProviderBoundaryCallback:
     """Collect the underlying provider result before structured parsing."""
 
@@ -383,9 +423,11 @@ class _ProviderBoundaryCallback:
         return None
 
     def on_llm_end(self, response: Any, **_: Any) -> None:
+        safe_response = _json_safe(response)
         self.events.append({
             "status": "completed",
-            "response": _json_safe(response),
+            "providerReportedModels": _provider_reported_models(safe_response),
+            "response": safe_response,
         })
 
     def on_llm_error(self, error: BaseException, **_: Any) -> None:
@@ -830,6 +872,150 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
             "terminal pipeline evidence has invalid retrieval.semanticDisabled"
         )
 
+    revision_binding = event.get("revisionBinding")
+    if not isinstance(revision_binding, dict):
+        raise ValueError("terminal pipeline evidence has no revision binding")
+    pr_indexed = revision_binding.get("prIndexed")
+    pull_request_id = revision_binding.get("pullRequestId")
+    target_branch = revision_binding.get("targetBranch")
+    source_revision = revision_binding.get("sourceRevision")
+    base_revision = revision_binding.get("baseRevision")
+    base_manifest = revision_binding.get("baseGenerationManifestSha256")
+    pr_fingerprint = revision_binding.get("prGenerationFingerprint")
+    overlay_manifest = revision_binding.get(
+        "prOverlayGenerationManifestSha256"
+    )
+    base_plugin_fingerprint = revision_binding.get(
+        "basePluginFingerprint"
+    )
+    base_plugin_descriptor_fingerprint = revision_binding.get(
+        "basePluginDescriptorFingerprint"
+    )
+    base_plugin_implementation_fingerprint = revision_binding.get(
+        "basePluginImplementationFingerprint"
+    )
+    base_index_representation_fingerprint = revision_binding.get(
+        "baseIndexRepresentationFingerprint"
+    )
+    if not isinstance(pr_indexed, bool):
+        raise ValueError(
+            "terminal pipeline evidence has invalid revisionBinding.prIndexed"
+        )
+    if (
+        pull_request_id is not None
+        and (
+            not isinstance(pull_request_id, int)
+            or isinstance(pull_request_id, bool)
+            or pull_request_id < 1
+        )
+    ):
+        raise ValueError(
+            "terminal pipeline evidence has invalid revisionBinding.pullRequestId"
+        )
+    if not isinstance(target_branch, str) or not target_branch.strip():
+        raise ValueError(
+            "terminal pipeline evidence has invalid revisionBinding.targetBranch"
+        )
+    if (
+        not isinstance(source_revision, str)
+        or _IMMUTABLE_GIT_REVISION.fullmatch(source_revision) is None
+    ):
+        raise ValueError(
+            "terminal pipeline evidence has invalid revisionBinding.sourceRevision"
+        )
+    if (
+        base_revision is not None
+        and (
+            not isinstance(base_revision, str)
+            or _IMMUTABLE_GIT_REVISION.fullmatch(base_revision) is None
+        )
+    ):
+        raise ValueError(
+            "terminal pipeline evidence has invalid revisionBinding.baseRevision"
+        )
+    if (
+        base_manifest is not None
+        and (
+            not isinstance(base_manifest, str)
+            or _SHA256_HEX.fullmatch(base_manifest) is None
+        )
+    ):
+        raise ValueError(
+            "terminal pipeline evidence has invalid "
+            "revisionBinding.baseGenerationManifestSha256"
+        )
+    if (
+        pr_fingerprint is not None
+        and (
+            not isinstance(pr_fingerprint, str)
+            or _SHA256_FINGERPRINT.fullmatch(pr_fingerprint) is None
+        )
+    ):
+        raise ValueError(
+            "terminal pipeline evidence has invalid "
+            "revisionBinding.prGenerationFingerprint"
+        )
+    if (
+        overlay_manifest is not None
+        and (
+            not isinstance(overlay_manifest, str)
+            or _SHA256_HEX.fullmatch(overlay_manifest) is None
+        )
+    ):
+        raise ValueError(
+            "terminal pipeline evidence has invalid "
+            "revisionBinding.prOverlayGenerationManifestSha256"
+        )
+    for field, value in (
+        ("basePluginFingerprint", base_plugin_fingerprint),
+        (
+            "basePluginDescriptorFingerprint",
+            base_plugin_descriptor_fingerprint,
+        ),
+        (
+            "basePluginImplementationFingerprint",
+            base_plugin_implementation_fingerprint,
+        ),
+        (
+            "baseIndexRepresentationFingerprint",
+            base_index_representation_fingerprint,
+        ),
+    ):
+        if value is not None and (
+            not isinstance(value, str)
+            or _SHA256_FINGERPRINT.fullmatch(value) is None
+        ):
+            raise ValueError(
+                "terminal pipeline evidence has invalid "
+                f"revisionBinding.{field}"
+            )
+    if pr_indexed and (
+        pull_request_id is None
+        or base_revision is None
+        or base_manifest is None
+        or pr_fingerprint is None
+        or overlay_manifest is None
+        or base_plugin_fingerprint is None
+        or base_plugin_descriptor_fingerprint is None
+        or base_plugin_implementation_fingerprint is None
+        or base_index_representation_fingerprint is None
+    ):
+        raise ValueError(
+            "terminal pipeline evidence has incomplete indexed revision binding"
+        )
+    if not pr_indexed and (
+        base_manifest is not None
+        or pr_fingerprint is not None
+        or overlay_manifest is not None
+        or base_plugin_fingerprint is not None
+        or base_plugin_descriptor_fingerprint is not None
+        or base_plugin_implementation_fingerprint is not None
+        or base_index_representation_fingerprint is not None
+    ):
+        raise ValueError(
+            "terminal pipeline evidence has receipts for an unindexed PR overlay"
+        )
+
     return {
         "state": "review_evidence_completed",
         "hunkCoverage": normalized_hunks,
@@ -845,6 +1031,26 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
             "semanticFailures": semantic_failures,
             "semanticDisabled": semantic_disabled,
             "exactEvidenceIds": exact_evidence_ids,
+        },
+        "revisionBinding": {
+            "prIndexed": pr_indexed,
+            "pullRequestId": pull_request_id,
+            "targetBranch": target_branch,
+            "sourceRevision": source_revision,
+            "baseRevision": base_revision,
+            "baseGenerationManifestSha256": base_manifest,
+            "prGenerationFingerprint": pr_fingerprint,
+            "prOverlayGenerationManifestSha256": overlay_manifest,
+            "basePluginFingerprint": base_plugin_fingerprint,
+            "basePluginDescriptorFingerprint": (
+                base_plugin_descriptor_fingerprint
+            ),
+            "basePluginImplementationFingerprint": (
+                base_plugin_implementation_fingerprint
+            ),
+            "baseIndexRepresentationFingerprint": (
+                base_index_representation_fingerprint
+            ),
         },
     }
 
@@ -1024,6 +1230,55 @@ class ReviewQualityCaptureSession:
                 terminal.append(candidate)
         for stale in terminal[self._max_files:]:
             stale.unlink(missing_ok=True)
+
+    def receipt(self) -> dict[str, Any]:
+        """Return a source-free receipt for the completed capture artifact."""
+
+        if (
+            self._artifact.get("status") not in {"completed", "failed"}
+            or not self._artifact.get("captureDigest")
+        ):
+            raise ValueError("quality capture receipt requires a terminal artifact")
+        call_receipts = []
+        all_reported_models: set[str] = set()
+        model_evidence_complete = True
+        for call in self._artifact["calls"]:
+            reported = sorted({
+                model
+                for event in call.get("providerEvents") or []
+                if isinstance(event, dict)
+                for model in event.get("providerReportedModels") or []
+                if isinstance(model, str) and model
+            })
+            all_reported_models.update(reported)
+            if call.get("status") == "completed" and not reported:
+                model_evidence_complete = False
+            call_receipts.append({
+                "sequence": call.get("sequence"),
+                "stage": call.get("stage"),
+                "status": call.get("status"),
+                "providerCallCount": call.get("providerCallCount"),
+                "providerReportedModels": reported,
+                "promptDigest": call.get("promptDigest"),
+                "responseDigest": call.get("responseDigest"),
+            })
+        receipt = {
+            "kind": "review-quality-capture-receipt",
+            "status": self._artifact["status"],
+            "artifactContainerPath": self.container_path,
+            "captureDigest": self._artifact["captureDigest"],
+            "provider": self._artifact["provider"],
+            "requestedModel": self._artifact["model"],
+            "providerReportedModels": sorted(all_reported_models),
+            "providerModelEvidenceComplete": model_evidence_complete,
+            "modelBoundaryInvocations": self._artifact[
+                "modelBoundaryInvocations"
+            ],
+            "providerCalls": self._artifact["providerCalls"],
+            "calls": call_receipts,
+        }
+        receipt["receiptDigest"] = _digest(receipt)
+        return receipt
 
     async def invoke(
         self,
@@ -1283,10 +1538,16 @@ class ReviewQualityCaptureLLM:
             include_raw=include_raw,
             **kwargs,
         )
+        bindings = dict(self._bindings)
+        bindings["structured_output"] = {
+            "include_raw": include_raw,
+            "options": dict(kwargs),
+        }
         return self._clone(
             delegate,
             schema=schema,
             include_raw=include_raw,
+            bindings=bindings,
         )
 
     def bind_tools(
@@ -1296,8 +1557,13 @@ class ReviewQualityCaptureLLM:
     ) -> "ReviewQualityCaptureLLM":
         materialized = tuple(tools)
         delegate = self._delegate.bind_tools(materialized, **kwargs)
+        bindings = dict(self._bindings)
+        bindings["tool_binding"] = {
+            "options": dict(kwargs),
+        }
         return self._clone(
             delegate,
+            bindings=bindings,
             tools=tuple(_tool_descriptor(tool) for tool in materialized),
         )
 

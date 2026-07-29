@@ -279,7 +279,7 @@ public class CodeAnalysisService {
                         }
                         CodeAnalysisIssue issue = createIssueFromData(
                                 issueData, String.valueOf(i), vcsAuthorId, vcsAuthorUsername,
-                                commitHash, prNumber, analysisId, fileContents);
+                                commitHash, prNumber, analysisId, fileContents, true);
                         if (issue != null) {
                             savedAnalysis.addIssue(issue);
                         }
@@ -304,7 +304,7 @@ public class CodeAnalysisService {
 
                         CodeAnalysisIssue issue = createIssueFromData(
                                 issueData, entry.getKey(), vcsAuthorId, vcsAuthorUsername,
-                                commitHash, prNumber, analysisId, fileContents);
+                                commitHash, prNumber, analysisId, fileContents, true);
                         if (issue != null) {
                             savedAnalysis.addIssue(issue);
                         }
@@ -545,6 +545,98 @@ public class CodeAnalysisService {
     }
 
     /**
+     * Applies the normal CodeCrow issue mapping, anchoring, filtering, and
+     * ingestion de-duplication rules without reading or writing persistence
+     * state.
+     *
+     * <p>This path is intended for isolated benchmark evaluation of a captured
+     * first-iteration inference result. Historical issue identifiers and
+     * resolution flags are deliberately ignored, so a model response cannot
+     * load or mutate a previous issue. The returned entities are transient and
+     * are never attached to a {@link CodeAnalysis}.</p>
+     *
+     * @param analysisData validated inference result containing {@code issues}
+     * @param fileContents exact head-revision file contents used for anchoring
+     * @return finalized transient issues in deterministic ingestion order
+     */
+    @Transactional(readOnly = true)
+    public List<CodeAnalysisIssue> finalizeIssuesWithoutPersistence(
+            Map<String, Object> analysisData,
+            Map<String, String> fileContents
+    ) {
+        if (analysisData == null) {
+            throw new IllegalArgumentException("analysisData is required");
+        }
+
+        Object issuesObj = analysisData.get("issues");
+        if (issuesObj == null) {
+            return List.of();
+        }
+
+        Map<String, String> exactFileContents = fileContents != null
+                ? fileContents
+                : Collections.emptyMap();
+        List<CodeAnalysisIssue> finalized = new ArrayList<>();
+
+        if (issuesObj instanceof List<?> issuesList) {
+            for (int index = 0; index < issuesList.size(); index++) {
+                CodeAnalysisIssue issue = finalizeTransientIssue(
+                        issuesList.get(index),
+                        String.valueOf(index),
+                        exactFileContents);
+                if (issue != null) {
+                    finalized.add(issue);
+                }
+            }
+        } else if (issuesObj instanceof Map<?, ?> issues) {
+            for (Map.Entry<?, ?> entry : issues.entrySet()) {
+                CodeAnalysisIssue issue = finalizeTransientIssue(
+                        entry.getValue(),
+                        String.valueOf(entry.getKey()),
+                        exactFileContents);
+                if (issue != null) {
+                    finalized.add(issue);
+                }
+            }
+        } else {
+            log.warn("Isolated finalization received issues field of unsupported type: {}",
+                    issuesObj.getClass().getName());
+            return List.of();
+        }
+
+        return issueDeduplicationService.deduplicateAtIngestion(finalized);
+    }
+
+    private CodeAnalysisIssue finalizeTransientIssue(
+            Object rawIssue,
+            String issueKey,
+            Map<String, String> fileContents
+    ) {
+        if (!(rawIssue instanceof Map<?, ?> rawIssueMap)) {
+            log.warn("Skipping non-object isolated issue at key {}", issueKey);
+            return null;
+        }
+
+        Map<String, Object> issueData = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : rawIssueMap.entrySet()) {
+            if (entry.getKey() instanceof String key) {
+                issueData.put(key, entry.getValue());
+            }
+        }
+
+        return createIssueFromData(
+                issueData,
+                issueKey,
+                null,
+                null,
+                null,
+                null,
+                null,
+                fileContents,
+                false);
+    }
+
+    /**
      * Get all analyses for a PR across all versions.
      * Useful for providing full issue history to AI including resolved issues.
      */
@@ -568,7 +660,8 @@ public class CodeAnalysisService {
             String commitHash,
             Long prNumber,
             Long analysisId,
-            Map<String, String> fileContents
+            Map<String, String> fileContents,
+            boolean allowHistoricalState
     ) {
         try {
             // Sanitize all string values in the AI response map to strip null bytes
@@ -588,7 +681,7 @@ public class CodeAnalysisService {
             issue.setVcsAuthorUsername(vcsAuthorUsername);
 
             // Check if this is a persisted issue from previous analysis (has original ID)
-            Object originalIdObj = issueData.get("id");
+            Object originalIdObj = allowHistoricalState ? issueData.get("id") : null;
             CodeAnalysisIssue originalIssue = null;
             if (originalIdObj != null) {
                 try {
@@ -721,7 +814,7 @@ public class CodeAnalysisService {
             }
 
             // Parse isResolved - handle both Boolean and String representations
-            Object isResolvedObj = issueData.get("isResolved");
+            Object isResolvedObj = allowHistoricalState ? issueData.get("isResolved") : null;
             boolean isResolved = false;
             if (isResolvedObj instanceof Boolean) {
                 isResolved = (Boolean) isResolvedObj;
@@ -918,7 +1011,7 @@ public class CodeAnalysisService {
      */
     private CodeAnalysisIssue createIssueFromData(Map<String, Object> issueData, String issueKey, String vcsAuthorId, String vcsAuthorUsername) {
         return createIssueFromData(issueData, issueKey, vcsAuthorId, vcsAuthorUsername,
-                null, null, null, Collections.emptyMap());
+                null, null, null, Collections.emptyMap(), true);
     }
 
     /**

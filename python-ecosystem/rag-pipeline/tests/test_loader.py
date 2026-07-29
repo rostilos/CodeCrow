@@ -128,6 +128,20 @@ class TestDocumentLoaderIterFiles:
         files = list(loader.iter_repository_files(tmp_path / "nonexistent"))
         assert files == []
 
+    def test_does_not_traverse_symlinked_directory(self, tmp_path):
+        external = tmp_path.parent / f"{tmp_path.name}-external"
+        external.mkdir()
+        (external / "secret.py").write_text("secret = True", encoding="utf-8")
+        try:
+            (tmp_path / "linked").symlink_to(external, target_is_directory=True)
+        except OSError as exception:
+            pytest.skip(f"symlinks are unavailable: {exception}")
+        (tmp_path / "main.py").write_text("safe = True", encoding="utf-8")
+
+        files = list(DocumentLoader(RAGConfig()).iter_repository_files(tmp_path))
+
+        assert files == [Path("main.py")]
+
 
 class TestDocumentLoaderLoadBatch:
 

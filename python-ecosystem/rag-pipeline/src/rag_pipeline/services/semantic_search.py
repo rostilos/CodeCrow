@@ -13,6 +13,7 @@ from qdrant_client.http.models import FieldCondition, MatchValue, MatchAny
 
 from .base import RAGQueryBase
 from ..core.index_representation import IndexCompatibilityError
+from ..core.repository_overlay import IncrementalIndexPreconditionError
 from ..models.instructions import InstructionType, format_query
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,9 @@ class SemanticSearchMixin:
             branch: str,
             top_k: int = 10,
             filter_language: Optional[str] = None,
-            instruction_type: InstructionType = InstructionType.GENERAL
+            instruction_type: InstructionType = InstructionType.GENERAL,
+            expected_revision: Optional[str] = None,
+            collection_target: Optional[str] = None,
     ) -> List[Dict]:
         """Perform semantic search in the repository for a single branch."""
         return self.semantic_search_multi_branch(
@@ -47,7 +50,13 @@ class SemanticSearchMixin:
             branches=[branch],
             top_k=top_k,
             filter_language=filter_language,
-            instruction_type=instruction_type
+            instruction_type=instruction_type,
+            expected_revisions=(
+                {branch: expected_revision}
+                if expected_revision is not None
+                else None
+            ),
+            collection_target=collection_target,
         )
 
     def semantic_search_multi_branch(
@@ -59,7 +68,9 @@ class SemanticSearchMixin:
             top_k: int = 10,
             filter_language: Optional[str] = None,
             instruction_type: InstructionType = InstructionType.GENERAL,
-            excluded_paths: Optional[List[str]] = None
+            excluded_paths: Optional[List[str]] = None,
+            expected_revisions: Optional[Dict[str, str]] = None,
+            collection_target: Optional[str] = None,
     ) -> List[Dict]:
         """Perform semantic search across multiple branches with filtering.
 
@@ -67,14 +78,22 @@ class SemanticSearchMixin:
             branches: List of branches to search (e.g., ['feature/xyz', 'main'])
             excluded_paths: Files to exclude from results (e.g., deleted files)
         """
-        collection_name = self._get_project_collection_name(workspace, project)
+        collection_name = (
+            collection_target
+            or self._get_project_collection_name(workspace, project)
+        )
         excluded_paths = excluded_paths or []
+        revision_bound = expected_revisions is not None
 
         logger.info(f"Multi-branch search in {collection_name} branches={branches} for: {query[:50]}...")
 
         try:
             if not self._collection_or_alias_exists(collection_name):
                 logger.warning(f"Collection {collection_name} does not exist")
+                if revision_bound:
+                    raise IncrementalIndexPreconditionError(
+                        "revision-bound semantic-search collection is unavailable"
+                    )
                 return []
 
             self._require_compatible_branches(collection_name, branches)
@@ -85,7 +104,27 @@ class SemanticSearchMixin:
             # Create retriever with branch filter
             filters = []
             for branch in branches:
-                filters.append(MetadataFilter(key="branch", value=branch, operator=FilterOperator.EQ))
+                branch_filters = [
+                    MetadataFilter(
+                        key="branch",
+                        value=branch,
+                        operator=FilterOperator.EQ,
+                    ),
+                ]
+                if expected_revisions and branch in expected_revisions:
+                    branch_filters.append(MetadataFilter(
+                        key="commit",
+                        value=expected_revisions[branch],
+                        operator=FilterOperator.EQ,
+                    ))
+                filters.append(
+                    branch_filters[0]
+                    if len(branch_filters) == 1
+                    else MetadataFilters(
+                        filters=branch_filters,
+                        condition="and",
+                    )
+                )
 
             branch_filters = MetadataFilters(
                 filters=filters,
@@ -112,6 +151,19 @@ class SemanticSearchMixin:
             incompatible_count = 0
             for node in nodes:
                 metadata = node.node.metadata
+                expected_revision = (
+                    expected_revisions.get(metadata.get("branch"))
+                    if expected_revisions
+                    else None
+                )
+                if (
+                    expected_revision is not None
+                    and metadata.get("commit") != expected_revision
+                ):
+                    raise IncrementalIndexPreconditionError(
+                        "semantic retrieval returned a repository point outside "
+                        "the requested immutable revision"
+                    )
 
                 if not self._plugin_identity_compatible(metadata):
                     incompatible_count += 1
@@ -123,6 +175,7 @@ class SemanticSearchMixin:
                         "architecture_context",
                         "repository_snapshot",
                         "repository_facts_state",
+                        "repository_generation_manifest",
                         "architecture_source",
                     )
                 ):
@@ -154,10 +207,12 @@ class SemanticSearchMixin:
             logger.info(f"Found {len(results)} results across {len(branches)} branches")
             return results
 
-        except IndexCompatibilityError:
+        except (IndexCompatibilityError, IncrementalIndexPreconditionError):
             raise
         except Exception as e:
             logger.error(f"Error during multi-branch semantic search: {e}")
+            if revision_bound:
+                raise
             return []
 
     def _dedupe_by_branch_priority(

@@ -15,7 +15,38 @@ import pytest
 from unittest.mock import patch, MagicMock
 from fastapi import HTTPException
 
+from rag_pipeline.core.repository_overlay import (
+    IncrementalIndexPreconditionError,
+)
 from rag_pipeline.models.config import IndexStats
+
+
+FULL_COMMIT = "a" * 40
+
+
+def _revision_preflight_response():
+    return {
+        "workspace": "ws",
+        "project": "proj",
+        "branch": "main",
+        "commit": FULL_COMMIT,
+        "point_count": 42,
+        "repository_revision": FULL_COMMIT,
+        "repository_facts_sha256": "b" * 64,
+        "plugin_ids": ["php", "magento"],
+        "plugin_fingerprint": "sha256:selection",
+        "plugin_descriptor_fingerprint": "sha256:descriptor",
+        "plugin_implementation_fingerprint": "sha256:implementation",
+        "index_representation_fingerprint": "sha256:representation",
+        "generation_schema": "codecrow.repository-index-generation",
+        "generation_member_count": 41,
+        "generation_members_sha256": "c" * 64,
+        "generation_manifest_sha256": "d" * 64,
+        "source_tree_sha256": "e" * 64,
+        "index_include_patterns": ["app/code/**"],
+        "index_exclude_patterns": ["vendor/**"],
+        "index_selection_policy_sha256": "f" * 64,
+    }
 
 
 def _mock_singletons(config_overrides=None, index_manager=None):
@@ -133,6 +164,7 @@ class TestIndexRepository:
         req.project = "proj"
         req.branch = "main"
         req.commit = "abc"
+        req.source_tree_sha256 = "c" * 64
         req.preserve_other_branches = False
         req.include_patterns = None
         req.exclude_patterns = None
@@ -145,6 +177,7 @@ class TestIndexRepository:
             project="proj",
             branch="main",
             commit="abc",
+            source_tree_sha256="c" * 64,
             preserve_other_branches=False,
             include_patterns=None,
             exclude_patterns=None,
@@ -164,12 +197,42 @@ class TestIndexRepository:
         req.project = "proj"
         req.branch = "main"
         req.commit = "abc"
+        req.source_tree_sha256 = "c" * 64
         req.include_patterns = None
         req.exclude_patterns = None
 
         with pytest.raises(HTTPException) as exc_info:
             index_repository(req, MagicMock())
         assert exc_info.value.status_code == 400
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_source_tree_precondition_error_raises_409(self, mock_get):
+        from rag_pipeline.core.source_tree import RepositorySourceTreeError
+
+        _, im = _mock_singletons()
+        im.index_repository.side_effect = RepositorySourceTreeError(
+            "repository source tree does not match its acquisition attestation"
+        )
+        mock_get.return_value = (_, im)
+
+        from rag_pipeline.api.routers.index import index_repository
+
+        req = MagicMock()
+        req.repo_path = "/tmp/repo"
+        req.workspace = "ws"
+        req.project = "proj"
+        req.branch = "main"
+        req.commit = "a" * 40
+        req.source_tree_sha256 = "c" * 64
+        req.preserve_other_branches = False
+        req.include_patterns = None
+        req.exclude_patterns = None
+
+        with pytest.raises(HTTPException) as exc_info:
+            index_repository(req, MagicMock())
+
+        assert exc_info.value.status_code == 409
+        assert "acquisition attestation" in exc_info.value.detail
 
     @patch("rag_pipeline.api.routers.index._get_singletons")
     def test_internal_error_raises_500(self, mock_get):
@@ -185,6 +248,7 @@ class TestIndexRepository:
         req.project = "proj"
         req.branch = "main"
         req.commit = "abc"
+        req.source_tree_sha256 = "c" * 64
         req.include_patterns = None
         req.exclude_patterns = None
 
@@ -422,6 +486,65 @@ class TestBranchEndpoints:
         assert "stale2" in result["deleted_branches"]
         assert result["total_deleted"] == 2
 
+
+class TestRevisionPreflight:
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_returns_exact_revision_identity(self, mock_get):
+        _, im = _mock_singletons()
+        im.get_revision_preflight.return_value = _revision_preflight_response()
+        mock_get.return_value = (_, im)
+
+        from rag_pipeline.api.routers.index import get_revision_preflight
+
+        result = get_revision_preflight("ws", "proj", "main", FULL_COMMIT)
+
+        assert result["point_count"] == 42
+        assert result["plugin_ids"] == ["php", "magento"]
+        im.get_revision_preflight.assert_called_once_with(
+            "ws",
+            "proj",
+            "main",
+            FULL_COMMIT,
+        )
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_missing_revision_is_404(self, mock_get):
+        _, im = _mock_singletons()
+        im.get_revision_preflight.return_value = None
+        mock_get.return_value = (_, im)
+
+        from rag_pipeline.api.routers.index import get_revision_preflight
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_revision_preflight("ws", "proj", "main", FULL_COMMIT)
+        assert exc_info.value.status_code == 404
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_incomplete_revision_is_409(self, mock_get):
+        _, im = _mock_singletons()
+        im.get_revision_preflight.side_effect = (
+            IncrementalIndexPreconditionError("incomplete revision")
+        )
+        mock_get.return_value = (_, im)
+
+        from rag_pipeline.api.routers.index import get_revision_preflight
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_revision_preflight("ws", "proj", "main", FULL_COMMIT)
+        assert exc_info.value.status_code == 409
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_storage_failure_is_500(self, mock_get):
+        _, im = _mock_singletons()
+        im.get_revision_preflight.side_effect = RuntimeError("qdrant unavailable")
+        mock_get.return_value = (_, im)
+
+        from rag_pipeline.api.routers.index import get_revision_preflight
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_revision_preflight("ws", "proj", "main", FULL_COMMIT)
+        assert exc_info.value.status_code == 500
 
 # ─────────────────────────────────────────────────────────────
 # Stats & list

@@ -7,8 +7,12 @@ import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.rostilos.codecrow.ragengine.source.RepositorySourceTreeIdentity;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -17,6 +21,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RagPipelineClientTest {
+
+    @TempDir
+    Path repositoryPath;
 
     private MockWebServer mockWebServer;
     private RagPipelineClient client;
@@ -38,6 +45,7 @@ class RagPipelineClientTest {
         );
         
         objectMapper = new ObjectMapper();
+        Files.writeString(repositoryPath.resolve("README.md"), "attested fixture\n");
     }
 
     @AfterEach
@@ -365,12 +373,16 @@ class RagPipelineClientTest {
                 .addHeader("Content-Type", "application/json"));
 
         Map<String, Object> result = client.indexRepository(
-                "/tmp/repo", "ws", "proj", "main", "abc123", null, null);
+                repositoryPath.toString(), "ws", "proj", "main", "abc123", null, null);
 
         assertThat(result).containsEntry("document_count", 42);
         RecordedRequest request = mockWebServer.takeRequest();
         assertThat(request.getPath()).endsWith("/index/repository");
         assertThat(request.getMethod()).isEqualTo("POST");
+        Map<?, ?> payload = objectMapper.readValue(request.getBody().readUtf8(), Map.class);
+        assertThat(payload.get("repo_path")).isEqualTo(repositoryPath.toString());
+        assertThat(payload.get("source_tree_sha256"))
+                .isEqualTo(RepositorySourceTreeIdentity.sha256(repositoryPath));
     }
 
     @Test
@@ -382,7 +394,7 @@ class RagPipelineClientTest {
 
         List<String> patterns = List.of("*.log", "vendor/**");
         Map<String, Object> result = client.indexRepository(
-                "/tmp/repo", "ws", "proj", "main", "abc123", null, patterns);
+                repositoryPath.toString(), "ws", "proj", "main", "abc123", null, patterns);
 
         assertThat(result).containsEntry("document_count", 30);
         RecordedRequest request = mockWebServer.takeRequest();

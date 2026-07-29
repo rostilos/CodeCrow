@@ -45,6 +45,7 @@ async def test_index_repository(client, auth_headers, rag_app, tmp_path):
             "project": "proj1",
             "branch": "main",
             "commit": "abc123",
+            "source_tree_sha256": "c" * 64,
         }, headers=auth_headers)
         assert resp.status_code == 200
     finally:
@@ -62,6 +63,7 @@ async def test_index_repository_no_auth(client, tmp_path):
         "project": "p",
         "branch": "main",
         "commit": "x",
+        "source_tree_sha256": "c" * 64,
     })
     assert resp.status_code == 401
 
@@ -92,6 +94,68 @@ async def test_list_branches(client, auth_headers, rag_app):
     data = resp.json()
     assert data["total_branches"] == 2
     assert len(data["branches"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_exact_revision_preflight(client, auth_headers, rag_app):
+    """GET /index/{w}/{p}/revision verifies one full commit snapshot."""
+    import rag_pipeline.api.api as api_module
+
+    commit = "a" * 40
+    api_module.index_manager.get_revision_preflight.return_value = {
+        "workspace": "ws1",
+        "project": "proj1",
+        "branch": "main",
+        "commit": commit,
+        "point_count": 42,
+        "repository_revision": commit,
+        "repository_facts_sha256": "b" * 64,
+        "plugin_ids": ["php", "magento"],
+        "plugin_fingerprint": "sha256:selection",
+        "plugin_descriptor_fingerprint": "sha256:descriptor",
+        "plugin_implementation_fingerprint": "sha256:implementation",
+        "index_representation_fingerprint": "sha256:representation",
+        "generation_schema": "codecrow.repository-index-generation",
+        "generation_member_count": 41,
+        "generation_members_sha256": "c" * 64,
+        "generation_manifest_sha256": "d" * 64,
+        "source_tree_sha256": "e" * 64,
+    }
+
+    resp = await client.get(
+        "/index/ws1/proj1/revision",
+        params={"branch": "main", "commit": commit},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["point_count"] == 42
+    assert resp.json()["repository_revision"] == commit
+    api_module.index_manager.get_revision_preflight.assert_called_with(
+        "ws1",
+        "proj1",
+        "main",
+        commit,
+    )
+
+
+@pytest.mark.asyncio
+async def test_exact_revision_preflight_rejects_abbreviated_sha(
+    client,
+    auth_headers,
+    rag_app,
+):
+    import rag_pipeline.api.api as api_module
+
+    api_module.index_manager.get_revision_preflight.reset_mock()
+    resp = await client.get(
+        "/index/ws1/proj1/revision",
+        params={"branch": "main", "commit": "abc123"},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 422
+    api_module.index_manager.get_revision_preflight.assert_not_called()
 
 
 @pytest.mark.asyncio

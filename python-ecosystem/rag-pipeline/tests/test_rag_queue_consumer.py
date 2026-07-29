@@ -36,6 +36,7 @@ def test_active_indexing_emits_heartbeats_and_refreshes_event_ttl(tmp_path):
                 "project": "project",
                 "branch": "main",
                 "commit": "abc123",
+                "source_tree_sha256": "c" * 64,
                 "cleanup_repo_path": False,
             },
         })
@@ -78,6 +79,7 @@ def test_consumer_removes_only_explicitly_owned_workspace(tmp_path):
                 "project": "project",
                 "branch": "main",
                 "commit": "abc123",
+                "source_tree_sha256": "c" * 64,
                 "cleanup_repo_path": True,
             },
         })

@@ -161,6 +161,30 @@ class CollectionManager:
         except Exception as e:
             logger.debug(f"Error resolving alias {alias_name}: {e}")
         return None
+
+    def resolve_collection_target(self, collection_name: str) -> Optional[str]:
+        """Resolve an alias or direct collection without hiding backend errors.
+
+        Mutation leases use this strict resolver so a transient alias lookup
+        failure cannot be mistaken for a direct collection.
+        """
+        aliases = self.client.get_aliases().aliases
+        matching_aliases = [
+            alias.collection_name
+            for alias in aliases
+            if alias.alias_name == collection_name
+        ]
+        if len(matching_aliases) > 1:
+            raise RuntimeError(
+                f"collection alias '{collection_name}' has multiple targets"
+            )
+        if matching_aliases:
+            return matching_aliases[0]
+
+        collections = self.client.get_collections().collections
+        if collection_name in {collection.name for collection in collections}:
+            return collection_name
+        return None
     
     def atomic_alias_swap(
         self,

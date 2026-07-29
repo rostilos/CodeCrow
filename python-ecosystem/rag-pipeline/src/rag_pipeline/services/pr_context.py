@@ -12,6 +12,7 @@ import logging
 
 from .base import RAGQueryBase
 from .duplication import generate_duplication_queries
+from ..core.repository_overlay import IncrementalIndexPreconditionError
 from ..models.instructions import InstructionType
 from ..models.scoring_config import get_scoring_config
 from ..utils.utils import detect_language_from_path
@@ -93,7 +94,9 @@ class PRContextMixin:
             min_relevance_score: float = 0.7,
             base_branch: Optional[str] = None,
             deleted_files: Optional[List[str]] = None,
-            exclude_pr_files: Optional[List[str]] = None
+            exclude_pr_files: Optional[List[str]] = None,
+            expected_revisions: Optional[Dict[str, str]] = None,
+            collection_target: Optional[str] = None,
     ) -> Dict:
         """
         Get relevant context for review using Smart RAG.
@@ -117,10 +120,17 @@ class PRContextMixin:
 
         # Determine branches to search
         branches_to_search = [branch]
-        collection_name = self._get_project_collection_name(workspace, project)
+        collection_name = (
+            collection_target
+            or self._get_project_collection_name(workspace, project)
+        )
 
         if not self._collection_or_alias_exists(collection_name):
             logger.warning(f"Collection {collection_name} does not exist")
+            if expected_revisions is not None:
+                raise IncrementalIndexPreconditionError(
+                    "revision-bound PR-context collection is unavailable"
+                )
             return {
                 "relevant_code": [],
                 "related_files": [],
@@ -167,7 +177,9 @@ class PRContextMixin:
                 branches=branches_to_search,
                 top_k=q_top_k,
                 instruction_type=q_instruction_type,
-                excluded_paths=all_excluded_paths
+                excluded_paths=all_excluded_paths,
+                expected_revisions=expected_revisions,
+                collection_target=collection_name,
             )
 
             logger.info(f"Query {i+1}/{len(queries)} returned {len(results)} results")

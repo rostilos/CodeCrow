@@ -4,10 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.rostilos.codecrow.ragengine.source.RepositorySourceTreeIdentity;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -82,6 +84,10 @@ public class RagPipelineClient {
         payload.put("project", projectNamespace);
         payload.put("branch", branch);
         payload.put("commit", commit);
+        payload.put(
+                "source_tree_sha256",
+                RepositorySourceTreeIdentity.sha256(Path.of(repoPath))
+        );
         if (includePatterns != null && !includePatterns.isEmpty()) {
             payload.put("include_patterns", includePatterns);
         }

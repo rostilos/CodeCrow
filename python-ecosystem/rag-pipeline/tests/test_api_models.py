@@ -30,6 +30,17 @@ from rag_pipeline.api.models import (
 class TestIndexRequest:
 
     @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_commit_labeled_index_requires_source_tree_attestation(self):
+        with pytest.raises(ValueError, match="source_tree_sha256"):
+            IndexRequest(
+                repo_path="/tmp/repo",
+                workspace="ws",
+                project="proj",
+                branch="main",
+                commit="abc123",
+            )
+
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
     def test_valid_path(self):
         req = IndexRequest(
             repo_path="/tmp/repo",
@@ -37,6 +48,7 @@ class TestIndexRequest:
             project="proj",
             branch="main",
             commit="abc123",
+            source_tree_sha256="c" * 64,
         )
         assert req.workspace == "ws"
         assert req.preserve_other_branches is False
@@ -50,6 +62,7 @@ class TestIndexRequest:
             project="proj",
             branch="main",
             commit="abc123",
+            source_tree_sha256="c" * 64,
             preserve_other_branches=True,
         )
         assert req.preserve_other_branches is True
@@ -62,6 +75,7 @@ class TestIndexRequest:
             project="proj",
             branch="main",
             commit="abc123",
+            source_tree_sha256="c" * 64,
             cleanup_repo_path=True,
         )
         assert req.cleanup_repo_path is True
@@ -75,6 +89,7 @@ class TestIndexRequest:
                 project="proj",
                 branch="main",
                 commit="abc123",
+                source_tree_sha256="c" * 64,
             )
 
 

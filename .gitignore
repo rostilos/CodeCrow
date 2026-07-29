@@ -56,3 +56,7 @@ java-ecosystem/services/pipeline-agent/runtime-plugins/
 tools/environment/dumps/
 tools/environment/qdrant-dumps/*
 !tools/environment/qdrant-dumps/.gitkeep
+tools/magento_benchmark/.cache/
+tools/magento_benchmark/runs/
+tools/magento_benchmark/site/
+tools/magento_benchmark/work/

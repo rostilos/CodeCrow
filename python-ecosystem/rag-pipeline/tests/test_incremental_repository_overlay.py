@@ -632,8 +632,10 @@ def test_incremental_update_rejects_missing_repository_analysis_snapshots(
         ),
     )
     point_ops = MagicMock()
+    client = MagicMock()
+    client.scroll.return_value = ([], None)
     operations = FileOperations(
-        MagicMock(),
+        client,
         point_ops,
         MagicMock(),
         MagicMock(),

@@ -1314,6 +1314,68 @@ class CodeAnalysisServiceTest {
     }
 
     @Nested
+    @DisplayName("finalizeIssuesWithoutPersistence()")
+    class FinalizeIssuesWithoutPersistenceTests {
+
+        @Test
+        @DisplayName("should apply product issue rules without persistence or historical state")
+        void shouldFinalizeWithoutPersistenceOrHistoricalState() {
+            Map<String, Object> primary = createIssueData(
+                    "HIGH",
+                    "Model.php",
+                    99,
+                    "Avoid the dangerous call");
+            primary.put("codeSnippet", "danger();");
+            primary.put("id", 1234L);
+            primary.put("isResolved", true);
+
+            Map<String, Object> duplicate = createIssueData(
+                    "MEDIUM",
+                    "Model.php",
+                    2,
+                    "Avoid the dangerous call");
+            duplicate.put("codeSnippet", "danger();");
+
+            Map<String, Object> informational = createIssueData(
+                    "INFO",
+                    "Model.php",
+                    2,
+                    "An informational observation");
+            informational.put("codeSnippet", "danger();");
+
+            Map<String, Object> analysisData = new LinkedHashMap<>();
+            analysisData.put("comment", "Review complete");
+            analysisData.put(
+                    "issues",
+                    List.of(primary, duplicate, informational));
+
+            List<CodeAnalysisIssue> result =
+                    codeAnalysisService.finalizeIssuesWithoutPersistence(
+                            analysisData,
+                            Map.of(
+                                    "Model.php",
+                                    "<?php\nsafe();\ndanger();\n"));
+
+            assertThat(result).hasSize(1);
+            CodeAnalysisIssue issue = result.get(0);
+            assertThat(issue.getAnalysis()).isNull();
+            assertThat(issue.getSeverity()).isEqualTo(IssueSeverity.HIGH);
+            assertThat(issue.getLineNumber()).isEqualTo(3);
+            assertThat(issue.isResolved()).isFalse();
+            assertThat(issue.getLineHash()).isNotBlank();
+            assertThat(primary)
+                    .containsEntry("id", 1234L)
+                    .containsEntry("isResolved", true);
+
+            verifyNoInteractions(
+                    codeAnalysisRepository,
+                    issueRepository,
+                    qualityGateRepository,
+                    qualityGateEvaluator);
+        }
+    }
+
+    @Nested
     @DisplayName("markIssueAsResolved()")
     class MarkIssueAsResolvedTests {
         @Test

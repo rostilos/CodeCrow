@@ -6,6 +6,8 @@ Covers:
 - delete_pr_files (success, collection not found, error)
 """
 import pytest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from unittest.mock import patch, MagicMock
 from types import SimpleNamespace
 from fastapi import HTTPException
@@ -15,6 +17,9 @@ DESCRIPTOR_FINGERPRINT = "sha256:" + "1" * 64
 IMPLEMENTATION_FINGERPRINT = "sha256:" + "2" * 64
 REPRESENTATION_FINGERPRINT = "sha256:" + "3" * 64
 OVERLAY_REPRESENTATION_FINGERPRINT = "sha256:" + "4" * 64
+BASE_GENERATION_MANIFEST_SHA256 = "5" * 64
+OVERLAY_GENERATION_MANIFEST_SHA256 = "6" * 64
+BASE_PLUGIN_FINGERPRINT = "sha256:" + "7" * 64
 
 
 @pytest.fixture(autouse=True)
@@ -23,6 +28,31 @@ def _stable_index_representation(monkeypatch):
         "rag_pipeline.api.routers.pr.require_compatible_branch_representation",
         lambda *_args, **_kwargs: None,
     )
+    monkeypatch.setattr(
+        "rag_pipeline.api.routers.pr.read_pr_overlay_generation",
+        lambda *_args, **kwargs: (
+            {
+                "overlay_generation_member_count": 0,
+                "overlay_generation_members_sha256": "8" * 64,
+                "overlay_generation_manifest_sha256": kwargs[
+                    "expected_manifest_sha256"
+                ],
+            }
+            if kwargs.get("expected_manifest_sha256")
+            else None
+        ),
+    )
+
+
+def _base_receipt(manifest=BASE_GENERATION_MANIFEST_SHA256):
+    return {
+        "generation_manifest_sha256": manifest,
+        "_collection_target": "rag_ws__proj_active",
+        "plugin_fingerprint": BASE_PLUGIN_FINGERPRINT,
+        "plugin_descriptor_fingerprint": DESCRIPTOR_FINGERPRINT,
+        "plugin_implementation_fingerprint": IMPLEMENTATION_FINGERPRINT,
+        "index_representation_fingerprint": REPRESENTATION_FINGERPRINT,
+    }
 
 
 def _make_index_manager():
@@ -33,13 +63,29 @@ def _make_index_manager():
     )
     im._get_project_collection_name.return_value = "rag_ws__proj"
     im._collection_manager.collection_exists.return_value = True
+    im._collection_manager.resolve_collection_target.return_value = (
+        "rag_ws__proj_active"
+    )
     im.splitter.split_documents.return_value = []
     im._point_ops.embed_and_create_points.return_value = []
     im._point_ops.upsert_points.return_value = (0, 0)
     im._point_ops.process_and_upsert_chunks.return_value = (0, 0)
     im.qdrant_client.scroll.return_value = ([], None)
+    im.get_revision_preflight.return_value = _base_receipt()
     im._file_ops._replace_points.side_effect = (
         lambda nodes, *_args: len(nodes)
+    )
+    im._file_ops.replace_pr_overlay_generation.side_effect = (
+        lambda nodes, *_args, **_kwargs: (
+            len(nodes),
+            {
+                "overlay_generation_member_count": 0,
+                "overlay_generation_members_sha256": "8" * 64,
+                "overlay_generation_manifest_sha256": (
+                    OVERLAY_GENERATION_MANIFEST_SHA256
+                ),
+            },
+        )
     )
     im.plugin_catalog.registry.resolve.side_effect = lambda plugin_ids: [
         SimpleNamespace(id=plugin_id) for plugin_id in dict.fromkeys(plugin_ids)
@@ -84,6 +130,37 @@ def _capabilities(*plugin_ids, fingerprint="sha256:capabilities"):
     )
 
 
+def test_same_pr_overlay_mutations_are_serialized():
+    from rag_pipeline.api.routers.pr import _pr_overlay_lock
+
+    first_entered = Event()
+    release_first = Event()
+    second_attempted = Event()
+    second_entered = Event()
+
+    def first():
+        with _pr_overlay_lock("ws", "project", 42):
+            first_entered.set()
+            assert release_first.wait(2)
+
+    def second():
+        second_attempted.set()
+        with _pr_overlay_lock("ws", "project", 42):
+            second_entered.set()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(first)
+        assert first_entered.wait(1)
+        second_future = executor.submit(second)
+        assert second_attempted.wait(1)
+        assert not second_entered.wait(0.1)
+        release_first.set()
+        first_future.result(timeout=2)
+        second_future.result(timeout=2)
+
+    assert second_entered.is_set()
+
+
 # ─────────────────────────────────────────────────────────────
 # index_pr_files
 # ─────────────────────────────────────────────────────────────
@@ -91,10 +168,42 @@ class TestIndexPRFiles:
 
     @patch("rag_pipeline.api.routers.pr.load_repository_snapshots")
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
+    def test_base_generation_change_never_publishes_overlay(
+        self,
+        mock_get,
+        mock_load_snapshots,
+    ):
+        im = _make_index_manager()
+        im.get_revision_preflight.side_effect = [
+            _base_receipt(),
+            _base_receipt("9" * 64),
+        ]
+        mock_get.return_value = im
+        mock_load_snapshots.return_value = ([], [], None, None, None)
+        request = _request([
+            SimpleNamespace(
+                path="src/Foo.java",
+                content="public class Foo {}",
+                change_type="MODIFIED",
+            ),
+        ])
+
+        from rag_pipeline.api.routers.pr import index_pr_files
+
+        with pytest.raises(HTTPException) as exception:
+            index_pr_files(request)
+
+        assert exception.value.status_code == 409
+        assert "generation changed" in exception.value.detail
+        im._file_ops._replace_points.assert_not_called()
+
+    @patch("rag_pipeline.api.routers.pr.load_repository_snapshots")
+    @patch("rag_pipeline.api.routers.pr._get_index_manager")
     def test_identical_complete_generation_is_reused_without_embedding(
         self,
         mock_get,
         mock_load_snapshots,
+        monkeypatch,
     ):
         from rag_pipeline.core.pr_overlay_identity import (
             ZERO_FINGERPRINT,
@@ -120,6 +229,9 @@ class TestIndexPRFiles:
             base_branch=req.base_branch,
             source_revision=req.source_revision,
             base_revision=req.base_revision,
+            base_generation_manifest_sha256=(
+                BASE_GENERATION_MANIFEST_SHA256
+            ),
             files=req.files,
             requested_plugin_ids=(),
             repository_plugin_ids=(),
@@ -147,6 +259,16 @@ class TestIndexPRFiles:
         im.qdrant_client.scroll.return_value = ([existing], None)
         mock_get.return_value = im
         mock_load_snapshots.return_value = ((), (), None, None, None)
+        monkeypatch.setattr(
+            "rag_pipeline.api.routers.pr.read_pr_overlay_generation",
+            lambda *_args, **_kwargs: {
+                "overlay_generation_member_count": 1,
+                "overlay_generation_members_sha256": "8" * 64,
+                "overlay_generation_manifest_sha256": (
+                    OVERLAY_GENERATION_MANIFEST_SHA256
+                ),
+            },
+        )
 
         from rag_pipeline.api.routers.pr import index_pr_files
 
@@ -179,7 +301,14 @@ class TestIndexPRFiles:
         result = index_pr_files(req)
 
         assert result["status"] == "indexed"
-        im._file_ops._replace_points.assert_called_once()
+        im._file_ops.replace_pr_overlay_generation.assert_called_once()
+        replacement_call = (
+            im._file_ops.replace_pr_overlay_generation.call_args
+        )
+        assert replacement_call.args[5] == (
+            "__pr__/42/feat/"
+            + replacement_call.kwargs["generation_fingerprint"]
+        )
 
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
     def test_success_with_files(self, mock_get):
@@ -239,7 +368,10 @@ class TestIndexPRFiles:
         assert result["chunks_indexed"] == 0
         assert result["partial_files"] == ["src/service.py"]
         im.splitter.split_documents.assert_not_called()
-        assert im._file_ops._replace_points.call_args.args[0] == []
+        assert (
+            im._file_ops.replace_pr_overlay_generation.call_args.args[0]
+            == []
+        )
 
     @patch("rag_pipeline.api.routers.pr.build_overlay_capabilities")
     @patch("rag_pipeline.api.routers.pr.load_repository_snapshots")
@@ -337,7 +469,10 @@ class TestIndexPRFiles:
         result = index_pr_files(req)
         assert result["status"] == "indexed"
         assert result["chunks_indexed"] == 0
-        assert im._file_ops._replace_points.call_args.args[0] == []
+        assert (
+            im._file_ops.replace_pr_overlay_generation.call_args.args[0]
+            == []
+        )
 
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
     def test_deleted_only_request_clears_previous_generation(self, mock_get):
@@ -356,7 +491,10 @@ class TestIndexPRFiles:
         result = index_pr_files(req)
         assert result["status"] == "indexed"
         assert result["chunks_indexed"] == 0
-        assert im._file_ops._replace_points.call_args.args[0] == []
+        assert (
+            im._file_ops.replace_pr_overlay_generation.call_args.args[0]
+            == []
+        )
 
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
     def test_replacement_does_not_predelete_existing_pr_points(self, mock_get):

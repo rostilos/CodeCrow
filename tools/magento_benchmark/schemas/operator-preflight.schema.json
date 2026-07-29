@@ -1,0 +1,344 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codecrow.co/schemas/magento2-benchmark/operator-preflight.schema.json",
+  "title": "CodeCrow Magento 2 operator preflight",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "generatedAt",
+    "operationMode",
+    "sideEffectPolicy",
+    "corpus",
+    "replay",
+    "configuration",
+    "runtime",
+    "snapshots",
+    "snapshotSetDigest",
+    "indexReceipts",
+    "indexReceiptSetDigest",
+    "checks",
+    "runReady",
+    "paperReady",
+    "readinessDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-operator-preflight"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "operationMode": {
+      "const": "strictly-read-only"
+    },
+    "sideEffectPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "indexesCreated",
+        "analysisJobsEnqueued",
+        "modelCallsMade",
+        "forkOrGitHubMutations",
+        "productFindingsFinalized"
+      ],
+      "properties": {
+        "indexesCreated": { "const": false },
+        "analysisJobsEnqueued": { "const": false },
+        "modelCallsMade": { "const": false },
+        "forkOrGitHubMutations": { "const": false },
+        "productFindingsFinalized": { "const": false }
+      }
+    },
+    "corpus": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "corpusId",
+            "corpusDigest",
+            "executionCorpusDigest",
+            "caseCount"
+          ],
+          "properties": {
+            "corpusId": { "type": "string", "minLength": 1 },
+            "corpusDigest": { "$ref": "#/$defs/digest" },
+            "executionCorpusDigest": { "$ref": "#/$defs/digest" },
+            "caseCount": { "const": 50 }
+          }
+        }
+      ]
+    },
+    "replay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "forkRepository",
+        "lockDigest",
+        "planDigest",
+        "attestationDigest",
+        "attestationAgeSeconds"
+      ],
+      "properties": {
+        "forkRepository": { "$ref": "#/$defs/nullableString" },
+        "lockDigest": { "$ref": "#/$defs/nullableDigest" },
+        "planDigest": { "$ref": "#/$defs/nullableDigest" },
+        "attestationDigest": { "$ref": "#/$defs/nullableDigest" },
+        "attestationAgeSeconds": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 3600
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configDigest",
+        "analysisConfigDigest",
+        "judgeConfigDigest",
+        "identity",
+        "models",
+        "environment",
+        "paperRuntimeControls"
+      ],
+      "properties": {
+        "configDigest": { "$ref": "#/$defs/digest" },
+        "analysisConfigDigest": { "$ref": "#/$defs/digest" },
+        "judgeConfigDigest": { "$ref": "#/$defs/digest" },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "forkRepository",
+            "configuredForkRepository",
+            "projectId",
+            "workspace",
+            "project"
+          ],
+          "properties": {
+            "forkRepository": { "$ref": "#/$defs/nullableString" },
+            "configuredForkRepository": { "type": "string" },
+            "projectId": { "type": ["integer", "null"] },
+            "workspace": { "$ref": "#/$defs/nullableString" },
+            "project": { "$ref": "#/$defs/nullableString" }
+          }
+        },
+        "models": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["analysis", "judge"],
+          "properties": {
+            "analysis": { "$ref": "#/$defs/modelIdentity" },
+            "judge": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "providerProtocol",
+                "requestedModel",
+                "expectedResponseModel"
+              ],
+              "properties": {
+                "providerProtocol": { "const": "openai-compatible" },
+                "requestedModel": { "$ref": "#/$defs/nullableString" },
+                "expectedResponseModel": {
+                  "$ref": "#/$defs/nullableString"
+                }
+              }
+            }
+          }
+        },
+        "environment": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["purpose", "variable", "present"],
+            "properties": {
+              "purpose": { "type": "string", "minLength": 1 },
+              "variable": { "type": "string", "minLength": 1 },
+              "present": { "type": "boolean" }
+            }
+          }
+        },
+        "paperRuntimeControls": {
+          "type": "object",
+          "additionalProperties": { "type": "boolean" },
+          "minProperties": 6
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["analysis", "rag", "finalizer"],
+      "properties": {
+        "analysis": { "$ref": "#/$defs/runtimeIdentity" },
+        "rag": { "$ref": "#/$defs/runtimeIdentity" },
+        "finalizer": { "$ref": "#/$defs/runtimeIdentity" }
+      }
+    },
+    "snapshots": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "$ref": "#/$defs/snapshot" }
+    },
+    "snapshotSetDigest": { "$ref": "#/$defs/digest" },
+    "indexReceipts": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "$ref": "#/$defs/receipt" }
+    },
+    "indexReceiptSetDigest": { "$ref": "#/$defs/digest" },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/check" }
+    },
+    "runReady": { "type": "boolean" },
+    "paperReady": { "const": false },
+    "readinessDigest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nullableDigest": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/digest" }
+      ]
+    },
+    "nullableString": {
+      "type": ["string", "null"]
+    },
+    "modelIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "requestedModel", "expectedResponseModel"],
+      "properties": {
+        "provider": { "$ref": "#/$defs/nullableString" },
+        "requestedModel": { "$ref": "#/$defs/nullableString" },
+        "expectedResponseModel": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "runtimeIdentity": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "containerId",
+            "imageId",
+            "imageReference",
+            "status",
+            "health"
+          ],
+          "properties": {
+            "containerId": { "$ref": "#/$defs/nullableString" },
+            "imageId": { "$ref": "#/$defs/nullableString" },
+            "imageReference": { "$ref": "#/$defs/nullableString" },
+            "status": { "$ref": "#/$defs/nullableString" },
+            "health": { "$ref": "#/$defs/nullableString" }
+          }
+        }
+      ]
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "baseSha",
+        "headSha",
+        "diffSha256",
+        "changedPathsSha256",
+        "baseSourceTreeSha256"
+      ],
+      "properties": {
+        "caseId": { "type": "string", "minLength": 1 },
+        "baseSha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "headSha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "diffSha256": { "$ref": "#/$defs/digest" },
+        "changedPathsSha256": { "$ref": "#/$defs/digest" },
+        "baseSourceTreeSha256": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "branch",
+        "commit",
+        "receiptDigest",
+        "pointCount",
+        "generationMemberCount",
+        "generationMembersSha256",
+        "generationManifestSha256",
+        "sourceTreeSha256",
+        "repositoryFactsSha256"
+      ],
+      "properties": {
+        "caseId": { "type": "string", "minLength": 1 },
+        "branch": { "type": "string", "minLength": 1 },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "receiptDigest": { "$ref": "#/$defs/digest" },
+        "pointCount": { "type": "integer", "minimum": 1 },
+        "generationMemberCount": { "type": "integer", "minimum": 1 },
+        "generationMembersSha256": { "$ref": "#/$defs/digest" },
+        "generationManifestSha256": { "$ref": "#/$defs/digest" },
+        "sourceTreeSha256": { "$ref": "#/$defs/digest" },
+        "repositoryFactsSha256": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "requiredForRun",
+        "requiredForPaper",
+        "status",
+        "failures"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "requiredForRun": { "type": "boolean" },
+        "requiredForPaper": { "type": "boolean" },
+        "status": {
+          "enum": ["passed", "failed", "blocked"]
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "detail"],
+            "properties": {
+              "code": { "type": "string", "minLength": 1 },
+              "detail": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

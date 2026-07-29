@@ -114,38 +114,36 @@ class BranchManager:
         
         offset = None
         total_yielded = 0
-        
-        try:
-            while True:
-                results = self.client.scroll(
-                    collection_name=collection_name,
-                    limit=batch_size,
-                    offset=offset,
-                    scroll_filter=Filter(
-                        must_not=[
-                            FieldCondition(
-                                key="branch",
-                                match=MatchValue(value=exclude_branch)
-                            )
-                        ]
-                    ),
-                    with_payload=True,
-                    with_vectors=True
-                )
-                points, next_offset = results
-                
-                if points:
-                    total_yielded += len(points)
-                    yield points
-                
-                if next_offset is None or len(points) < batch_size:
-                    break
-                offset = next_offset
-            
-            logger.info(f"Streamed {total_yielded} points from other branches")
-        except Exception as e:
-            logger.warning(f"Could not read existing points: {e}")
-            return
+
+        while True:
+            points, next_offset = self.client.scroll(
+                collection_name=collection_name,
+                limit=batch_size,
+                offset=offset,
+                scroll_filter=Filter(
+                    must_not=[
+                        FieldCondition(
+                            key="branch",
+                            match=MatchValue(value=exclude_branch)
+                        )
+                    ]
+                ),
+                with_payload=True,
+                with_vectors=True
+            )
+
+            if points:
+                total_yielded += len(points)
+                yield points
+
+            # Qdrant's continuation token is authoritative. A filtered or
+            # sharded page may legitimately contain fewer points than the
+            # requested limit while still carrying a next offset.
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        logger.info(f"Streamed {total_yielded} points from other branches")
     
     def stream_copy_points_to_collection(
         self,
@@ -182,17 +180,17 @@ class BranchManager:
                 elif isinstance(vectors_config, dict) and '' in vectors_config:
                     target_dim = vectors_config[''].size
             
-            if source_dim and target_dim and source_dim != target_dim:
-                logger.warning(
-                    f"Skipping branch preservation: dimension mismatch "
-                    f"(source: {source_dim}, target: {target_dim}). "
-                    f"Re-embedding required for all branches."
-                )
-                return 0
-                
         except Exception as e:
-            logger.warning(f"Could not verify collection dimensions: {e}")
-            # Continue anyway - will fail at upsert if dimensions don't match
+            raise RuntimeError(
+                "Cannot verify collection dimensions before preserving "
+                "indexed branches"
+            ) from e
+        if source_dim and target_dim and source_dim != target_dim:
+            raise RuntimeError(
+                f"Cannot preserve indexed branches: dimension mismatch "
+                f"(source: {source_dim}, target: {target_dim}). "
+                f"Re-embedding required for all branches."
+            )
         total_copied = 0
         
         for batch in self.preserve_other_branch_points(source_collection, exclude_branch, batch_size):

@@ -38,6 +38,21 @@ def select_review_evidence_diff(request: ReviewRequestDto) -> Optional[str]:
     return request.rawDiff
 
 
+def allow_unbound_global_rag_fallback(request: ReviewRequestDto) -> bool:
+    """Do not race an unsealed query against an exact PR review snapshot."""
+    return not (
+        isinstance(request.pullRequestId, int)
+        and request.pullRequestId > 0
+        and isinstance(request.baseCommitHash, str)
+        and bool(request.baseCommitHash.strip())
+        and isinstance(
+            request.currentCommitHash or request.commitHash,
+            str,
+        )
+        and bool((request.currentCommitHash or request.commitHash).strip())
+    )
+
+
 class ReviewService:
     """Service class for handling code review requests with streaming support."""
     
@@ -108,6 +123,12 @@ class ReviewService:
                     response,
                     failed=review_response_indicates_failure(response),
                 )
+                if event_callback is not None:
+                    event_callback({
+                        "type": "status",
+                        "state": "review_quality_capture_completed",
+                        "qualityCapture": quality_capture.receipt(),
+                    })
             return response
 
     async def _process_prompt_dry_run(
@@ -366,13 +387,25 @@ class ReviewService:
                 # task is only awaited if a batch cannot obtain per-batch
                 # context. Branch reconciliation does not need it.
                 request_rag_client = self._rag_client_for_request(request)
-                if needs_multistage_review and request_rag_client is not None:
+                if (
+                    needs_multistage_review
+                    and request_rag_client is not None
+                    and allow_unbound_global_rag_fallback(request)
+                ):
                     rag_context_task = asyncio.create_task(
                         self._fetch_rag_context(
                             request,
                             event_callback,
                             llm_reranker=llm_reranker,
                         )
+                    )
+                elif (
+                    needs_multistage_review
+                    and request_rag_client is not None
+                ):
+                    logger.info(
+                        "Global RAG fallback disabled for exact PR review; "
+                        "Stage 1 will use the sealed per-batch retrieval path"
                     )
 
                 self._emit_event(event_callback, {

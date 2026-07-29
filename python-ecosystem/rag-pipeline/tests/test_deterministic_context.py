@@ -308,6 +308,74 @@ class TestQueryChangedFile:
         assert len(result) == 1
         assert result[0]["text"] == "target"
 
+    def test_single_branch_pr_change_prefers_overlay_over_stale_base(self):
+        svc = _build_service()
+        overlay = _make_point({
+            "text": "post-change",
+            "path": "src/Foo.php",
+            "branch": "main",
+            "pr": True,
+            "pr_number": 42,
+        }, "overlay")
+        stale_base = _make_point({
+            "text": "pre-change",
+            "path": "src/Foo.php",
+            "branch": "main",
+        }, "base")
+        svc.qdrant_client.scroll.return_value = (
+            [stale_base, overlay],
+            None,
+        )
+
+        result = svc._query_changed_file(
+            "coll",
+            _branch_filter(),
+            "src/Foo.php",
+            10,
+            ["main"],
+            "main",
+            set(),
+            set(),
+            {"src/Foo.php"},
+            set(),
+            set(),
+            set(),
+            set(),
+            set(),
+            [],
+        )
+
+        assert [chunk["text"] for chunk in result] == ["post-change"]
+
+    def test_deleted_pr_path_never_falls_back_to_stale_base(self):
+        svc = _build_service()
+        stale_base = _make_point({
+            "text": "deleted pre-change source",
+            "path": "src/Deleted.php",
+            "branch": "main",
+        }, "base")
+        svc.qdrant_client.scroll.return_value = ([stale_base], None)
+
+        result = svc._query_changed_file(
+            "coll",
+            _branch_filter(),
+            "src/Deleted.php",
+            10,
+            ["main"],
+            "main",
+            set(),
+            set(),
+            {"src/Deleted.php"},
+            set(),
+            set(),
+            set(),
+            set(),
+            set(),
+            [],
+        )
+
+        assert result == []
+
     def test_imports_parsing_multi_segment(self):
         svc = _build_service()
 

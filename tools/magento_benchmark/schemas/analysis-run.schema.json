@@ -1,0 +1,1254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "analysis-run.schema.json",
+  "title": "CodeCrow Magento 2 analysis run",
+  "description": "Final run.json artifact emitted after CodeCrow analysis. An interrupted in-progress manifest may not yet satisfy this final-artifact schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "runId",
+    "startedAt",
+    "completedAt",
+    "corpusId",
+    "corpusDigest",
+    "executionCorpusDigest",
+    "executionCorpusArtifact",
+    "analysisModel",
+    "analysisProvider",
+    "analysisModelRoles",
+    "analysisConfig",
+    "analysisConfigDigest",
+    "replayLockDigest",
+    "replayLockArtifact",
+    "replayAttestationDigest",
+    "replayAttestationArtifact",
+    "runtimeProvenance",
+    "selectedCaseIds",
+    "transport",
+    "findingSemantics",
+    "attemptPolicy",
+    "attemptLedger",
+    "cases",
+    "indexReceiptsBefore",
+    "indexReceiptsAfter",
+    "status",
+    "runDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-analysis-run"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "corpusId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "corpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "executionCorpusDigest": {
+      "$ref": "#/$defs/sha256",
+      "description": "Digest of the label-free execution corpus used by the blinded H operator."
+    },
+    "executionCorpusArtifact": {
+      "const": "analysis-execution-corpus.json",
+      "description": "Run-relative copy of the exact label-free execution corpus."
+    },
+    "analysisModel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "analysisProvider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "analysisModelRoles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewPipeline",
+        "reviewPipelineRequested",
+        "reviewPipelineExpectedResponse",
+        "reviewPipelineProviderReported",
+        "providerReportedByStage"
+      ],
+      "properties": {
+        "reviewPipeline": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewPipelineRequested": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewPipelineExpectedResponse": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewPipelineProviderReported": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "providerReportedByStage": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "analysisConfig": {
+      "type": "object",
+      "description": "Recursively secret-redacted public analysis configuration."
+    },
+    "analysisConfigDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "replayLockDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "replayLockArtifact": {
+      "const": "replay-lock.json",
+      "description": "Run-relative copy of the exact validated replay lock."
+    },
+    "replayAttestationDigest": {
+      "description": "Digest of the optional live GitHub replay attestation. Frozen paper runs require a SHA-256 value; offline diagnostic runs may use null.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "replayAttestationArtifact": {
+      "description": "Run-relative copy of the validated replay attestation. It is required by paper-run semantics and null for unattested diagnostics.",
+      "oneOf": [
+        {
+          "const": "replay-attestation.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "runtimeProvenance": {
+      "$ref": "#/$defs/runtimeProvenance"
+    },
+    "transport": {
+      "enum": [
+        "redis",
+        "http"
+      ]
+    },
+    "selectedCaseIds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "findingSemantics": {
+      "const": "java-finalized-transient-first-iteration"
+    },
+    "attemptPolicy": {
+      "$ref": "#/$defs/attemptPolicy"
+    },
+    "attemptLedger": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/attempt"
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    },
+    "indexReceiptsBefore": {
+      "$ref": "#/$defs/receiptMap"
+    },
+    "indexReceiptsAfter": {
+      "$ref": "#/$defs/receiptMap"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial"
+      ]
+    },
+    "runDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "x-codecrow-semantic-gates": {
+    "paperRun": "A paper run should have status=completed, all intended cases present and completed, a bound live replay attestation, immutable inference-orchestrator/RAG/Java-finalizer container provenance required and available, and identical sealed exact-revision receipts before and after. The runner enforces replay-attestation binding, receipt equality, corpus/diff identity, Java product-finalization state, and sealed-generation identity; coverage is evaluated downstream."
+  },
+  "$defs": {
+    "sha1": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "modelCallEvidence": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "receipt",
+            "artifact",
+            "artifactDigest"
+          ],
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/qualityCaptureReceipt"
+            },
+            "artifact": {
+              "type": "string",
+              "pattern": "^raw/attempts/attempt-[0-9a-f]{32}-quality-capture\\.json$"
+            },
+            "artifactDigest": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      ]
+    },
+    "qualityCaptureReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "status",
+        "artifactContainerPath",
+        "captureDigest",
+        "provider",
+        "requestedModel",
+        "providerReportedModels",
+        "providerModelEvidenceComplete",
+        "modelBoundaryInvocations",
+        "providerCalls",
+        "calls",
+        "receiptDigest"
+      ],
+      "properties": {
+        "kind": {
+          "const": "review-quality-capture-receipt"
+        },
+        "status": {
+          "const": "completed"
+        },
+        "artifactContainerPath": {
+          "type": "string",
+          "pattern": "^/.+/project-[1-9][0-9]*-review-([1-9][0-9]*|branch)-[0-9a-f]{32}\\.json$"
+        },
+        "captureDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestedModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerReportedModels": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "providerModelEvidenceComplete": {
+          "const": true
+        },
+        "modelBoundaryInvocations": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "providerCalls": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "calls": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/qualityCaptureCall"
+          }
+        },
+        "receiptDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "qualityCaptureCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "stage",
+        "status",
+        "providerCallCount",
+        "providerReportedModels",
+        "promptDigest",
+        "responseDigest"
+      ],
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "failed"
+          ]
+        },
+        "providerCallCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "providerReportedModels": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "promptDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "responseDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "runtimeProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "analysis",
+        "rag",
+        "finalizer",
+        "required"
+      ],
+      "properties": {
+        "analysis": {
+          "description": "The codecrow-inference-orchestrator analysis engine container identity.",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/container"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rag": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/container"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finalizer": {
+          "description": "The codecrow-web-application Java product-finalizer container identity.",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/container"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "containerId",
+        "imageId",
+        "imageReference"
+      ],
+      "properties": {
+        "containerId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "imageId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "imageReference": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "receiptMap": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/receipt"
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "required": [
+        "branch",
+        "commit"
+      ],
+      "properties": {
+        "workspace": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "$ref": "#/$defs/sha1"
+        },
+        "point_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "generation_schema": {
+          "const": "codecrow.repository-index-generation"
+        },
+        "generation_member_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "generation_members_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "generation_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_tree_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "index_include_patterns": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "index_exclude_patterns": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "index_selection_policy_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "repository_revision": {
+          "$ref": "#/$defs/sha1"
+        },
+        "repository_facts_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "plugin_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "plugin_fingerprint": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "plugin_descriptor_fingerprint": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "plugin_implementation_fingerprint": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "index_representation_fingerprint": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "mode": {
+          "const": "rag-disabled"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "mode"
+            ]
+          },
+          "required": [
+            "workspace",
+            "project",
+            "point_count",
+            "generation_schema",
+            "generation_member_count",
+            "generation_members_sha256",
+            "generation_manifest_sha256",
+            "source_tree_sha256",
+            "index_include_patterns",
+            "index_exclude_patterns",
+            "index_selection_policy_sha256",
+            "repository_revision",
+            "repository_facts_sha256",
+            "plugin_ids",
+            "plugin_fingerprint",
+            "plugin_descriptor_fingerprint",
+            "plugin_implementation_fingerprint",
+            "index_representation_fingerprint"
+          ]
+        }
+      ],
+      "additionalProperties": false
+    },
+    "attemptPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxAttemptsPerCase",
+        "attemptsPerInvocation",
+        "retryTrigger",
+        "exhaustedCaseStatus"
+      ],
+      "properties": {
+        "maxAttemptsPerCase": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "attemptsPerInvocation": {
+          "const": 1
+        },
+        "retryTrigger": {
+          "const": "explicit-resume"
+        },
+        "exhaustedCaseStatus": {
+          "const": "failed"
+        }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attemptId",
+        "caseId",
+        "attemptNumber",
+        "jobId",
+        "status",
+        "startedAt",
+        "completedAt",
+        "durationSeconds",
+        "requestDigest",
+        "requestControlDigest",
+        "startArtifact",
+        "startArtifactDigest",
+        "resultArtifact",
+        "resultArtifactDigest",
+        "modelCallEvidence",
+        "error",
+        "stoppingReason",
+        "retryEligible"
+      ],
+      "properties": {
+        "attemptId": {
+          "type": "string",
+          "pattern": "^attempt-[0-9a-f]{32}$"
+        },
+        "caseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attemptNumber": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "jobId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "failed"
+          ]
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "durationSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "requestDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestControlDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startArtifact": {
+          "type": "string",
+          "pattern": "^raw/attempts/attempt-[0-9a-f]{32}-start\\.json$"
+        },
+        "startArtifactDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resultArtifact": {
+          "type": "string",
+          "pattern": "^raw/attempts/attempt-[0-9a-f]{32}-result\\.json$"
+        },
+        "resultArtifactDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "modelCallEvidence": {
+          "$ref": "#/$defs/modelCallEvidence"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stoppingReason": {
+          "enum": [
+            "case_completed",
+            "explicit_resume_required",
+            "attempt_limit_reached"
+          ]
+        },
+        "retryEligible": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "type": "null"
+              },
+              "stoppingReason": {
+                "const": "case_completed"
+              },
+              "retryEligible": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "jobId",
+        "attemptId",
+        "attemptNumber",
+        "attemptCount",
+        "maxAttempts",
+        "sizeBand",
+        "partition",
+        "status",
+        "startedAt",
+        "completedAt",
+        "durationSeconds",
+        "requestDigest",
+        "requestControlDigest",
+        "responseDigest",
+        "rawResponse",
+        "analysisState",
+        "retrievalEvidence",
+        "modelCallEvidence",
+        "productFinalization",
+        "findings",
+        "error",
+        "indexReceipt",
+        "retryEligible",
+        "stoppingReason"
+      ],
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "jobId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attemptId": {
+          "type": "string",
+          "pattern": "^attempt-[0-9a-f]{32}$"
+        },
+        "attemptNumber": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "attemptCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "sizeBand": {
+          "enum": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        "partition": {
+          "enum": [
+            "development",
+            "sealed"
+          ]
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "failed"
+          ]
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "durationSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "requestDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestControlDigest": {
+          "description": "Digest of the exact redacted analysis request with only aiModel normalized for controlled model comparisons.",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "responseDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rawResponse": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "analysisState": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retrievalEvidence": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/retrievalEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modelCallEvidence": {
+          "$ref": "#/$defs/modelCallEvidence"
+        },
+        "productFinalization": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/productFinalization"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "indexReceipt": {
+          "$ref": "#/$defs/receipt"
+        },
+        "retryEligible": {
+          "type": "boolean"
+        },
+        "stoppingReason": {
+          "enum": [
+            "case_completed",
+            "explicit_resume_required",
+            "attempt_limit_reached"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "completed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "requestDigest": {
+                "$ref": "#/$defs/sha256"
+              },
+              "responseDigest": {
+                "$ref": "#/$defs/sha256"
+              },
+              "rawResponse": {
+                "type": "string",
+                "minLength": 1
+              },
+              "productFinalization": {
+                "$ref": "#/$defs/productFinalization"
+              },
+              "error": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "retrievalEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "reviewUnits",
+        "retrieval",
+        "revisionBinding",
+        "evidenceSha256"
+      ],
+      "properties": {
+        "state": {
+          "const": "review_evidence_completed"
+        },
+        "reviewUnits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "registered",
+            "completed"
+          ],
+          "properties": {
+            "registered": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "completed": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "retrieval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "deterministicStates",
+            "semanticFailures",
+            "semanticDisabled",
+            "exactEvidenceIds"
+          ],
+          "properties": {
+            "deterministicStates": {
+              "type": "array",
+              "items": {
+                "const": "complete"
+              }
+            },
+            "semanticFailures": {
+              "const": 0
+            },
+            "semanticDisabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "exactEvidenceIds": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "revisionBinding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "prIndexed",
+            "pullRequestId",
+            "targetBranch",
+            "sourceRevision",
+            "baseRevision",
+            "baseGenerationManifestSha256",
+            "prGenerationFingerprint",
+            "prOverlayGenerationManifestSha256",
+            "basePluginFingerprint",
+            "basePluginDescriptorFingerprint",
+            "basePluginImplementationFingerprint",
+            "baseIndexRepresentationFingerprint"
+          ],
+          "properties": {
+            "prIndexed": {
+              "const": true
+            },
+            "pullRequestId": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "targetBranch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sourceRevision": {
+              "$ref": "#/$defs/sha1"
+            },
+            "baseRevision": {
+              "$ref": "#/$defs/sha1"
+            },
+            "baseGenerationManifestSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "prGenerationFingerprint": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "prOverlayGenerationManifestSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "basePluginFingerprint": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "basePluginDescriptorFingerprint": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "basePluginImplementationFingerprint": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "baseIndexRepresentationFingerprint": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          }
+        },
+        "evidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "productFinalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "rawIssueCount",
+        "finalIssueCount",
+        "responseDigest",
+        "analysisDataValidated",
+        "persisted",
+        "published",
+        "previousIssueStateUsed"
+      ],
+      "properties": {
+        "kind": {
+          "const": "codecrow-isolated-analysis-finalization"
+        },
+        "rawIssueCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "finalIssueCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "responseDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "analysisDataValidated": {
+          "const": true
+        },
+        "persisted": {
+          "const": false
+        },
+        "published": {
+          "const": false
+        },
+        "previousIssueStateUsed": {
+          "const": false
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "findingId",
+        "path",
+        "line",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "suggestedFix",
+        "confidence",
+        "raw"
+      ],
+      "properties": {
+        "findingId": {
+          "type": "string",
+          "pattern": "^finding-[0-9]{4}$"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "suggestedFix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "string",
+            "null"
+          ]
+        },
+        "raw": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

@@ -338,6 +338,10 @@ class VcsRagIndexingServiceTest {
                     .path("request")
                     .path("cleanup_repo_path")
                     .asBoolean()).isTrue();
+            assertThat(new ObjectMapper().readTree(queuedPayload.getValue())
+                    .path("request")
+                    .path("source_tree_sha256")
+                    .asText()).matches("[0-9a-f]{64}");
             verify(queueService).setExpiry(startsWith("codecrow:analysis:events:"), anyLong());
 
             // Polling should be called

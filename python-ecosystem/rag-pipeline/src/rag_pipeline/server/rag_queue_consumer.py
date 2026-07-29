@@ -153,6 +153,7 @@ class RAGQueueConsumer:
                     project=request_dto.project,
                     branch=request_dto.branch,
                     commit=request_dto.commit,
+                    source_tree_sha256=request_dto.source_tree_sha256,
                     preserve_other_branches=request_dto.preserve_other_branches,
                     include_patterns=request_dto.include_patterns,
                     exclude_patterns=request_dto.exclude_patterns

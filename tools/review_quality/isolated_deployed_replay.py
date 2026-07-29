@@ -46,6 +46,9 @@ from codecrow_plugins.bootstrap import discover_builtin_plugins  # noqa: E402
 from model.dtos import ReviewRequestDto  # noqa: E402
 from model.enrichment import FileContentDto, PrEnrichmentDataDto  # noqa: E402
 from model.plugins import ProjectCapabilitiesDto  # noqa: E402
+from tools.source_tree_identity import (  # noqa: E402
+    compute_repository_source_tree_sha256,
+)
 
 from .prompt_dry_run_audit import audit_prompt_dry_run  # noqa: E402
 
@@ -91,6 +94,30 @@ _REPOSITORY_IDENTITY_FIELDS = frozenset({
     "repositorypath",
     "repository_path",
 })
+
+
+def build_repository_index_payload(
+    *,
+    repo_path: str,
+    source_tree: Path,
+    workspace: str,
+    project: str,
+    branch: str,
+    commit: str,
+) -> dict[str, Any]:
+    """Build the canonical attested full-index request shared by replay tools."""
+    return {
+        "repo_path": repo_path,
+        "workspace": workspace,
+        "project": project,
+        "branch": branch,
+        "commit": commit,
+        "source_tree_sha256": compute_repository_source_tree_sha256(
+            source_tree
+        ),
+        "preserve_other_branches": False,
+        "cleanup_repo_path": False,
+    }
 
 
 @contextmanager
@@ -1025,15 +1052,14 @@ def _run_isolated_replay_locked(args: argparse.Namespace) -> dict[str, Any]:
                 f"{args.rag_url}/index/repository",
                 method="POST",
                 secret=service_secret,
-                payload={
-                    "repo_path": rag_repo_path,
-                    "workspace": ISOLATED_WORKSPACE,
-                    "project": project_namespace,
-                    "branch": ISOLATED_BRANCH,
-                    "commit": repository.base_revision,
-                    "preserve_other_branches": False,
-                    "cleanup_repo_path": False,
-                },
+                payload=build_repository_index_payload(
+                    repo_path=rag_repo_path,
+                    source_tree=repository.base_tree,
+                    workspace=ISOLATED_WORKSPACE,
+                    project=project_namespace,
+                    branch=ISOLATED_BRANCH,
+                    commit=repository.base_revision,
+                ),
                 timeout=args.timeout,
             )
             if int(index_stats.get("document_count") or 0) < len(BASE_FILES):

@@ -171,6 +171,45 @@ async def test_cross_module_context_does_not_guess_main_without_target_branch():
     rag.search_for_duplicates.assert_not_awaited()
 
 
+@pytest.mark.asyncio(loop_scope="function")
+async def test_revision_bound_cross_module_transport_failure_is_propagated():
+    request = SimpleNamespace(
+        baseCommitHash="a" * 40,
+        ragBaseGenerationManifestSha256="b" * 64,
+        changedFiles=["src/service.py"],
+        prTitle="Change service",
+        projectWorkspace="ws",
+        projectNamespace="project",
+        get_rag_branch=lambda: "main",
+        get_rag_base_branch=lambda: "main",
+    )
+    rag = SimpleNamespace(
+        search_for_duplicates=AsyncMock(
+            side_effect=ConnectionError("transport unavailable")
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="required revision-bound cross-module context",
+    ):
+        await _fetch_cross_module_context(rag, request)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_cross_module_context_rejects_partial_generation_lease():
+    request = SimpleNamespace(
+        baseCommitHash="a" * 40,
+        ragBaseGenerationManifestSha256=None,
+    )
+    rag = SimpleNamespace(search_for_duplicates=AsyncMock())
+
+    with pytest.raises(RuntimeError, match="requires both"):
+        await _fetch_cross_module_context(rag, request)
+
+    rag.search_for_duplicates.assert_not_awaited()
+
+
 # ── _slim_issues_for_stage_2 ────────────────────────────────
 
 class TestSlimIssues:

@@ -16,12 +16,14 @@ from ..splitter import ASTCodeSplitter
 from ..loader import DocumentLoader
 from ..embedding_factory import create_embedding_model, get_embedding_model_info
 from ..index_representation import (
+    IndexCompatibilityError,
     branch_splitter_kwargs,
     index_representation_fingerprint,
 )
 from ..pr_overlay_representation import (
     pr_overlay_representation_fingerprint,
 )
+from ..repository_overlay import IncrementalIndexPreconditionError
 
 from .collection_manager import CollectionManager
 from .branch_manager import BranchManager
@@ -162,6 +164,7 @@ class RAGIndexManager:
         project: str,
         branch: str,
         commit: str,
+        source_tree_sha256: str,
         preserve_other_branches: bool = False,
         include_patterns: Optional[List[str]] = None,
         exclude_patterns: Optional[List[str]] = None
@@ -174,6 +177,7 @@ class RAGIndexManager:
             project=project,
             branch=branch,
             commit=commit,
+            source_tree_sha256=source_tree_sha256,
             alias_name=alias_name,
             preserve_other_branches=preserve_other_branches,
             include_patterns=include_patterns,
@@ -277,6 +281,89 @@ class RAGIndexManager:
                 return []
 
         return self._branch_manager.get_indexed_branches(collection_name)
+
+    def get_revision_preflight(
+        self,
+        workspace: str,
+        project: str,
+        branch: str,
+        commit: str,
+        *,
+        collection_target: Optional[str] = None,
+    ):
+        """Read and verify one immutable branch/commit index generation."""
+        requested_collection = (
+            collection_target
+            or self._get_project_collection_name(workspace, project)
+        )
+        collection_name = (
+            self._collection_manager.resolve_collection_target(
+                requested_collection
+            )
+        )
+        if collection_name is None:
+            return None
+        if (
+            collection_target is not None
+            and collection_name != collection_target
+        ):
+            raise IncrementalIndexPreconditionError(
+                "exact revision collection lease no longer resolves to its "
+                "bound concrete target"
+            )
+
+        from ..revision_preflight import read_repository_revision_preflight
+
+        result = read_repository_revision_preflight(
+            self.qdrant_client,
+            collection_name,
+            branch,
+            commit,
+        )
+        if result is None:
+            return None
+        if (
+            result.get("workspace") != workspace
+            or result.get("project") != project
+        ):
+            raise IncrementalIndexPreconditionError(
+                "exact revision generation coordinates do not match the "
+                "requested workspace/project; fully reindex the revision"
+            )
+        if (
+            result["index_representation_fingerprint"]
+            != self.index_representation_fingerprint
+        ):
+            raise IndexCompatibilityError(
+                f"revision '{branch}@{commit}' was indexed with a different "
+                "neutral RAG representation; fully reindex the revision"
+            )
+
+        if self.plugin_catalog is not None:
+            plugin_ids = tuple(result["plugin_ids"])
+            try:
+                expected_descriptor = (
+                    self.plugin_catalog.registry.fingerprint_for(plugin_ids)
+                )
+                expected_implementation = (
+                    self.plugin_catalog.implementation_fingerprint(plugin_ids)
+                )
+            except (KeyError, TypeError, ValueError) as exception:
+                raise IndexCompatibilityError(
+                    f"revision '{branch}@{commit}' references unavailable "
+                    "repository plugins; fully reindex the revision"
+                ) from exception
+            if (
+                result["plugin_descriptor_fingerprint"] != expected_descriptor
+                or result["plugin_implementation_fingerprint"]
+                != expected_implementation
+            ):
+                raise IndexCompatibilityError(
+                    f"revision '{branch}@{commit}' was indexed with different "
+                    "repository plugin content; fully reindex the revision"
+                )
+
+        return result
 
     # Index management
 

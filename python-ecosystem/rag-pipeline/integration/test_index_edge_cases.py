@@ -29,6 +29,7 @@ class TestIndexRepositoryEdgeCases:
                 "project": "proj1",
                 "branch": "main",
                 "commit": "abc",
+                "source_tree_sha256": "c" * 64,
             }, headers=auth_headers)
             assert resp.status_code == 400
         finally:
@@ -55,6 +56,7 @@ class TestIndexRepositoryEdgeCases:
                 "project": "proj1",
                 "branch": "main",
                 "commit": "abc",
+                "source_tree_sha256": "c" * 64,
             }, headers=auth_headers)
             assert resp.status_code == 500
         finally:
@@ -85,6 +87,7 @@ class TestIndexRepositoryEdgeCases:
                 "project": "p",
                 "branch": "main",
                 "commit": "sha1",
+                "source_tree_sha256": "c" * 64,
                 "include_patterns": ["*.py", "*.java"],
                 "exclude_patterns": ["**/node_modules/**"],
             }, headers=auth_headers)

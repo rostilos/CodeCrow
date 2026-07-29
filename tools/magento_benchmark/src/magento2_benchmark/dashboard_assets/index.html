@@ -1,0 +1,171 @@
+<!doctype html>
+<!-- Packaged with the benchmark so editable and wheel installs behave alike. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'"
+    >
+    <meta
+      name="description"
+      content="Explore CodeCrow Magento 2 benchmark measurements by analysis and judge configuration."
+    >
+    <title>CodeCrow Magento 2 benchmark</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to benchmark results</a>
+    <header class="site-header">
+      <div>
+        <p class="eyebrow">CodeCrow benchmark laboratory</p>
+        <h1>Magento 2 review benchmark</h1>
+        <p class="lede">
+          Auditable reference-set measurements across analysis and judge configurations.
+        </p>
+      </div>
+      <div class="provenance" id="provenance" aria-label="Artifact provenance"></div>
+    </header>
+
+    <main id="main-content">
+      <div id="load-status" class="load-status" role="status" aria-live="polite">
+        Loading benchmark data…
+      </div>
+
+      <section id="dashboard" hidden>
+        <section class="control-panel" aria-labelledby="configuration-heading">
+          <div>
+            <h2 id="configuration-heading">Configuration</h2>
+            <p>Choose the analysis and judge pair used in the detailed results.</p>
+          </div>
+          <label class="select-field" for="configuration-select">
+            Analysis / judge
+            <select id="configuration-select"></select>
+          </label>
+        </section>
+
+        <aside class="interpretation-note" aria-labelledby="interpretation-heading">
+          <h2 id="interpretation-heading">How to read “FP”</h2>
+          <p>
+            An unmatched CodeCrow finding is counted as a
+            <strong>reference-set false positive (FP)</strong>. That label means it did
+            not match a collected reviewer issue; it is not, by itself, proof that the
+            finding is an invalid defect. Novel-finding adjudication is shown separately
+            when available.
+          </p>
+          <p id="methodology-status" class="methodology-status"></p>
+          <ul id="methodology-limitations" class="methodology-limitations"></ul>
+        </aside>
+
+        <section aria-labelledby="overview-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Selected configuration</p>
+              <h2 id="overview-heading">Sealed confirmatory overview</h2>
+            </div>
+            <p id="selected-models" class="model-caption"></p>
+          </div>
+          <div id="metric-cards" class="metric-grid"></div>
+          <p id="counts-line" class="counts-line"></p>
+        </section>
+
+        <section aria-labelledby="comparison-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">All completed runs</p>
+              <h2 id="comparison-heading">Configuration comparison</h2>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <caption>
+                Sealed confirmatory micro measurements and evaluated-case coverage.
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Analysis model</th>
+                  <th scope="col">Judge model</th>
+                  <th scope="col">Coverage</th>
+                  <th scope="col">Precision</th>
+                  <th scope="col">Recall</th>
+                  <th scope="col">F1</th>
+                  <th scope="col">TP / FP / FN</th>
+                </tr>
+              </thead>
+              <tbody id="comparison-body"></tbody>
+            </table>
+          </div>
+          <div id="pairwise-section" class="pairwise" hidden>
+            <h3>Paired configuration deltas</h3>
+            <p>
+              Micro F1 deltas are paired over common scored cases in the sealed
+              partition. They do not, on their own, establish a performance improvement.
+            </p>
+            <div class="table-scroll">
+              <table>
+                <caption>Reported pairwise comparisons from the metrics artifact.</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Configuration A</th>
+                    <th scope="col">Configuration B</th>
+                    <th scope="col">Common cases</th>
+                    <th scope="col">Sealed micro F1 delta</th>
+                    <th scope="col">Interval</th>
+                  </tr>
+                </thead>
+                <tbody id="pairwise-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="size-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Pull-request scale</p>
+              <h2 id="size-heading">Measurements by size band</h2>
+            </div>
+          </div>
+          <div id="size-chart" class="band-chart"></div>
+        </section>
+
+        <section aria-labelledby="case-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Trace the assignment</p>
+              <h2 id="case-heading">Case drilldown</h2>
+            </div>
+            <label class="select-field case-select" for="case-select">
+              Benchmark case
+              <select id="case-select"></select>
+            </label>
+          </div>
+          <div id="case-summary" class="case-summary"></div>
+          <div class="issue-columns">
+            <section aria-labelledby="gold-heading">
+              <h3 id="gold-heading">Reviewer reference issues</h3>
+              <div id="gold-list" class="issue-list"></div>
+            </section>
+            <section aria-labelledby="candidate-heading">
+              <h3 id="candidate-heading">CodeCrow candidate findings</h3>
+              <div id="candidate-list" class="issue-list"></div>
+            </section>
+          </div>
+          <section id="assignment-section" class="assignment-section" aria-labelledby="assignment-heading">
+            <h3 id="assignment-heading">One-to-one assignments</h3>
+            <div id="assignment-list" class="assignment-list"></div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        This static view renders the attached metrics artifact. Recompute metrics at
+        the source when changing the corpus, analysis output, or judgment protocol.
+      </p>
+    </footer>
+  </body>
+</html>

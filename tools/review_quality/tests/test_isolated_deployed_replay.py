@@ -13,12 +13,16 @@ from tools.review_quality.isolated_deployed_replay import (
     ISOLATED_PROJECT_ID,
     audit_expected_context,
     build_review_request,
+    build_repository_index_payload,
     build_synthetic_repository,
     _copy_artifact_for_audit,
     _assert_no_connected_identity,
     _exclusive_isolated_state_lock,
     _qdrant_collections_for_project,
     _queue_review,
+)
+from tools.source_tree_identity import (
+    compute_repository_source_tree_sha256,
 )
 
 
@@ -48,6 +52,30 @@ def test_synthetic_repository_is_remote_free_and_immutable(tmp_path):
         "python",
         "typescript",
     ]
+
+
+def test_repository_index_payload_binds_the_canonical_source_tree(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "Service.php").write_text(
+        "<?php final class Service {}\n",
+        encoding="utf-8",
+    )
+
+    payload = build_repository_index_payload(
+        repo_path="/tmp/container-checkout",
+        source_tree=tmp_path,
+        workspace="workspace",
+        project="project",
+        branch="main",
+        commit="a" * 40,
+    )
+
+    assert payload["source_tree_sha256"] == (
+        compute_repository_source_tree_sha256(tmp_path)
+    )
+    assert len(payload["source_tree_sha256"]) == 64
+    assert payload["preserve_other_branches"] is False
+    assert payload["cleanup_repo_path"] is False
 
 
 def test_expected_context_audit_requires_one_owner_and_related_path():

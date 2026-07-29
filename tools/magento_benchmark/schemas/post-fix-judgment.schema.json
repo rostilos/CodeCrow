@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "post-fix-judgment.schema.json",
+  "title": "CodeCrow Magento 2 verified-F root-cause judgment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "judgmentId",
+    "createdAt",
+    "registrationDigest",
+    "sealLedgerDigest",
+    "unsealedAt",
+    "promptVersion",
+    "promptDigest",
+    "corpusId",
+    "corpusDigest",
+    "primaryAnalysisRunId",
+    "primaryAnalysisRunDigest",
+    "primaryJudgmentId",
+    "primaryJudgmentDigest",
+    "postFixAnalysisRunId",
+    "postFixAnalysisRunDigest",
+    "postFixReplayLockDigest",
+    "analysisModel",
+    "judgeModel",
+    "judgeExpectedResponseModel",
+    "judgeConfig",
+    "judgeConfigDigest",
+    "cases",
+    "judgmentDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-post-fix-judgment-run"
+    },
+    "judgmentId": {
+      "$ref": "#/$defs/safeId"
+    },
+    "createdAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "registrationDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "sealLedgerDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "unsealedAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "promptVersion": {
+      "const": "magento2-verified-f-root-cause-control-2026-07-29"
+    },
+    "promptDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "corpusId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "corpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "primaryAnalysisRunId": {
+      "$ref": "#/$defs/safeId"
+    },
+    "primaryAnalysisRunDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "primaryJudgmentId": {
+      "$ref": "#/$defs/safeId"
+    },
+    "primaryJudgmentDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "postFixAnalysisRunId": {
+      "$ref": "#/$defs/safeId"
+    },
+    "postFixAnalysisRunDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "postFixReplayLockDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "analysisModel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "judgeModel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "judgeExpectedResponseModel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "judgeConfig": {
+      "type": "object"
+    },
+    "judgeConfigDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 50,
+      "maxItems": 50,
+      "items": {
+        "type": "object"
+      }
+    },
+    "judgmentDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

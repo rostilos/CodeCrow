@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Dict, Any, List, Optional, Callable
 
 from model.dtos import ReviewRequestDto
@@ -76,6 +77,8 @@ from service.review.snapshot_identity import (
 )
 
 logger = logging.getLogger(__name__)
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+_SHA256_FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -140,6 +143,8 @@ def _review_log_id(request: ReviewRequestDto) -> str:
 def _emit_review_evidence_completed(
     callback: Optional[Callable[[Dict], None]],
     hunk_coverage: HunkCoverageLedger,
+    request: ReviewRequestDto,
+    pr_indexed: bool,
     review_units: Optional[Stage1ReviewUnitState] = None,
     rag_state: Optional[Stage1RagState] = None,
     candidate_ledger: Optional[CandidateEvidenceLedger] = None,
@@ -186,6 +191,34 @@ def _emit_review_evidence_completed(
             ),
             "exactEvidenceIds": len(
                 rag_state.exact_evidence_by_id if rag_state is not None else {}
+            ),
+        },
+        "revisionBinding": {
+            "prIndexed": pr_indexed,
+            "pullRequestId": request.pullRequestId,
+            "targetBranch": request.targetBranchName,
+            "sourceRevision": (
+                request.currentCommitHash
+                if request.currentCommitHash is not None
+                else request.commitHash
+            ),
+            "baseRevision": request.baseCommitHash,
+            "baseGenerationManifestSha256": (
+                request.ragBaseGenerationManifestSha256
+            ),
+            "prGenerationFingerprint": request.ragPrGenerationFingerprint,
+            "prOverlayGenerationManifestSha256": (
+                request.ragPrOverlayGenerationManifestSha256
+            ),
+            "basePluginFingerprint": request.ragBasePluginFingerprint,
+            "basePluginDescriptorFingerprint": (
+                request.ragBasePluginDescriptorFingerprint
+            ),
+            "basePluginImplementationFingerprint": (
+                request.ragBasePluginImplementationFingerprint
+            ),
+            "baseIndexRepresentationFingerprint": (
+                request.ragBaseIndexRepresentationFingerprint
             ),
         },
     })
@@ -238,7 +271,16 @@ class MultiStageReviewOrchestrator:
         evidence but is explicitly marked partial so RAG cannot parse or embed it
         as a complete repository artifact.
         """
+        self._pr_indexed = False
+        self._pr_number = None
         self._repository_review_groups = ()
+        request.ragBaseGenerationManifestSha256 = None
+        request.ragPrGenerationFingerprint = None
+        request.ragPrOverlayGenerationManifestSha256 = None
+        request.ragBasePluginFingerprint = None
+        request.ragBasePluginDescriptorFingerprint = None
+        request.ragBasePluginImplementationFingerprint = None
+        request.ragBaseIndexRepresentationFingerprint = None
         if not request.ragEnabled:
             logger.info("PR file indexing skipped because project RAG is disabled")
             return
@@ -366,6 +408,75 @@ class MultiStageReviewOrchestrator:
                 files=files
             )
             if result.get("status") in {"indexed", "reused"}:
+                base_generation_receipt = result.get(
+                    "base_generation_manifest_sha256"
+                )
+                pr_generation_fingerprint = result.get(
+                    "generation_fingerprint"
+                )
+                overlay_generation_manifest_sha256 = result.get(
+                    "overlay_generation_manifest_sha256"
+                )
+                base_plugin_fingerprint = result.get("plugin_fingerprint")
+                base_plugin_descriptor_fingerprint = result.get(
+                    "plugin_descriptor_fingerprint"
+                )
+                base_plugin_implementation_fingerprint = result.get(
+                    "plugin_implementation_fingerprint"
+                )
+                base_index_representation_fingerprint = result.get(
+                    "index_representation_fingerprint"
+                )
+                if (
+                    not isinstance(base_generation_receipt, str)
+                    or _SHA256_HEX.fullmatch(base_generation_receipt) is None
+                    or not isinstance(pr_generation_fingerprint, str)
+                    or _SHA256_FINGERPRINT.fullmatch(
+                        pr_generation_fingerprint
+                    )
+                    is None
+                    or not isinstance(
+                        overlay_generation_manifest_sha256,
+                        str,
+                    )
+                    or _SHA256_HEX.fullmatch(
+                        overlay_generation_manifest_sha256
+                    )
+                    is None
+                    or any(
+                        not isinstance(value, str)
+                        or _SHA256_FINGERPRINT.fullmatch(value) is None
+                        for value in (
+                            base_plugin_fingerprint,
+                            base_plugin_descriptor_fingerprint,
+                            base_plugin_implementation_fingerprint,
+                            base_index_representation_fingerprint,
+                        )
+                    )
+                ):
+                    raise PrIndexPreconditionError(
+                        "PR context precondition failed: RAG indexing did not "
+                        "return exact base and overlay generation receipts"
+                    )
+                request.ragBaseGenerationManifestSha256 = (
+                    base_generation_receipt
+                )
+                request.ragPrGenerationFingerprint = (
+                    pr_generation_fingerprint
+                )
+                request.ragPrOverlayGenerationManifestSha256 = (
+                    overlay_generation_manifest_sha256
+                )
+                request.ragBasePluginFingerprint = base_plugin_fingerprint
+                request.ragBasePluginDescriptorFingerprint = (
+                    base_plugin_descriptor_fingerprint
+                )
+                request.ragBasePluginImplementationFingerprint = (
+                    base_plugin_implementation_fingerprint
+                )
+                request.ragBaseIndexRepresentationFingerprint = (
+                    base_index_representation_fingerprint
+                )
                 apply_effective_project_capabilities(
                     request,
                     result.get("effective_project_capabilities"),
@@ -852,6 +963,8 @@ class MultiStageReviewOrchestrator:
                 _emit_review_evidence_completed(
                     self.event_callback,
                     hunk_coverage,
+                    request,
+                    self._pr_indexed,
                     candidate_ledger=candidate_ledger,
                 )
                 logger.info(
@@ -1269,6 +1382,8 @@ class MultiStageReviewOrchestrator:
             _emit_review_evidence_completed(
                 self.event_callback,
                 hunk_coverage,
+                request,
+                self._pr_indexed,
                 stage_1_review_unit_state,
                 stage_1_rag_state,
                 candidate_ledger,

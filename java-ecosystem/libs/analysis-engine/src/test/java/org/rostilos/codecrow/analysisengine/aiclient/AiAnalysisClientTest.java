@@ -651,6 +651,26 @@ class AiAnalysisClientTest {
                 }
 
                 @Test
+                @DisplayName("should reject a non-collection issues field")
+                void shouldRejectMalformedIssuesField() throws Exception {
+                        Map<String, Object> malformedResult = new HashMap<>();
+                        malformedResult.put("comment", "done");
+                        malformedResult.put("issues", "not-an-issue-collection");
+
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "final");
+                        finalEvent.put("result", malformedResult);
+
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        assertThatThrownBy(() -> client.performAnalysis(mockRequest))
+                                        .isInstanceOf(IOException.class)
+                                        .hasMessageContaining(
+                                                        "'issues' must be an array or object");
+                }
+
+                @Test
                 @DisplayName("should fail after worker inactivity")
                 void shouldThrowAfterWorkerInactivity() {
                         AiAnalysisClient shortInactivityClient = new AiAnalysisClient(

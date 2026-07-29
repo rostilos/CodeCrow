@@ -16,6 +16,7 @@ def _fingerprint(files, *, source="head", base="base", snapshots=()):
         base_branch="main",
         source_revision=source,
         base_revision=base,
+        base_generation_manifest_sha256="a" * 64,
         files=files,
         requested_plugin_ids=("php", "magento"),
         repository_plugin_ids=("php", "magento"),
@@ -83,6 +84,38 @@ def test_generation_identity_changes_with_content_completeness():
     assert _fingerprint((complete,)) != _fingerprint((partial,))
 
 
+def test_generation_identity_changes_with_base_generation_receipt():
+    file_info = SimpleNamespace(
+        path="src/service.py",
+        change_type="MODIFIED",
+        content="same bytes",
+    )
+    baseline = _fingerprint((file_info,))
+    changed = pr_overlay_generation_fingerprint(
+        workspace="workspace",
+        project="project",
+        pr_number=42,
+        branch="feature",
+        base_branch="main",
+        source_revision="head",
+        base_revision="base",
+        base_generation_manifest_sha256="b" * 64,
+        files=(file_info,),
+        requested_plugin_ids=("php", "magento"),
+        repository_plugin_ids=("php", "magento"),
+        request_plugin_fingerprint="sha256:request",
+        target_plugin_fingerprint="sha256:target",
+        capability_fingerprint="sha256:capabilities",
+        descriptor_fingerprint="sha256:descriptors",
+        implementation_fingerprint="sha256:implementation",
+        index_representation_fingerprint="sha256:representation",
+        pr_overlay_representation_fingerprint="sha256:overlay",
+        snapshots=(),
+    )
+
+    assert changed != baseline
+
+
 def test_generation_identity_changes_with_index_representation():
     file_info = SimpleNamespace(
         path="etc/di.xml",
@@ -98,6 +131,7 @@ def test_generation_identity_changes_with_index_representation():
         base_branch="main",
         source_revision="head",
         base_revision="base",
+        base_generation_manifest_sha256="a" * 64,
         files=(file_info,),
         requested_plugin_ids=("php", "magento"),
         repository_plugin_ids=("php", "magento"),
@@ -128,6 +162,7 @@ def test_generation_identity_changes_with_overlay_representation():
         base_branch="main",
         source_revision="head",
         base_revision="base",
+        base_generation_manifest_sha256="a" * 64,
         files=(file_info,),
         requested_plugin_ids=("php", "magento"),
         repository_plugin_ids=("php", "magento"),

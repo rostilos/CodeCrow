@@ -152,12 +152,32 @@ class TestPreserveOtherBranchPoints:
         batches = list(bm.preserve_other_branch_points("coll", "main"))
         assert batches == []
 
-    def test_error_handled(self):
+    def test_error_is_fail_closed(self):
         client = MagicMock()
         client.scroll.side_effect = RuntimeError("err")
         bm = BranchManager(client)
-        batches = list(bm.preserve_other_branch_points("coll", "main"))
-        assert batches == []
+        with pytest.raises(RuntimeError, match="err"):
+            list(bm.preserve_other_branch_points("coll", "main"))
+
+    def test_short_filtered_page_with_continuation_is_not_truncated(self):
+        client = MagicMock()
+        pt1 = _make_point("dev", point_id="p1")
+        pt2 = _make_point("dev", point_id="p2")
+        client.scroll.side_effect = [
+            ([pt1], "next"),
+            ([pt2], None),
+        ]
+
+        bm = BranchManager(client)
+        batches = list(
+            bm.preserve_other_branch_points(
+                "coll",
+                "main",
+                batch_size=10,
+            )
+        )
+
+        assert batches == [[pt1], [pt2]]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -183,7 +203,7 @@ class TestStreamCopyPointsToCollection:
         assert total == 1
         client.upsert.assert_called_once()
 
-    def test_dimension_mismatch_skips(self):
+    def test_dimension_mismatch_fails_closed(self):
         client = MagicMock()
 
         source_info = MagicMock()
@@ -193,19 +213,31 @@ class TestStreamCopyPointsToCollection:
         client.get_collection.side_effect = [source_info, target_info]
 
         bm = BranchManager(client)
-        total = bm.stream_copy_points_to_collection("src_coll", "tgt_coll", "main", 50)
-        assert total == 0
+        with pytest.raises(RuntimeError, match="dimension mismatch"):
+            bm.stream_copy_points_to_collection(
+                "src_coll",
+                "tgt_coll",
+                "main",
+                50,
+            )
         client.upsert.assert_not_called()
 
-    def test_get_collection_error_continues(self):
+    def test_get_collection_error_fails_closed(self):
         client = MagicMock()
         client.get_collection.side_effect = RuntimeError("err")
-        pt = _make_point("dev", point_id="p1")
-        client.scroll.return_value = ([pt], None)
 
         bm = BranchManager(client)
-        total = bm.stream_copy_points_to_collection("src_coll", "tgt_coll", "main", 50)
-        assert total == 1
+        with pytest.raises(
+            RuntimeError,
+            match="Cannot verify collection dimensions",
+        ):
+            bm.stream_copy_points_to_collection(
+                "src_coll",
+                "tgt_coll",
+                "main",
+                50,
+            )
+        client.scroll.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────

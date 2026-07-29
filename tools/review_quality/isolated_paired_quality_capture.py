@@ -45,6 +45,7 @@ from .isolated_deployed_replay import (
     _redis,
     _run,
     _wait_for_consumer,
+    build_repository_index_payload,
     build_java_review_request,
 )
 from .isolated_paired_capture_preflight import audit_paired_requests
@@ -752,15 +753,14 @@ def _run_capture_mode(
             rag_container,
             method="POST",
             path="/index/repository",
-            payload={
-                "repo_path": repository_path,
-                "workspace": ISOLATED_WORKSPACE,
-                "project": request.projectNamespace,
-                "branch": "main",
-                "commit": case.repository.base_revision,
-                "preserve_other_branches": False,
-                "cleanup_repo_path": False,
-            },
+            payload=build_repository_index_payload(
+                repo_path=repository_path,
+                source_tree=case.repository.base_tree,
+                workspace=ISOLATED_WORKSPACE,
+                project=request.projectNamespace,
+                branch="main",
+                commit=case.repository.base_revision,
+            ),
             timeout=args.timeout,
         )
         if int(index_result.get("document_count") or 0) < 1:

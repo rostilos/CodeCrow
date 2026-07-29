@@ -140,6 +140,20 @@ def test_manager_wiring_is_pr_overlay_only_and_source_sets_are_disjoint(tmp_path
     )
 
 
+def test_pr_overlay_identity_covers_seal_and_exact_retrieval_implementation():
+    assert {
+        "api/routers/query.py",
+        "core/pr_overlay_manifest.py",
+        "core/revision_binding.py",
+        "core/revision_preflight.py",
+        "services/base.py",
+        "services/deterministic_context.py",
+        "services/pr_context.py",
+        "services/query_service.py",
+        "services/semantic_search.py",
+    }.issubset(_PR_OVERLAY_SOURCE_PATHS)
+
+
 def test_branch_splitter_construction_is_part_of_runtime_identity():
     config = SimpleNamespace(chunk_size=8000, chunk_overlap=200)
 

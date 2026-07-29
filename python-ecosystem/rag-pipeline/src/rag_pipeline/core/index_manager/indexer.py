@@ -30,6 +30,11 @@ from ..index_representation import (
     index_representation_fingerprint,
     require_compatible_branch_representation,
 )
+from ..source_tree import (
+    read_repository_file_bytes,
+    require_repository_source_tree_unchanged,
+    verify_repository_source_tree,
+)
 from .collection_manager import CollectionManager
 from .branch_manager import BranchManager
 from .point_operations import PointOperations
@@ -444,12 +449,18 @@ class RepositoryIndexer:
         alias_name: str,
         preserve_other_branches: bool = False,
         include_patterns: Optional[List[str]] = None,
-        exclude_patterns: Optional[List[str]] = None
+        exclude_patterns: Optional[List[str]] = None,
+        source_tree_sha256: Optional[str] = None,
     ) -> IndexStats:
         """Index entire repository for a branch using atomic swap strategy."""
         logger.info(f"Indexing repository: {workspace}/{project}/{branch} from {repo_path}")
 
         repo_path_obj = Path(repo_path)
+        source_tree = verify_repository_source_tree(
+            repo_path_obj,
+            commit,
+            source_tree_sha256,
+        )
         pending_collection_name = self.collection_manager.create_pending_collection(alias_name)
 
         # Check existing collection and preserve other branch data using streaming
@@ -475,8 +486,18 @@ class RepositoryIndexer:
 
         # Get file list
         repository_file_list = list(
-            self.loader.iter_repository_files(repo_path_obj, include_patterns, exclude_patterns)
+            self.loader.iter_repository_files(
+                repo_path_obj,
+                include_patterns,
+                exclude_patterns,
+                expected_file_sha256=source_tree.file_sha256_by_path,
+            )
         )
+        index_include_patterns = sorted(set(include_patterns or ()))
+        index_exclude_patterns = sorted(set([
+            *getattr(self.config, "excluded_patterns", ()),
+            *(exclude_patterns or ()),
+        ]))
         logger.info(
             "Found %s repository files before plugin file policy for branch '%s'",
             len(repository_file_list),
@@ -504,6 +525,27 @@ class RepositoryIndexer:
                 repository_file_list,
                 self.plugin_catalog.registry,
             )
+            for marker_path, marker_content in (
+                repository_facts.marker_contents.items()
+            ):
+                expected_digest = source_tree.file_sha256_by_path.get(
+                    marker_path
+                )
+                if expected_digest is None:
+                    raise RuntimeError(
+                        "repository plugin marker was not present in the "
+                        f"attested regular-file tree: {marker_path}"
+                    )
+                expected_content = read_repository_file_bytes(
+                    repo_path_obj,
+                    marker_path,
+                    expected_sha256=expected_digest,
+                ).decode("utf-8")
+                if marker_content != expected_content:
+                    raise RuntimeError(
+                        "repository plugin marker changed while repository "
+                        f"facts were built: {marker_path}"
+                    )
             capabilities = self.plugin_selector.select(repository_facts)
             implementation_fingerprint = (
                 self.plugin_catalog.implementation_fingerprint(
@@ -578,6 +620,7 @@ class RepositoryIndexer:
         successful_chunks = 0
         failed_chunks = 0
         preserved_point_count = 0
+        generation_members = []
 
         try:
             # A main-only project must not carry stale non-target branches into
@@ -610,6 +653,7 @@ class RepositoryIndexer:
                 documents = self.loader.load_file_batch(
                     file_batch, repo_path_obj, workspace, project, branch, commit,
                     strict=True,
+                    expected_file_sha256=source_tree.file_sha256_by_path,
                 )
                 if not documents:
                     continue
@@ -660,7 +704,12 @@ class RepositoryIndexer:
                 
                 # Process and upsert
                 success, failed = self.point_ops.process_and_upsert_chunks(
-                    chunks, pending_collection_name, workspace, project, branch
+                    chunks,
+                    pending_collection_name,
+                    workspace,
+                    project,
+                    branch,
+                    generation_members=generation_members,
                 )
                 successful_chunks += success
                 failed_chunks += failed
@@ -759,6 +808,7 @@ class RepositoryIndexer:
                     workspace,
                     project,
                     branch,
+                    generation_members=generation_members,
                 )
                 successful_chunks += success
                 failed_chunks += failed
@@ -787,10 +837,39 @@ class RepositoryIndexer:
                     f"expected={chunk_count}, successful={successful_chunks}, failed={failed_chunks}"
                 )
 
+            require_repository_source_tree_unchanged(
+                repo_path_obj,
+                source_tree,
+            )
+            generation_manifest = (
+                self.point_ops.write_repository_generation_manifest(
+                    pending_collection_name,
+                    workspace,
+                    project,
+                    branch,
+                    commit,
+                    expected_member_count=successful_chunks,
+                    expected_members=generation_members,
+                    source_tree_sha256=source_tree.tree_sha256,
+                    index_include_patterns=index_include_patterns,
+                    index_exclude_patterns=index_exclude_patterns,
+                    identity_metadata=_plugin_identity_metadata(
+                        capabilities,
+                        implementation_fingerprint,
+                        self.representation_fingerprint,
+                    ),
+                )
+            )
+            logger.info(
+                "Sealed repository generation with %s members (%s)",
+                generation_manifest["generation_member_count"],
+                generation_manifest["generation_members_sha256"],
+            )
+
             # Verify and perform atomic swap
             pending_info = self.point_ops.client.get_collection(pending_collection_name)
             actual_point_count = int(pending_info.points_count or 0)
-            expected_point_count = preserved_point_count + successful_chunks
+            expected_point_count = preserved_point_count + successful_chunks + 1
             if actual_point_count == 0:
                 raise RuntimeError("Pending collection is empty after indexing")
             if actual_point_count != expected_point_count:
@@ -805,10 +884,11 @@ class RepositoryIndexer:
                     branch,
                 )
             )
-            if target_branch_point_count != successful_chunks:
+            expected_target_branch_points = successful_chunks + 1
+            if target_branch_point_count != expected_target_branch_points:
                 raise RuntimeError(
                     "Pending target-branch point count is incomplete: "
-                    f"branch={branch}, expected={successful_chunks}, "
+                    f"branch={branch}, expected={expected_target_branch_points}, "
                     f"actual={target_branch_point_count}"
                 )
 
@@ -1039,6 +1119,118 @@ class FileOperations:
             raise
         return successful
 
+    def replace_pr_overlay_generation(
+        self,
+        nodes,
+        old_records,
+        collection_name: str,
+        workspace: str,
+        project: str,
+        point_id_branch: str,
+        *,
+        pr_number: int,
+        branch: str,
+        base_branch: str,
+        source_revision: str,
+        base_revision: str,
+        base_generation_manifest_sha256: str,
+        generation_fingerprint: str,
+        overlay_representation_fingerprint: str,
+        identity_metadata,
+    ) -> tuple[int, dict[str, object]]:
+        """Replace one PR overlay and seal its exact persisted membership."""
+        from ..pr_overlay_manifest import build_pr_overlay_manifest_node
+
+        old_points = {str(record.id): record for record in old_records}
+        chunk_data = self.point_ops.prepare_chunks_for_embedding(
+            nodes,
+            workspace,
+            project,
+            point_id_branch,
+        )
+        new_points = self.point_ops.embed_and_create_points(chunk_data)
+        new_ids = {str(point.id) for point in new_points}
+        old_ids = set(old_points)
+        new_only_ids = [
+            point.id for point in new_points if str(point.id) not in old_ids
+        ]
+
+        try:
+            successful, failed = self.point_ops.upsert_points(
+                collection_name,
+                new_points,
+            )
+            if failed or successful != len(new_points):
+                raise RuntimeError(
+                    "PR overlay write was partial: "
+                    f"expected={len(new_points)}, successful={successful}, "
+                    f"failed={failed}"
+                )
+            members = self.point_ops._seal_persisted_point_digests(
+                collection_name,
+                new_points,
+            )
+            manifest_node, receipt = build_pr_overlay_manifest_node(
+                workspace=workspace,
+                project=project,
+                pr_number=pr_number,
+                branch=branch,
+                base_branch=base_branch,
+                source_revision=source_revision,
+                base_revision=base_revision,
+                base_generation_manifest_sha256=(
+                    base_generation_manifest_sha256
+                ),
+                generation_fingerprint=generation_fingerprint,
+                overlay_representation_fingerprint=(
+                    overlay_representation_fingerprint
+                ),
+                members=members,
+                identity_metadata=identity_metadata,
+            )
+            manifest_data = self.point_ops.prepare_chunks_for_embedding(
+                [manifest_node],
+                workspace,
+                project,
+                point_id_branch,
+            )
+            manifest_points = self.point_ops.embed_and_create_points(
+                manifest_data
+            )
+            if len(manifest_points) != 1:
+                raise RuntimeError(
+                    "PR overlay manifest preparation was incomplete"
+                )
+            manifest_point = manifest_points[0]
+            if str(manifest_point.id) not in old_ids:
+                new_only_ids.append(manifest_point.id)
+            new_ids.add(str(manifest_point.id))
+            manifest_successful, manifest_failed = (
+                self.point_ops.upsert_points(
+                    collection_name,
+                    manifest_points,
+                )
+            )
+            if manifest_failed or manifest_successful != 1:
+                raise RuntimeError(
+                    "PR overlay manifest write was incomplete"
+                )
+
+            stale_ids = [
+                record.id
+                for point_id, record in old_points.items()
+                if point_id not in new_ids
+            ]
+            self._delete_point_ids(collection_name, stale_ids)
+        except Exception:
+            self._restore_old_points(
+                collection_name,
+                old_points,
+                new_only_ids,
+            )
+            raise
+        return len(new_points), receipt
+
     def _apply_change_set(
         self,
         updated_file_paths: List[str],
@@ -1080,6 +1272,56 @@ class FileOperations:
             return self.stats_manager.get_project_stats(
                 workspace, project, collection_name
             )
+        requested_collection_name = collection_name
+        bound_collection_name = (
+            self.collection_manager.resolve_collection_target(
+                requested_collection_name
+            )
+        )
+        if bound_collection_name is None:
+            self.collection_manager.ensure_collection_exists(
+                requested_collection_name
+            )
+            bound_collection_name = (
+                self.collection_manager.resolve_collection_target(
+                    requested_collection_name
+                )
+            )
+        if bound_collection_name is None:
+            raise IncrementalIndexPreconditionError(
+                "incremental mutation could not bind the requested collection "
+                "to one concrete Qdrant target"
+            )
+
+        def require_unsealed_bound_target() -> None:
+            sealed_points, _ = self.client.scroll(
+                collection_name=bound_collection_name,
+                scroll_filter=Filter(must=[
+                    FieldCondition(
+                        key="branch",
+                        match=MatchValue(value=branch),
+                    ),
+                    FieldCondition(
+                        key="repository_generation_manifest",
+                        match=MatchValue(value=True),
+                    ),
+                ]),
+                limit=1,
+                with_payload=False,
+                with_vectors=False,
+            )
+            if sealed_points:
+                raise IncrementalIndexPreconditionError(
+                    f"indexed branch '{branch}' is a sealed repository generation; "
+                    "incremental mutation is disabled because it cannot preserve the "
+                    "content-addressed generation manifest. Fully reindex the branch."
+                )
+
+        require_unsealed_bound_target()
+        # Every subsequent read and write uses this immutable concrete target.
+        # An alias swap can make the work obsolete, but it cannot redirect a
+        # late incremental write into the newly sealed generation.
+        collection_name = bound_collection_name
         if updated_paths:
             if repo_base is None:
                 raise ValueError(
@@ -1099,7 +1341,6 @@ class FileOperations:
                     + ", ".join(missing_files[:10])
                 )
         revision = commit or branch
-        self.collection_manager.ensure_collection_exists(collection_name)
         require_compatible_branch_representation(
             self.client,
             collection_name,
@@ -1308,6 +1549,7 @@ class FileOperations:
                 "architecture_source",
                 "repository_snapshot",
                 "repository_facts_state",
+                "repository_generation_manifest",
             ))
         ]
         new_nodes = list(semantic_nodes)
@@ -1423,6 +1665,16 @@ class FileOperations:
             new_nodes.extend(facts_nodes)
             for record in old_facts_records:
                 old_records[str(record.id)] = record
+
+        current_target = self.collection_manager.resolve_collection_target(
+            requested_collection_name
+        )
+        if current_target != bound_collection_name:
+            raise IncrementalIndexPreconditionError(
+                "the active collection changed while an incremental generation "
+                "was prepared; discard it and fully reindex the branch"
+            )
+        require_unsealed_bound_target()
 
         successful = self._replace_points(
             new_nodes,

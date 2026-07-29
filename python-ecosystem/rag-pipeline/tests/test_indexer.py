@@ -20,7 +20,29 @@ from rag_pipeline.core.index_manager.indexer import (
     RepositoryIndexer, FileOperations,
     DOCUMENT_BATCH_SIZE, INSERT_BATCH_SIZE,
 )
+from rag_pipeline.core.repository_overlay import (
+    IncrementalIndexPreconditionError,
+)
 from rag_pipeline.models.config import IndexStats
+
+
+@pytest.fixture(autouse=True)
+def _verified_source_tree(monkeypatch):
+    source = SimpleNamespace(
+        commit="abc123",
+        tree_sha256="c" * 64,
+        git_commit_verified=False,
+        file_sha256_by_path={},
+    )
+    monkeypatch.setattr(
+        "rag_pipeline.core.index_manager.indexer.verify_repository_source_tree",
+        lambda *_args, **_kwargs: source,
+    )
+    monkeypatch.setattr(
+        "rag_pipeline.core.index_manager.indexer."
+        "require_repository_source_tree_unchanged",
+        lambda *_args, **_kwargs: None,
+    )
 
 
 def _mock_config(**overrides):
@@ -43,8 +65,14 @@ def _mock_components():
 
     # Default: point_ops returns success
     point_ops.process_and_upsert_chunks.return_value = (1, 0)
+    point_ops.write_repository_generation_manifest.return_value = {
+        "generation_schema": "codecrow.repository-index-generation",
+        "generation_member_count": 1,
+        "generation_members_sha256": "a" * 64,
+        "generation_manifest_sha256": "b" * 64,
+    }
     point_ops.client = MagicMock()
-    branch_mgr.get_branch_point_count.return_value = 1
+    branch_mgr.get_branch_point_count.return_value = 2
     branch_mgr.stream_copy_points_to_collection.return_value = 0
 
     return coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader
@@ -150,9 +178,9 @@ class TestIndexRepository:
         coll_mgr.alias_exists.return_value = False
         coll_mgr.collection_exists.return_value = False
         coll_mgr.resolve_alias.return_value = None
-        point_ops.client.get_collection.return_value = SimpleNamespace(points_count=2)
+        point_ops.client.get_collection.return_value = SimpleNamespace(points_count=3)
         point_ops.process_and_upsert_chunks.return_value = (1, 0)
-        branch_mgr.get_branch_point_count.return_value = 2
+        branch_mgr.get_branch_point_count.return_value = 3
         stats_mgr.store_metadata.return_value = None
         selector = MagicMock()
         selector.select.return_value = ProjectCapabilities(
@@ -247,9 +275,9 @@ class TestIndexRepository:
 
         # After indexing, temp collection has points
         temp_info = MagicMock()
-        temp_info.points_count = 2
+        temp_info.points_count = 3
         point_ops.client.get_collection.return_value = temp_info
-        branch_mgr.get_branch_point_count.return_value = 2
+        branch_mgr.get_branch_point_count.return_value = 3
 
         indexer = RepositoryIndexer(config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader)
         result = indexer.index_repository("/repo", "ws", "proj", "main", "abc123", "alias1")
@@ -258,6 +286,72 @@ class TestIndexRepository:
         assert result.project == "proj"
         assert result.branch == "main"
         stats_mgr.store_metadata.assert_called_once()
+        point_ops.write_repository_generation_manifest.assert_called_once_with(
+            "pending",
+            "ws",
+            "proj",
+            "main",
+            "abc123",
+            expected_member_count=2,
+            expected_members=[],
+            source_tree_sha256="c" * 64,
+            index_include_patterns=[],
+            index_exclude_patterns=[],
+            identity_metadata={
+                "index_representation_fingerprint": (
+                    indexer.representation_fingerprint
+                ),
+            },
+        )
+
+    def test_generation_manifest_failure_never_swaps_alias(self):
+        config = _mock_config()
+        (
+            coll_mgr,
+            branch_mgr,
+            point_ops,
+            stats_mgr,
+            splitter,
+            loader,
+        ) = _mock_components()
+        loader.iter_repository_files.return_value = iter(["a.py"])
+        loader.load_file_batch.return_value = [
+            SimpleNamespace(text="a = 1", metadata={"path": "a.py"})
+        ]
+        splitter.split_documents.return_value = [MagicMock()]
+        coll_mgr.create_pending_collection.return_value = "pending"
+        coll_mgr.alias_exists.return_value = True
+        coll_mgr.collection_exists.return_value = True
+        coll_mgr.resolve_alias.return_value = "active"
+        point_ops.write_repository_generation_manifest.side_effect = (
+            RuntimeError("generation membership is incomplete")
+        )
+
+        indexer = RepositoryIndexer(
+            config,
+            coll_mgr,
+            branch_mgr,
+            point_ops,
+            stats_mgr,
+            splitter,
+            loader,
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="generation membership is incomplete",
+        ):
+            indexer.index_repository(
+                "/repo",
+                "ws",
+                "proj",
+                "main",
+                "abc123",
+                "alias1",
+            )
+
+        coll_mgr.atomic_alias_swap.assert_not_called()
+        stats_mgr.store_metadata.assert_not_called()
+        coll_mgr.delete_collection.assert_called_with("pending")
 
     def test_preserves_other_branches_only_when_explicitly_enabled(self):
         config = _mock_config()
@@ -276,7 +370,7 @@ class TestIndexRepository:
         splitter.split_documents.return_value = [MagicMock()]
 
         temp_info = MagicMock()
-        temp_info.points_count = 3
+        temp_info.points_count = 4
         point_ops.client.get_collection.return_value = temp_info
         branch_mgr.stream_copy_points_to_collection.return_value = 2
 
@@ -309,7 +403,7 @@ class TestIndexRepository:
         ]
         splitter.split_documents.return_value = [MagicMock()]
         temp_info = MagicMock()
-        temp_info.points_count = 1
+        temp_info.points_count = 2
         point_ops.client.get_collection.return_value = temp_info
 
         indexer = RepositoryIndexer(
@@ -331,7 +425,7 @@ class TestIndexRepository:
         splitter.split_documents.return_value = [MagicMock(), MagicMock()]
         point_ops.process_and_upsert_chunks.return_value = (2, 0)
         point_ops.client.get_collection.return_value = SimpleNamespace(
-            points_count=1
+            points_count=2
         )
         branch_mgr.get_branch_point_count.return_value = 2
         coll_mgr.create_pending_collection.return_value = "pending"
@@ -363,7 +457,7 @@ class TestIndexRepository:
         ]
         splitter.split_documents.return_value = [MagicMock()]
         point_ops.client.get_collection.return_value = SimpleNamespace(
-            points_count=1
+            points_count=2
         )
         branch_mgr.get_branch_point_count.return_value = 0
         coll_mgr.create_pending_collection.return_value = "pending"
@@ -449,8 +543,8 @@ class TestIndexRepository:
         loader.load_file_batch.return_value = [document]
         splitter.split_documents.return_value = [MagicMock()]
         point_ops.process_and_upsert_chunks.side_effect = [(1, 0), (2, 0)]
-        point_ops.client.get_collection.return_value = SimpleNamespace(points_count=3)
-        branch_mgr.get_branch_point_count.return_value = 3
+        point_ops.client.get_collection.return_value = SimpleNamespace(points_count=4)
+        branch_mgr.get_branch_point_count.return_value = 4
         coll_mgr.create_pending_collection.return_value = "pending"
         coll_mgr.alias_exists.return_value = False
         coll_mgr.collection_exists.return_value = False
@@ -667,7 +761,7 @@ class TestPerformAtomicSwap:
         coll_mgr.create_pending_collection.return_value = "pending"
         coll_mgr.alias_exists.return_value = True
         coll_mgr.resolve_alias.return_value = "active"
-        point_ops.client.get_collection.return_value = SimpleNamespace(points_count=1)
+        point_ops.client.get_collection.return_value = SimpleNamespace(points_count=2)
         stats_mgr.store_metadata.side_effect = RuntimeError("metadata unavailable")
 
         indexer = RepositoryIndexer(config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader)
@@ -709,6 +803,7 @@ class TestFileOperations:
         loader = MagicMock()
 
         client.scroll.return_value = ([], None)
+        coll_mgr.resolve_collection_target.return_value = "coll"
         point_ops.prepare_chunks_for_embedding.side_effect = (
             lambda nodes, *_: [
                 (f"point-{index}", node) for index, node in enumerate(nodes)
@@ -779,6 +874,59 @@ class TestFileOperations:
             collection_name="coll",
         )
         ops.point_ops.upsert_points.assert_called_once_with("coll", [])
+        ops.client.delete.assert_not_called()
+
+    def test_alias_swap_before_incremental_write_fails_without_mutation(self):
+        ops = self._make_file_ops()
+        ops.collection_manager.resolve_collection_target.side_effect = [
+            "active-before",
+            "active-after",
+        ]
+
+        with pytest.raises(
+            IncrementalIndexPreconditionError,
+            match="active collection changed",
+        ):
+            ops.delete_files(
+                file_paths=["src/Del.java"],
+                workspace="ws",
+                project="proj",
+                branch="main",
+                collection_name="coll",
+                commit="b" * 40,
+            )
+
+        ops.point_ops.upsert_points.assert_not_called()
+        ops.client.delete.assert_not_called()
+        assert {
+            call.kwargs["collection_name"]
+            for call in ops.client.scroll.call_args_list
+        } == {"active-before"}
+
+    def test_sealed_generation_rejects_incremental_change_before_mutation(self):
+        ops = self._make_file_ops()
+        manifest = SimpleNamespace(
+            id="manifest",
+            payload={"repository_generation_manifest": True},
+        )
+        ops.client.scroll.return_value = ([manifest], None)
+
+        with pytest.raises(
+            IncrementalIndexPreconditionError,
+            match="sealed repository generation",
+        ):
+            ops.delete_files(
+                file_paths=["src/Del.java"],
+                workspace="ws",
+                project="proj",
+                branch="main",
+                collection_name="coll",
+                commit="b" * 40,
+            )
+
+        ops.collection_manager.ensure_collection_exists.assert_not_called()
+        ops.loader.load_specific_files.assert_not_called()
+        ops.point_ops.upsert_points.assert_not_called()
         ops.client.delete.assert_not_called()
 
     def test_partial_replacement_restores_previous_points(self):

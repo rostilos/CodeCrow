@@ -47,10 +47,12 @@ async def test_non_reviewable_hunk_manifest_completes_without_model_stage():
         for hunk in generated.hunks
     ]
     rag = DeterministicRagSpy()
+    events = []
     orchestrator = MultiStageReviewOrchestrator(
         llm=object(),
         mcp_client=None,
         rag_client=rag,
+        event_callback=events.append,
     )
 
     result = await orchestrator.orchestrate_review(
@@ -63,6 +65,16 @@ async def test_non_reviewable_hunk_manifest_completes_without_model_stage():
     assert rag.index_requests == []
     assert rag.requests == []
     assert rag.semantic_requests == []
+    terminal_event = next(
+        event
+        for event in events
+        if event.get("state") == "review_evidence_completed"
+    )
+    assert terminal_event["revisionBinding"]["prIndexed"] is False
+    assert (
+        terminal_event["revisionBinding"]["baseGenerationManifestSha256"]
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -615,6 +627,25 @@ async def test_full_pipeline_capture_persists_real_context_artifact(
         event.get("state") == "review_evidence_completed"
         for event in forwarded_events
     )
+    terminal_event = next(
+        event
+        for event in forwarded_events
+        if event.get("state") == "review_evidence_completed"
+    )
+    assert terminal_event["revisionBinding"] == {
+        "prIndexed": True,
+        "pullRequestId": request.pullRequestId,
+        "targetBranch": "main",
+        "sourceRevision": HEAD_REVISION,
+        "baseRevision": BASE_REVISION,
+        "baseGenerationManifestSha256": "3" * 64,
+        "prGenerationFingerprint": "sha256:" + "4" * 64,
+        "prOverlayGenerationManifestSha256": "5" * 64,
+        "basePluginFingerprint": "sha256:" + "6" * 64,
+        "basePluginDescriptorFingerprint": "sha256:" + "7" * 64,
+        "basePluginImplementationFingerprint": "sha256:" + "8" * 64,
+        "baseIndexRepresentationFingerprint": "sha256:" + "9" * 64,
+    }
     assert report["reviewIdentity"]["targetBranch"] == "main"
     assert report["reviewIdentity"]["sourceBranch"] == "feature/dry-run"
     assert report["reviewIdentity"]["headRevision"] == HEAD_REVISION
@@ -625,6 +656,17 @@ async def test_full_pipeline_capture_persists_real_context_artifact(
     assert rag.index_requests
     assert rag.index_requests[0]["source_revision"] == HEAD_REVISION
     assert rag.index_requests[0]["base_revision"] == BASE_REVISION
+    assert rag.requests
+    assert all(
+        request["source_revision"] == HEAD_REVISION
+        and request["base_revision"] == BASE_REVISION
+        and request["base_generation_manifest_sha256"] == "3" * 64
+        and request["pr_generation_fingerprint"]
+        == "sha256:" + "4" * 64
+        and request["pr_overlay_generation_manifest_sha256"]
+        == "5" * 64
+        for request in rag.requests
+    )
     assert {
         file_info["content_state"]
         for file_info in rag.index_requests[0]["files"]
@@ -836,6 +878,13 @@ async def test_pr_overlay_review_groups_are_retained_for_stage_zero_planning():
         return {
             "status": "indexed",
             "chunks_indexed": 4,
+            "base_generation_manifest_sha256": "3" * 64,
+            "generation_fingerprint": "sha256:" + "4" * 64,
+            "overlay_generation_manifest_sha256": "5" * 64,
+            "plugin_fingerprint": "sha256:" + "6" * 64,
+            "plugin_descriptor_fingerprint": "sha256:" + "7" * 64,
+            "plugin_implementation_fingerprint": "sha256:" + "8" * 64,
+            "index_representation_fingerprint": "sha256:" + "9" * 64,
             "review_groups": [
                 ["src/file_0.py", "src/file_1.py"],
                 ["src/file_1.py", "src/file_2.py"],

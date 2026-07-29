@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codecrow.dev/schemas/magento2-current-comment-attestation.schema.json",
+  "title": "CodeCrow Magento 2 current review-comment attestation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "generatedAt",
+    "sourceMode",
+    "githubApiVersion",
+    "repository",
+    "draftFileSha256",
+    "draftSha256",
+    "paperReady",
+    "scoringEnabled",
+    "currentSelectedCommentsVerified",
+    "caseCount",
+    "selectedRootCount",
+    "completeRestReplyCount",
+    "releaseBlockers",
+    "warning",
+    "cases",
+    "attestationDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-current-review-comment-attestation"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sourceMode": {
+      "enum": [
+        "live",
+        "cache-only"
+      ]
+    },
+    "githubApiVersion": {
+      "const": "2022-11-28"
+    },
+    "repository": {
+      "const": "magento/magento2"
+    },
+    "draftFileSha256": {
+      "$ref": "#/$defs/digest"
+    },
+    "draftSha256": {
+      "$ref": "#/$defs/digest"
+    },
+    "paperReady": {
+      "const": false
+    },
+    "scoringEnabled": {
+      "const": false
+    },
+    "currentSelectedCommentsVerified": {
+      "const": true
+    },
+    "caseCount": {
+      "const": 50
+    },
+    "selectedRootCount": {
+      "const": 121
+    },
+    "completeRestReplyCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "releaseBlockers": {
+      "const": [
+        "complete_raw_pull_and_submitted_review_archive",
+        "authenticated_graphql_thread_resolution_and_outdated_state",
+        "two_independent_human_curators_and_adjudication",
+        "paper_ready_release_selection_and_materialization"
+      ]
+    },
+    "warning": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 50,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    },
+    "attestationDigest": {
+      "$ref": "#/$defs/digest"
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "rawComment": {
+      "type": "object",
+      "required": [
+        "id",
+        "pull_request_review_id",
+        "user",
+        "body",
+        "created_at",
+        "updated_at",
+        "path",
+        "diff_hunk",
+        "original_commit_id",
+        "commit_id",
+        "pull_request_url",
+        "html_url"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "in_reply_to_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pageIndex",
+        "request",
+        "status",
+        "etag",
+        "lastModified",
+        "response",
+        "responseDigest",
+        "previousPageDigest",
+        "pageDigest"
+      ],
+      "properties": {
+        "pageIndex": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "url"
+          ],
+          "properties": {
+            "method": {
+              "const": "GET"
+            },
+            "url": {
+              "type": "string",
+              "pattern": "^https://api\\.github\\.com/repos/magento/magento2/pulls/[1-9][0-9]*/comments\\?per_page=100&page=[1-9][0-9]*$"
+            }
+          }
+        },
+        "status": {
+          "const": 200
+        },
+        "etag": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastModified": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "response": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rawComment"
+          }
+        },
+        "responseDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "previousPageDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pageDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "selectedRoot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commentId",
+        "response",
+        "responseDigest"
+      ],
+      "properties": {
+        "commentId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "response": {
+          "$ref": "#/$defs/rawComment"
+        },
+        "responseDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "thread": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rootCommentId",
+        "replyCount",
+        "comments",
+        "threadDigest"
+      ],
+      "properties": {
+        "rootCommentId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "replyCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "comments": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/rawComment"
+          }
+        },
+        "threadDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pullRequest",
+        "pageCount",
+        "pages",
+        "allReviewCommentCount",
+        "allReviewCommentsDigest",
+        "selectedRoots",
+        "threads",
+        "caseEvidenceDigest"
+      ],
+      "properties": {
+        "pullRequest": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pageCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pages": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/page"
+          }
+        },
+        "allReviewCommentCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "allReviewCommentsDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "selectedRoots": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/selectedRoot"
+          }
+        },
+        "threads": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/thread"
+          }
+        },
+        "caseEvidenceDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    }
+  }
+}

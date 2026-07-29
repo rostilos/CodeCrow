@@ -168,7 +168,7 @@ public class AiAnalysisClient {
                             if (isPromptDryRunResult(finalResult)) {
                                 return finalResult;
                             }
-                            return extractAndValidateAnalysisData(finalResult);
+                            return validateAnalysisData(finalResult);
                         } else {
                             throw new IOException("AI service returned final event without a valid result payload");
                         }
@@ -290,7 +290,15 @@ public class AiAnalysisClient {
         }
     }
 
-    private Map<String, Object> extractAndValidateAnalysisData(Map<String, Object> result) throws IOException {
+    /**
+     * Applies the same structural validation used for a final inference result
+     * without submitting a new analysis job.
+     *
+     * <p>This is intentionally public so isolated, non-persisting product
+     * evaluation paths can validate a captured inference result before applying
+     * the normal Java issue finalization rules.</p>
+     */
+    public static Map<String, Object> validateAnalysisData(Map<String, Object> result) throws IOException {
         try {
             if (result == null) {
                 throw new IOException("Missing 'result' field in AI response");
@@ -311,12 +319,13 @@ public class AiAnalysisClient {
 
             // Log issue count - handle both List and Map formats
             Object issues = result.get("issues");
-            int issueCount = 0;
-            if (issues instanceof List) {
-                issueCount = ((List<?>) issues).size();
-            } else if (issues instanceof Map) {
-                issueCount = ((Map<?, ?>) issues).size();
+            if (!(issues instanceof List<?>) && !(issues instanceof Map<?, ?>)) {
+                throw new IOException(
+                        "Analysis data field 'issues' must be an array or object");
             }
+            int issueCount = issues instanceof List<?> issueList
+                    ? issueList.size()
+                    : ((Map<?, ?>) issues).size();
             log.info("Successfully extracted analysis data with {} issues", issueCount);
 
             return result;
