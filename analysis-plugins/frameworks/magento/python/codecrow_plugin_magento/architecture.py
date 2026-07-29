@@ -58,6 +58,8 @@ def safe_xml(plugin_id: str, path: str, content: str):
             "DTD/entity declarations are forbidden in Magento "
             f"configuration {path}",
             plugin_id,
+            path=path,
+            recoverable=True,
         )
     try:
         return ET.fromstring(content), None
@@ -66,6 +68,8 @@ def safe_xml(plugin_id: str, path: str, content: str):
             "magento-invalid-xml",
             f"Cannot parse {path}: {exception}",
             plugin_id,
+            path=path,
+            recoverable=True,
         )
 
 

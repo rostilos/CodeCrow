@@ -210,6 +210,8 @@ class IndexStats(BaseModel):
     namespace: str
     document_count: int
     chunk_count: int
+    skipped_file_count: int = 0
+    skipped_chunk_count: int = 0
     last_updated: str
     workspace: str
     project: str

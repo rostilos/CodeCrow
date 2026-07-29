@@ -155,10 +155,10 @@ normal review pipeline continues.
 | Retrieval           | Qdrant semantic search combined with deterministic metadata and exact-path lookup                                                                          |
 | Stored Context      | Semantic source chunks plus exact-source, architecture, graph, plugin snapshot, and repository-detection points                                            |
 | Full Reindex        | Builds a pending collection generation and atomically swaps the project alias only after successful completion                                             |
-| Resilient Writes    | Retries transient Qdrant writes and subdivides rejected batches; an unrecoverable point keeps the pending generation inactive                              |
+| Resilient Writes    | Quarantines malformed files and exact rejected points while retaining valid content; systemic Qdrant failures still prevent activation                    |
 | Incremental Reindex | Applies one pinned commit change set and replaces changed semantic chunks together with affected graph and state groups                                    |
 | PR Context          | Uses an immutable, commit-pinned PR overlay so changed files do not retrieve stale base-branch copies                                                      |
-| Compatibility Guard | Returns HTTP 409 for stale or incompatible representation/plugin state before a review-model call; recovery is a full reindex with matching service images |
+| Compatibility Guard | Source-build fingerprints are provenance only and never force a reindex; durable plugin descriptor, snapshot-integrity, and Qdrant vector-shape checks remain enforced |
 | Prompt Budget       | Plugin and RAG evidence share bounded context budgets; plugins cannot create an additional model stage                                                     |
 
 The Vector Storage Explorer exposes the different point types and their

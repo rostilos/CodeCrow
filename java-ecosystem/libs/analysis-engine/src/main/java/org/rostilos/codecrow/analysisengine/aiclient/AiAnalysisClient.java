@@ -37,16 +37,27 @@ public class AiAnalysisClient {
 
     static final String INACTIVITY_TIMEOUT_MINUTES_KEY =
             "ANALYSIS_QUEUE_INACTIVITY_TIMEOUT_MINUTES";
+    static final String ADMISSION_TIMEOUT_MINUTES_KEY =
+            "ANALYSIS_QUEUE_ADMISSION_TIMEOUT_MINUTES";
+    static final String CONSUMER_HEARTBEAT_KEY =
+            "codecrow:analysis:consumer:heartbeat";
     private static final long DEFAULT_INACTIVITY_TIMEOUT_MINUTES = 15L;
+    private static final long DEFAULT_ADMISSION_TIMEOUT_MINUTES = 5L;
 
     private final long inactivityTimeoutMillis;
+    private final long admissionTimeoutMillis;
 
     @Autowired
     public AiAnalysisClient(
             @Qualifier("aiRestTemplate") RestTemplate restTemplate,
             RedisQueueService queueService,
             ObjectMapper objectMapper) {
-        this(restTemplate, queueService, objectMapper, resolveInactivityTimeoutMillis());
+        this(
+                restTemplate,
+                queueService,
+                objectMapper,
+                resolveInactivityTimeoutMillis(),
+                resolveAdmissionTimeoutMillis());
     }
 
     AiAnalysisClient(
@@ -54,6 +65,20 @@ public class AiAnalysisClient {
             RedisQueueService queueService,
             ObjectMapper objectMapper,
             long inactivityTimeoutMillis) {
+        this(
+                restTemplate,
+                queueService,
+                objectMapper,
+                inactivityTimeoutMillis,
+                resolveAdmissionTimeoutMillis());
+    }
+
+    AiAnalysisClient(
+            RestTemplate restTemplate,
+            RedisQueueService queueService,
+            ObjectMapper objectMapper,
+            long inactivityTimeoutMillis,
+            long admissionTimeoutMillis) {
         // restTemplate kept in constructor for backward compatibility but no longer
         // used
         this.queueService = queueService;
@@ -61,7 +86,11 @@ public class AiAnalysisClient {
         if (inactivityTimeoutMillis <= 0) {
             throw new IllegalArgumentException("Review queue inactivity timeout must be positive");
         }
+        if (admissionTimeoutMillis <= 0) {
+            throw new IllegalArgumentException("Review queue admission timeout must be positive");
+        }
         this.inactivityTimeoutMillis = inactivityTimeoutMillis;
+        this.admissionTimeoutMillis = admissionTimeoutMillis;
     }
 
     public Map<String, Object> performAnalysis(AiAnalysisRequest request)
@@ -76,9 +105,15 @@ public class AiAnalysisClient {
         String jobId = UUID.randomUUID().toString();
         String eventQueueKey = "codecrow:analysis:events:" + jobId;
         String jobsQueueKey = "codecrow:analysis:jobs";
+        String jsonPayload = null;
 
         try {
             log.info("Sending async analysis request to Redis queue (Job ID: {})", jobId);
+
+            if (!queueService.hasKey(CONSUMER_HEARTBEAT_KEY)) {
+                throw new IOException(
+                        "Inference Orchestrator is unavailable: no live review queue consumer");
+            }
 
             // Wrap the request with the jobId
             boolean promptDryRun = PromptDryRunMode.isEnabledForProject(request.getProjectId());
@@ -100,7 +135,7 @@ public class AiAnalysisClient {
                     "job_id", jobId,
                     "request", requestPayload);
 
-            String jsonPayload = objectMapper.writeValueAsString(jobPayload);
+            jsonPayload = objectMapper.writeValueAsString(jobPayload);
 
             // Push the job to the Redis queue
             queueService.leftPush(jobsQueueKey, jsonPayload);
@@ -114,14 +149,30 @@ public class AiAnalysisClient {
             queueService.setExpiry(eventQueueKey, eventTtlMinutes);
 
             long lastActivityTime = System.currentTimeMillis();
+            long queuedAt = lastActivityTime;
+            boolean workerAcknowledged = false;
 
             // Poll the event queue for progress or final result
             while (true) {
-                if (System.currentTimeMillis() - lastActivityTime > inactivityTimeoutMillis) {
+                long now = System.currentTimeMillis();
+                if (!workerAcknowledged) {
+                    if (!queueService.hasKey(CONSUMER_HEARTBEAT_KEY)) {
+                        throw new IOException(
+                                "Inference Orchestrator became unavailable before "
+                                        + "the review job was admitted");
+                    }
+                    if (now - queuedAt > admissionTimeoutMillis) {
+                        throw new IOException(
+                                "Review was not admitted by Inference Orchestrator within "
+                                        + TimeUnit.MILLISECONDS.toSeconds(admissionTimeoutMillis)
+                                        + " seconds");
+                    }
+                }
+                if (now - lastActivityTime > inactivityTimeoutMillis) {
                     if (queueService.listContains(jobsQueueKey, jsonPayload)) {
-                        // Capacity-bound work is still durably owned by Redis.
-                        // Treat that exact queue membership as liveness and
-                        // forward it so the caller can renew its analysis lock.
+                        // Queue membership is durable ownership, but only a fresh
+                        // consumer heartbeat proves that capacity can eventually
+                        // admit it. Admission itself remains time-bounded.
                         lastActivityTime = System.currentTimeMillis();
                         forwardEvent(eventHandler, Map.of(
                                 "type", "status",
@@ -140,6 +191,7 @@ public class AiAnalysisClient {
                     continue; // Timeout on BRPOP, continue to check inactivity
                 }
                 lastActivityTime = System.currentTimeMillis();
+                workerAcknowledged = true;
 
                 try {
                     Map<String, Object> event = objectMapper.readValue(eventJson, Map.class);
@@ -184,10 +236,24 @@ public class AiAnalysisClient {
             log.error("Failed to communicate with AI async queue", e);
             throw new IOException("AI queue communication failed: " + e.getMessage(), e);
         } finally {
+            if (jsonPayload != null) {
+                try {
+                    queueService.removeFromList(jobsQueueKey, jsonPayload);
+                } catch (Exception cleanupError) {
+                    log.warn(
+                            "Failed to remove analysis job {} from the pending queue: {}",
+                            jobId,
+                            cleanupError.getMessage());
+                }
+            }
             try {
                 // Clean up the event queue if we exit early or successfully
                 queueService.deleteKey(eventQueueKey);
-            } catch (Exception ignored) {
+            } catch (Exception cleanupError) {
+                log.warn(
+                        "Failed to delete analysis event queue {}: {}",
+                        eventQueueKey,
+                        cleanupError.getMessage());
             }
         }
     }
@@ -206,23 +272,34 @@ public class AiAnalysisClient {
     }
 
     private static long resolveInactivityTimeoutMillis() {
-        String configured = System.getProperty(INACTIVITY_TIMEOUT_MINUTES_KEY);
+        return resolvePositiveMinutes(
+                INACTIVITY_TIMEOUT_MINUTES_KEY,
+                DEFAULT_INACTIVITY_TIMEOUT_MINUTES);
+    }
+
+    private static long resolveAdmissionTimeoutMillis() {
+        return resolvePositiveMinutes(
+                ADMISSION_TIMEOUT_MINUTES_KEY,
+                DEFAULT_ADMISSION_TIMEOUT_MINUTES);
+    }
+
+    private static long resolvePositiveMinutes(String key, long defaultMinutes) {
+        String configured = System.getProperty(key);
         if (configured == null || configured.isBlank()) {
-            configured = System.getenv(INACTIVITY_TIMEOUT_MINUTES_KEY);
+            configured = System.getenv(key);
         }
         if (configured == null || configured.isBlank()) {
-            return TimeUnit.MINUTES.toMillis(DEFAULT_INACTIVITY_TIMEOUT_MINUTES);
+            return TimeUnit.MINUTES.toMillis(defaultMinutes);
         }
         try {
             long minutes = Long.parseLong(configured.trim());
             if (minutes <= 0) {
-                throw new IllegalArgumentException(
-                        INACTIVITY_TIMEOUT_MINUTES_KEY + " must be a positive integer");
+                throw new IllegalArgumentException(key + " must be a positive integer");
             }
             return TimeUnit.MINUTES.toMillis(minutes);
         } catch (NumberFormatException error) {
             throw new IllegalArgumentException(
-                    INACTIVITY_TIMEOUT_MINUTES_KEY + " must be a positive integer",
+                    key + " must be a positive integer",
                     error);
         }
     }

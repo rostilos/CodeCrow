@@ -155,7 +155,7 @@ def index_pr_files(request: PRIndexRequest):
             stored_plugin_ids,
             stored_fingerprint,
             stored_descriptor_fingerprint,
-            stored_implementation_fingerprint,
+            _stored_implementation_fingerprint,
         ) = load_repository_snapshots(
             index_manager.qdrant_client,
             collection_name,
@@ -195,22 +195,15 @@ def index_pr_files(request: PRIndexRequest):
                     stored_plugin_ids
                 )
             )
-            current_stored_implementation_fingerprint = (
-                index_manager.plugin_catalog.implementation_fingerprint(
-                    stored_plugin_ids
-                )
-            )
             if (
                 stored_descriptor_fingerprint
                 != current_stored_descriptor_fingerprint
-                or stored_implementation_fingerprint
-                != current_stored_implementation_fingerprint
             ):
                 raise HTTPException(
                     status_code=409,
                     detail=(
                         f"target branch '{target_branch}' was indexed with "
-                        "different or unknown plugin implementation content; "
+                        "different or unknown plugin descriptors; "
                         f"reindex target branch '{target_branch}' before review"
                     ),
                 )
@@ -484,10 +477,16 @@ def index_pr_files(request: PRIndexRequest):
             )
             documents.append(doc)
 
-        chunks = index_manager.splitter.split_documents(
-            documents,
-            capabilities=capabilities,
-        ) if documents else []
+        if documents:
+            chunks, split_skipped_paths = (
+                index_manager.splitter.split_documents_resilient(
+                    documents,
+                    capabilities=capabilities,
+                )
+            )
+        else:
+            chunks = []
+            split_skipped_paths = ()
 
         # Add PR metadata to all chunks
         for chunk in chunks:
@@ -553,12 +552,17 @@ def index_pr_files(request: PRIndexRequest):
             ))
             handle.ingest(artifacts)
             analysis, diagnostics = handle.finish()
-            if diagnostics:
-                summary = "; ".join(
-                    f"{item.plugin_id or 'plugin'}:{item.code}: {item.message}"
-                    for item in diagnostics[:10]
+            repository_skipped_paths = (
+                index_manager._indexer
+                .accept_recoverable_repository_diagnostics(
+                    diagnostics,
+                    "PR repository overlay",
                 )
-                raise RuntimeError(f"PR repository overlay is incomplete: {summary}")
+            )
+            split_skipped_paths = tuple(sorted({
+                *split_skipped_paths,
+                *repository_skipped_paths,
+            }))
 
             changed_paths = {
                 file_info.path for file_info in active_overlay_files
@@ -621,6 +625,9 @@ def index_pr_files(request: PRIndexRequest):
             request.project,
             point_id_branch,
         )
+        skipped_points = (
+            len(chunks) + len(architecture_nodes) - successful
+        )
 
         logger.info(
             "Indexed PR #%s: %s semantic/architecture points from %s changed files (%s architecture packets)",
@@ -636,6 +643,8 @@ def index_pr_files(request: PRIndexRequest):
             "files_processed": len(request.files),
             "chunks_indexed": successful,
             "chunks_failed": 0,
+            "chunks_skipped": skipped_points,
+            "skipped_files": list(split_skipped_paths),
             "architecture_packets_indexed": len(architecture_nodes),
             "generation_fingerprint": generation_fingerprint,
             "overlay_representation_fingerprint": (

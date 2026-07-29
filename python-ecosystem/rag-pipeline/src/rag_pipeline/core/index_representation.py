@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Mapping, Optional
 
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
+
+logger = logging.getLogger(__name__)
 
 INDEX_REPRESENTATION_PAYLOAD_KEY = "index_representation_fingerprint"
 
@@ -211,7 +214,14 @@ def require_compatible_branch_representation(
     *,
     expected_fingerprint: Optional[str] = None,
 ) -> bool:
-    """Fail closed for a legacy or differently produced indexed branch."""
+    """Return whether a branch exists without gating it on source-code hashes.
+
+    The fingerprint remains stored as build provenance for diagnostics.  It is
+    deliberately not a compatibility boundary: operational changes to the RAG
+    host must not force customers to rebuild otherwise usable embeddings.
+    Structural incompatibilities are enforced by Qdrant and by the persisted
+    plugin descriptor/snapshot contracts at the points where they are used.
+    """
     exists, stored = read_branch_index_representation(
         client,
         collection_name,
@@ -221,9 +231,9 @@ def require_compatible_branch_representation(
         return False
     expected = expected_fingerprint or index_representation_fingerprint()
     if stored != expected:
-        raise IndexCompatibilityError(
-            f"branch '{branch}' was indexed with different or unknown neutral "
-            "RAG representation content; fully reindex the branch before "
-            "retrieval or incremental updates"
+        logger.info(
+            "Branch '%s' has a different or legacy neutral RAG build "
+            "fingerprint; accepting the existing index without reindexing",
+            branch,
         )
     return True

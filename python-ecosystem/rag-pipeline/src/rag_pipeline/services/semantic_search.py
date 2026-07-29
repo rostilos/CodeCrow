@@ -147,7 +147,7 @@ class SemanticSearchMixin:
             if incompatible_count:
                 logger.warning(
                     "Semantic search discarded %d result(s) with stale or "
-                    "unknown plugin descriptor/build-content identity",
+                    "unknown plugin descriptor identity",
                     incompatible_count,
                 )
 

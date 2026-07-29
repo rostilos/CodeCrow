@@ -20,6 +20,7 @@ from rag_pipeline.core.index_manager.indexer import (
     RepositoryIndexer, FileOperations,
     DOCUMENT_BATCH_SIZE, INSERT_BATCH_SIZE,
 )
+from rag_pipeline.core.index_manager.point_operations import PointWriteResult
 from rag_pipeline.models.config import IndexStats
 
 
@@ -46,6 +47,15 @@ def _mock_components():
     point_ops.client = MagicMock()
     branch_mgr.get_branch_point_count.return_value = 1
     branch_mgr.stream_copy_points_to_collection.return_value = 0
+    splitter.split_documents_resilient.side_effect = (
+        lambda documents, capabilities=None: (
+            splitter.split_documents(
+                documents,
+                capabilities=capabilities,
+            ),
+            (),
+        )
+    )
 
     return coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader
 
@@ -406,7 +416,7 @@ class TestIndexRepository:
 
         coll_mgr.delete_collection.assert_called_with("pending")
 
-    def test_partial_vector_write_never_swaps_alias(self):
+    def test_rejected_vector_point_is_skipped_and_valid_index_is_published(self):
         config = _mock_config()
         coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader = _mock_components()
         loader.iter_repository_files.return_value = iter(["a.php"])
@@ -415,6 +425,10 @@ class TestIndexRepository:
         ]
         splitter.split_documents.return_value = [MagicMock(), MagicMock()]
         point_ops.process_and_upsert_chunks.return_value = (1, 1)
+        point_ops.client.get_collection.return_value = SimpleNamespace(
+            points_count=1
+        )
+        branch_mgr.get_branch_point_count.return_value = 1
         coll_mgr.create_pending_collection.return_value = "pending"
         coll_mgr.alias_exists.return_value = True
         coll_mgr.collection_exists.return_value = True
@@ -422,17 +436,21 @@ class TestIndexRepository:
 
         indexer = RepositoryIndexer(config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader)
 
-        with pytest.raises(RuntimeError, match="partial"):
-            indexer.index_repository("/repo", "ws", "proj", "main", "abc123", "alias1")
+        result = indexer.index_repository(
+            "/repo", "ws", "proj", "main", "abc123", "alias1"
+        )
 
-        coll_mgr.atomic_alias_swap.assert_not_called()
-        stats_mgr.store_metadata.assert_not_called()
+        assert result.chunk_count == 1
+        assert result.skipped_chunk_count == 1
+        coll_mgr.atomic_alias_swap.assert_called_once()
+        stats_mgr.store_metadata.assert_called_once()
 
     def test_repository_architecture_is_streamed_and_indexed_as_context(self, tmp_path):
         from codecrow_plugins import (
             ArchitecturePacket,
             FileDisposition,
             GraphFact,
+            PluginDiagnostic,
             RepositoryAnalysis,
         )
 
@@ -480,7 +498,13 @@ class TestIndexRepository:
                     related_paths=("app/code/Acme/Module.php",),
                 ),),
             ),)),
-            (),
+            (PluginDiagnostic(
+                code="magento-invalid-xml",
+                message="Cannot parse etc/invalid.xml",
+                plugin_id="magento",
+                path="etc/invalid.xml",
+                recoverable=True,
+            ),),
         )
         runtime = MagicMock()
         runtime.file_disposition.return_value = FileDisposition.FULL
@@ -513,6 +537,7 @@ class TestIndexRepository:
             "app/code/Acme/etc/di.xml",
         ]
         assert result.chunk_count == 3
+        assert result.skipped_file_count == 1
 
 
 # ─────────────────────────────────────────────────────────────
@@ -722,6 +747,20 @@ class TestFileOperations:
         point_ops.upsert_points.side_effect = (
             lambda _collection, points: (len(points), 0)
         )
+        point_ops.upsert_points_detailed.side_effect = (
+            lambda _collection, points: PointWriteResult(
+                successful=len(points)
+            )
+        )
+        splitter.split_documents_resilient.side_effect = (
+            lambda documents, capabilities=None: (
+                splitter.split_documents(
+                    documents,
+                    capabilities=capabilities,
+                ),
+                (),
+            )
+        )
 
         stats_mgr.get_project_stats.return_value = MagicMock(spec=IndexStats)
         return FileOperations(client, point_ops, coll_mgr, stats_mgr, splitter, loader)
@@ -745,8 +784,8 @@ class TestFileOperations:
             collection_name="coll",
         )
 
-        ops.splitter.split_documents.assert_called_once()
-        ops.point_ops.upsert_points.assert_called_once()
+        ops.splitter.split_documents_resilient.assert_called_once()
+        ops.point_ops.upsert_points_detailed.assert_called_once()
         ops.client.delete.assert_not_called()
 
     def test_update_files_no_documents(self, tmp_path):
@@ -766,7 +805,7 @@ class TestFileOperations:
             collection_name="coll",
         )
         ops.splitter.split_documents.assert_not_called()
-        ops.point_ops.upsert_points.assert_called_once_with("coll", [])
+        ops.point_ops.upsert_points_detailed.assert_called_once_with("coll", [])
 
     def test_delete_files(self):
         ops = self._make_file_ops()
@@ -778,10 +817,10 @@ class TestFileOperations:
             branch="main",
             collection_name="coll",
         )
-        ops.point_ops.upsert_points.assert_called_once_with("coll", [])
+        ops.point_ops.upsert_points_detailed.assert_called_once_with("coll", [])
         ops.client.delete.assert_not_called()
 
-    def test_partial_replacement_restores_previous_points(self):
+    def test_rejected_replacement_point_is_quarantined(self):
         from qdrant_client.models import PointStruct
 
         ops = self._make_file_ops()
@@ -801,20 +840,27 @@ class TestFileOperations:
             vector=[0.0, 1.0],
             payload={"path": "new.php", "branch": "main"},
         )]
-        ops.point_ops.upsert_points.side_effect = None
-        ops.point_ops.upsert_points.return_value = (0, 1)
+        ops.point_ops.upsert_points_detailed.side_effect = None
+        ops.point_ops.upsert_points_detailed.return_value = PointWriteResult(
+            skipped_points=(
+                PointStruct(
+                    id=new_id,
+                    vector=[0.0, 1.0],
+                    payload={"path": "new.php", "branch": "main"},
+                ),
+            ),
+        )
 
-        with pytest.raises(RuntimeError, match="write was partial"):
-            ops._replace_points(
-                [node],
-                [old_record],
-                "coll",
-                "ws",
-                "project",
-                "main",
-            )
+        successful = ops._replace_points(
+            [node],
+            [old_record],
+            "coll",
+            "ws",
+            "project",
+            "main",
+        )
 
-        restored = ops.client.upsert.call_args.kwargs["points"]
-        assert [str(point.id) for point in restored] == [old_id]
+        assert successful == 0
+        ops.client.upsert.assert_not_called()
         deleted = ops.client.delete.call_args.kwargs["points_selector"]
-        assert [str(point_id) for point_id in deleted.points] == [new_id]
+        assert [str(point_id) for point_id in deleted.points] == [old_id]

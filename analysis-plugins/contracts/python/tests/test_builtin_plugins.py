@@ -662,7 +662,7 @@ def test_magento_emits_effective_di_from_repository_state_only():
     )
 
 
-def test_magento_rejects_xml_entities_without_resolution():
+def test_magento_quarantines_unsafe_config_without_failing_repository_analysis():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)
     capabilities = ProjectSelector(catalog.registry).select(_facts())
@@ -685,8 +685,14 @@ def test_magento_rejects_xml_entities_without_resolution():
     ), key=lambda value: value.path)))
     analysis, diagnostics = handle.finish()
 
-    assert analysis.packets == ()
+    assert analysis.snapshots
+    assert all(
+        artifact.path not in packet.paths
+        for packet in analysis.packets
+    )
     assert [diagnostic.code for diagnostic in diagnostics] == ["magento-unsafe-xml"]
+    assert diagnostics[0].recoverable is True
+    assert diagnostics[0].path == artifact.path
 
 
 def test_magento_keeps_custom_entity_bearing_xml_outside_architecture_analysis():

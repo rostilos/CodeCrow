@@ -210,6 +210,7 @@ class MagentoRepositoryResolver:
         self.graph = PacketGraph(plugin_id)
         self._roots: dict[str, object] = {}
         self._diagnostics: list[PluginDiagnostic] = []
+        self.invalid_paths: set[str] = set()
         self._effective_di_arguments: dict[str, dict[str, dict]] = {}
         self._template_layout_sources: dict[
             str,
@@ -302,6 +303,7 @@ class MagentoRepositoryResolver:
         root, diagnostic = safe_xml(self.plugin_id, path, self.artifacts[path])
         if diagnostic:
             self._diagnostics.append(diagnostic)
+            self.invalid_paths.add(path)
         self._roots[path] = root
         return root
 
@@ -6961,7 +6963,16 @@ class MagentoRepositorySession:
         resolver = MagentoRepositoryResolver(self.plugin_id, self.artifacts, dependencies.symbols)
         analysis, diagnostics = resolver.resolve()
         if diagnostics:
-            return PluginOutcome.failed(diagnostics[0])
+            for diagnostic in diagnostics:
+                logger.warning(
+                    "Skipping invalid Magento repository input "
+                    "(code=%s path=%s): %s",
+                    diagnostic.code,
+                    diagnostic.path or "<repository>",
+                    diagnostic.message,
+                )
+        for path in resolver.invalid_paths:
+            self.artifacts.pop(path, None)
         related_paths = {
             path for packet in analysis.packets for path in packet.paths
         }
@@ -6997,4 +7008,14 @@ class MagentoRepositorySession:
             packets=analysis.packets,
             snapshots=(snapshot,),
             contexts=contexts,
+            diagnostics=tuple(
+                PluginDiagnostic(
+                    code=diagnostic.code,
+                    message=diagnostic.message,
+                    plugin_id=diagnostic.plugin_id,
+                    path=diagnostic.path,
+                    recoverable=True,
+                )
+                for diagnostic in diagnostics
+            ),
         ))

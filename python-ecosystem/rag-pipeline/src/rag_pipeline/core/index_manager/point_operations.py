@@ -7,6 +7,7 @@ Handles embedding generation, point creation, and batch upsert operations.
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Dict, Tuple
 
@@ -15,6 +16,20 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct
 
 logger = logging.getLogger(__name__)
+
+
+class PointWriteInfrastructureError(RuntimeError):
+    """Raised when Qdrant is unavailable or rejects the index representation."""
+
+
+@dataclass(frozen=True)
+class PointWriteResult:
+    successful: int = 0
+    skipped_points: tuple[PointStruct, ...] = ()
+
+    @property
+    def failed(self) -> int:
+        return len(self.skipped_points)
 
 
 class PointOperations:
@@ -167,20 +182,29 @@ class PointOperations:
         Returns:
             Tuple of (successful_count, failed_count)
         """
+        result = self.upsert_points_detailed(collection_name, points)
+        return result.successful, result.failed
+
+    def upsert_points_detailed(
+        self,
+        collection_name: str,
+        points: List[PointStruct],
+    ) -> PointWriteResult:
+        """Upsert points and retain the identities of quarantined points."""
         successful = 0
-        failed = 0
-        
+        skipped_points: list[PointStruct] = []
+
         for i in range(0, len(points), self.batch_size):
             batch = points[i:i + self.batch_size]
-            batch_successful, batch_failed = self._upsert_resilient(
+            batch_result = self._upsert_resilient(
                 collection_name,
                 batch,
                 batch_offset=i,
             )
-            successful += batch_successful
-            failed += batch_failed
+            successful += batch_result.successful
+            skipped_points.extend(batch_result.skipped_points)
 
-        return successful, failed
+        return PointWriteResult(successful, tuple(skipped_points))
 
     @staticmethod
     def _status_code(exception: Exception) -> int | None:
@@ -196,10 +220,23 @@ class PointOperations:
         """Return whether a smaller request can isolate a rejected point."""
         if exception is None:
             return False
+        message = str(exception).casefold()
+        if any(
+            marker in message
+            for marker in (
+                "vector dimension",
+                "dimension mismatch",
+                "expected dimension",
+                "vector name",
+                "collection not found",
+                "doesn't exist",
+                "does not exist",
+            )
+        ):
+            return False
         status_code = cls._status_code(exception)
         if status_code in {400, 413, 422}:
             return True
-        message = str(exception).casefold()
         return any(
             marker in message
             for marker in (
@@ -208,8 +245,6 @@ class PointOperations:
                 "request entity too large",
                 "request too large",
                 "validation error",
-                "vector dimension",
-                "wrong input",
             )
         )
 
@@ -225,10 +260,10 @@ class PointOperations:
         points: List[PointStruct],
         *,
         batch_offset: int,
-    ) -> tuple[int, int]:
+    ) -> PointWriteResult:
         """Write a batch with bounded retry and rejected-request subdivision."""
         if not points:
-            return 0, 0
+            return PointWriteResult()
 
         error = None
         for attempt in range(1, self.upsert_max_attempts + 1):
@@ -237,7 +272,7 @@ class PointOperations:
                     collection_name=collection_name,
                     points=points,
                 )
-                return len(points), 0
+                return PointWriteResult(successful=len(points))
             except Exception as exception:
                 error = exception
                 if self._is_batch_shape_failure(exception):
@@ -251,7 +286,10 @@ class PointOperations:
                         len(points),
                         exception,
                     )
-                    return 0, len(points)
+                    raise PointWriteInfrastructureError(
+                        "Qdrant index storage is unavailable or incompatible "
+                        f"after {self.upsert_max_attempts} attempts"
+                    ) from exception
                 delay = self.upsert_retry_base_seconds * (2 ** (attempt - 1))
                 logger.warning(
                     "Qdrant upsert failed at point offset %s "
@@ -268,12 +306,12 @@ class PointOperations:
 
         if len(points) == 1:
             logger.error(
-                "Qdrant rejected one exact index point after bounded recovery "
+                "Skipping one exact index point rejected by Qdrant "
                 "(%s): %s",
                 self._point_label(points[0]),
                 error,
             )
-            return 0, 1
+            return PointWriteResult(skipped_points=(points[0],))
 
         midpoint = len(points) // 2
         left = points[:midpoint]
@@ -298,10 +336,57 @@ class PointOperations:
             right,
             batch_offset=batch_offset + midpoint,
         )
-        return (
-            left_result[0] + right_result[0],
-            left_result[1] + right_result[1],
+        return PointWriteResult(
+            successful=left_result.successful + right_result.successful,
+            skipped_points=(
+                *left_result.skipped_points,
+                *right_result.skipped_points,
+            ),
         )
+
+    def _embed_resilient(
+        self,
+        chunk_data: List[Tuple[str, TextNode]],
+    ) -> tuple[List[PointStruct], int]:
+        """Embed a slice, isolating only provider-rejected input chunks."""
+        if not chunk_data:
+            return [], 0
+        try:
+            return self.embed_and_create_points(chunk_data), 0
+        except MemoryError:
+            raise
+        except Exception as exception:
+            if not self._is_batch_shape_failure(exception):
+                raise
+            if len(chunk_data) == 1:
+                chunk = chunk_data[0][1]
+                logger.error(
+                    "Skipping one embedding input rejected by the provider "
+                    "(path=%s): %s",
+                    chunk.metadata.get("path", "<unknown>"),
+                    exception,
+                )
+                return [], 1
+
+            midpoint = len(chunk_data) // 2
+            logger.warning(
+                "Embedding provider rejected a %s-chunk request; "
+                "isolating it into %s and %s chunks: %s",
+                len(chunk_data),
+                midpoint,
+                len(chunk_data) - midpoint,
+                exception,
+            )
+            left_points, left_skipped = self._embed_resilient(
+                chunk_data[:midpoint]
+            )
+            right_points, right_skipped = self._embed_resilient(
+                chunk_data[midpoint:]
+            )
+            return (
+                [*left_points, *right_points],
+                left_skipped + right_skipped,
+            )
     
     def process_and_upsert_chunks(
         self,
@@ -329,16 +414,17 @@ class PointOperations:
         # work count, but operators can now observe steady progress instead of
         # waiting for every chunk from a 50-file document batch to finish.
         for i in range(0, len(chunk_data), self.batch_size):
-            point_batch = self.embed_and_create_points(
+            point_batch, embedding_skipped = self._embed_resilient(
                 chunk_data[i:i + self.batch_size]
             )
+            failed += embedding_skipped
+            if not point_batch:
+                continue
             batch_successful, batch_failed = self.upsert_points(
                 collection_name,
                 point_batch,
             )
             successful += batch_successful
             failed += batch_failed
-            if batch_failed:
-                break
 
         return successful, failed

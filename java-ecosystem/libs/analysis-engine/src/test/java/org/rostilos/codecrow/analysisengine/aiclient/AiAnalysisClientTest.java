@@ -207,6 +207,8 @@ class AiAnalysisClientTest {
         void setUp() throws Exception {
                 objectMapper = new ObjectMapper();
                 client = new AiAnalysisClient(restTemplate, queueService, objectMapper);
+                lenient().when(queueService.hasKey(AiAnalysisClient.CONSUMER_HEARTBEAT_KEY))
+                                .thenReturn(true);
                 System.setProperty(PromptDryRunMode.ENABLED_KEY, "false");
                 System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
         }
@@ -555,8 +557,8 @@ class AiAnalysisClientTest {
                 }
 
                 @Test
-                @DisplayName("should keep waiting while the exact job remains durably queued")
-                void shouldTreatExactQueueMembershipAsAdmissionLiveness() throws Exception {
+                @DisplayName("should report durable queue wait while a live consumer can still admit it")
+                void shouldReportDurableQueueWaitWithLiveConsumer() throws Exception {
                         AiAnalysisClient shortInactivityClient = new AiAnalysisClient(
                                         restTemplate, queueService, objectMapper, 20L);
                         String terminal = objectMapper.writeValueAsString(Map.of(
@@ -595,6 +597,66 @@ class AiAnalysisClientTest {
         @Nested
         @DisplayName("performAnalysis() error paths")
         class PerformAnalysisErrorTests {
+
+                @Test
+                @DisplayName("should fail before enqueue when no review consumer is alive")
+                void shouldFailWhenInferenceOrchestratorIsUnavailable() {
+                        when(queueService.hasKey(AiAnalysisClient.CONSUMER_HEARTBEAT_KEY))
+                                        .thenReturn(false);
+
+                        assertThatThrownBy(() -> client.performAnalysis(mockRequest))
+                                        .isInstanceOf(IOException.class)
+                                        .hasMessageContaining("no live review queue consumer");
+
+                        verify(queueService, never()).leftPush(anyString(), anyString());
+                }
+
+                @Test
+                @DisplayName("should fail queued work when the review consumer heartbeat expires")
+                void shouldFailWhenConsumerDisappearsBeforeAdmission() {
+                        AiAnalysisClient shortAdmissionClient = new AiAnalysisClient(
+                                        restTemplate,
+                                        queueService,
+                                        objectMapper,
+                                        1_000L,
+                                        1_000L);
+                        when(queueService.hasKey(AiAnalysisClient.CONSUMER_HEARTBEAT_KEY))
+                                        .thenReturn(true, true, false);
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(null);
+
+                        assertThatThrownBy(() ->
+                                        shortAdmissionClient.performAnalysis(mockRequest))
+                                        .isInstanceOf(IOException.class)
+                                        .hasMessageContaining(
+                                                        "became unavailable before the review job was admitted");
+
+                        verify(queueService).removeFromList(
+                                        eq("codecrow:analysis:jobs"),
+                                        anyString());
+                }
+
+                @Test
+                @DisplayName("should fail work that exceeds the bounded admission wait")
+                void shouldFailWhenWorkerCapacityDoesNotAdmitJobInTime() {
+                        AiAnalysisClient shortAdmissionClient = new AiAnalysisClient(
+                                        restTemplate,
+                                        queueService,
+                                        objectMapper,
+                                        1_000L,
+                                        10L);
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenAnswer(invocation -> {
+                                                Thread.sleep(12L);
+                                                return null;
+                                        });
+
+                        assertThatThrownBy(() ->
+                                        shortAdmissionClient.performAnalysis(mockRequest))
+                                        .isInstanceOf(IOException.class)
+                                        .hasMessageContaining(
+                                                        "was not admitted by Inference Orchestrator");
+                }
 
                 @Test
                 @DisplayName("should throw IOException when AI service returns error event")

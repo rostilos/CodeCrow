@@ -6,6 +6,8 @@ import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 from dataclasses import dataclass
 
+from llama_index.core.schema import Document
+
 from rag_pipeline.core.splitter.splitter import (
     ASTCodeSplitter,
     ASTChunk,
@@ -773,6 +775,26 @@ class TestStaticMethods:
 
     def test_is_ast_supported_unknown(self):
         assert ASTCodeSplitter.is_ast_supported("test.xyz") is False
+
+
+def test_resilient_splitter_quarantines_only_the_failing_file():
+    splitter = ASTCodeSplitter()
+    good_node = MagicMock()
+
+    def split(documents, capabilities=None):
+        path = documents[0].metadata["path"]
+        if path == "src/bad.custom":
+            raise ValueError("invalid project syntax")
+        return [good_node]
+
+    splitter.split_documents = MagicMock(side_effect=split)
+    nodes, skipped_paths = splitter.split_documents_resilient([
+        Document(text="valid", metadata={"path": "src/good.custom"}),
+        Document(text="invalid", metadata={"path": "src/bad.custom"}),
+    ])
+
+    assert nodes == [good_node]
+    assert skipped_paths == ("src/bad.custom",)
 
 
 # ── _get_text_splitter ──
