@@ -12,7 +12,6 @@ from llama_index.core.vector_stores import MetadataFilters, MetadataFilter, Filt
 from qdrant_client.http.models import FieldCondition, MatchValue, MatchAny
 
 from .base import RAGQueryBase
-from ..core.index_representation import IndexCompatibilityError
 from ..models.instructions import InstructionType, format_query
 
 logger = logging.getLogger(__name__)
@@ -109,13 +108,8 @@ class SemanticSearchMixin:
             nodes = retriever.retrieve(formatted_query)
 
             results = []
-            incompatible_count = 0
             for node in nodes:
                 metadata = node.node.metadata
-
-                if not self._plugin_identity_compatible(metadata):
-                    incompatible_count += 1
-                    continue
 
                 if any(
                     metadata.get(marker)
@@ -144,18 +138,9 @@ class SemanticSearchMixin:
                 if len(results) >= result_limit:
                     break
 
-            if incompatible_count:
-                logger.warning(
-                    "Semantic search discarded %d result(s) with stale or "
-                    "unknown plugin descriptor identity",
-                    incompatible_count,
-                )
-
             logger.info(f"Found {len(results)} results across {len(branches)} branches")
             return results
 
-        except IndexCompatibilityError:
-            raise
         except Exception as e:
             logger.error(f"Error during multi-branch semantic search: {e}")
             return []

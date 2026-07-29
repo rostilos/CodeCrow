@@ -265,11 +265,6 @@ def _runtime_plugin_identity(request: ReviewRequestDto) -> dict[str, Any]:
             "quality capture requires dependency-stable repository plugin order"
         )
     runtime_descriptor = catalog.registry.fingerprint_for(plugin_ids)
-    if capabilities.descriptorFingerprint != runtime_descriptor:
-        raise ValueError(
-            "quality capture requires the request plugin descriptor fingerprint "
-            "to match the inference runtime"
-        )
     return {
         "status": "resolved",
         "repositoryPlugins": list(plugin_ids),
@@ -279,7 +274,9 @@ def _runtime_plugin_identity(request: ReviewRequestDto) -> dict[str, Any]:
         "implementationFingerprint": (
             catalog.implementation_fingerprint(plugin_ids)
         ),
-        "descriptorMatch": True,
+        "descriptorMatch": (
+            capabilities.descriptorFingerprint == runtime_descriptor
+        ),
     }
 
 

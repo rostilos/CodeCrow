@@ -28,7 +28,7 @@ from ...utils.utils import clean_archive_path, make_namespace
 from ..index_representation import (
     INDEX_REPRESENTATION_PAYLOAD_KEY,
     index_representation_fingerprint,
-    require_compatible_branch_representation,
+    observe_branch_representation,
 )
 from .collection_manager import CollectionManager
 from .branch_manager import BranchManager
@@ -1171,7 +1171,7 @@ class FileOperations:
                 )
         revision = commit or branch
         self.collection_manager.ensure_collection_exists(collection_name)
-        require_compatible_branch_representation(
+        observe_branch_representation(
             self.client,
             collection_name,
             branch,
@@ -1193,7 +1193,7 @@ class FileOperations:
             snapshots,
             plugin_ids,
             _fingerprint,
-            stored_descriptor_fingerprint,
+            _stored_descriptor_fingerprint,
             _stored_implementation_fingerprint,
         ) = load_repository_snapshots(
             self.client,
@@ -1243,24 +1243,11 @@ class FileOperations:
         if capabilities is not None:
             if self.plugin_runtime is None or self.plugin_catalog is None:
                 raise RuntimeError("repository plugins are unavailable")
-            current_descriptor_fingerprint = (
-                self.plugin_catalog.registry.fingerprint_for(
-                    capabilities.repository_plugins
-                )
-            )
             implementation_fingerprint = (
                 self.plugin_catalog.implementation_fingerprint(
                     capabilities.repository_plugins
                 )
             )
-            if (
-                stored_descriptor_fingerprint != current_descriptor_fingerprint
-            ):
-                raise IncrementalIndexPreconditionError(
-                    "indexed repository plugin descriptors are incompatible "
-                    f"with branch '{branch}'; reindex the branch before applying "
-                    "an incremental update"
-                )
             repository_analysis_plugins = (
                 self.plugin_runtime.repository_analysis_plugins(capabilities)
             )

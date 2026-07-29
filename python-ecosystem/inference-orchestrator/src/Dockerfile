@@ -18,7 +18,7 @@ RUN apt-get update && \
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip check && \
-    python -c "from mcp.shared.context import RequestContext; from mcp_use import MCPClient"
+    python -c "from mcp.shared.context import RequestContext; from mcp_use import MCPClient; import tree_sitter_typescript"
 
 
 # --- Builder Stage 2: Copy and Install Application Modules ---

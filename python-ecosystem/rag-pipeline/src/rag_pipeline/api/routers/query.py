@@ -5,8 +5,6 @@ from fastapi import APIRouter, HTTPException
 from qdrant_client.models import Filter, FieldCondition, MatchAny, MatchValue
 
 from ..models import QueryRequest, PRContextRequest, DeterministicContextRequest
-from ...core.index_representation import IndexCompatibilityError
-
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["query"])
 
@@ -44,9 +42,6 @@ def semantic_search(request: QueryRequest):
             filter_language=request.filter_language
         )
         return {"results": results}
-    except IndexCompatibilityError as e:
-        logger.warning("Rejected search against incompatible index: %s", e)
-        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"Error performing search: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -161,9 +156,6 @@ def get_pr_context(request: PRContextRequest):
         }
 
         return {"context": context}
-    except IndexCompatibilityError as e:
-        logger.warning("Rejected PR context against incompatible index: %s", e)
-        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting PR context: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -371,12 +363,6 @@ def get_deterministic_context(request: DeterministicContextRequest):
             additional_identifiers=request.additional_identifiers
         )
         return {"context": context}
-    except IndexCompatibilityError as e:
-        logger.warning(
-            "Rejected deterministic context against incompatible index: %s",
-            e,
-        )
-        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting deterministic context: {e}")
         raise HTTPException(status_code=500, detail=str(e))

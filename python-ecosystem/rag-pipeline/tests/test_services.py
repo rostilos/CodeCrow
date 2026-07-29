@@ -100,7 +100,7 @@ class TestRAGQueryBase:
     @patch("rag_pipeline.services.base.create_embedding_model")
     @patch("rag_pipeline.services.base.get_embedding_model_info")
     @patch("rag_pipeline.services.base.QdrantClient")
-    def test_plugin_identity_requires_descriptor_but_accepts_older_build_content(
+    def test_plugin_identity_fingerprints_do_not_filter_stored_points(
         self, MockQdrant, mock_info, mock_create
     ):
         from rag_pipeline.services.base import RAGQueryBase
@@ -111,28 +111,15 @@ class TestRAGQueryBase:
         catalog.registry.fingerprint_for.return_value = "sha256:descriptor"
         catalog.implementation_fingerprint.return_value = "sha256:implementation"
         base = RAGQueryBase(_mock_config(), plugin_catalog=catalog)
-        current = {
+        legacy = SimpleNamespace(payload={
             "plugin_ids": ["python", "fastapi"],
-            "plugin_descriptor_fingerprint": "sha256:descriptor",
-            "plugin_implementation_fingerprint": "sha256:implementation",
-            "index_representation_fingerprint": (
-                base.index_representation_fingerprint
-            ),
-        }
-
-        assert base._plugin_identity_compatible(current) is True
-        assert base._plugin_identity_compatible({
-            **current,
+            "plugin_descriptor_fingerprint": "sha256:other-descriptor",
             "plugin_implementation_fingerprint": "sha256:old",
             "index_representation_fingerprint": "sha256:older-host",
-        }) is True
-        assert base._plugin_identity_compatible({
-            **current,
-            "plugin_descriptor_fingerprint": "sha256:other-descriptor",
-        }) is False
-        catalog.registry.fingerprint_for.assert_called_once_with(
-            ("python", "fastapi")
-        )
+        })
+
+        assert base._filter_plugin_compatible_points([legacy]) == [legacy]
+        catalog.registry.fingerprint_for.assert_not_called()
         catalog.implementation_fingerprint.assert_not_called()
 
 
@@ -153,7 +140,10 @@ class TestRAGQueryService:
         service = RAGQueryService(_mock_config(), plugin_catalog=catalog)
 
         assert service.plugin_catalog is catalog
-        assert service._plugin_identity_cache == {}
+        point = SimpleNamespace(payload={
+            "plugin_descriptor_fingerprint": "sha256:legacy",
+        })
+        assert service._filter_plugin_compatible_points([point]) == [point]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -209,8 +199,6 @@ class TestSemanticSearchDedup:
         mixin._get_or_create_index = MagicMock(return_value=index)
         mixin._require_compatible_branches = MagicMock()
         mixin._supports_instructions = False
-        mixin._plugin_identity_compatible = MagicMock(return_value=True)
-
         results = mixin.semantic_search_multi_branch(
             query="service",
             workspace="ws",
@@ -226,7 +214,7 @@ class TestSemanticSearchDedup:
         filters = index.as_retriever.call_args.kwargs["filters"].filters
         assert [metadata_filter.key for metadata_filter in filters] == ["branch"]
 
-    def test_search_discards_incompatible_plugin_descriptor_before_result_limit(self):
+    def test_search_does_not_filter_results_by_plugin_build_identity(self):
         from rag_pipeline.services.semantic_search import SemanticSearchMixin
 
         stale_node = SimpleNamespace(
@@ -255,8 +243,6 @@ class TestSemanticSearchDedup:
         mixin._get_or_create_index = MagicMock(return_value=index)
         mixin._require_compatible_branches = MagicMock()
         mixin._supports_instructions = False
-        mixin._plugin_identity_compatible = lambda metadata: metadata["compatible"]
-
         results = mixin.semantic_search_multi_branch(
             query="service",
             workspace="ws",
@@ -265,7 +251,7 @@ class TestSemanticSearchDedup:
             top_k=1,
         )
 
-        assert [result["text"] for result in results] == ["current"]
+        assert [result["text"] for result in results] == ["stale", "current"]
 
 
 # ─────────────────────────────────────────────────────────────

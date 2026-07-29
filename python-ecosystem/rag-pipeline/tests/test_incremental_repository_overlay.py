@@ -146,7 +146,7 @@ def _repository_facts(root: Path, revision: str, catalog):
     return build_repository_facts(root, revision, paths, catalog.registry)
 
 
-def test_incremental_di_change_restores_snapshot_and_replaces_effective_graph(tmp_path):
+def test_incremental_di_change_accepts_legacy_identity_and_replaces_graph(tmp_path):
     original = "Acme\\Checkout\\Model\\Cart"
     replacement = "Acme\\Checkout\\Model\\AlternativeCart"
     _write_repository(tmp_path, original)
@@ -210,6 +210,18 @@ def test_incremental_di_change_restores_snapshot_and_replaces_effective_graph(tm
     )
     assert successful == len(initial_nodes)
     assert failed == 0
+
+    # A deployment/source change must never make an otherwise usable branch
+    # require a full reindex. Stored identity hashes are provenance only.
+    initial_points = scroll_branch_points(client, collection, "main")
+    client.set_payload(
+        collection_name=collection,
+        points=[point.id for point in initial_points],
+        payload={
+            "plugin_descriptor_fingerprint": "sha256:" + "8" * 64,
+            "plugin_implementation_fingerprint": "sha256:" + "9" * 64,
+        },
+    )
 
     _write_repository(tmp_path, replacement)
     loader = DocumentLoader(SimpleNamespace(
@@ -609,7 +621,7 @@ def test_incremental_update_rejects_missing_repository_analysis_snapshots(
 ):
     monkeypatch.setattr(
         "rag_pipeline.core.index_manager.indexer."
-        "require_compatible_branch_representation",
+        "observe_branch_representation",
         lambda *_args, **_kwargs: None,
     )
     _write_repository(tmp_path, "Acme\\Checkout\\Model\\Cart")

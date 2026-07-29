@@ -9,7 +9,6 @@ from ..models import (
     DeleteBranchRequest, CleanupStaleBranchesRequest,
     EstimateRequest, EstimateResponse,
 )
-from ...core.index_representation import IndexCompatibilityError
 from ...core.repository_overlay import IncrementalIndexPreconditionError
 
 logger = logging.getLogger(__name__)
@@ -117,7 +116,7 @@ def update_files(request: UpdateFilesRequest):
             commit=request.commit
         )
         return stats
-    except (IndexCompatibilityError, IncrementalIndexPreconditionError) as e:
+    except IncrementalIndexPreconditionError as e:
         logger.warning(f"Incremental update precondition failed: {e}")
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
@@ -138,7 +137,7 @@ def delete_files(request: DeleteFilesRequest):
             commit=request.commit,
         )
         return stats
-    except (IndexCompatibilityError, IncrementalIndexPreconditionError) as e:
+    except IncrementalIndexPreconditionError as e:
         logger.warning(f"Incremental delete precondition failed: {e}")
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
@@ -165,7 +164,7 @@ def apply_changes(request: ApplyChangesRequest):
             branch=request.branch,
             commit=request.commit,
         )
-    except (IndexCompatibilityError, IncrementalIndexPreconditionError) as e:
+    except IncrementalIndexPreconditionError as e:
         logger.warning(f"Incremental change-set precondition failed: {e}")
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:

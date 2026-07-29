@@ -158,7 +158,7 @@ normal review pipeline continues.
 | Resilient Writes    | Quarantines malformed files and exact rejected points while retaining valid content; systemic Qdrant failures still prevent activation                    |
 | Incremental Reindex | Applies one pinned commit change set and replaces changed semantic chunks together with affected graph and state groups                                    |
 | PR Context          | Uses an immutable, commit-pinned PR overlay so changed files do not retrieve stale base-branch copies                                                      |
-| Compatibility Guard | Source-build fingerprints are provenance only and never force a reindex; durable plugin descriptor, snapshot-integrity, and Qdrant vector-shape checks remain enforced |
+| Compatibility Guard | Host, selection, descriptor, and implementation fingerprints are provenance only and never force a reindex or filter context; snapshot integrity and Qdrant vector shape remain enforced |
 | Prompt Budget       | Plugin and RAG evidence share bounded context budgets; plugins cannot create an additional model stage                                                     |
 
 The Vector Storage Explorer exposes the different point types and their

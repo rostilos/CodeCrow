@@ -19,8 +19,7 @@ from ...core.pr_overlay_identity import (
 from ...core.review_grouping import review_groups_from_architecture_payloads
 from ...core.index_representation import (
     INDEX_REPRESENTATION_PAYLOAD_KEY,
-    IndexCompatibilityError,
-    require_compatible_branch_representation,
+    observe_branch_representation,
 )
 from ...core.pr_overlay_representation import (
     PR_OVERLAY_REPRESENTATION_PAYLOAD_KEY,
@@ -144,7 +143,7 @@ def index_pr_files(request: PRIndexRequest):
         overlay_representation_fingerprint = (
             index_manager.pr_overlay_representation_fingerprint
         )
-        require_compatible_branch_representation(
+        observe_branch_representation(
             index_manager.qdrant_client,
             collection_name,
             target_branch,
@@ -154,7 +153,7 @@ def index_pr_files(request: PRIndexRequest):
             snapshots,
             stored_plugin_ids,
             stored_fingerprint,
-            stored_descriptor_fingerprint,
+            _stored_descriptor_fingerprint,
             _stored_implementation_fingerprint,
         ) = load_repository_snapshots(
             index_manager.qdrant_client,
@@ -168,45 +167,12 @@ def index_pr_files(request: PRIndexRequest):
                 or index_manager.plugin_runtime is None
             ):
                 raise RuntimeError("repository plugins are unavailable")
-            requested_descriptor_fingerprint = (
-                index_manager.plugin_catalog.registry.fingerprint_for(
-                    requested_plugin_ids
-                )
-            )
-            if (
-                request.plugin_descriptor_fingerprint
-                != requested_descriptor_fingerprint
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "review request plugin descriptors do not match the RAG "
-                        "runtime; deploy one tested backend source state before review"
-                    ),
-                )
         if stored_plugin_ids:
             if (
                 index_manager.plugin_catalog is None
                 or index_manager.plugin_runtime is None
             ):
                 raise RuntimeError("repository plugins are unavailable")
-            current_stored_descriptor_fingerprint = (
-                index_manager.plugin_catalog.registry.fingerprint_for(
-                    stored_plugin_ids
-                )
-            )
-            if (
-                stored_descriptor_fingerprint
-                != current_stored_descriptor_fingerprint
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"target branch '{target_branch}' was indexed with "
-                        "different or unknown plugin descriptors; "
-                        f"reindex target branch '{target_branch}' before review"
-                    ),
-                )
         # The PR request is selected from changed/enriched paths, while the
         # target-branch capability set is selected from the whole repository.
         # Therefore the PR set is normally a subset and its selection
@@ -667,7 +633,7 @@ def index_pr_files(request: PRIndexRequest):
 
     except HTTPException:
         raise
-    except (IndexCompatibilityError, IncrementalIndexPreconditionError) as e:
+    except IncrementalIndexPreconditionError as e:
         logger.warning("Rejected PR indexing against incompatible index: %s", e)
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
