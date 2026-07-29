@@ -54,3 +54,5 @@ java-ecosystem/services/pipeline-agent/runtime-plugins/
 **/newrelic.yml
 
 tools/environment/dumps/
+tools/environment/qdrant-dumps/*
+!tools/environment/qdrant-dumps/.gitkeep
