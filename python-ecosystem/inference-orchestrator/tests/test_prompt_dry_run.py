@@ -636,7 +636,7 @@ async def test_full_pipeline_capture_persists_real_context_artifact(
 
 
 @pytest.mark.asyncio
-async def test_full_pipeline_capture_fails_when_pr_overlay_is_not_indexed(
+async def test_full_pipeline_capture_continues_when_pr_overlay_is_not_indexed(
     monkeypatch,
     tmp_path,
 ):
@@ -664,7 +664,8 @@ async def test_full_pipeline_capture_fails_when_pr_overlay_is_not_indexed(
     )
 
     assert rag.index_requests
-    assert artifact["pipeline"]["completed"] is True
+    assert artifact["status"] == "prompt_capture_completed"
+    assert artifact["promptArtifact"]["pipeline"]["completed"] is True
     assert list(tmp_path.iterdir())
 
 
@@ -718,7 +719,6 @@ def test_review_snapshot_allows_missing_optional_pr_identity():
     assert identity.base_revision is None
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("revision", ["abc123", "HEAD", "release/10x"])
 def test_review_snapshot_accepts_provider_native_git_revisions(revision):
     request = _request().model_copy(update={

@@ -80,8 +80,10 @@ services:
     restart: unless-stopped
 
   web-server:
+    image: codecrow-local-web-server:latest
     build:
       context: ../java-ecosystem/services/web-server
+      dockerfile: Dockerfile.observable
     container_name: codecrow-web-application
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-codecrow_ai}
@@ -139,9 +141,10 @@ services:
     restart: unless-stopped
 
   pipeline-agent:
+    image: codecrow-local-pipeline-agent:latest
     build:
       context: ..
-      dockerfile: java-ecosystem/services/pipeline-agent/Dockerfile
+      dockerfile: java-ecosystem/services/pipeline-agent/Dockerfile.observable
     container_name: codecrow-pipeline-agent
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-codecrow_ai}
@@ -208,9 +211,10 @@ services:
       - "host.docker.internal:host-gateway"
 
   inference-orchestrator:
+    image: codecrow-local-inference-orchestrator:latest
     build:
       context: ..
-      dockerfile: python-ecosystem/inference-orchestrator/src/Dockerfile
+      dockerfile: python-ecosystem/inference-orchestrator/src/Dockerfile.observable
     container_name: codecrow-inference-orchestrator
     ports:
       - "127.0.0.1:${INFERENCE_ORCHESTRATOR_HOST_PORT:-8015}:8000"
@@ -262,9 +266,10 @@ services:
           memory: 512M
 
   rag-pipeline:
+    image: codecrow-local-rag-pipeline:latest
     build:
       context: ..
-      dockerfile: python-ecosystem/rag-pipeline/Dockerfile
+      dockerfile: python-ecosystem/rag-pipeline/Dockerfile.observable
     container_name: codecrow-rag-pipeline
     environment:
       CODECROW_WEB_SERVER_URL: http://web-server:8081
@@ -303,6 +308,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   web-frontend:
+    image: codecrow-local-web-frontend:latest
     build:
       context: ../frontend
     container_name: codecrow-web-frontend
