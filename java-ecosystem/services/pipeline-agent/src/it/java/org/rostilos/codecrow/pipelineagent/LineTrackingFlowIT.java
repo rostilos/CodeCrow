@@ -112,7 +112,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
                 .thenAnswer(inv -> CommitRangeContext.firstAnalysis(inv.getArgument(3)));
         when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), anyList()))
                 .thenReturn(resource("line-tracking/diffs/merge-pr3.diff"));
-        when(branchArchiveService.downloadAndExtractFiles(any(), anyString(), anyString(), anyString(), anySet()))
+        when(branchArchiveService.downloadSnapshot(any(), anyString(), anyString(), anyString(), anySet()))
                 .thenAnswer(inv -> {
                     @SuppressWarnings("unchecked")
                     Set<String> needed = inv.getArgument(4);
@@ -123,7 +123,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
                             contents.put(file, app);
                         }
                     }
-                    return contents;
+                    return new BranchArchiveService.ArchiveSnapshot(contents, contents.keySet());
                 });
     }
 

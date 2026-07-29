@@ -234,9 +234,12 @@ for the detailed invariants and failure behavior.
 ## Self-Hosting and Build Verification
 
 The interactive setup configures secrets and chooses OpenRouter or Ollama for
-embeddings. The production build synchronizes the pinned frontend submodule,
-rejects local frontend drift, builds Java artifacts, assembles the Java plugin
-bundle, builds the Compose services, and waits for them to become healthy.
+embeddings. The local production build synchronizes the pinned frontend
+submodule, rejects local frontend drift, recreates the two isolated Python 3.11
+CI environments, and runs the same Python, plugin-boundary, Maven `verify`, and
+observable-image Buildx gates as CI/CD. Only after every gate passes does it
+replace the local Compose services with those validated images and wait for
+health checks.
 
 ```bash
 cd deployment
@@ -247,8 +250,9 @@ cd deployment
 | Gate                | Command or CI Behavior                                                                                                            |
 | :------------------ | :-------------------------------------------------------------------------------------------------------------------------------- |
 | Java                | `cd java-ecosystem && mvn clean verify`                                                                                           |
-| Python              | `deployment/ci/python-tests.sh` runs plugin-contract, RAG unit/integration, inference unit/integration, and review-quality suites |
+| Python              | CI and `production-build.sh` install each service's requirements separately, then run plugin-contract, RAG unit/integration, inference unit/integration, and review-quality suites |
 | Plugin Boundary     | `python3 tools/validate_plugin_boundaries.py` prevents concrete implementations from leaking into generic hosts                   |
+| Docker Images       | CI pushes and the local build loads images from the same contexts and observable Dockerfiles                                      |
 | Production Workflow | Manual dispatch; deployment waits for both Java/build and full Python test jobs unless explicitly deploying existing images       |
 
 ## Contributing

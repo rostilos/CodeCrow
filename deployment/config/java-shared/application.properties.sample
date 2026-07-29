@@ -181,6 +181,10 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 #codecrow.rag.api.timeout.read=120
 # RAG indexing timeout - 4 hours for large repositories
 #codecrow.rag.api.timeout.indexing=14400
+# Shared VCS acquisition threshold for incremental RAG and reconciliation
+# fallback. The legacy codecrow.rag.incremental.archive-file-threshold property
+# remains a fallback when this property is not set.
+#codecrow.vcs.file-retrieval.archive-threshold=25
 
 # Analysis Lock Configuration
 # Lock timeout - maximum time for a single analysis to hold a lock (in minutes)

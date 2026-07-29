@@ -6,6 +6,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
+import org.rostilos.codecrow.analysisengine.service.VcsFileRetrievalPolicy;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
@@ -43,6 +44,9 @@ class IncrementalRagUpdateServiceTest {
     @Mock
     private BranchArchiveService branchArchiveService;
 
+    @Mock
+    private VcsFileRetrievalPolicy fileRetrievalPolicy;
+
     private IncrementalRagUpdateService service;
     private Project testProject;
 
@@ -52,9 +56,11 @@ class IncrementalRagUpdateServiceTest {
                 vcsClientProvider,
                 ragPipelineClient,
                 ragIndexTrackingService,
-                branchArchiveService);
+                branchArchiveService,
+                fileRetrievalPolicy);
         ReflectionTestUtils.setField(service, "ragApiRetryDelayMs", 0L);
-        ReflectionTestUtils.setField(service, "archiveFileThreshold", 25);
+        lenient().when(fileRetrievalPolicy.archiveFileThreshold()).thenReturn(25);
+        lenient().when(fileRetrievalPolicy.shouldUseArchive(anyInt())).thenReturn(false);
 
         testProject = new Project();
         ReflectionTestUtils.setField(testProject, "id", 100L);
@@ -307,7 +313,6 @@ class IncrementalRagUpdateServiceTest {
     void testPerformIncrementalUpdate_UpdatesOnly() throws Exception {
         setupProjectWithWorkspace();
         ReflectionTestUtils.setField(service, "parallelRequests", 1);
-        ReflectionTestUtils.setField(service, "archiveFileThreshold", 1);
         VcsConnection vcsConn = new VcsConnection();
         VcsClient mockVcsClient = mock(VcsClient.class);
         doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
@@ -333,7 +338,7 @@ class IncrementalRagUpdateServiceTest {
     @Test
     void testPerformIncrementalUpdate_AboveThresholdUsesSingleArchiveAtCommit() throws Exception {
         setupProjectWithWorkspace();
-        ReflectionTestUtils.setField(service, "archiveFileThreshold", 2);
+        when(fileRetrievalPolicy.shouldUseArchive(3)).thenReturn(true);
         VcsConnection vcsConn = new VcsConnection();
         Set<String> changedFiles = new LinkedHashSet<>(List.of(
                 "src/A.java", "src/B.java", "src/C.java"));
@@ -361,7 +366,7 @@ class IncrementalRagUpdateServiceTest {
     @Test
     void testPerformIncrementalUpdate_ArchiveFailureDoesNotFallBackToPerFileCalls() throws Exception {
         setupProjectWithWorkspace();
-        ReflectionTestUtils.setField(service, "archiveFileThreshold", 1);
+        when(fileRetrievalPolicy.shouldUseArchive(2)).thenReturn(true);
         VcsConnection vcsConn = new VcsConnection();
         Set<String> changedFiles = new LinkedHashSet<>(List.of("src/A.java", "src/B.java"));
         doThrow(new IOException("Archive rate limited")).when(branchArchiveService)
@@ -378,6 +383,40 @@ class IncrementalRagUpdateServiceTest {
         verify(ragPipelineClient, never()).applyChanges(
                 anyList(), anyList(), nullable(String.class), anyString(),
                 anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testPerformIncrementalUpdate_RateLimitSwitchesRemainingBatchToArchive() throws Exception {
+        setupProjectWithWorkspace();
+        ReflectionTestUtils.setField(service, "parallelRequests", 1);
+        VcsConnection vcsConn = new VcsConnection();
+        VcsClient mockVcsClient = mock(VcsClient.class);
+        doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
+        when(fileRetrievalPolicy.isRateLimited(any(IOException.class))).thenReturn(true);
+        doThrow(new IOException("Unexpected response 429"))
+                .when(mockVcsClient)
+                .getFileContent(anyString(), anyString(), eq("src/A.java"), anyString());
+
+        Set<String> changedFiles = new LinkedHashSet<>(List.of("src/A.java", "src/B.java"));
+        doReturn(changedFiles).when(branchArchiveService).downloadAndExtractFilesToDirectory(
+                eq(vcsConn), eq("ws-slug"), eq("repo-slug"), eq("abc123"),
+                eq(changedFiles), any());
+        doReturn(Map.of("status", "success")).when(ragPipelineClient).applyChanges(
+                anyList(), anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123",
+                changedFiles, Set.of(), Set.of());
+
+        assertThat(result).containsEntry("status", "completed");
+        assertThat(result).containsEntry("fileFetchMode", "archive-after-rate-limit");
+        verify(mockVcsClient, times(1)).getFileContent(
+                "ws-slug", "repo-slug", "src/A.java", "abc123");
+        verify(mockVcsClient, never()).getFileContent(
+                "ws-slug", "repo-slug", "src/B.java", "abc123");
+        verify(branchArchiveService).downloadAndExtractFilesToDirectory(
+                eq(vcsConn), eq("ws-slug"), eq("repo-slug"), eq("abc123"),
+                eq(changedFiles), any());
     }
 
     @Test
