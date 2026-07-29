@@ -20,4 +20,4 @@ build/
 
 logs/**
 **/__pycache__/ 
-
+newrelic.ini

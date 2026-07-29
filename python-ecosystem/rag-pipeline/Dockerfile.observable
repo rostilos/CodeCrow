@@ -1,0 +1,63 @@
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY python-ecosystem/rag-pipeline/requirements.txt .
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# --- Production stage (no build-essential, saves ~340MB) ---
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed Python packages and executables, including newrelic-admin.
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+COPY python-ecosystem/rag-pipeline/src/ ./src/
+COPY python-ecosystem/rag-pipeline/main.py .
+COPY analysis-plugins/ ./plugins/
+
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+
+# Create cache directories with proper permissions
+RUN mkdir -p /tmp/.tiktoken_cache /tmp/.transformers_cache /tmp/.huggingface /tmp/.llama_index && \
+    chmod -R 777 /tmp && \
+    chown -R appuser:appgroup /app
+
+USER appuser
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src:/app/plugins/contracts/python
+ENV CODECROW_PLUGINS_ROOT=/app/plugins
+ENV HOME=/tmp
+ENV TIKTOKEN_CACHE_DIR=/tmp/.tiktoken_cache
+ENV TRANSFORMERS_CACHE=/tmp/.transformers_cache
+ENV HF_HOME=/tmp/.huggingface
+ENV LLAMA_INDEX_CACHE_DIR=/tmp/.llama_index
+# Allow concurrent indexing by running multiple Uvicorn workers
+ENV UVICORN_WORKERS=4
+
+# CPU Threading Optimization (can be overridden via .env)
+# These control parallelism for numerical operations
+ENV OMP_NUM_THREADS=4
+ENV MKL_NUM_THREADS=4
+ENV OPENBLAS_NUM_THREADS=4
+ENV NUMEXPR_NUM_THREADS=4
+
+# New Relic observability. The config file is mounted by production Compose.
+ENV NEW_RELIC_CONFIG_FILE=/app/newrelic.ini
+ENV NEW_RELIC_LOG_FILE_NAME=STDOUT
+
+EXPOSE 8001
+
+CMD ["newrelic-admin", "run-program", "python", "main.py"]

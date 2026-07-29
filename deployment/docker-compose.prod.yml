@@ -253,6 +253,8 @@ services:
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
       REDIS_URL: redis://redis:6379/1
+      # New Relic APM — points to the mounted config file
+      NEW_RELIC_CONFIG_FILE: /app/newrelic.ini
     ports:
       - "127.0.0.1:${RAG_PIPELINE_HOST_PORT:-8001}:8001"
     depends_on:
@@ -268,6 +270,7 @@ services:
       - source_code_tmp:/tmp
       - rag_logs:/app/logs
       - ./config/rag-pipeline/.env:/app/.env
+      - ./config/rag-pipeline/newrelic.ini:/app/newrelic.ini:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
