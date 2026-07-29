@@ -78,10 +78,11 @@ jobs:
           cache-dependency-path: ${{ matrix.requirements }}
 
       - name: Install Python test dependencies
+        env:
+          PYTHON_TEST_GROUP: ${{ matrix.test_group }}
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r "${{ matrix.requirements }}"
-          python -m pip check
+          chmod +x deployment/ci/install-python-test-dependencies.sh
+          deployment/ci/install-python-test-dependencies.sh
 
       - name: Run Python test group
         env:

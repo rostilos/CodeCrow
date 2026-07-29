@@ -98,7 +98,16 @@ def run_http_server(host: str = "0.0.0.0", port: int = 8000):
             logger.warning(f"New Relic ASGI wrapper failed: {e}")
 
     import uvicorn
-    uvicorn.run(app, host=host, port=port, log_level="info", timeout_keep_alive=300)
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+        timeout_keep_alive=300,
+        # New Relic exports a callable wrapper whose signature can otherwise
+        # be mistaken for an ASGI2 application by Uvicorn.
+        interface="asgi3",
+    )
 
 
 if __name__ == "__main__":

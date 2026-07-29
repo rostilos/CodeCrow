@@ -133,5 +133,8 @@ if __name__ == "__main__":
         "rag_pipeline.api.api:app",
         host="0.0.0.0",
         port=8001,
-        workers=workers
+        workers=workers,
+        # New Relic exports a callable wrapper whose signature Uvicorn 0.27
+        # otherwise misclassifies as an ASGI2 application.
+        interface="asgi3",
     )
