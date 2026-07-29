@@ -16,7 +16,9 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip check && \
+    python -c "from mcp.shared.context import RequestContext; from mcp_use import MCPClient"
 
 
 # --- Builder Stage 2: Copy and Install Application Modules ---
