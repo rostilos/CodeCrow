@@ -102,6 +102,20 @@ class RedisQueueServiceTest {
         assertThat(service.listContains("q", "payload")).isFalse();
     }
 
+    @Test
+    void removeFromList_shouldDeleteOnlyTheExactQueuedPayload() {
+        service.removeFromList("q", "payload");
+
+        verify(listOperations).remove("q", 1, "payload");
+    }
+
+    @Test
+    void hasKey_shouldRequireAnExistingHeartbeatKey() {
+        when(redisTemplate.hasKey("heartbeat")).thenReturn(true);
+
+        assertThat(service.hasKey("heartbeat")).isTrue();
+    }
+
     // ── setExpiry ────────────────────────────────────────────────────────
 
     @Test

@@ -5,6 +5,7 @@ Creates the FastAPI application, manages singleton lifecycle (startup/shutdown),
 and includes all routers. This is the thin orchestration layer.
 """
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Optional
 from fastapi import FastAPI
@@ -80,6 +81,16 @@ app.include_router(index_router)
 app.include_router(query_router)
 app.include_router(pr_router)
 app.include_router(inspect_router)
+
+# Uvicorn loads this module by import string in every worker. Wrap the exported
+# application here so each worker receives top-level ASGI instrumentation.
+if os.environ.get("NEW_RELIC_CONFIG_FILE"):
+    try:
+        import newrelic.agent
+        app = newrelic.agent.ASGIApplicationWrapper(app)
+        logger.info("New Relic ASGI wrapper applied")
+    except Exception as exc:
+        logger.warning("New Relic ASGI wrapper failed: %s", exc)
 
 
 if __name__ == "__main__":

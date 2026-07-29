@@ -173,6 +173,7 @@ services:
       PR_ENRICHMENT_MAX_FILE_SIZE_BYTES: ${PR_ENRICHMENT_MAX_FILE_SIZE_BYTES:-5242880}
       PR_ENRICHMENT_MAX_TOTAL_SIZE_BYTES: ${PR_ENRICHMENT_MAX_TOTAL_SIZE_BYTES:-20971520}
       ANALYSIS_QUEUE_INACTIVITY_TIMEOUT_MINUTES: ${ANALYSIS_QUEUE_INACTIVITY_TIMEOUT_MINUTES:-15}
+      ANALYSIS_QUEUE_ADMISSION_TIMEOUT_MINUTES: ${ANALYSIS_QUEUE_ADMISSION_TIMEOUT_MINUTES:-5}
       ANALYSIS_PROMPT_DRY_RUN_ENABLED: ${ANALYSIS_PROMPT_DRY_RUN_ENABLED:-false}
       ANALYSIS_PROMPT_DRY_RUN_PROJECT_IDS: ${ANALYSIS_PROMPT_DRY_RUN_PROJECT_IDS:-}
       #JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5006"
@@ -184,6 +185,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      inference-orchestrator:
         condition: service_healthy
       fix-permissions:
         condition: service_completed_successfully
@@ -212,15 +215,19 @@ services:
     ports:
       - "127.0.0.1:${INFERENCE_ORCHESTRATOR_HOST_PORT:-8015}:8000"
     depends_on:
-      - rag-pipeline
-      - web-server
-      - redis
+      rag-pipeline:
+        condition: service_healthy
+      web-server:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       CODECROW_API_URL: http://codecrow-web-application:8081
       PLATFORM_MCP_JAR: /app/codecrow-platform-mcp-1.0.jar
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       ANALYSIS_QUEUE_HEARTBEAT_SECONDS: ${ANALYSIS_QUEUE_HEARTBEAT_SECONDS:-30}
+      ANALYSIS_CONSUMER_HEARTBEAT_SECONDS: ${ANALYSIS_CONSUMER_HEARTBEAT_SECONDS:-5}
       ANALYSIS_PROMPT_DRY_RUN_ENABLED: ${ANALYSIS_PROMPT_DRY_RUN_ENABLED:-false}
       ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_PER_FILE: ${ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_PER_FILE:-6}
       ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_MAX_TOTAL: ${ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_MAX_TOTAL:-24}
@@ -236,6 +243,12 @@ services:
     volumes:
       - ./config/inference-orchestrator/.env:/app/.env
       - inference_orchestrator_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

@@ -16,7 +16,6 @@ from ..models.config import RAGConfig
 from ..utils.utils import make_project_namespace
 from ..core.embedding_factory import create_embedding_model, get_embedding_model_info
 from ..core.index_representation import (
-    INDEX_REPRESENTATION_PAYLOAD_KEY,
     index_representation_fingerprint,
     require_compatible_branch_representation,
 )
@@ -42,9 +41,7 @@ class RAGQueryBase:
             index_representation_fingerprint(config)
         )
         self._compatible_branch_cache: set[tuple[str, str]] = set()
-        self._plugin_identity_cache: Dict[
-            tuple[str, ...], tuple[str, str]
-        ] = {}
+        self._plugin_identity_cache: Dict[tuple[str, ...], str] = {}
         self.qdrant_client = QdrantClient(
             url=config.qdrant_url,
             api_key=config.qdrant_api_key or None,
@@ -61,18 +58,7 @@ class RAGQueryBase:
         self._index_cache_lock = threading.Lock()
 
     def _plugin_identity_compatible(self, metadata: Dict[str, Any]) -> bool:
-        """Return whether indexed plugin code matches the running RAG build.
-
-        Branches share one collection and a full reindex intentionally preserves
-        points from other branches. Build-content identity is therefore checked
-        per result rather than assumed from the active collection alias.
-        """
-        if (
-            self.plugin_catalog is not None
-            and metadata.get(INDEX_REPRESENTATION_PAYLOAD_KEY)
-            != self.index_representation_fingerprint
-        ):
-            return False
+        """Validate durable plugin descriptors, not deployment source hashes."""
         if self.plugin_catalog is None:
             return True
 
@@ -86,17 +72,15 @@ class RAGQueryBase:
         expected = self._plugin_identity_cache.get(normalized_ids)
         if expected is None:
             try:
-                expected = (
-                    self.plugin_catalog.registry.fingerprint_for(normalized_ids),
-                    self.plugin_catalog.implementation_fingerprint(normalized_ids),
+                expected = self.plugin_catalog.registry.fingerprint_for(
+                    normalized_ids
                 )
             except (KeyError, TypeError, ValueError):
                 return False
             self._plugin_identity_cache[normalized_ids] = expected
 
         return (
-            metadata.get("plugin_descriptor_fingerprint") == expected[0]
-            and metadata.get("plugin_implementation_fingerprint") == expected[1]
+            metadata.get("plugin_descriptor_fingerprint") == expected
         )
 
     def _require_compatible_branches(
@@ -104,7 +88,7 @@ class RAGQueryBase:
         collection_name: str,
         branches: List[str],
     ) -> None:
-        """Preflight branch representation once so stale indexes never look empty."""
+        """Confirm branch presence; build fingerprints are provenance only."""
         for branch in dict.fromkeys(branches):
             cache_key = (collection_name, branch)
             if cache_key in self._compatible_branch_cache:
@@ -128,7 +112,7 @@ class RAGQueryBase:
         if omitted:
             logger.warning(
                 "Discarded %d indexed point(s) with stale or unknown plugin "
-                "descriptor/build-content identity",
+                "descriptor identity",
                 omitted,
             )
         return compatible

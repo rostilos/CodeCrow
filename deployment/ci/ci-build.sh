@@ -169,7 +169,7 @@ set_image_definition() {
     rag-pipeline)
       IMAGE_NAME="codecrow/rag-pipeline"
       CONTEXT="."
-      DOCKERFILE="python-ecosystem/rag-pipeline/Dockerfile"
+      DOCKERFILE="python-ecosystem/rag-pipeline/Dockerfile.observable"
       ;;
     web-frontend)
       IMAGE_NAME="codecrow/web-frontend"

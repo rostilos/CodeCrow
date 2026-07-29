@@ -95,6 +95,43 @@ class RepositoryIndexer:
         )
 
     @staticmethod
+    def accept_recoverable_repository_diagnostics(
+        diagnostics,
+        phase: str,
+    ) -> set[str]:
+        """Log quarantined project inputs and reject only runtime-level faults."""
+        recoverable = [
+            diagnostic for diagnostic in diagnostics
+            if diagnostic.recoverable
+        ]
+        fatal = [
+            diagnostic for diagnostic in diagnostics
+            if not diagnostic.recoverable
+        ]
+        for diagnostic in recoverable:
+            logger.warning(
+                "Skipping invalid repository input during %s "
+                "(plugin=%s code=%s path=%s): %s",
+                phase,
+                diagnostic.plugin_id or "plugin",
+                diagnostic.code,
+                diagnostic.path or "<repository>",
+                diagnostic.message,
+            )
+        if fatal:
+            summary = "; ".join(
+                f"{diagnostic.plugin_id or 'plugin'}:{diagnostic.code}: "
+                f"{diagnostic.message}"
+                for diagnostic in fatal[:10]
+            )
+            raise RuntimeError(f"{phase} failed: {summary}")
+        return {
+            diagnostic.path
+            for diagnostic in recoverable
+            if diagnostic.path is not None
+        }
+
+    @staticmethod
     def _architecture_nodes(
         analysis,
         capabilities,
@@ -576,7 +613,8 @@ class RepositoryIndexer:
         document_count = 0
         chunk_count = 0
         successful_chunks = 0
-        failed_chunks = 0
+        skipped_chunk_count = 0
+        skipped_file_paths: set[str] = set()
         preserved_point_count = 0
 
         try:
@@ -609,8 +647,21 @@ class RepositoryIndexer:
                 
                 documents = self.loader.load_file_batch(
                     file_batch, repo_path_obj, workspace, project, branch, commit,
-                    strict=True,
+                    strict=False,
                 )
+                loaded_paths = {
+                    document.metadata["path"] for document in documents
+                }
+                missing_paths = {
+                    clean_archive_path(Path(path).as_posix())
+                    for path in file_batch
+                } - loaded_paths
+                for path in sorted(missing_paths):
+                    logger.warning(
+                        "Skipping repository file that could not be loaded: %s",
+                        path,
+                    )
+                skipped_file_paths.update(missing_paths)
                 if not documents:
                     continue
 
@@ -634,14 +685,19 @@ class RepositoryIndexer:
                     for document in documents
                     if document.metadata["path"] in semantic_paths
                 ]
-                document_count += len(semantic_documents)
                 if not semantic_documents:
                     del documents
                     continue
                 
-                chunks = self.splitter.split_documents(
+                chunks, split_skipped_paths = (
+                    self.splitter.split_documents_resilient(
                     semantic_documents,
                     capabilities=capabilities,
+                    )
+                )
+                skipped_file_paths.update(split_skipped_paths)
+                document_count += (
+                    len(semantic_documents) - len(split_skipped_paths)
                 )
                 identity_metadata = _plugin_identity_metadata(
                     capabilities,
@@ -663,12 +719,13 @@ class RepositoryIndexer:
                     chunks, pending_collection_name, workspace, project, branch
                 )
                 successful_chunks += success
-                failed_chunks += failed
-
+                skipped_chunk_count += failed
                 if failed:
-                    raise RuntimeError(
-                        f"Index write was partial in batch {batch_num}: "
-                        f"{failed} of {batch_chunk_count} chunks failed"
+                    logger.warning(
+                        "Skipped %s rejected chunks in batch %s; "
+                        "continuing repository indexing",
+                        failed,
+                        batch_num,
                     )
                 
                 logger.info(
@@ -688,12 +745,12 @@ class RepositoryIndexer:
             snapshot_nodes = []
             if analysis_handle is not None:
                 repository_analysis, diagnostics = analysis_handle.finish()
-                if diagnostics:
-                    summary = "; ".join(
-                        f"{diagnostic.plugin_id or 'plugin'}:{diagnostic.code}: {diagnostic.message}"
-                        for diagnostic in diagnostics[:10]
+                skipped_file_paths.update(
+                    self.accept_recoverable_repository_diagnostics(
+                        diagnostics,
+                        "repository architecture analysis",
                     )
-                    raise RuntimeError(f"Repository architecture analysis is incomplete: {summary}")
+                )
 
                 architecture_nodes = self._architecture_nodes(
                     repository_analysis,
@@ -761,11 +818,12 @@ class RepositoryIndexer:
                     branch,
                 )
                 successful_chunks += success
-                failed_chunks += failed
+                skipped_chunk_count += failed
                 if failed:
-                    raise RuntimeError(
-                        "Architecture context index write was partial: "
-                        f"{failed} of {architecture_count} chunks failed"
+                    logger.warning(
+                        "Skipped %s rejected deterministic context points; "
+                        "continuing repository indexing",
+                        failed,
                     )
                 logger.info(
                     "Indexed %s deterministic architecture packets, %s exact source parts, "
@@ -778,21 +836,15 @@ class RepositoryIndexer:
 
             logger.info(
                 f"Streaming indexing complete: {document_count} files, "
-                f"{successful_chunks}/{chunk_count} chunks indexed ({failed_chunks} failed)"
+                f"{successful_chunks}/{chunk_count} chunks indexed "
+                f"({skipped_chunk_count} skipped across "
+                f"{len(skipped_file_paths)} files)"
             )
-
-            if failed_chunks or successful_chunks != chunk_count:
-                raise RuntimeError(
-                    "Index generation is incomplete: "
-                    f"expected={chunk_count}, successful={successful_chunks}, failed={failed_chunks}"
-                )
 
             # Verify and perform atomic swap
             pending_info = self.point_ops.client.get_collection(pending_collection_name)
             actual_point_count = int(pending_info.points_count or 0)
             expected_point_count = preserved_point_count + successful_chunks
-            if actual_point_count == 0:
-                raise RuntimeError("Pending collection is empty after indexing")
             if actual_point_count != expected_point_count:
                 raise RuntimeError(
                     "Pending collection point count is incomplete: "
@@ -818,7 +870,12 @@ class RepositoryIndexer:
 
             try:
                 self.stats_manager.store_metadata(
-                    workspace, project, branch, commit, document_count, chunk_count
+                    workspace,
+                    project,
+                    branch,
+                    commit,
+                    document_count,
+                    successful_chunks,
                 )
             except Exception:
                 self._rollback_atomic_swap(alias_name, old_target)
@@ -839,6 +896,8 @@ class RepositoryIndexer:
             namespace=namespace,
             document_count=document_count,
             chunk_count=successful_chunks,
+            skipped_file_count=len(skipped_file_paths),
+            skipped_chunk_count=skipped_chunk_count,
             last_updated=datetime.now(timezone.utc).isoformat(),
             workspace=workspace,
             project=project,
@@ -873,6 +932,10 @@ class RepositoryIndexer:
 
 class FileOperations:
     """Apply rollback-safe file and neutral repository-graph updates."""
+
+    accept_recoverable_repository_diagnostics = staticmethod(
+        RepositoryIndexer.accept_recoverable_repository_diagnostics
+    )
     
     def __init__(
         self,
@@ -1009,24 +1072,32 @@ class FileOperations:
             point.id for point in new_points if str(point.id) not in old_ids
         ]
 
-        successful, failed = self.point_ops.upsert_points(
-            collection_name,
-            new_points,
-        )
-        if failed or successful != len(new_points):
+        try:
+            write_result = self.point_ops.upsert_points_detailed(
+                collection_name,
+                new_points,
+            )
+        except Exception:
             self._restore_old_points(
                 collection_name,
                 old_points,
                 new_only_ids,
             )
-            raise RuntimeError(
-                "incremental index write was partial: "
-                f"expected={len(new_points)}, successful={successful}, failed={failed}"
+            raise
+
+        skipped_ids = {
+            str(point.id) for point in write_result.skipped_points
+        }
+        if skipped_ids:
+            logger.warning(
+                "Quarantining %s rejected points during incremental replacement",
+                len(skipped_ids),
             )
+        accepted_new_ids = new_ids - skipped_ids
 
         stale_ids = [
             record.id for point_id, record in old_points.items()
-            if point_id not in new_ids
+            if point_id not in accepted_new_ids
         ]
         try:
             self._delete_point_ids(collection_name, stale_ids)
@@ -1037,7 +1108,7 @@ class FileOperations:
                 new_only_ids,
             )
             raise
-        return successful
+        return write_result.successful
 
     def _apply_change_set(
         self,
@@ -1123,7 +1194,7 @@ class FileOperations:
             plugin_ids,
             _fingerprint,
             stored_descriptor_fingerprint,
-            stored_implementation_fingerprint,
+            _stored_implementation_fingerprint,
         ) = load_repository_snapshots(
             self.client,
             collection_name,
@@ -1184,11 +1255,9 @@ class FileOperations:
             )
             if (
                 stored_descriptor_fingerprint != current_descriptor_fingerprint
-                or stored_implementation_fingerprint
-                != implementation_fingerprint
             ):
                 raise IncrementalIndexPreconditionError(
-                    "indexed repository plugin implementation is incompatible "
+                    "indexed repository plugin descriptors are incompatible "
                     f"with branch '{branch}'; reindex the branch before applying "
                     "an incremental update"
                 )
@@ -1242,14 +1311,16 @@ class FileOperations:
             documents_by_path = {
                 document.metadata["path"]: document for document in documents
             }
-            missing = [
+            missing = sorted(
                 path for path in active_updated_paths
                 if path not in documents_by_path
-            ]
+            )
             if missing:
-                raise RuntimeError(
-                    "cannot apply exact repository overlay; changed files were not loaded: "
-                    + ", ".join(missing[:10])
+                logger.warning(
+                    "Quarantining %s changed repository files that could not "
+                    "be loaded during incremental indexing: %s",
+                    len(missing),
+                    ", ".join(missing[:10]),
                 )
             artifacts = tuple(sorted((
                 *(
@@ -1261,7 +1332,7 @@ class FileOperations:
                 ),
                 *(
                     FileArtifact(path=path, content="", deleted=True)
-                    for path in active_deleted_paths
+                    for path in (*active_deleted_paths, *missing)
                 ),
             ), key=lambda artifact: artifact.path))
             handle = self.plugin_runtime.start_repository_analysis(
@@ -1272,24 +1343,32 @@ class FileOperations:
             )
             handle.ingest(artifacts)
             analysis, diagnostics = handle.finish()
-            if diagnostics:
-                summary = "; ".join(
-                    f"{item.plugin_id or 'plugin'}:{item.code}: {item.message}"
-                    for item in diagnostics[:10]
-                )
-                raise RuntimeError(
-                    f"incremental repository overlay is incomplete: {summary}"
-                )
+            self.accept_recoverable_repository_diagnostics(
+                diagnostics,
+                "incremental repository overlay",
+            )
 
         semantic_documents = [
             document for document in documents
             if dispositions.get(document.metadata["path"], FileDisposition.FULL)
             is FileDisposition.FULL
         ]
-        semantic_nodes = self.splitter.split_documents(
-            semantic_documents,
-            capabilities=capabilities,
-        ) if semantic_documents else []
+        if semantic_documents:
+            semantic_nodes, split_skipped_paths = (
+                self.splitter.split_documents_resilient(
+                    semantic_documents,
+                    capabilities=capabilities,
+                )
+            )
+            if split_skipped_paths:
+                logger.warning(
+                    "Quarantining %s changed files that failed semantic "
+                    "parsing/enrichment: %s",
+                    len(split_skipped_paths),
+                    ", ".join(split_skipped_paths[:10]),
+                )
+        else:
+            semantic_nodes = []
         identity_metadata = _plugin_identity_metadata(
             capabilities,
             implementation_fingerprint,

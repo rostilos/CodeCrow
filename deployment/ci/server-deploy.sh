@@ -71,7 +71,10 @@ if codecrow_includes_service "inference-orchestrator" "${SELECTED_SERVICES[@]}";
 fi
 
 if codecrow_includes_service "rag-pipeline" "${SELECTED_SERVICES[@]}"; then
-  REQUIRED_CONFIGS+=("$CONFIG_DIR/rag-pipeline/.env")
+  REQUIRED_CONFIGS+=(
+    "$CONFIG_DIR/rag-pipeline/.env"
+    "$CONFIG_DIR/rag-pipeline/newrelic.ini"
+  )
 fi
 
 for cfg in "${REQUIRED_CONFIGS[@]}"; do

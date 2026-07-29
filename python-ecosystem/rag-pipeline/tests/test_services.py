@@ -100,7 +100,7 @@ class TestRAGQueryBase:
     @patch("rag_pipeline.services.base.create_embedding_model")
     @patch("rag_pipeline.services.base.get_embedding_model_info")
     @patch("rag_pipeline.services.base.QdrantClient")
-    def test_plugin_identity_requires_current_descriptor_and_build_content(
+    def test_plugin_identity_requires_descriptor_but_accepts_older_build_content(
         self, MockQdrant, mock_info, mock_create
     ):
         from rag_pipeline.services.base import RAGQueryBase
@@ -124,13 +124,16 @@ class TestRAGQueryBase:
         assert base._plugin_identity_compatible({
             **current,
             "plugin_implementation_fingerprint": "sha256:old",
-        }) is False
+            "index_representation_fingerprint": "sha256:older-host",
+        }) is True
         assert base._plugin_identity_compatible({
-            "plugin_ids": ["python", "fastapi"],
+            **current,
+            "plugin_descriptor_fingerprint": "sha256:other-descriptor",
         }) is False
         catalog.registry.fingerprint_for.assert_called_once_with(
             ("python", "fastapi")
         )
+        catalog.implementation_fingerprint.assert_not_called()
 
 
 class TestRAGQueryService:
@@ -223,7 +226,7 @@ class TestSemanticSearchDedup:
         filters = index.as_retriever.call_args.kwargs["filters"].filters
         assert [metadata_filter.key for metadata_filter in filters] == ["branch"]
 
-    def test_search_discards_stale_plugin_build_before_result_limit(self):
+    def test_search_discards_incompatible_plugin_descriptor_before_result_limit(self):
         from rag_pipeline.services.semantic_search import SemanticSearchMixin
 
         stale_node = SimpleNamespace(

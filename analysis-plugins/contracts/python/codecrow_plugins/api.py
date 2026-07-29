@@ -225,12 +225,18 @@ class PluginDiagnostic:
     code: str
     message: str
     plugin_id: str | None = None
+    path: str | None = None
+    recoverable: bool = False
 
     def __post_init__(self) -> None:
         _non_blank(self.code, "diagnostic code")
         _non_blank(self.message, "diagnostic message")
         if self.plugin_id is not None:
             _plugin_id(self.plugin_id)
+        if self.path is not None:
+            normalized = normalize_path(self.path)
+            if normalized != self.path:
+                raise ValueError("diagnostic path must already be normalized")
 
 
 T = TypeVar("T")
@@ -537,12 +543,20 @@ class RepositoryAnalysis:
     packets: tuple[ArchitecturePacket, ...] = ()
     snapshots: tuple[RepositorySnapshot, ...] = ()
     contexts: tuple[RepositoryContext, ...] = ()
+    diagnostics: tuple[PluginDiagnostic, ...] = ()
 
     def __post_init__(self) -> None:
         _sorted_unique(self.symbols, "repository symbols")
         _sorted_unique(self.packets, "architecture packets")
         _sorted_unique(self.snapshots, "repository snapshots")
         _sorted_unique(self.contexts, "repository contexts")
+        if any(
+            not isinstance(diagnostic, PluginDiagnostic)
+            for diagnostic in self.diagnostics
+        ):
+            raise ValueError(
+                "repository diagnostics must contain PluginDiagnostic values"
+            )
 
 
 @dataclass(frozen=True, order=True)

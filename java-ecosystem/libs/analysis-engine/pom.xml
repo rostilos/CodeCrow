@@ -169,6 +169,7 @@
                 <configuration>
                     <argLine>
                         @{argLine}
+                        -javaagent:${settings.localRepository}/net/bytebuddy/byte-buddy-agent/${byte-buddy.version}/byte-buddy-agent-${byte-buddy.version}.jar
                         --add-opens org.rostilos.codecrow.analysisengine/org.rostilos.codecrow.analysisengine.service=com.fasterxml.jackson.databind
                         --add-opens org.rostilos.codecrow.core/org.rostilos.codecrow.core.model.branch=org.rostilos.codecrow.analysisengine
                         --add-opens org.rostilos.codecrow.core/org.rostilos.codecrow.core.model.project=org.rostilos.codecrow.analysisengine

@@ -18,6 +18,29 @@ MAGENTO_AREAS = (
 )
 
 
+def is_magento_config_xml(path: str) -> bool:
+    """Return whether an XML path participates in Magento config merging.
+
+    A module configuration file is either directly below ``etc`` or below one
+    known Magento area. Deeper/custom directories such as ``etc/samples`` are
+    ordinary project content, even though their path contains an ``etc``
+    segment. Treating every descendant as Magento configuration makes valid
+    payload formats such as cXML part of repository architecture analysis.
+    """
+    normalized = path.replace("\\", "/").strip("/").casefold()
+    if not normalized.endswith(".xml"):
+        return False
+    marker = "/etc/"
+    candidate = f"/{normalized}"
+    if marker not in candidate:
+        return False
+    tail = candidate.split(marker, 1)[1].split("/")
+    return (
+        len(tail) == 1
+        or (len(tail) == 2 and tail[0] in MAGENTO_AREAS)
+    )
+
+
 def tag(element: ET.Element) -> str:
     return element.tag.rsplit("}", 1)[-1]
 
@@ -32,8 +55,11 @@ def safe_xml(plugin_id: str, path: str, content: str):
     if "<!doctype" in lowered or "<!entity" in lowered:
         return None, PluginDiagnostic(
             "magento-unsafe-xml",
-            f"XML declarations/entities are forbidden in {path}",
+            "DTD/entity declarations are forbidden in Magento "
+            f"configuration {path}",
             plugin_id,
+            path=path,
+            recoverable=True,
         )
     try:
         return ET.fromstring(content), None
@@ -42,6 +68,8 @@ def safe_xml(plugin_id: str, path: str, content: str):
             "magento-invalid-xml",
             f"Cannot parse {path}: {exception}",
             plugin_id,
+            path=path,
+            recoverable=True,
         )
 
 

@@ -34,6 +34,15 @@ def _make_index_manager():
     im._get_project_collection_name.return_value = "rag_ws__proj"
     im._collection_manager.collection_exists.return_value = True
     im.splitter.split_documents.return_value = []
+    im.splitter.split_documents_resilient.side_effect = (
+        lambda documents, capabilities=None: (
+            im.splitter.split_documents(
+                documents,
+                capabilities=capabilities,
+            ),
+            (),
+        )
+    )
     im._point_ops.embed_and_create_points.return_value = []
     im._point_ops.upsert_points.return_value = (0, 0)
     im._point_ops.process_and_upsert_chunks.return_value = (0, 0)
@@ -723,12 +732,14 @@ class TestIndexPRFiles:
         assert "plugin descriptors do not match" in exc_info.value.detail
         im._file_ops._replace_points.assert_not_called()
 
+    @patch("rag_pipeline.api.routers.pr.build_overlay_capabilities")
     @patch("rag_pipeline.api.routers.pr.load_repository_snapshots")
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
-    def test_stored_plugin_implementation_mismatch_requires_reindex(
+    def test_stored_plugin_implementation_mismatch_does_not_require_reindex(
         self,
         mock_get,
         mock_load_snapshots,
+        mock_build_capabilities,
     ):
         im = _make_index_manager()
         mock_get.return_value = im
@@ -741,16 +752,15 @@ class TestIndexPRFiles:
         )
         req = _request([])
         req.repository_plugins = ["java"]
+        im.plugin_runtime.repository_analysis_plugins.return_value = ()
+        mock_build_capabilities.return_value = _capabilities("java")
 
         from rag_pipeline.api.routers.pr import index_pr_files
 
-        with pytest.raises(HTTPException) as exc_info:
-            index_pr_files(req)
+        result = index_pr_files(req)
 
-        assert exc_info.value.status_code == 409
-        assert "different or unknown plugin implementation" in exc_info.value.detail
-        assert "reindex target branch 'main'" in exc_info.value.detail
-        im._file_ops._replace_points.assert_not_called()
+        assert result["status"] == "indexed"
+        im._file_ops._replace_points.assert_called_once()
 
     @patch("rag_pipeline.api.routers.pr.load_repository_snapshots")
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
@@ -777,7 +787,7 @@ class TestIndexPRFiles:
             index_pr_files(req)
 
         assert exc_info.value.status_code == 409
-        assert "different or unknown plugin implementation" in exc_info.value.detail
+        assert "different or unknown plugin descriptors" in exc_info.value.detail
         im._file_ops._replace_points.assert_not_called()
 
 

@@ -126,7 +126,7 @@ class TestApplyBranchPriority:
         result = svc._apply_branch_priority([pt1, pt2], "main", ["main"], set())
         assert len(result) == 2
 
-    def test_stale_target_plugin_build_cannot_hide_fresh_base_context(self):
+    def test_older_target_plugin_build_remains_eligible(self):
         catalog = MagicMock()
         catalog.registry.fingerprint_for.return_value = "sha256:descriptor"
         catalog.implementation_fingerprint.return_value = "sha256:implementation"
@@ -159,7 +159,7 @@ class TestApplyBranchPriority:
             set(),
         )
 
-        assert [point.id for point in result] == ["base"]
+        assert [point.id for point in result] == ["target"]
 
 
 # ─────────────────────────────────────────────────────────────

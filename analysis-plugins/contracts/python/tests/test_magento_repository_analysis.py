@@ -2046,7 +2046,7 @@ def test_magento_di_emits_effective_virtual_and_php_inherited_object_arguments()
     } <= child_packet_paths
 
 
-def test_magento_di_virtual_type_argument_cycle_fails_closed():
+def test_magento_di_virtual_type_argument_cycle_is_quarantined():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     plugin = catalog.implementation("magento")
     started = plugin.start_repository_analysis("virtual-cycle")
@@ -2071,10 +2071,11 @@ def test_magento_di_virtual_type_argument_cycle_fails_closed():
 
     outcome = started.value.finish(RepositoryAnalysis())
 
-    assert outcome.status is OutcomeStatus.FAILED
-    assert outcome.diagnostic.code == (
+    assert outcome.status is OutcomeStatus.HANDLED
+    assert [diagnostic.code for diagnostic in outcome.value.diagnostics] == [
         "magento-di-argument-inheritance-cycle"
-    )
+    ]
+    assert outcome.value.diagnostics[0].recoverable is True
 
 
 def test_magento_base_view_configuration_is_related_to_area_variant():

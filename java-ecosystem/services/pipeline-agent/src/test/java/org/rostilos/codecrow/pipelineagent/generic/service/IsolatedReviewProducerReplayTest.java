@@ -406,6 +406,16 @@ class IsolatedReviewProducerReplayTest {
         }
 
         @Override
+        public boolean hasKey(String key) {
+            return true;
+        }
+
+        @Override
+        public void removeFromList(String queueKey, String payload) {
+            // The synthetic response consumes the envelope immediately.
+        }
+
+        @Override
         public void deleteKey(String key) {
             // The disconnected producer has no Redis state to delete.
         }

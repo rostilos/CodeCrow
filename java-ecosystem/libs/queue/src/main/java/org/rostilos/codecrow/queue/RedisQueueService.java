@@ -27,6 +27,14 @@ public class RedisQueueService {
         return redisTemplate.opsForList().indexOf(queueKey, payload) != null;
     }
 
+    public void removeFromList(String queueKey, String payload) {
+        redisTemplate.opsForList().remove(queueKey, 1, payload);
+    }
+
+    public boolean hasKey(String key) {
+        return Boolean.TRUE.equals(redisTemplate.hasKey(key));
+    }
+
     public void setExpiry(String key, long timeoutMinutes) {
         redisTemplate.expire(key, timeoutMinutes, TimeUnit.MINUTES);
     }

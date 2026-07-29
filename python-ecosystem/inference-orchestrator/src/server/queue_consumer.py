@@ -30,6 +30,19 @@ class RedisQueueConsumer:
         self.is_running = False
         self._redis: Optional[redis.Redis] = None
         self._task: Optional[asyncio.Task] = None
+        self._consumer_heartbeat_task: Optional[asyncio.Task] = None
+        self.consumer_heartbeat_key = "codecrow:analysis:consumer:heartbeat"
+        self.consumer_heartbeat_seconds = max(
+            1.0,
+            float(os.environ.get(
+                "ANALYSIS_CONSUMER_HEARTBEAT_SECONDS",
+                "5",
+            )),
+        )
+        self.consumer_heartbeat_ttl_seconds = max(
+            15,
+            int(self.consumer_heartbeat_seconds * 3),
+        )
         # Bound concurrent job processing to prevent memory pressure
         max_concurrent = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4"))
         self._job_semaphore = asyncio.Semaphore(max_concurrent)
@@ -52,6 +65,10 @@ class RedisQueueConsumer:
             health_check_interval=30,
         )
         self.is_running = True
+        await self._publish_consumer_heartbeat()
+        self._consumer_heartbeat_task = asyncio.create_task(
+            self._consumer_heartbeat_loop()
+        )
         self._task = asyncio.create_task(self._consume_loop())
 
     async def stop(self):
@@ -63,10 +80,52 @@ class RedisQueueConsumer:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        if self._consumer_heartbeat_task:
+            self._consumer_heartbeat_task.cancel()
+            try:
+                await self._consumer_heartbeat_task
+            except asyncio.CancelledError:
+                pass
         
         if self._redis:
             await self._redis.aclose()
             logger.info("Redis Queue Consumer stopped")
+
+    async def _publish_consumer_heartbeat(self):
+        if self._redis:
+            await self._redis.set(
+                self.consumer_heartbeat_key,
+                "alive",
+                ex=self.consumer_heartbeat_ttl_seconds,
+            )
+
+    async def _consumer_heartbeat_loop(self):
+        while self.is_running:
+            try:
+                await self._publish_consumer_heartbeat()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Failed to publish review consumer heartbeat")
+            await asyncio.sleep(self.consumer_heartbeat_seconds)
+
+    async def is_healthy(self) -> bool:
+        if (
+            not self.is_running
+            or self._redis is None
+            or self._task is None
+            or self._task.done()
+            or self._consumer_heartbeat_task is None
+            or self._consumer_heartbeat_task.done()
+        ):
+            return False
+        try:
+            return bool(await asyncio.wait_for(
+                self._redis.exists(self.consumer_heartbeat_key),
+                timeout=2,
+            ))
+        except Exception:
+            return False
 
     async def _consume_loop(self):
         """Infinite loop blocking on the Redis queue for new jobs."""

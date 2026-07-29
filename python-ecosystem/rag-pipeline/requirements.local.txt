@@ -60,4 +60,7 @@ httpx>=0.27.0,<1.0.0
 # System monitoring
 psutil>=5.9.0,<6.0.0
 
+# Application performance monitoring
+newrelic==11.5.0
+
 debugpy==1.8.1

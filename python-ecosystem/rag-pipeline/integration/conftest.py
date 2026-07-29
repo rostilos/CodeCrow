@@ -78,6 +78,15 @@ def rag_app(_mock_qdrant, _mock_embedding):
         mock_im = MagicMock()
         mock_im.embed_model = _mock_embedding
         mock_im.qdrant_client = _mock_qdrant
+        mock_im.splitter.split_documents_resilient.side_effect = (
+            lambda documents, capabilities=None: (
+                mock_im.splitter.split_documents(
+                    documents,
+                    capabilities=capabilities,
+                ),
+                (),
+            )
+        )
         MockIM.return_value = mock_im
 
         mock_qs = MagicMock()

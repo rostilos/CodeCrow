@@ -146,3 +146,13 @@ applies it before full/incremental file loading and PR overlay construction; and
 inference maps generated/excluded files to explicit non-reviewable hunk
 dispositions before Stage 0. Empty registries keep the generic fallback, while a
 failed policy contribution aborts instead of silently changing the disposition.
+
+Magento classifies XML as module configuration only when it is directly below an
+`etc` directory or directly below a known Magento area such as `etc/frontend`.
+Custom descendants such as `etc/samples/*.xml` stay `full` project content and
+are handled by the generic indexing path. DTDs and entities in those ordinary
+documents are not resolved by the Magento repository analyzer. Actual Magento
+configuration XML remains architecture input, but a malformed file or one with a
+DTD/entity declaration is quarantined from the architecture snapshot instead of
+failing the repository index. Other valid plugin inputs continue to contribute
+deterministic context. Runtime/plugin contract failures remain fatal.

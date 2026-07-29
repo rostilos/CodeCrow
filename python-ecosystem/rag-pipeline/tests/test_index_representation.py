@@ -196,13 +196,25 @@ def test_branch_identity_distinguishes_absent_legacy_and_current_points():
         "collection",
         "main",
     ) == (True, None)
-    with pytest.raises(IndexCompatibilityError, match="fully reindex"):
-        require_compatible_branch_representation(
-            client,
-            "collection",
-            "main",
-            expected_fingerprint="sha256:current",
-        )
+    assert require_compatible_branch_representation(
+        client,
+        "collection",
+        "main",
+        expected_fingerprint="sha256:current",
+    ) is True
+
+    client.scroll = lambda **_kwargs: (
+        [SimpleNamespace(payload={
+            INDEX_REPRESENTATION_PAYLOAD_KEY: "sha256:older-build",
+        })],
+        None,
+    )
+    assert require_compatible_branch_representation(
+        client,
+        "collection",
+        "main",
+        expected_fingerprint="sha256:current",
+    ) is True
 
     client.scroll = lambda **_kwargs: (
         [SimpleNamespace(payload={
@@ -210,12 +222,12 @@ def test_branch_identity_distinguishes_absent_legacy_and_current_points():
         })],
         None,
     )
-    require_compatible_branch_representation(
+    assert require_compatible_branch_representation(
         client,
         "collection",
         "main",
         expected_fingerprint="sha256:current",
-    )
+    ) is True
 
 
 def test_branch_identity_pages_past_pr_points_and_accepts_missing_pr_as_legacy():
