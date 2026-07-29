@@ -60,11 +60,13 @@ def _patch_services():
          patch("server.command_queue_consumer.CommandQueueConsumer") as mock_cqc:
         mock_rqc.return_value.start = AsyncMock()
         mock_rqc.return_value.stop = AsyncMock()
+        mock_rqc.return_value.is_healthy = AsyncMock(return_value=True)
         mock_cqc.return_value.start = AsyncMock()
         mock_cqc.return_value.stop = AsyncMock()
         yield {
             "review_service": mock_review_svc,
             "command_service": mock_command_svc,
+            "queue_consumer": mock_rqc.return_value,
         }
 
 
@@ -82,6 +84,7 @@ def io_app(_patch_services):
     # Manually populate app.state — routers read from request.app.state
     app.state.review_service = _patch_services["review_service"]
     app.state.command_service = _patch_services["command_service"]
+    app.state.queue_consumer = _patch_services["queue_consumer"]
     return app
 
 
