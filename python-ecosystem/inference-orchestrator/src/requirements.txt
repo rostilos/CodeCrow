@@ -8,7 +8,11 @@ langchain-core>=1.0.0,<2.0.0
 langchain-openai>=1.0.0,<2.0.0
 langchain-anthropic>=1.0.0,<2.0.0
 langchain-google-genai>=4.0.0
-mcp-use
+mcp-use==1.7.0
+# mcp-use 1.7 imports RequestContext from the stable MCP 1.x API. MCP 2.x
+# removed that symbol, so allowing an unbounded transitive upgrade makes the
+# service crash before FastAPI and the Redis review consumer can start.
+mcp==1.27.1
 redis>=5.0.0
 newrelic==11.5.0
 

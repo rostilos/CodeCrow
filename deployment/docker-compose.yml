@@ -322,7 +322,7 @@ services:
 
   fix-permissions:
     image: busybox
-    command: sh -c "chmod -R 777 /tmp"
+    command: sh -c "chmod -R 1777 /tmp"
     volumes:
       - source_code_tmp:/tmp
 
