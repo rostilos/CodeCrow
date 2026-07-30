@@ -47,6 +47,7 @@ import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.model.VcsCommit;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
 import java.util.*;
@@ -600,7 +601,6 @@ class BranchAnalysisProcessorTest {
             when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
             when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
             when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
-
             Map<String, Object> result = processor.process(request, events::add);
 
             assertThat(result).containsEntry("status", "accepted");
@@ -733,6 +733,9 @@ class BranchAnalysisProcessorTest {
             when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
             when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
             when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
+            when(ragOperationsService.triggerIncrementalUpdate(
+                    eq(project), eq("main"), eq("new-commit"), eq(rawDiff), any()))
+                    .thenReturn(true);
 
             // Final markHealthy
             when(branchRepository.findByProjectIdAndBranchName(1L, "main"))
@@ -742,6 +745,38 @@ class BranchAnalysisProcessorTest {
             processor.process(request, consumer);
 
             verify(ragOperationsService).triggerIncrementalUpdate(eq(project), eq("main"), eq("new-commit"), eq(rawDiff), any());
+        }
+
+        @Test
+        @DisplayName("should not emit RAG success after an incremental failure")
+        void shouldNotEmitRagSuccessAfterIncrementalFailure() {
+            BranchProcessRequest request = createRequest();
+            request.commitHash = "failed-commit";
+            request.targetBranchName = "main";
+            String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
+            List<Map<String, Object>> events = new ArrayList<>();
+
+            when(project.getId()).thenReturn(1L);
+            when(ragOperationsService.isRagEnabled(project)).thenReturn(true);
+            when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
+            when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
+            when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
+            when(ragOperationsService.triggerIncrementalUpdate(
+                    eq(project), eq("main"), eq("failed-commit"), eq(rawDiff), any()))
+                    .thenReturn(false);
+
+            ReflectionTestUtils.invokeMethod(
+                    processor,
+                    "performIncrementalRagUpdate",
+                    request,
+                    project,
+                    rawDiff,
+                    (Consumer<Map<String, Object>>) events::add,
+                    false);
+
+            assertThat(events)
+                    .noneSatisfy(event ->
+                            assertThat(event).containsEntry("state", "rag_update_complete"));
         }
 
         @Test

@@ -881,12 +881,21 @@ public class BranchAnalysisProcessor {
 						scopedOnly
 								? "Updating RAG index for changed files with previous issues only"
 								: "Updating RAG index with changed files for main branch push");
-				ragOperationsService.triggerIncrementalUpdate(
+				boolean ragUpdated = ragOperationsService.triggerIncrementalUpdate(
 						project, targetBranch, request.getCommitHash(), commitDiff, consumer);
+				if (!ragUpdated) {
+					log.warn("RAG incremental update did not complete for project={}, branch={}, commit={}",
+							project.getId(), targetBranch, request.getCommitHash());
+					return;
+				}
 			} else {
 				log.info("Non-main branch push - updating branch index for project={}, branch={}",
 						project.getId(), targetBranch);
-				ragOperationsService.updateBranchIndex(project, targetBranch, consumer);
+				if (!ragOperationsService.updateBranchIndex(project, targetBranch, consumer)) {
+					log.warn("RAG branch index update did not complete for project={}, branch={}",
+							project.getId(), targetBranch);
+					return;
+				}
 			}
 
 			log.info("RAG update completed for project={}, branch={}, commit={}",

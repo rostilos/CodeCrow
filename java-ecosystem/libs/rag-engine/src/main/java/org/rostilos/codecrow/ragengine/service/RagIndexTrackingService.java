@@ -146,12 +146,12 @@ public class RagIndexTrackingService {
                 .orElseThrow(() -> new IllegalStateException("Cannot update non-indexed project: " + project.getId()));
 
         status.setStatus(RagIndexingStatus.UPDATING);
-        status.setIndexedBranch(branchName);
-        status.setIndexedCommitHash(commitHash);
         status.setErrorMessage(null);
 
         status = ragIndexStatusRepository.save(status);
-        log.info("Marked RAG indexing as UPDATING for project {}", project.getName());
+        log.info("Marked RAG indexing as UPDATING for project {} toward branch {} commit {}; "
+                        + "completed checkpoint remains {}",
+                project.getName(), branchName, commitHash, status.getIndexedCommitHash());
         return status;
     }
 
@@ -163,13 +163,28 @@ public class RagIndexTrackingService {
     @Transactional
     public RagIndexStatus markUpdatingCompleted(Project project, String branchName, String commitHash,
             Integer addedFilesCount, Integer deletedFilesCount, Integer chunkCount) {
+        return markUpdatingCompleted(
+                project, branchName, commitHash, addedFilesCount, deletedFilesCount, chunkCount, true);
+    }
+
+    /**
+     * Completes an update while advancing the project-level checkpoint only
+     * for the configured base branch. Non-base branches have their own
+     * {@code RagBranchIndex} checkpoint.
+     */
+    @Transactional
+    public RagIndexStatus markUpdatingCompleted(Project project, String branchName, String commitHash,
+            Integer addedFilesCount, Integer deletedFilesCount, Integer chunkCount,
+            boolean advanceProjectCheckpoint) {
         RagIndexStatus status = ragIndexStatusRepository.findByProjectId(project.getId())
                 .orElseThrow(
                         () -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
 
         status.setStatus(RagIndexingStatus.INDEXED);
-        status.setIndexedBranch(branchName);
-        status.setIndexedCommitHash(commitHash);
+        if (advanceProjectCheckpoint) {
+            status.setIndexedBranch(branchName);
+            status.setIndexedCommitHash(commitHash);
+        }
 
         if (addedFilesCount != null && deletedFilesCount != null && status.getTotalFilesIndexed() != null) {
             int newTotal = status.getTotalFilesIndexed() + addedFilesCount - deletedFilesCount;
@@ -186,8 +201,10 @@ public class RagIndexTrackingService {
         status.resetFailedIncrementalCount();
 
         status = ragIndexStatusRepository.save(status);
-        log.info("Marked RAG updating as COMPLETED for project {} (added {}, deleted {}, chunks {})",
-                project.getName(), addedFilesCount, deletedFilesCount, chunkCount);
+        log.info("Marked RAG updating as COMPLETED for project {} (added {}, deleted {}, chunks {}, "
+                        + "project checkpoint advanced={})",
+                project.getName(), addedFilesCount, deletedFilesCount, chunkCount,
+                advanceProjectCheckpoint);
         return status;
     }
 
@@ -201,7 +218,9 @@ public class RagIndexTrackingService {
                 .orElseThrow(
                         () -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
 
-        // Keep status as INDEXED (the base index is still valid), but record the error
+        // Restore the usable terminal state and retain the last completed
+        // branch/commit checkpoint. The attempted commit is never published.
+        status.setStatus(RagIndexingStatus.INDEXED);
         status.setErrorMessage("Incremental update failed: " + errorMessage);
         status.incrementFailedIncrementalCount();
 
