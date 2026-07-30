@@ -342,8 +342,10 @@ class IncrementalRagUpdateServiceTest {
         VcsConnection vcsConn = new VcsConnection();
         Set<String> changedFiles = new LinkedHashSet<>(List.of(
                 "src/A.java", "src/B.java", "src/C.java"));
-        doReturn(changedFiles).when(branchArchiveService).downloadAndExtractFilesToDirectory(
-                eq(vcsConn), eq("ws-slug"), eq("repo-slug"), eq("abc123"), eq(changedFiles), any());
+        doReturn(archiveSnapshot(changedFiles, changedFiles))
+                .when(branchArchiveService).downloadAndExtractSnapshotToDirectory(
+                        eq(vcsConn), eq("ws-slug"), eq("repo-slug"), eq("abc123"),
+                        eq(changedFiles), any());
         doReturn(Map.of("status", "success")).when(ragPipelineClient).applyChanges(
                 anyList(), anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
 
@@ -354,7 +356,7 @@ class IncrementalRagUpdateServiceTest {
         assertThat(result).containsEntry("status", "completed");
         assertThat(result).containsEntry("updatedFiles", 3);
         assertThat(result).containsEntry("fileFetchMode", "archive");
-        verify(branchArchiveService, times(1)).downloadAndExtractFilesToDirectory(
+        verify(branchArchiveService, times(1)).downloadAndExtractSnapshotToDirectory(
                 eq(vcsConn), eq("ws-slug"), eq("repo-slug"), eq("abc123"), eq(changedFiles), any());
         verifyNoInteractions(vcsClientProvider);
         verify(ragPipelineClient).applyChanges(
@@ -370,7 +372,7 @@ class IncrementalRagUpdateServiceTest {
         VcsConnection vcsConn = new VcsConnection();
         Set<String> changedFiles = new LinkedHashSet<>(List.of("src/A.java", "src/B.java"));
         doThrow(new IOException("Archive rate limited")).when(branchArchiveService)
-                .downloadAndExtractFilesToDirectory(
+                .downloadAndExtractSnapshotToDirectory(
                         eq(vcsConn), eq("ws-slug"), eq("repo-slug"), eq("abc123"), eq(changedFiles), any());
 
         assertThatThrownBy(() -> service.performIncrementalUpdate(
@@ -398,9 +400,10 @@ class IncrementalRagUpdateServiceTest {
                 .getFileContent(anyString(), anyString(), eq("src/A.java"), anyString());
 
         Set<String> changedFiles = new LinkedHashSet<>(List.of("src/A.java", "src/B.java"));
-        doReturn(changedFiles).when(branchArchiveService).downloadAndExtractFilesToDirectory(
-                eq(vcsConn), eq("ws-slug"), eq("repo-slug"), eq("abc123"),
-                eq(changedFiles), any());
+        doReturn(archiveSnapshot(changedFiles, changedFiles))
+                .when(branchArchiveService).downloadAndExtractSnapshotToDirectory(
+                        eq(vcsConn), eq("ws-slug"), eq("repo-slug"), eq("abc123"),
+                        eq(changedFiles), any());
         doReturn(Map.of("status", "success")).when(ragPipelineClient).applyChanges(
                 anyList(), anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
 
@@ -414,9 +417,106 @@ class IncrementalRagUpdateServiceTest {
                 "ws-slug", "repo-slug", "src/A.java", "abc123");
         verify(mockVcsClient, never()).getFileContent(
                 "ws-slug", "repo-slug", "src/B.java", "abc123");
-        verify(branchArchiveService).downloadAndExtractFilesToDirectory(
+        verify(branchArchiveService).downloadAndExtractSnapshotToDirectory(
                 eq(vcsConn), eq("ws-slug"), eq("repo-slug"), eq("abc123"),
                 eq(changedFiles), any());
+    }
+
+    @Test
+    void testPerformIncrementalUpdate_SkipsMagentoImageAssetsWithoutAbortingArchiveBatch()
+            throws Exception {
+        setupProjectWithWorkspace();
+        VcsConnection vcsConn = new VcsConnection();
+        String sourceFile = "app/code/Andra/Returns/etc/di.xml";
+        Set<String> imageFiles = Set.of(
+                "app/design/frontend/AndraGroup/her/web/images/icons/Box.jpg",
+                "app/design/frontend/AndraGroup/her/web/images/icons/Label.jpg",
+                "app/design/frontend/AndraGroup/her/web/images/icons/Truck.jpg",
+                "app/design/frontend/AndraGroup/her/web/images/rma-email/return-box.jpg",
+                "app/design/frontend/AndraGroup/her/web/images/rma-email/return-label.jpg",
+                "app/design/frontend/AndraGroup/her/web/images/rma-email/return-truck.jpg");
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add(sourceFile);
+        changedFiles.addAll(imageFiles);
+
+        when(fileRetrievalPolicy.shouldUseArchive(1)).thenReturn(true);
+        Set<String> requestedTextFiles = Set.of(sourceFile);
+        doReturn(archiveSnapshot(requestedTextFiles, requestedTextFiles))
+                .when(branchArchiveService).downloadAndExtractSnapshotToDirectory(
+                        eq(vcsConn), eq("ws-slug"), eq("repo-slug"), eq("abc123"),
+                        eq(requestedTextFiles), any());
+        doReturn(Map.of("status", "success")).when(ragPipelineClient).applyChanges(
+                anyList(), anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123",
+                changedFiles, Set.of(), Set.of());
+
+        assertThat(result)
+                .containsEntry("status", "completed")
+                .containsEntry("updatedFiles", 1)
+                .containsEntry("skippedFiles", 6);
+        verify(ragPipelineClient).applyChanges(
+                eq(List.of(sourceFile)), eq(List.of()), anyString(),
+                eq("test-ws"), eq("test-proj"), eq("main"), eq("abc123"));
+    }
+
+    @Test
+    void testPerformIncrementalUpdate_SkipsPresentArchiveEntryThatIsNotText()
+            throws Exception {
+        setupProjectWithWorkspace();
+        VcsConnection vcsConn = new VcsConnection();
+        Set<String> changedFiles =
+                new LinkedHashSet<>(List.of("src/Main.java", "assets/opaque.asset"));
+        when(fileRetrievalPolicy.shouldUseArchive(2)).thenReturn(true);
+        doReturn(archiveSnapshot(Set.of("src/Main.java"), changedFiles))
+                .when(branchArchiveService).downloadAndExtractSnapshotToDirectory(
+                        eq(vcsConn), eq("ws-slug"), eq("repo-slug"), eq("abc123"),
+                        eq(changedFiles), any());
+        doReturn(Map.of("status", "success")).when(ragPipelineClient).applyChanges(
+                anyList(), anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123",
+                changedFiles, Set.of(), Set.of());
+
+        assertThat(result)
+                .containsEntry("updatedFiles", 1)
+                .containsEntry("skippedFiles", 1);
+        verify(ragPipelineClient).applyChanges(
+                eq(List.of("src/Main.java")), eq(List.of()), anyString(),
+                anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testPerformIncrementalUpdate_SkipsUnknownBinaryInPerFileMode()
+            throws Exception {
+        setupProjectWithWorkspace();
+        ReflectionTestUtils.setField(service, "parallelRequests", 1);
+        VcsConnection vcsConn = new VcsConnection();
+        VcsClient mockVcsClient = mock(VcsClient.class);
+        doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
+        doReturn("public class Main {}").when(mockVcsClient)
+                .getFileContent("ws-slug", "repo-slug", "src/Main.java", "abc123");
+        doReturn("binary\0payload").when(mockVcsClient)
+                .getFileContent("ws-slug", "repo-slug", "assets/opaque.asset", "abc123");
+        doReturn(Map.of("status", "success")).when(ragPipelineClient).applyChanges(
+                anyList(), anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+
+        Set<String> changedFiles =
+                new LinkedHashSet<>(List.of("src/Main.java", "assets/opaque.asset"));
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123",
+                changedFiles, Set.of(), Set.of());
+
+        assertThat(result)
+                .containsEntry("updatedFiles", 1)
+                .containsEntry("skippedFiles", 1)
+                .containsEntry("fileFetchMode", "per-file");
+        verify(ragPipelineClient).applyChanges(
+                eq(List.of("src/Main.java")), eq(List.of()), anyString(),
+                anyString(), anyString(), anyString(), anyString());
+        verifyNoInteractions(branchArchiveService);
     }
 
     @Test
@@ -555,5 +655,12 @@ class IncrementalRagUpdateServiceTest {
         testProject.setWorkspace(ws);
         testProject.setName("test-proj");
         testProject.setNamespace("test-proj");
+    }
+
+    private BranchArchiveService.ArchiveDirectorySnapshot archiveSnapshot(
+            Set<String> extractedFiles,
+            Set<String> presentFiles) {
+        return new BranchArchiveService.ArchiveDirectorySnapshot(
+                extractedFiles, presentFiles);
     }
 }

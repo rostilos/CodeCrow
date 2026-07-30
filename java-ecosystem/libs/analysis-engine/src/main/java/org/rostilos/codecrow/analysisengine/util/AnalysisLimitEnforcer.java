@@ -31,16 +31,17 @@ public class AnalysisLimitEnforcer {
     }
 
     public void enforce(Project project, Long pullRequestId, String rawDiff) {
-        if (rawDiff == null || rawDiff.isBlank()) {
+        String scopedDiff = AnalysisScopeFilter.filterDiff(rawDiff, project);
+        if (scopedDiff == null || scopedDiff.isBlank()) {
             return;
         }
         AnalysisLimitsConfig limits = effectiveLimits(project);
-        List<DiffParsingUtils.FileChange> sections = DiffParsingUtils.parseFileChanges(rawDiff);
+        List<DiffParsingUtils.FileChange> sections = DiffParsingUtils.parseFileChanges(scopedDiff);
         if (sections.size() > limits.maxFiles()) {
             throw exceeded(LimitType.FILES, sections.size(), limits.maxFiles(), project, pullRequestId, null);
         }
 
-        long totalBytes = rawDiff.getBytes(StandardCharsets.UTF_8).length;
+        long totalBytes = scopedDiff.getBytes(StandardCharsets.UTF_8).length;
         if (totalBytes > limits.maxTotalDiffSizeBytes()) {
             throw exceeded(LimitType.TOTAL_DIFF_SIZE, totalBytes, limits.maxTotalDiffSizeBytes(),
                     project, pullRequestId, null);
@@ -55,7 +56,7 @@ public class AnalysisLimitEnforcer {
             }
         }
 
-        int estimatedTokens = TokenEstimator.estimateTokens(rawDiff);
+        int estimatedTokens = TokenEstimator.estimateTokens(scopedDiff);
         if (estimatedTokens > limits.maxTotalTokens()) {
             throw exceeded(LimitType.TOKENS, estimatedTokens, limits.maxTotalTokens(),
                     project, pullRequestId, null);

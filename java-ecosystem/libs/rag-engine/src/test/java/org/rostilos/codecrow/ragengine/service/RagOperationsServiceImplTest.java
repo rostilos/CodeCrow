@@ -225,8 +225,10 @@ class RagOperationsServiceImplTest {
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
-        service.triggerIncrementalUpdate(testProject, "main", "abc123", "diff", eventConsumer);
+        boolean result =
+                service.triggerIncrementalUpdate(testProject, "main", "abc123", "diff", eventConsumer);
 
+        assertThat(result).isFalse();
         verifyNoInteractions(analysisJobService);
         verifyNoInteractions(analysisLockService);
     }
@@ -558,10 +560,13 @@ class RagOperationsServiceImplTest {
         when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "feature"))
                 .thenReturn(Optional.empty());
 
-        service.triggerIncrementalUpdate(testProject, "feature", "commit1", "diff content", eventConsumer);
+        boolean result = service.triggerIncrementalUpdate(
+                testProject, "feature", "commit1", "diff content", eventConsumer);
 
+        assertThat(result).isTrue();
         verify(ragIndexTrackingService).markUpdatingStarted(testProject, "feature", "commit1");
-        verify(ragIndexTrackingService).markUpdatingCompleted(testProject, "feature", "commit1", 0, 1, null);
+        verify(ragIndexTrackingService).markUpdatingCompleted(
+                testProject, "feature", "commit1", 0, 1, null, false);
         verify(analysisLockService).releaseLock("lock-key");
         verify(analysisJobService).completeJob(eq(mockJob), isNull());
         verify(ragBranchIndexRepository).save(any(RagBranchIndex.class));
@@ -578,8 +583,10 @@ class RagOperationsServiceImplTest {
                 .thenReturn(new IncrementalRagUpdateService.DiffResult(java.util.Collections.<String>emptySet(),
                         java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet()));
 
-        service.triggerIncrementalUpdate(testProject, "main", "abc", "empty", eventConsumer);
+        boolean result =
+                service.triggerIncrementalUpdate(testProject, "main", "abc", "empty", eventConsumer);
 
+        assertThat(result).isTrue();
         verifyNoInteractions(analysisLockService);
     }
 
@@ -598,8 +605,10 @@ class RagOperationsServiceImplTest {
         when(analysisLockService.acquireLock(any(), anyString(), any(), anyString(), isNull()))
                 .thenReturn(Optional.empty());
 
-        service.triggerIncrementalUpdate(testProject, "feature", "c1", "diff", eventConsumer);
+        boolean result =
+                service.triggerIncrementalUpdate(testProject, "feature", "c1", "diff", eventConsumer);
 
+        assertThat(result).isFalse();
         verify(analysisJobService).failJob(eq(mockJob), anyString());
         verifyNoInteractions(ragIndexTrackingService);
     }
@@ -624,12 +633,67 @@ class RagOperationsServiceImplTest {
                 any(), any()))
                 .thenThrow(new RuntimeException("Pipeline down"));
 
-        service.triggerIncrementalUpdate(testProject, "feature", "c1", "diff", eventConsumer);
+        boolean result =
+                service.triggerIncrementalUpdate(testProject, "feature", "c1", "diff", eventConsumer);
 
+        assertThat(result).isFalse();
         // Should call markIncrementalUpdateFailed (keeps status INDEXED) NOT markIndexingFailed
         verify(ragIndexTrackingService).markIncrementalUpdateFailed(eq(testProject), anyString());
         verify(ragIndexTrackingService, never()).markIndexingFailed(any(), anyString());
         verify(analysisLockService).releaseLock("lock-key");
+    }
+
+    @Test
+    void testTriggerIncrementalUpdate_UsesCompletedMainCheckpointAfterEarlierFailure()
+            throws Exception {
+        setupRagEnabled();
+        setupVcsBinding();
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+        Job mockJob = mock(Job.class);
+        VcsClient vcsClient = mock(VcsClient.class);
+        RagIndexStatus completedStatus = new RagIndexStatus();
+        completedStatus.setIndexedBranch("main");
+        completedStatus.setIndexedCommitHash("last-completed");
+        String catchUpDiff =
+                "diff --git a/src/Recovered.java b/src/Recovered.java\n+recovered\n";
+
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
+                .thenReturn(true);
+        when(ragIndexTrackingService.getIndexStatus(testProject))
+                .thenReturn(Optional.of(completedStatus));
+        when(vcsClientProvider.getClient(any(VcsConnection.class))).thenReturn(vcsClient);
+        when(vcsClient.getBranchDiff(
+                "my-workspace", "my-repo", "last-completed", "current-head"))
+                .thenReturn(catchUpDiff);
+        when(incrementalRagUpdateService.parseDiffForRag(catchUpDiff))
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(
+                        Set.of("src/Recovered.java"), Set.of(), Set.of()));
+        when(analysisJobService.createRagIndexJob(any(), anyBoolean(), any()))
+                .thenReturn(mockJob);
+        when(analysisLockService.acquireLock(
+                any(), eq("main"), any(), eq("current-head"), isNull()))
+                .thenReturn(Optional.of("lock-key"));
+        when(incrementalRagUpdateService.performIncrementalUpdate(
+                any(), any(), anyString(), anyString(), anyString(), anyString(), any(),
+                any(), any()))
+                .thenReturn(Map.of("updatedFiles", 1, "deletedFiles", 0));
+        when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "main"))
+                .thenReturn(Optional.empty());
+
+        boolean result = service.triggerIncrementalUpdate(
+                testProject, "main", "current-head",
+                "diff --git a/src/OnlyLatest.java b/src/OnlyLatest.java\n+latest\n",
+                eventConsumer);
+
+        assertThat(result).isTrue();
+        verify(incrementalRagUpdateService).parseDiffForRag(catchUpDiff);
+        verify(incrementalRagUpdateService).performIncrementalUpdate(
+                eq(testProject), any(VcsConnection.class), eq("my-workspace"), eq("my-repo"),
+                eq("main"), eq("current-head"), eq(Set.of("src/Recovered.java")),
+                eq(Set.of()), eq(Set.of()));
+        verify(ragIndexTrackingService).markUpdatingCompleted(
+                testProject, "main", "current-head", 0, 0, null, true);
     }
 
     @Test
@@ -675,8 +739,7 @@ class RagOperationsServiceImplTest {
         when(vcsClientProvider.getClient(any(VcsConnection.class))).thenReturn(mockVcs);
         when(mockVcs.getBranchDiff("my-workspace", "my-repo", "main", "feature")).thenReturn("diff data");
         when(mockVcs.getLatestCommitHash("my-workspace", "my-repo", "feature")).thenReturn("abc123");
-        // triggerIncrementalUpdate will be called but shouldPerform returns false
-        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(false);
+        stubSuccessfulIncrementalUpdate("feature", "abc123");
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
@@ -729,7 +792,7 @@ class RagOperationsServiceImplTest {
         when(vcsClientProvider.getClient(any(VcsConnection.class))).thenReturn(mockVcs);
         when(mockVcs.getBranchDiff("my-workspace", "my-repo", "main", "feature")).thenReturn("diff data");
         when(mockVcs.getLatestCommitHash("my-workspace", "my-repo", "feature")).thenReturn("xyz789");
-        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(false);
+        stubSuccessfulIncrementalUpdate("feature", "xyz789");
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
@@ -870,13 +933,32 @@ class RagOperationsServiceImplTest {
         // ensureBranchIndexForPrTarget called
         when(ragBranchIndexRepository.existsByProjectIdAndBranchName(100L, "feature")).thenReturn(false);
         when(mockVcs.getBranchDiff("my-workspace", "my-repo", "main", "feature")).thenReturn("branch diff");
-        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(false);
+        stubSuccessfulIncrementalUpdate("feature", "feat-commit");
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
         boolean result = service.ensureRagIndexUpToDate(testProject, "feature", eventConsumer);
 
         assertThat(result).isTrue();
+    }
+
+    private void stubSuccessfulIncrementalUpdate(String branchName, String commitHash)
+            throws Exception {
+        Job mockJob = mock(Job.class);
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
+                .thenReturn(true);
+        when(incrementalRagUpdateService.parseDiffForRag(anyString()))
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(
+                        Set.of("src/A.java"), Set.of(), Set.of()));
+        when(analysisJobService.createRagIndexJob(any(), anyBoolean(), any()))
+                .thenReturn(mockJob);
+        when(analysisLockService.acquireLock(
+                any(), eq(branchName), any(), eq(commitHash), isNull()))
+                .thenReturn(Optional.of("lock-key-" + branchName));
+        when(incrementalRagUpdateService.performIncrementalUpdate(
+                any(), any(), anyString(), anyString(), anyString(), anyString(), any(),
+                any(), any()))
+                .thenReturn(Map.of("updatedFiles", 1, "deletedFiles", 0));
     }
 
     @Test

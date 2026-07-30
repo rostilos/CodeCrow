@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.*;
+import org.rostilos.codecrow.analysisengine.util.TextFileEligibility;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -231,44 +232,13 @@ public class PrFileEnrichmentService {
     }
 
     /**
-     * Blacklist of binary / non-text file extensions that should be excluded
-     * from enrichment. Everything else is allowed.
-     */
-    private static final Set<String> EXCLUDED_EXTENSIONS = Set.of(
-            // Raster images. SVG is XML source and remains eligible.
-            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tiff", ".tif",
-            // Fonts
-            ".woff", ".woff2", ".ttf", ".otf", ".eot",
-            // Compiled / bytecode
-            ".class", ".pyc", ".pyo", ".o", ".obj", ".dll", ".so", ".dylib", ".exe",
-            ".war", ".ear", ".nar",
-            // Archives
-            ".jar", ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
-            // Documents / media
-            ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-            ".mp3", ".mp4", ".avi", ".mov", ".wav", ".flac", ".ogg", ".webm",
-            // Data blobs / certs
-            ".bin", ".dat", ".db", ".sqlite", ".sqlite3",
-            ".p12", ".pfx", ".jks", ".keystore", ".der", ".cer",
-            // Lock files (large, auto-generated, no review value)
-            ".lockb",
-            // Misc binary. Source maps and minified JS/CSS remain text; selected
-            // plugin file policy decides whether they are generated or reviewable.
-            ".wasm"
-    );
-
-    /**
      * Filter out known binary / non-text files. Everything not blacklisted is
      * allowed through for enrichment and file snapshots.
      */
     private List<String> filterSupportedFiles(List<String> files, Map<String, Integer> skipReasons) {
         List<String> supported = new ArrayList<>();
         for (String file : files) {
-            String lower = file.toLowerCase();
-            boolean isExcluded = EXCLUDED_EXTENSIONS.stream()
-                    .anyMatch(lower::endsWith);
-
-            if (isExcluded) {
+            if (!TextFileEligibility.isTextCandidate(file)) {
                 skipReasons.merge("binary_or_non_text", 1, Integer::sum);
             } else {
                 supported.add(file);

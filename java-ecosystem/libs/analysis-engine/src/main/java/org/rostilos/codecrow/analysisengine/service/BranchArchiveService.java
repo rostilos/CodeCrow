@@ -130,21 +130,48 @@ public class BranchArchiveService {
             Set<String> neededFiles,
             Path targetDirectory
     ) throws IOException {
+        return downloadAndExtractSnapshotToDirectory(
+                vcsConnection,
+                workspace,
+                repoSlug,
+                branchOrCommit,
+                neededFiles,
+                targetDirectory).extractedFiles();
+    }
+
+    /**
+     * Directory-extraction variant that also preserves archive path presence.
+     * A requested path can be present but intentionally not extracted when it
+     * is binary or exceeds the text-file size limit.
+     */
+    public ArchiveDirectorySnapshot downloadAndExtractSnapshotToDirectory(
+            VcsConnection vcsConnection,
+            String workspace,
+            String repoSlug,
+            String branchOrCommit,
+            Set<String> neededFiles,
+            Path targetDirectory
+    ) throws IOException {
         Objects.requireNonNull(targetDirectory, "targetDirectory");
         Path normalizedTarget = targetDirectory.toAbsolutePath().normalize();
         Files.createDirectories(normalizedTarget);
         setWorldReadable(normalizedTarget, true);
 
+        Set<String> presentFiles = new LinkedHashSet<>();
         return downloadAndProcessArchive(
                 vcsConnection,
                 workspace,
                 repoSlug,
                 branchOrCommit,
-                archiveFile -> extractFilesFromArchive(
-                        archiveFile,
-                        neededFiles,
-                        new LinkedHashSet<>(),
-                        (relativePath, bytes) -> writeFile(normalizedTarget, relativePath, bytes)));
+                archiveFile -> {
+                    Set<String> extractedFiles = extractFilesFromArchive(
+                            archiveFile,
+                            neededFiles,
+                            presentFiles,
+                            (relativePath, bytes) ->
+                                    writeFile(normalizedTarget, relativePath, bytes));
+                    return new ArchiveDirectorySnapshot(extractedFiles, presentFiles);
+                });
     }
 
     private <T> T downloadAndProcessArchive(
@@ -355,6 +382,16 @@ public class BranchArchiveService {
     ) {
         public ArchiveSnapshot {
             contents = Collections.unmodifiableMap(new LinkedHashMap<>(contents));
+            presentFiles = Collections.unmodifiableSet(new LinkedHashSet<>(presentFiles));
+        }
+    }
+
+    public record ArchiveDirectorySnapshot(
+            Set<String> extractedFiles,
+            Set<String> presentFiles
+    ) {
+        public ArchiveDirectorySnapshot {
+            extractedFiles = Collections.unmodifiableSet(new LinkedHashSet<>(extractedFiles));
             presentFiles = Collections.unmodifiableSet(new LinkedHashSet<>(presentFiles));
         }
     }

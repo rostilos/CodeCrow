@@ -14,21 +14,16 @@ echo "  CodeCrow local production build"
 echo "  Mirrors the CI/CD verification pipeline"
 echo "=========================================="
 
-echo "--- 1. Synchronizing the pinned frontend submodule ---"
-git submodule update --init --recursive -- "$FRONTEND_DIR"
+echo "--- 1. Synchronizing the frontend submodule with origin/main ---"
+git submodule update --init --recursive --remote -- "$FRONTEND_DIR"
 
-PINNED_FRONTEND_COMMIT="$(git rev-parse "HEAD:$FRONTEND_DIR")"
 ACTUAL_FRONTEND_COMMIT="$(git -C "$FRONTEND_DIR" rev-parse HEAD)"
-if [ "$ACTUAL_FRONTEND_COMMIT" != "$PINNED_FRONTEND_COMMIT" ]; then
-    echo "Frontend submodule is not at the commit pinned by this checkout." >&2
-    exit 1
-fi
 FRONTEND_WORKTREE_STATUS="$(git -C "$FRONTEND_DIR" status --porcelain --untracked-files=normal)"
 if [ -n "$FRONTEND_WORKTREE_STATUS" ]; then
     echo "Frontend submodule has non-ignored local changes; refusing a non-reproducible production build." >&2
     exit 1
 fi
-echo "Frontend at pinned commit: $ACTUAL_FRONTEND_COMMIT"
+echo "Frontend at latest origin/main commit: $ACTUAL_FRONTEND_COMMIT"
 
 echo "--- 2. Injecting Environment Configurations ---"
 

@@ -112,7 +112,7 @@ public class RagOperationsServiceImpl implements RagOperationsService {
     }
 
     @Override
-    public void triggerIncrementalUpdate(
+    public boolean triggerIncrementalUpdate(
             Project project,
             String branchName,
             String commitHash,
@@ -129,13 +129,16 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 eventConsumer.accept(Map.of(
                         "type", "info",
                         "message", "Skipping RAG update - main branch must be indexed first"));
-                return;
+                return false;
             }
 
-            log.info("shouldPerformIncrementalUpdate returned true, parsing diff...");
+            String effectiveRawDiff = resolveDiffFromCompletedCheckpoint(
+                    project, branchName, commitHash, rawDiff);
+            log.info("RAG checkpoint reconciliation complete; parsing effective diff...");
 
             // Parse the diff to find changed files
-            IncrementalRagUpdateService.DiffResult diffResult = incrementalRagUpdateService.parseDiffForRag(rawDiff);
+            IncrementalRagUpdateService.DiffResult diffResult =
+                    incrementalRagUpdateService.parseDiffForRag(effectiveRawDiff);
             Set<String> addedFiles = diffResult.added();
             Set<String> modifiedFiles = diffResult.modified();
             Set<String> deletedFiles = diffResult.deleted();
@@ -146,7 +149,7 @@ public class RagOperationsServiceImpl implements RagOperationsService {
 
             if (addedOrModifiedSize == 0 && deletedFiles.isEmpty()) {
                 log.info("Skipping RAG incremental update - no files changed in diff");
-                return;
+                return true;
             }
 
             log.info("RAG incremental update: {} files to add/update, {} files to delete",
@@ -170,7 +173,7 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                         project.getId(), branchName);
                 analysisJobService.warn(job, "rag_skip", "RAG update already in progress - skipping");
                 analysisJobService.failJob(job, "RAG update already in progress");
-                return;
+                return false;
             }
 
             try {
@@ -209,6 +212,7 @@ public class RagOperationsServiceImpl implements RagOperationsService {
 
                 int filesUpdated = (Integer) result.getOrDefault("updatedFiles", 0);
                 int filesDeleted = (Integer) result.getOrDefault("deletedFiles", 0);
+                int filesSkipped = (Integer) result.getOrDefault("skippedFiles", 0);
                 Integer newlyAddedFilesCount = (Integer) result.get("addedFilesCount");
 
                 Integer chunkCount = null;
@@ -222,7 +226,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                         commitHash,
                         newlyAddedFilesCount != null ? newlyAddedFilesCount : 0,
                         filesDeleted,
-                        chunkCount);
+                        chunkCount,
+                        branchName.equals(getBaseBranch(project)));
 
                 // Track branch index for deleted files
                 trackBranchIndex(project, branchName, commitHash, deletedFiles);
@@ -231,14 +236,20 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                         "type", "status",
                         "state", "rag_complete",
                         "message",
-                        String.format("RAG index updated: %d files updated, %d deleted", filesUpdated, filesDeleted)));
+                        String.format(
+                                "RAG index updated: %d files updated, %d deleted, %d non-text files skipped",
+                                filesUpdated, filesDeleted, filesSkipped)));
 
-                log.info("RAG incremental update completed for project={}: {} files updated, {} deleted",
-                        project.getId(), filesUpdated, filesDeleted);
+                log.info("RAG incremental update completed for project={}: {} files updated, {} deleted, "
+                                + "{} non-text files skipped",
+                        project.getId(), filesUpdated, filesDeleted, filesSkipped);
                 analysisJobService.info(job, "rag_complete",
-                        String.format("RAG incremental update completed: %d files updated, %d deleted", filesUpdated,
-                                filesDeleted));
+                        String.format(
+                                "RAG incremental update completed: %d files updated, %d deleted, "
+                                        + "%d non-text files skipped",
+                                filesUpdated, filesDeleted, filesSkipped));
                 analysisJobService.completeJob(job, null);
+                return true;
 
             } catch (Exception e) {
                 // Use markIncrementalUpdateFailed (keeps status INDEXED, increments failure counter)
@@ -254,6 +265,7 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                         "type", "warning",
                         "state", "rag_error",
                         "message", "RAG incremental update failed: " + e.getMessage()));
+                return false;
             } finally {
                 analysisLockService.releaseLock(ragLockKey.get());
             }
@@ -264,7 +276,66 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                         "RAG incremental update failed (non-critical): " + e.getMessage());
                 analysisJobService.failJob(job, e.getMessage());
             }
+            eventConsumer.accept(Map.of(
+                    "type", "warning",
+                    "state", "rag_error",
+                    "message", "RAG incremental update failed: " + e.getMessage()));
+            return false;
         }
+    }
+
+    /**
+     * Rebuilds the effective range from the last completed RAG checkpoint.
+     * The caller's branch-analysis diff is used only when no completed
+     * checkpoint exists yet for this branch.
+     */
+    private String resolveDiffFromCompletedCheckpoint(
+            Project project,
+            String branchName,
+            String commitHash,
+            String suppliedDiff) throws IOException {
+        if (commitHash == null || commitHash.isBlank()) {
+            throw new IOException("Cannot incrementally update RAG without a target commit hash");
+        }
+
+        String baseBranch = getBaseBranch(project);
+        Optional<String> completedCheckpoint;
+        if (branchName.equals(baseBranch)) {
+            completedCheckpoint = ragIndexTrackingService.getIndexStatus(project)
+                    .map(RagIndexStatus::getIndexedCommitHash);
+        } else {
+            completedCheckpoint = ragBranchIndexRepository
+                    .findByProjectIdAndBranchName(project.getId(), branchName)
+                    .map(RagBranchIndex::getCommitHash);
+        }
+
+        String checkpoint = completedCheckpoint
+                .filter(value -> !value.isBlank())
+                .orElse(null);
+        if (checkpoint == null) {
+            log.info("No completed RAG checkpoint for branch {}; using supplied initial diff",
+                    branchName);
+            return suppliedDiff;
+        }
+        if (checkpoint.equals(commitHash)) {
+            log.info("RAG checkpoint already represents branch {} commit {}", branchName, commitHash);
+            return "";
+        }
+
+        VcsRepoBinding vcsRepoBinding = project.getVcsRepoBinding();
+        if (vcsRepoBinding == null) {
+            throw new IOException("Project has no VcsRepoBinding configured");
+        }
+        VcsConnection vcsConnection = vcsRepoBinding.getVcsConnection();
+        VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
+        String workspaceSlug = vcsRepoBinding.getExternalNamespace();
+        String repoSlug = vcsRepoBinding.getExternalRepoSlug();
+
+        log.info("Fetching catch-up RAG diff for branch {} from completed checkpoint {} to {}",
+                branchName, checkpoint, commitHash);
+        String catchUpDiff = vcsClient.getBranchDiff(
+                workspaceSlug, repoSlug, checkpoint, commitHash);
+        return catchUpDiff != null ? catchUpDiff : "";
     }
 
     // ==========================================================================
@@ -399,9 +470,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                     rawDiff.length(), targetBranch, targetCommit);
 
             // Trigger incremental update with full branch diff
-            triggerIncrementalUpdate(project, targetBranch, targetCommit, rawDiff, eventConsumer);
-
-            return true;
+            return triggerIncrementalUpdate(
+                    project, targetBranch, targetCommit, rawDiff, eventConsumer);
 
         } catch (Exception e) {
             log.error("Failed to update branch index for project={}, branch={}",
@@ -496,9 +566,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
             // Trigger incremental update for this branch
             log.info("Triggering incremental update for project={}, branch={}, commit={}, diffBytes={}",
                     project.getId(), targetBranch, targetCommit, rawDiff.length());
-            triggerIncrementalUpdate(project, targetBranch, targetCommit, rawDiff, eventConsumer);
-
-            return true;
+            return triggerIncrementalUpdate(
+                    project, targetBranch, targetCommit, rawDiff, eventConsumer);
 
         } catch (Exception e) {
             log.error("Failed to index branch data for project={}, branch={}: {}",
@@ -776,9 +845,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                         indexedCommit.substring(0, 7), currentCommit.substring(0, 7))));
 
         // Trigger incremental update
-        triggerIncrementalUpdate(project, branchName, currentCommit, rawDiff, eventConsumer);
-
-        return isRagIndexReady(project);
+        return triggerIncrementalUpdate(
+                project, branchName, currentCommit, rawDiff, eventConsumer);
     }
 
     /**
@@ -854,9 +922,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         // Trigger incremental update for this branch
         log.info("Triggering incremental branch update for '{}' with {} bytes diff",
                 targetBranch, rawDiff.length());
-        triggerIncrementalUpdate(project, targetBranch, currentCommit, rawDiff, eventConsumer);
-
-        return true;
+        return triggerIncrementalUpdate(
+                project, targetBranch, currentCommit, rawDiff, eventConsumer);
     }
 
 }
