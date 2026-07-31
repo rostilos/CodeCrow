@@ -34,11 +34,10 @@ from llm.provider_guard import forbid_llm_provider_construction
 from service.rag.llm_reranker import LLMReranker, RerankResponse
 from service.review.orchestrator import MultiStageReviewOrchestrator
 from service.review.plugin_context import (
-    apply_plugin_file_policy,
     capture_plugin_diagnostics,
 )
 from service.review.prompt_diagnostics import capture_prompt_diagnostics
-from utils.diff_processor import DiffProcessor
+from service.review.evidence_scopes import process_review_evidence_scopes
 
 
 _FILE_SECTION = re.compile(
@@ -825,19 +824,12 @@ async def capture_review_prompts(
                 },
             )
         else:
-            processed_diff = (
-                DiffProcessor().process(safe_request.rawDiff)
-                if safe_request.rawDiff
-                else None
-            )
-            processed_diff = apply_plugin_file_policy(
-                safe_request,
-                processed_diff,
-            )
+            evidence_scopes = process_review_evidence_scopes(safe_request)
             await orchestrator.orchestrate_review(
                 request=safe_request,
                 rag_context=None,
-                processed_diff=processed_diff,
+                processed_diff=evidence_scopes.review,
+                full_pr_processed_diff=evidence_scopes.full_pr,
             )
 
     return session.report(

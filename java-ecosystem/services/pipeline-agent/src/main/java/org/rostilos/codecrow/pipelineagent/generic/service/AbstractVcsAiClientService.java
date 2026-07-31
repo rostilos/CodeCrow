@@ -3,6 +3,7 @@ package org.rostilos.codecrow.pipelineagent.generic.service;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -437,9 +438,27 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             String sourceBranch,
             String title,
             String description) {
-        return taskContextEnrichmentService != null
-                ? taskContextEnrichmentService.resolveTaskContext(project, sourceBranch, title, description)
-                : Collections.emptyMap();
+        if (taskContextEnrichmentService == null) {
+            return Collections.emptyMap();
+        }
+        Map<String, String> resolved =
+                taskContextEnrichmentService.resolveTaskContext(
+                        project, sourceBranch, title, description);
+        if (resolved.containsKey("task_key")) {
+            return resolved;
+        }
+
+        // The task provider may be temporarily unavailable while the task key
+        // remains deterministically identifiable from PR metadata. Preserve
+        // that key for database association and prior-task evidence lookup.
+        Optional<String> fallbackKey = taskContextEnrichmentService.resolveTaskKey(
+                project, sourceBranch, title, description);
+        if (fallbackKey.isEmpty()) {
+            return resolved;
+        }
+        Map<String, String> withFallbackKey = new LinkedHashMap<>(resolved);
+        withFallbackKey.put("task_key", fallbackKey.get());
+        return Map.copyOf(withFallbackKey);
     }
 
     private String resolveTaskHistory(

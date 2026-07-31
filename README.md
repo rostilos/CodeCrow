@@ -234,12 +234,12 @@ for the detailed invariants and failure behavior.
 ## Self-Hosting and Build Verification
 
 The interactive setup configures secrets and chooses OpenRouter or Ollama for
-embeddings. The local production build synchronizes the pinned frontend
-submodule, rejects local frontend drift, recreates the two isolated Python 3.11
-CI environments, and runs the same Python, plugin-boundary, Maven `verify`, and
-observable-image Buildx gates as CI/CD. Only after every gate passes does it
-replace the local Compose services with those validated images and wait for
-health checks.
+embeddings. The local production build fetches and checks out the latest commit
+from the frontend submodule's configured `main` branch, rejects local frontend
+drift, recreates the two isolated Python 3.11 CI environments, and runs the same
+Python, plugin-boundary, Maven `verify`, and observable-image Buildx gates as
+CI/CD. Only after every gate passes does it replace the local Compose services
+with those validated images and wait for health checks.
 
 ```bash
 cd deployment

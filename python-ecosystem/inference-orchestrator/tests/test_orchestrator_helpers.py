@@ -18,6 +18,7 @@ from service.review.orchestrator.orchestrator import (
     _retain_published_cross_file_issues,
     _serialize_issue_for_client,
     _suppress_duplicates_of_protected_history,
+    _task_evidence_key,
 )
 from service.review.orchestrator.stage_0_planning import (
     apply_mechanical_skip_constraints,
@@ -32,6 +33,7 @@ from model.multi_stage import (
     FileToSkip,
 )
 from model.output_schemas import CodeReviewIssue
+from model.dtos import ReviewRequestDto
 
 
 @pytest.fixture
@@ -40,6 +42,26 @@ def orchestrator():
         llm=MagicMock(),
         mcp_client=MagicMock(),
     )
+
+
+def test_task_evidence_key_falls_back_to_server_built_history():
+    request = ReviewRequestDto(
+        projectId=42,
+        projectVcsWorkspace="workspace",
+        projectVcsRepoSlug="repository",
+        projectWorkspace="project",
+        projectNamespace="namespace",
+        aiProvider="OPENAI",
+        aiModel="test-model",
+        aiApiKey="test-key",
+        taskContext=None,
+        taskHistoryContext=(
+            "### Prior Task Implementation Context\n"
+            "Task: SHOP-42 - Coupon tracking\n"
+        ),
+    )
+
+    assert _task_evidence_key(request) == "SHOP-42"
 
 
 # ── _filter_diff_for_files ──────────────────────────────────────

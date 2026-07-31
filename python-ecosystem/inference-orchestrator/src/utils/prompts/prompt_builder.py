@@ -280,6 +280,7 @@ These rules refine evidence collection only. Report a finding only when supplied
         task_context: str = "No task context available.",
         task_history_context: str = "No prior task history available.",
         pr_change_summary: str = "No PR-wide change summary available.",
+        incremental_delta_summary: str = "Full review scope.",
     ) -> str:
         """
         Build prompt for Stage 2: Cross-File & Architectural Review.
@@ -306,6 +307,9 @@ These rules refine evidence collection only. Report a finding only when supplied
             task_context=task_context or "No task context available.",
             task_history_context=task_history_context or "No prior task history available.",
             pr_change_summary=pr_change_summary or "No PR-wide change summary available.",
+            incremental_delta_summary=(
+                incremental_delta_summary or "No current review-scope summary available."
+            ),
             stage_1_findings_json=stage_1_findings_json,
             architecture_context=architecture_context,
             migrations=migrations,

@@ -1,7 +1,10 @@
 import pytest
 
 from model.dtos import ReviewRequestDto
-from service.review.review_service import select_review_evidence_diff
+from service.review.evidence_scopes import (
+    process_review_evidence_scopes,
+    select_review_evidence_diff,
+)
 from utils.diff_processor import DiffProcessor, HunkDisposition
 from utils.hunk_coverage import (
     HunkCoverageLedger,
@@ -113,6 +116,7 @@ def test_incremental_manifest_is_validated_against_delta_not_full_pr_diff():
         rawDiff=full_diff,
         deltaDiff=delta_diff,
         changedFiles=["src/current.php"],
+        currentCommitHash="a" * 40,
     )
 
     processed_diff = DiffProcessor().process(select_review_evidence_diff(request))
@@ -123,3 +127,83 @@ def test_incremental_manifest_is_validated_against_delta_not_full_pr_diff():
         processed_diff,
     )
     assert [file.path for file in processed_diff.files] == ["src/current.php"]
+
+    scopes = process_review_evidence_scopes(request)
+    assert [file.path for file in scopes.review.files] == ["src/current.php"]
+    assert [file.path for file in scopes.full_pr.files] == [
+        "src/old.php",
+        "src/current.php",
+    ]
+
+
+def test_incremental_full_pr_plugin_policy_failure_does_not_block_delta(
+    monkeypatch,
+):
+    full_diff = _diff("src/old.php") + _diff("src/current.php")
+    delta_diff = _diff("src/current.php")
+    request = ReviewRequestDto(
+        projectId=42,
+        projectVcsWorkspace="workspace",
+        projectVcsRepoSlug="repository",
+        projectWorkspace="project",
+        projectNamespace="namespace",
+        aiProvider="OPENAI",
+        aiModel="test-model",
+        aiApiKey="test-key",
+        analysisMode="INCREMENTAL",
+        rawDiff=full_diff,
+        deltaDiff=delta_diff,
+        changedFiles=["src/current.php"],
+        currentCommitHash="a" * 40,
+    )
+    calls = 0
+
+    def plugin_policy(_request, processed):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("optional full-scope plugin failed")
+        return processed
+
+    monkeypatch.setattr(
+        "service.review.evidence_scopes.apply_plugin_file_policy",
+        plugin_policy,
+    )
+
+    scopes = process_review_evidence_scopes(request)
+
+    assert [file.path for file in scopes.review.files] == ["src/current.php"]
+    assert [file.path for file in scopes.full_pr.files] == [
+        "src/old.php",
+        "src/current.php",
+    ]
+
+
+def test_incremental_scope_without_full_diff_keeps_delta_and_marks_full_unavailable(
+    monkeypatch,
+):
+    delta_diff = _diff("src/current.php")
+    request = ReviewRequestDto(
+        projectId=42,
+        projectVcsWorkspace="workspace",
+        projectVcsRepoSlug="repository",
+        projectWorkspace="project",
+        projectNamespace="namespace",
+        aiProvider="OPENAI",
+        aiModel="test-model",
+        aiApiKey="test-key",
+        analysisMode="INCREMENTAL",
+        rawDiff=None,
+        deltaDiff=delta_diff,
+        changedFiles=["src/current.php"],
+        currentCommitHash="a" * 40,
+    )
+    monkeypatch.setattr(
+        "service.review.evidence_scopes.apply_plugin_file_policy",
+        lambda _request, processed: processed,
+    )
+
+    scopes = process_review_evidence_scopes(request)
+
+    assert [file.path for file in scopes.review.files] == ["src/current.php"]
+    assert scopes.full_pr is None
