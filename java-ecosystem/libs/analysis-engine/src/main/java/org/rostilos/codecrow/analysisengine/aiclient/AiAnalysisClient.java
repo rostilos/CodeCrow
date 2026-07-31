@@ -332,6 +332,7 @@ public class AiAnalysisClient {
         payload.put("ragEnabled", request.getRagEnabled());
         payload.put("analysisType", request.getAnalysisType());
         payload.put("vcsProvider", request.getVcsProvider());
+        payload.put("vcsBaseUrl", request.getVcsBaseUrl());
         payload.put("prTitle", request.getPrTitle());
         payload.put("prDescription", request.getPrDescription());
         payload.put("taskContext", request.getTaskContext());

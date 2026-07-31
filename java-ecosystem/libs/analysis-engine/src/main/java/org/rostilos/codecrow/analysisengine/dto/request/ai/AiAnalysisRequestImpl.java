@@ -48,6 +48,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String targetBranchName;
     protected final String sourceBranchName;
     protected final String vcsProvider;
+    protected final String vcsBaseUrl;
     protected final String rawDiff;
 
     // Incremental analysis fields
@@ -98,6 +99,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.targetBranchName = builder.targetBranchName;
         this.sourceBranchName = builder.sourceBranchName;
         this.vcsProvider = builder.vcsProvider;
+        this.vcsBaseUrl = builder.vcsBaseUrl;
         this.rawDiff = builder.rawDiff;
         // Incremental analysis fields
         this.analysisMode = builder.analysisMode != null ? builder.analysisMode : AnalysisMode.FULL;
@@ -231,6 +233,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return vcsProvider;
     }
 
+    @Override
+    public String getVcsBaseUrl() {
+        return vcsBaseUrl;
+    }
+
     public String getRawDiff() {
         return rawDiff;
     }
@@ -311,6 +318,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String targetBranchName;
         private String sourceBranchName;
         private String vcsProvider;
+        private String vcsBaseUrl;
         private String rawDiff;
         // Incremental analysis fields
         private AnalysisMode analysisMode;
@@ -603,6 +611,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withVcsProvider(String vcsProvider) {
             this.vcsProvider = vcsProvider;
+            return self();
+        }
+
+        public T withVcsBaseUrl(String vcsBaseUrl) {
+            this.vcsBaseUrl = vcsBaseUrl;
             return self();
         }
 

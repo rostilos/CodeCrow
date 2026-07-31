@@ -388,6 +388,7 @@ public class AskCommandProcessor implements CommentCommandProcessor {
                 credentials.accessToken(),
                 project.getEffectiveConfig().maxAnalysisTokenLimit(),
                 credentials.vcsProviderString(),
+                credentials.vcsBaseUrl(),
                 analysisContext,
                 context.issueReferences()
             );

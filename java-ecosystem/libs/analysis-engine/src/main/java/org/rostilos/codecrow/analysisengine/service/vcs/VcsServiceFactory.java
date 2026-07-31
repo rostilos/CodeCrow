@@ -16,19 +16,15 @@ public class VcsServiceFactory {
 
     private final Map<EVcsProvider, VcsAiClientService> aiClientServices;
     private final Map<EVcsProvider, VcsReportingService> reportingServices;
-    private final Map<EVcsProvider, VcsOperationsService> operationsServices;
 
     public VcsServiceFactory(
             List<VcsAiClientService> aiClientServiceList,
-            List<VcsReportingService> reportingServiceList,
-            List<VcsOperationsService> operationsServiceList
+            List<VcsReportingService> reportingServiceList
     ) {
         this.aiClientServices = aiClientServiceList.stream()
                 .collect(Collectors.toMap(VcsAiClientService::getProvider, Function.identity()));
         this.reportingServices = reportingServiceList.stream()
                 .collect(Collectors.toMap(VcsReportingService::getProvider, Function.identity()));
-        this.operationsServices = operationsServiceList.stream()
-                .collect(Collectors.toMap(VcsOperationsService::getProvider, Function.identity()));
     }
 
     public VcsAiClientService getAiClientService(EVcsProvider provider) {
@@ -43,14 +39,6 @@ public class VcsServiceFactory {
         VcsReportingService service = reportingServices.get(provider);
         if (service == null) {
             throw new UnsupportedOperationException("No reporting service registered for provider: " + provider);
-        }
-        return service;
-    }
-
-    public VcsOperationsService getOperationsService(EVcsProvider provider) {
-        VcsOperationsService service = operationsServices.get(provider);
-        if (service == null) {
-            throw new UnsupportedOperationException("No operations service registered for provider: " + provider);
         }
         return service;
     }

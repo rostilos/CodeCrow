@@ -30,12 +30,6 @@ class VcsServiceFactoryTest {
     @Mock
     private VcsReportingService gitlabReportingService;
 
-    @Mock
-    private VcsOperationsService githubOperationsService;
-
-    @Mock
-    private VcsOperationsService gitlabOperationsService;
-
     private VcsServiceFactory factory;
 
     @BeforeEach
@@ -44,14 +38,10 @@ class VcsServiceFactoryTest {
         when(gitlabAiService.getProvider()).thenReturn(EVcsProvider.GITLAB);
         when(githubReportingService.getProvider()).thenReturn(EVcsProvider.GITHUB);
         when(gitlabReportingService.getProvider()).thenReturn(EVcsProvider.GITLAB);
-        when(githubOperationsService.getProvider()).thenReturn(EVcsProvider.GITHUB);
-        when(gitlabOperationsService.getProvider()).thenReturn(EVcsProvider.GITLAB);
-
         List<VcsAiClientService> aiServices = Arrays.asList(githubAiService, gitlabAiService);
         List<VcsReportingService> reportingServices = Arrays.asList(githubReportingService, gitlabReportingService);
-        List<VcsOperationsService> operationsServices = Arrays.asList(githubOperationsService, gitlabOperationsService);
 
-        factory = new VcsServiceFactory(aiServices, reportingServices, operationsServices);
+        factory = new VcsServiceFactory(aiServices, reportingServices);
     }
 
     @Test
@@ -97,30 +87,8 @@ class VcsServiceFactoryTest {
     }
 
     @Test
-    void testGetOperationsService_GitHub_ReturnsGitHubService() {
-        VcsOperationsService result = factory.getOperationsService(EVcsProvider.GITHUB);
-
-        assertThat(result).isEqualTo(githubOperationsService);
-    }
-
-    @Test
-    void testGetOperationsService_GitLab_ReturnsGitLabService() {
-        VcsOperationsService result = factory.getOperationsService(EVcsProvider.GITLAB);
-
-        assertThat(result).isEqualTo(gitlabOperationsService);
-    }
-
-    @Test
-    void testGetOperationsService_UnknownProvider_ThrowsException() {
-        assertThatThrownBy(() -> factory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("No operations service registered for provider: BITBUCKET_CLOUD");
-    }
-
-    @Test
     void testFactoryWithEmptyLists_ThrowsExceptionForAnyProvider() {
         VcsServiceFactory emptyFactory = new VcsServiceFactory(
-                Collections.emptyList(),
                 Collections.emptyList(),
                 Collections.emptyList()
         );
@@ -129,16 +97,13 @@ class VcsServiceFactoryTest {
                 .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> emptyFactory.getReportingService(EVcsProvider.GITHUB))
                 .isInstanceOf(UnsupportedOperationException.class);
-        assertThatThrownBy(() -> emptyFactory.getOperationsService(EVcsProvider.GITHUB))
-                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test
     void testFactoryWithOnlyGitHub_GitLabNotAvailable() {
         VcsServiceFactory githubOnlyFactory = new VcsServiceFactory(
                 List.of(githubAiService),
-                List.of(githubReportingService),
-                List.of(githubOperationsService)
+                List.of(githubReportingService)
         );
 
         assertThat(githubOnlyFactory.getAiClientService(EVcsProvider.GITHUB))
@@ -153,10 +118,8 @@ class VcsServiceFactoryTest {
     void testAllServicesForSameProvider_ReturnsConsistently() {
         VcsAiClientService aiService = factory.getAiClientService(EVcsProvider.GITHUB);
         VcsReportingService reportingService = factory.getReportingService(EVcsProvider.GITHUB);
-        VcsOperationsService operationsService = factory.getOperationsService(EVcsProvider.GITHUB);
 
         assertThat(aiService.getProvider()).isEqualTo(EVcsProvider.GITHUB);
         assertThat(reportingService.getProvider()).isEqualTo(EVcsProvider.GITHUB);
-        assertThat(operationsService.getProvider()).isEqualTo(EVcsProvider.GITHUB);
     }
 }

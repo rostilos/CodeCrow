@@ -11,6 +11,11 @@ public class GitLabCreateRequest {
     
     private String connectionName;
 
+    /**
+     * GitLab instance root. Null/blank keeps the GitLab.com default.
+     */
+    private String baseUrl;
+
     public String getAccessToken() {
         return accessToken;
     }
@@ -33,5 +38,13 @@ public class GitLabCreateRequest {
 
     public void setConnectionName(String connectionName) {
         this.connectionName = connectionName;
+    }
+
+    public String getBaseUrl() {
+        return baseUrl;
+    }
+
+    public void setBaseUrl(String baseUrl) {
+        this.baseUrl = baseUrl;
     }
 }

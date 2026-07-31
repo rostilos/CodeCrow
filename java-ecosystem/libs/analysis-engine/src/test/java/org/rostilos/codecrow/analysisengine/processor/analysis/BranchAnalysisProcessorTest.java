@@ -1,6 +1,5 @@
 package org.rostilos.codecrow.analysisengine.processor.analysis;
 
-import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -31,7 +30,6 @@ import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestStatusSyncService;
 import org.rostilos.codecrow.commitgraph.service.CommitCoverageService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.util.AnalysisLimitEnforcer;
@@ -130,16 +128,13 @@ class BranchAnalysisProcessorTest {
     private RagOperationsService ragOperationsService;
 
     @Mock
-    private VcsOperationsService operationsService;
-
-    @Mock
     private Project project;
 
     @Mock
     private VcsConnection vcsConnection;
 
     @Mock
-    private OkHttpClient httpClient;
+    private VcsClient authorizedClient;
 
     @Mock
     private Branch branch;
@@ -148,6 +143,7 @@ class BranchAnalysisProcessorTest {
 
     @BeforeEach
     void setUp() {
+        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(authorizedClient);
         processor = new BranchAnalysisProcessor(
                 projectService,
                 branchRepository,
@@ -407,16 +403,13 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             // DAG sync
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(Collections.emptyList(), null, true));
 
             // Diff fetcher returns the raw diff
             String rawDiff = "diff --git a/src/App.java b/src/App.java\n+new code\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             // Support services return values
@@ -450,7 +443,7 @@ class BranchAnalysisProcessorTest {
             verify(branchFileOperationsService).updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot));
             verify(branchFileOperationsService).createOrUpdateProjectBranch(eq(project), eq(request), any());
             verify(branchDiffFetcher).fetchDiff(
-                    any(), any(), any(), any(), any(), any(), isNull(), any());
+                    any(), any(), any(), any(), any(), isNull(), any());
             verify(branchIssueMappingService).mapCodeAnalysisIssuesToBranch(
                     anySet(), anySet(), eq(savedBranch), eq(project), eq(Set.of(40L, 41L, 42L)));
             verify(branchIssueReconciliationService).reconcileIssueLineNumbers(eq(rawDiff), anySet(), eq(savedBranch));
@@ -491,16 +484,13 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             // DAG sync
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             // Diff fetcher returns delta diff
             String rawDiff = "diff --git a/src/App.java b/src/App.java\n+delta change\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             // Support services
@@ -519,7 +509,7 @@ class BranchAnalysisProcessorTest {
             Map<String, Object> result = processor.process(request, consumer);
 
             assertThat(result).containsEntry("status", "accepted");
-            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any(), any());
+            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -555,10 +545,6 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD))
-                    .thenReturn(operationsService);
-
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(List.of("new-commit"), "old-commit", false));
 
@@ -576,7 +562,7 @@ class BranchAnalysisProcessorTest {
                     -old unrelated code
                     +new unrelated code
                     """;
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
             doThrow(new DiffTooLargeException(
                     DiffTooLargeException.LimitType.FILES, 851, 150, 1L, null, null))
@@ -646,16 +632,13 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             // DAG sync
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             // Diff fetcher returns commit diff
             String rawDiff = "diff --git a/README.md b/README.md\n+updated\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             // Support services
@@ -678,7 +661,7 @@ class BranchAnalysisProcessorTest {
             Map<String, Object> result = processor.process(request, consumer);
 
             assertThat(result).containsEntry("status", "accepted");
-            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any(), any());
+            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -702,15 +685,12 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             // DAG sync
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("f.java", "content");
@@ -801,15 +781,12 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             // DAG sync
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("f.java", "content");
@@ -868,16 +845,13 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             // DAG sync
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             // Diff fetcher returns diff (handles fallback internally)
             String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("f.java", "content");
@@ -894,7 +868,7 @@ class BranchAnalysisProcessorTest {
 
             processor.process(request, consumer);
 
-            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any(), any());
+            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -923,21 +897,16 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(List.of("source-head"), "old-commit", false));
 
-            VcsClient vcsClient = mock(VcsClient.class);
-            when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
-            when(vcsClient.getCommitHistory("ws", "repo", "merge-commit", 1))
+            when(authorizedClient.getCommitHistory("ws", "repo", "merge-commit", 1))
                     .thenReturn(List.of(new VcsCommit(
                             "merge-commit", "Merge PR", null, null, null,
                             List.of("target-parent", "source-head"))));
-            when(operationsService.findPullRequestForCommit(httpClient, "ws", "repo", "merge-commit"))
+            when(authorizedClient.findPullRequestForCommit("ws", "repo", "merge-commit"))
                     .thenReturn(null);
-            when(operationsService.findPullRequestForCommit(httpClient, "ws", "repo", "source-head"))
+            when(authorizedClient.findPullRequestForCommit("ws", "repo", "source-head"))
                     .thenReturn(null);
             when(codeAnalysisService.findReviewedPrNumberByCommitHash(1L, "main", "merge-commit"))
                     .thenReturn(Optional.empty());
@@ -945,7 +914,7 @@ class BranchAnalysisProcessorTest {
                     .thenReturn(Optional.of(42L));
 
             String rawDiff = "diff --git a/src/App.java b/src/App.java\n+change\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("src/App.java", "content");
@@ -962,7 +931,7 @@ class BranchAnalysisProcessorTest {
 
             processor.process(request, consumer);
 
-            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), eq(42L), any());
+            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), eq(42L), any());
             verify(branchIssueMappingService).mapCodeAnalysisIssuesToBranch(
                     anySet(), anySet(), eq(existingBranch), eq(project), eq(42L));
             verify(pullRequestService).markPullRequestMerged(1L, 42L);

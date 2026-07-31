@@ -1,10 +1,7 @@
 package org.rostilos.codecrow.pipelineagent.qadoc;
 
-import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
@@ -74,7 +71,6 @@ public class QaAutoDocListener {
     private final QaDocGenerationService qaDocGenerationService;
     private final CodeAnalysisService codeAnalysisService;
     private final VcsClientProvider vcsClientProvider;
-    private final VcsServiceFactory vcsServiceFactory;
     private final QaDocStateRepository qaDocStateRepository;
     private final QaDocDocumentService qaDocDocumentService;
     private final PrFileEnrichmentService enrichmentService;
@@ -86,7 +82,6 @@ public class QaAutoDocListener {
                               QaDocGenerationService qaDocGenerationService,
                               CodeAnalysisService codeAnalysisService,
                               VcsClientProvider vcsClientProvider,
-                              VcsServiceFactory vcsServiceFactory,
                               QaDocStateRepository qaDocStateRepository,
                               QaDocDocumentService qaDocDocumentService,
                               PrFileEnrichmentService enrichmentService,
@@ -97,7 +92,6 @@ public class QaAutoDocListener {
         this.qaDocGenerationService = qaDocGenerationService;
         this.codeAnalysisService = codeAnalysisService;
         this.vcsClientProvider = vcsClientProvider;
-        this.vcsServiceFactory = vcsServiceFactory;
         this.qaDocStateRepository = qaDocStateRepository;
         this.qaDocDocumentService = qaDocDocumentService;
         this.enrichmentService = enrichmentService;
@@ -208,15 +202,12 @@ public class QaAutoDocListener {
 
         // 5a. Fetch full PR diff
         String diff = null;
-        OkHttpClient httpClient = null;
-        VcsOperationsService opsService = null;
+        VcsClient vcsClient = null;
 
         if (vcsConnection != null) {
             try {
-                httpClient = vcsClientProvider.getHttpClient(vcsConnection);
-                opsService = vcsServiceFactory.getOperationsService(vcsConnection.getProviderType());
-                diff = opsService.getPullRequestDiff(
-                        httpClient, workspace, repoSlug, String.valueOf(prNumber));
+                vcsClient = vcsClientProvider.getClient(vcsConnection);
+                diff = vcsClient.getPullRequestDiff(workspace, repoSlug, prNumber);
                 log.info("QA auto-doc: fetched PR diff, size={} chars",
                         diff != null ? diff.length() : 0);
             } catch (Exception e) {
@@ -239,12 +230,11 @@ public class QaAutoDocListener {
         // 5c. Compute delta diff for same-PR re-runs (incremental update)
         String deltaDiff = null;
         if (isSamePrRerun && state.getLastCommitHash() != null
-                && currentCommitHash != null && opsService != null && httpClient != null) {
+                && currentCommitHash != null && vcsClient != null) {
             DiffContentFilter contentFilter = new DiffContentFilter();
-            final OkHttpClient client = httpClient;
-            final VcsOperationsService ops = opsService;
+            final VcsClient client = vcsClient;
             deltaDiff = VcsDiffUtils.fetchDeltaDiff(
-                    (ws, repo, base, head) -> ops.getCommitRangeDiff(client, ws, repo, base, head),
+                    client::getCommitRangeDiff,
                     workspace, repoSlug,
                     state.getLastCommitHash(), currentCommitHash, contentFilter);
             if (deltaDiff != null) {

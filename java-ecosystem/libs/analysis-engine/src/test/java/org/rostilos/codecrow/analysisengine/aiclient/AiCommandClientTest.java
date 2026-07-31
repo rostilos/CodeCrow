@@ -42,7 +42,7 @@ class AiCommandClientTest {
                 return new AiCommandClient.SummarizeRequest(
                                 1L, "workspace", "repo-slug", "project-workspace", "namespace",
                                 "openai", "gpt-4", "api-key", null, 42L, "feature", "main", "abc123",
-                                "oauth-client", "oauth-secret", "access-token", true, 4096, "bitbucket");
+                                "oauth-client", "oauth-secret", "access-token", true, 4096, "bitbucket", null);
         }
 
         private AiCommandClient.AskRequest createAskRequest() {
@@ -50,14 +50,14 @@ class AiCommandClientTest {
                                 1L, "workspace", "repo-slug", "project-workspace", "namespace",
                                 "openai", "gpt-4", "api-key", null, "What is this code doing?",
                                 42L, "abc123", "oauth-client", "oauth-secret", "access-token",
-                                4096, "bitbucket", null, null);
+                                4096, "bitbucket", null, null, null);
         }
 
         private AiCommandClient.ReviewRequest createReviewRequest() {
                 return new AiCommandClient.ReviewRequest(
                                 1L, "workspace", "repo-slug", "project-workspace", "namespace",
                                 "openai", "gpt-4", "api-key", null, 42L, "feature", "main", "abc123",
-                                "oauth-client", "oauth-secret", "access-token", 4096, "bitbucket");
+                                "oauth-client", "oauth-secret", "access-token", 4096, "bitbucket", null);
         }
 
         @Nested

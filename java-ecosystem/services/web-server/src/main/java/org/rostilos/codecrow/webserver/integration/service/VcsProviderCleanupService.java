@@ -2,7 +2,6 @@ package org.rostilos.codecrow.webserver.integration.service;
 
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
-import okhttp3.FormBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -16,6 +15,8 @@ import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionReposi
 import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabClientFactory;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabConfig;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -186,27 +187,13 @@ public class VcsProviderCleanupService {
             throw new IntegrationException("GitLab OAuth application credentials are not configured");
         }
 
-        String baseUrl = settings.baseUrl() == null || settings.baseUrl().isBlank()
-                ? "https://gitlab.com"
-                : settings.baseUrl().replaceAll("/$", "");
+        String baseUrl = GitLabConfig.instanceBaseUrl(connection);
         String accessToken = encryptionService.decrypt(connection.getAccessToken());
-        var body = new FormBody.Builder()
-                .add("client_id", settings.clientId())
-                .add("client_secret", settings.clientSecret())
-                .add("token", accessToken)
-                .build();
-        Request request = new Request.Builder()
-                .url(baseUrl + "/oauth/revoke")
-                .post(body)
-                .build();
-
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                String responseBody = response.body() == null ? "" : response.body().string();
-                throw new IOException("GitLab OAuth revoke returned "
-                        + response.code() + (responseBody.isBlank() ? "" : ": " + responseBody));
-            }
-        }
+        GitLabClientFactory.createOAuthClient(httpClient).revokeToken(
+                baseUrl,
+                settings.clientId(),
+                settings.clientSecret(),
+                accessToken);
         log.info("Revoked GitLab OAuth grant for connection {}", connection.getId());
     }
 

@@ -32,7 +32,8 @@ class GitLabDTOTest {
                 true,
                 now,
                 EVcsConnectionType.PERSONAL_TOKEN,
-                "/path/to/repo"
+                "/path/to/repo",
+                "https://gitlab.example.com"
         );
 
         assertThat(dto.id()).isEqualTo(1L);
@@ -44,6 +45,7 @@ class GitLabDTOTest {
         assertThat(dto.updatedAt()).isEqualTo(now);
         assertThat(dto.connectionType()).isEqualTo(EVcsConnectionType.PERSONAL_TOKEN);
         assertThat(dto.repositoryPath()).isEqualTo("/path/to/repo");
+        assertThat(dto.baseUrl()).isEqualTo("https://gitlab.example.com");
     }
 
     @Test
@@ -51,10 +53,12 @@ class GitLabDTOTest {
     void recordsWithSameValuesShouldBeEqual() {
         LocalDateTime now = LocalDateTime.now();
         GitLabDTO dto1 = new GitLabDTO(
-                1L, "name", "group", 5, EVcsSetupStatus.CONNECTED, true, now, EVcsConnectionType.APP, "/path"
+                1L, "name", "group", 5, EVcsSetupStatus.CONNECTED, true, now,
+                EVcsConnectionType.APP, "/path", "https://gitlab.com"
         );
         GitLabDTO dto2 = new GitLabDTO(
-                1L, "name", "group", 5, EVcsSetupStatus.CONNECTED, true, now, EVcsConnectionType.APP, "/path"
+                1L, "name", "group", 5, EVcsSetupStatus.CONNECTED, true, now,
+                EVcsConnectionType.APP, "/path", "https://gitlab.com"
         );
 
         assertThat(dto1).isEqualTo(dto2);

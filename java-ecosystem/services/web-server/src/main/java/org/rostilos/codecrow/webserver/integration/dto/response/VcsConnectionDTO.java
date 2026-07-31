@@ -4,6 +4,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.EVcsSetupStatus;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.model.vcs.config.gitlab.GitLabConfig;
 
 import java.time.LocalDateTime;
 
@@ -18,6 +19,7 @@ public record VcsConnectionDTO(
     EVcsSetupStatus status,
     String externalWorkspaceId,
     String externalWorkspaceSlug,
+    String baseUrl,
     boolean installationRequestPending,
     int repoCount,
     LocalDateTime tokenExpiresAt,
@@ -36,11 +38,21 @@ public record VcsConnectionDTO(
             entity.getSetupStatus(),
             entity.getExternalWorkspaceId(),
             entity.getExternalWorkspaceSlug(),
+            gitLabBaseUrl(entity),
             entity.getGithubInstallationRequestId() != null,
             entity.getRepoCount(),
             entity.getTokenExpiresAt(),
             entity.getCreatedAt(),
             entity.getUpdatedAt()
         );
+    }
+
+    private static String gitLabBaseUrl(VcsConnection entity) {
+        if (entity.getProviderType() != EVcsProvider.GITLAB) {
+            return null;
+        }
+        return entity.getConfiguration() instanceof GitLabConfig config
+                ? config.effectiveBaseUrl()
+                : GitLabConfig.DEFAULT_BASE_URL;
     }
 }

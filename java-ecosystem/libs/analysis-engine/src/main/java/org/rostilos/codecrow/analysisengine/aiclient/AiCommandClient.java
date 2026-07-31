@@ -179,7 +179,8 @@ public class AiCommandClient {
             String accessToken,
             boolean supportsMermaid,
             Integer maxAllowedTokens,
-            String vcsProvider) {
+            String vcsProvider,
+            String vcsBaseUrl) {
     }
 
     /**
@@ -203,6 +204,7 @@ public class AiCommandClient {
             String accessToken,
             Integer maxAllowedTokens,
             String vcsProvider,
+            String vcsBaseUrl,
             String analysisContext,
             java.util.List<String> issueReferences) {
     }
@@ -244,7 +246,8 @@ public class AiCommandClient {
             String oAuthSecret,
             String accessToken,
             Integer maxAllowedTokens,
-            String vcsProvider) {
+            String vcsProvider,
+            String vcsBaseUrl) {
     }
 
     /**

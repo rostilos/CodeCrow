@@ -302,7 +302,8 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
                 credentials.accessToken(),
                 diagramType == PrSummarizeCache.DiagramType.MERMAID,
                 project.getEffectiveConfig().maxAnalysisTokenLimit(),
-                credentials.vcsProviderString()
+                credentials.vcsProviderString(),
+                credentials.vcsBaseUrl()
             );
             
         } catch (GeneralSecurityException e) {

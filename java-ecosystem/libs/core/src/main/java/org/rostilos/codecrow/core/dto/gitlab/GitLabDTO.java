@@ -17,7 +17,8 @@ public record GitLabDTO(
         Boolean hasAccessToken,
         LocalDateTime updatedAt,
         EVcsConnectionType connectionType,
-        String repositoryPath
+        String repositoryPath,
+        String baseUrl
 ) {
     public static GitLabDTO fromVcsConnection(VcsConnection vcsConnection) {
         if (vcsConnection.getProviderType() != EVcsProvider.GITLAB) {
@@ -34,7 +35,8 @@ public record GitLabDTO(
                     vcsConnection.getAccessToken() != null && !vcsConnection.getAccessToken().isBlank(),
                     vcsConnection.getUpdatedAt(),
                     vcsConnection.getConnectionType(),
-                    vcsConnection.getRepositoryPath()
+                    vcsConnection.getRepositoryPath(),
+                    effectiveBaseUrl(vcsConnection)
             );
         }
         
@@ -48,7 +50,14 @@ public record GitLabDTO(
                 config.accessToken() != null && !config.accessToken().isBlank(),
                 vcsConnection.getUpdatedAt(),
                 vcsConnection.getConnectionType(),
-                vcsConnection.getRepositoryPath()
+                vcsConnection.getRepositoryPath(),
+                config.effectiveBaseUrl()
         );
+    }
+
+    private static String effectiveBaseUrl(VcsConnection connection) {
+        return connection.getConfiguration() instanceof GitLabConfig config
+                ? config.effectiveBaseUrl()
+                : GitLabConfig.DEFAULT_BASE_URL;
     }
 }

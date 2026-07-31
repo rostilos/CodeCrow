@@ -4,6 +4,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
 import org.rostilos.codecrow.vcsclient.VcsClient;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.CheckFileExistsInBranchAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitDiffAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitRangeDiffAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestDiffAction;
 import org.rostilos.codecrow.vcsclient.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -764,6 +770,124 @@ public class BitbucketCloudClient implements VcsClient {
             ResponseBody body = response.body();
             return body != null ? body.string() : "";
         }
+    }
+
+    @Override
+    public VcsPullRequest getPullRequest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException {
+        GetPullRequestAction.PullRequestMetadata metadata =
+                new GetPullRequestAction(httpClient).getPullRequest(
+                        workspaceId, repoIdOrSlug, String.valueOf(pullRequestNumber));
+        String baseCommit = resolveCommitHashIfNeeded(
+                workspaceId, repoIdOrSlug, metadata.getDestinationCommit());
+        String headCommit = resolveCommitHashIfNeeded(
+                workspaceId, repoIdOrSlug, metadata.getSourceCommit());
+        String state = metadata.getState();
+        return new VcsPullRequest(
+                pullRequestNumber,
+                metadata.getTitle(),
+                metadata.getDescription(),
+                metadata.getSourceRef(),
+                metadata.getDestRef(),
+                baseCommit,
+                headCommit,
+                state,
+                "MERGED".equalsIgnoreCase(state),
+                null);
+    }
+
+    @Override
+    public String getPullRequestDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException {
+        return new GetPullRequestDiffAction(httpClient).getPullRequestDiff(
+                workspaceId, repoIdOrSlug, String.valueOf(pullRequestNumber));
+    }
+
+    @Override
+    public String getCommitDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commitHash
+    ) throws IOException {
+        return new GetCommitDiffAction(httpClient).getCommitDiff(
+                workspaceId, repoIdOrSlug, commitHash);
+    }
+
+    @Override
+    public String getCommitRangeDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            String baseCommitHash,
+            String headCommitHash
+    ) throws IOException {
+        return new GetCommitRangeDiffAction(httpClient).getCommitRangeDiff(
+                workspaceId, repoIdOrSlug, baseCommitHash, headCommitHash);
+    }
+
+    @Override
+    public boolean fileExists(
+            String workspaceId,
+            String repoIdOrSlug,
+            String branchOrCommit,
+            String filePath
+    ) throws IOException {
+        return new CheckFileExistsInBranchAction(httpClient).fileExists(
+                workspaceId, repoIdOrSlug, branchOrCommit, filePath);
+    }
+
+    @Override
+    public Long findPullRequestForCommit(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commitHash
+    ) throws IOException {
+        String url = API_BASE + "/repositories/" + workspaceId + "/" + repoIdOrSlug
+                + "/commit/" + commitHash + "/pullrequests";
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .get()
+                .build();
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                log.warn("Failed to find Bitbucket PR for commit {}: HTTP {}", commitHash, response.code());
+                return null;
+            }
+            JsonNode root = objectMapper.readTree(
+                    response.body() != null ? response.body().string() : "{}");
+            JsonNode pullRequests = root.path("values");
+            if (!pullRequests.isArray() || pullRequests.isEmpty()) {
+                return null;
+            }
+            for (JsonNode pullRequest : pullRequests) {
+                if ("MERGED".equalsIgnoreCase(pullRequest.path("state").asText())) {
+                    return pullRequest.path("id").asLong();
+                }
+            }
+            return pullRequests.get(0).path("id").asLong();
+        } catch (Exception error) {
+            log.warn("Error finding Bitbucket PR for commit {}: {}",
+                    commitHash, error.getMessage());
+            return null;
+        }
+    }
+
+    private String resolveCommitHashIfNeeded(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commitHash
+    ) throws IOException {
+        if (commitHash == null || commitHash.isBlank() || commitHash.length() >= 40) {
+            return commitHash;
+        }
+        return new GetCommitAction(httpClient).resolveCommitHash(
+                workspaceId, repoIdOrSlug, commitHash);
     }
 
     @Override

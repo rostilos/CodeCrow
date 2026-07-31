@@ -155,7 +155,7 @@ class VcsRagIndexingServiceTest {
     }
 
     private ProjectDTO createProjectDTO(Long id) {
-        return new ProjectDTO(id, null, null, false, null, null, null, null, null, null, null, null, null, null, null,
+        return new ProjectDTO(id, null, null, false, null, null, null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 

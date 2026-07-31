@@ -325,6 +325,8 @@ class CommandService:
                 props["oAuthSecret"] = request.oAuthSecret
         if hasattr(request, 'vcsProvider') and request.vcsProvider:
             props["vcs.provider"] = request.vcsProvider
+        if hasattr(request, 'vcsBaseUrl') and request.vcsBaseUrl:
+            props["vcs.baseUrl"] = request.vcsBaseUrl
         
         return props
 
@@ -339,7 +341,8 @@ class CommandService:
             oAuthSecret=request.oAuthSecret,
             access_token=request.accessToken,
             max_allowed_tokens=request.maxAllowedTokens,
-            vcs_provider=request.vcsProvider
+            vcs_provider=request.vcsProvider,
+            vcs_base_url=request.vcsBaseUrl,
         )
 
     def _build_jvm_props_for_ask(self, request: AskRequestDto) -> Dict[str, str]:
@@ -353,7 +356,8 @@ class CommandService:
             oAuthSecret=request.oAuthSecret,
             access_token=request.accessToken,
             max_allowed_tokens=request.maxAllowedTokens,
-            vcs_provider=request.vcsProvider
+            vcs_provider=request.vcsProvider,
+            vcs_base_url=request.vcsBaseUrl,
         )
 
     async def _fetch_rag_context_for_summarize(

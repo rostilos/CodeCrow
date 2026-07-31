@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.model.vcs.config.gitlab.GitLabConfig;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.BitbucketCloudClient;
 import org.rostilos.codecrow.vcsclient.github.GitHubClient;
 import org.rostilos.codecrow.vcsclient.gitlab.GitLabClient;
@@ -43,14 +44,22 @@ class VcsClientFactoryTest {
     }
 
     @Test
-    void testCreateClient_GitLab_ReturnsGitLabClient() {
+    void testCreateClient_GitLab_UsesConnectionInstance() throws Exception {
         VcsConnection connection = new VcsConnection();
         connection.setProviderType(EVcsProvider.GITLAB);
+        connection.setConfiguration(new GitLabConfig(
+                null, null, null, "https://gitlab.example.com/root/"));
 
         VcsClient result = factory.createClient(connection, "gitlab-token", null);
 
         assertThat(result).isInstanceOf(GitLabClient.class);
-        verify(mockHttpClientFactory).createClientWithBearerToken("gitlab-token");
+        var api = GitLabClient.class.getDeclaredField("api");
+        api.setAccessible(true);
+        Object context = api.get(result);
+        var apiBaseUrl = context.getClass().getDeclaredMethod("apiBaseUrl");
+        apiBaseUrl.setAccessible(true);
+        assertThat(apiBaseUrl.invoke(context))
+                .isEqualTo("https://gitlab.example.com/root/api/v4");
     }
 
     @Test

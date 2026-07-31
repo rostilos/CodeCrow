@@ -542,15 +542,16 @@ class ReviewService:
     ) -> Dict[str, str]:
         """Build JVM properties from request."""
         return MCPConfigBuilder.build_jvm_props(
-            request.projectId,
-            request.pullRequestId,
-            request.projectVcsWorkspace,
-            request.projectVcsRepoSlug,
-            request.oAuthClient,
-            request.oAuthSecret,
-            request.accessToken,
-            request.maxAllowedTokens or max_allowed_tokens,
-            request.vcsProvider
+            project_id=request.projectId,
+            pull_request_id=request.pullRequestId,
+            workspace=request.projectVcsWorkspace,
+            repo_slug=request.projectVcsRepoSlug,
+            oAuthClient=request.oAuthClient,
+            oAuthSecret=request.oAuthSecret,
+            access_token=request.accessToken,
+            max_allowed_tokens=request.maxAllowedTokens or max_allowed_tokens,
+            vcs_provider=request.vcsProvider,
+            vcs_base_url=request.vcsBaseUrl,
         )
 
     async def _fetch_rag_context(

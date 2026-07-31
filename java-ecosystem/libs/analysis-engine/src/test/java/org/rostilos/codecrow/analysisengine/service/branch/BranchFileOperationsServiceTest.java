@@ -1,6 +1,5 @@
 package org.rostilos.codecrow.analysisengine.service.branch;
 
-import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -9,10 +8,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.VcsFileRetrievalPolicy;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
@@ -21,6 +17,7 @@ import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalys
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.filecontent.persistence.BranchFileRepository;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 
 import java.io.IOException;
@@ -47,7 +44,6 @@ class BranchFileOperationsServiceTest {
     @Mock private BranchIssueRepository branchIssueRepository;
     @Mock private CodeAnalysisIssueRepository codeAnalysisIssueRepository;
     @Mock private CodeAnalysisRepository codeAnalysisRepository;
-    @Mock private VcsServiceFactory vcsServiceFactory;
     @Mock private VcsClientProvider vcsClientProvider;
     @Mock private FileSnapshotService fileSnapshotService;
     @Mock private BranchArchiveService branchArchiveService;
@@ -55,8 +51,7 @@ class BranchFileOperationsServiceTest {
     @Mock private Project project;
     @Mock private VcsConnection vcsConnection;
     @Mock private VcsRepoInfo vcsRepoInfo;
-    @Mock private VcsOperationsService operationsService;
-    @Mock private OkHttpClient httpClient;
+    @Mock private VcsClient vcsClient;
 
     private BranchFileOperationsService service;
 
@@ -68,7 +63,6 @@ class BranchFileOperationsServiceTest {
                 branchIssueRepository,
                 codeAnalysisIssueRepository,
                 codeAnalysisRepository,
-                vcsServiceFactory,
                 vcsClientProvider,
                 fileSnapshotService,
                 branchArchiveService,
@@ -120,7 +114,7 @@ class BranchFileOperationsServiceTest {
 
         assertThat(existing).containsExactlyInAnyOrder("src/Text.java", "assets/logo.png");
         verify(branchFileRepository, org.mockito.Mockito.times(2)).save(any());
-        verifyNoInteractions(vcsServiceFactory, vcsClientProvider, operationsService);
+        verifyNoInteractions(vcsClientProvider, vcsClient);
     }
 
     @Test
@@ -132,15 +126,12 @@ class BranchFileOperationsServiceTest {
                 anyLong(), anyString(), anyString())).thenReturn(Optional.empty());
         when(codeAnalysisIssueRepository.findByProjectIdAndFilePath(anyLong(), anyString()))
                 .thenReturn(List.of());
-        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
         when(vcsRepoInfo.getVcsConnection()).thenReturn(vcsConnection);
         when(vcsRepoInfo.getRepoWorkspace()).thenReturn("workspace");
         when(vcsRepoInfo.getRepoSlug()).thenReturn("repo");
-        when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD))
-                .thenReturn(operationsService);
-        when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-        when(operationsService.checkFileExistsInBranch(
-                httpClient, "workspace", "repo", "main", "src/A.java"))
+        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
+        when(vcsClient.fileExists(
+                "workspace", "repo", "main", "src/A.java"))
                 .thenThrow(new IOException("Unexpected response 429"));
 
         BranchFileOperationsService.BranchFileSnapshot snapshot =
@@ -154,10 +145,10 @@ class BranchFileOperationsServiceTest {
 
         assertThat(existing).containsExactlyInAnyOrder("src/A.java", "src/B.java");
         assertThat(snapshot.allowContentApiFallback()).isFalse();
-        verify(operationsService).checkFileExistsInBranch(
-                httpClient, "workspace", "repo", "main", "src/A.java");
-        verify(operationsService, never()).checkFileExistsInBranch(
-                httpClient, "workspace", "repo", "main", "src/B.java");
+        verify(vcsClient).fileExists(
+                "workspace", "repo", "main", "src/A.java");
+        verify(vcsClient, never()).fileExists(
+                "workspace", "repo", "main", "src/B.java");
     }
 
     private void configureProjectRepository() {

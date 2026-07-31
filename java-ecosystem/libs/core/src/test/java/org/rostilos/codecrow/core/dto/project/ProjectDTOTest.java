@@ -18,6 +18,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
+import org.rostilos.codecrow.core.model.vcs.config.gitlab.GitLabConfig;
 
 import java.lang.reflect.Field;
 import java.util.List;
@@ -44,7 +45,7 @@ class ProjectDTOTest {
             ProjectDTO dto = new ProjectDTO(
                     1L, "Test Project", "Description", true,
                     10L, "OAUTH_MANUAL", "BITBUCKET_CLOUD",
-                    "workspace", "repo-slug",
+                    null, "workspace", "repo-slug",
                     20L, "namespace", "main", "main",
                     100L, stats, ragConfig,
                     true, false, "WEBHOOK",
@@ -80,7 +81,7 @@ class ProjectDTOTest {
         void shouldCreateWithNullOptionalFields() {
             ProjectDTO dto = new ProjectDTO(
                     1L, "Test", null, true,
-                    null, null, null, null, null,
+                    null, null, null, null, null, null,
                     null, null, null, null, null, null,
                     null, null, null, null, null, null, null, null, null, null, null, null, null);
 
@@ -127,6 +128,33 @@ class ProjectDTOTest {
             assertThat(dto.projectVcsWorkspace()).isEqualTo("test-workspace");
             assertThat(dto.projectVcsRepoSlug()).isEqualTo("test-repo");
             assertThat(dto.webhooksConfigured()).isTrue();
+        }
+
+        @Test
+        @DisplayName("should expose the normalized GitLab instance URL")
+        void shouldExposeGitLabInstanceUrl() {
+            Project project = createProjectWithVcsBinding();
+            VcsConnection connection = project.getVcsRepoBinding().getVcsConnection();
+            connection.setProviderType(EVcsProvider.GITLAB);
+            connection.setConfiguration(new GitLabConfig(
+                    null, "test-workspace", null, "https://gitlab.example.com/api/v4/"));
+
+            ProjectDTO dto = ProjectDTO.fromProject(project);
+
+            assertThat(dto.vcsBaseUrl()).isEqualTo("https://gitlab.example.com");
+        }
+
+        @Test
+        @DisplayName("should default legacy GitLab connections to GitLab.com")
+        void shouldDefaultLegacyGitLabInstanceUrl() {
+            Project project = createProjectWithVcsBinding();
+            VcsConnection connection = project.getVcsRepoBinding().getVcsConnection();
+            connection.setProviderType(EVcsProvider.GITLAB);
+            connection.setConfiguration(null);
+
+            ProjectDTO dto = ProjectDTO.fromProject(project);
+
+            assertThat(dto.vcsBaseUrl()).isEqualTo(GitLabConfig.DEFAULT_BASE_URL);
         }
 
         @Test

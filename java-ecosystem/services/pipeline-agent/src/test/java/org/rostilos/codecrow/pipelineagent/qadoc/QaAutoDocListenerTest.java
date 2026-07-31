@@ -5,7 +5,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.persistence.repository.qadoc.QaDocStateRepository;
 import org.rostilos.codecrow.core.persistence.repository.taskmanagement.TaskManagementConnectionRepository;
@@ -40,8 +39,6 @@ class QaAutoDocListenerTest {
     @Mock
     private VcsClientProvider vcsClientProvider;
     @Mock
-    private VcsServiceFactory vcsServiceFactory;
-    @Mock
     private QaDocStateRepository qaDocStateRepository;
     @Mock
     private QaDocDocumentService qaDocDocumentService;
@@ -59,7 +56,6 @@ class QaAutoDocListenerTest {
                 qaDocGenerationService,
                 codeAnalysisService,
                 vcsClientProvider,
-                vcsServiceFactory,
                 qaDocStateRepository,
                 qaDocDocumentService,
                 enrichmentService,

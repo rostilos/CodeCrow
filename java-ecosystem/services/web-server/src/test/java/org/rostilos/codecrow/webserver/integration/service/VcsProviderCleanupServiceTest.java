@@ -22,6 +22,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.EVcsSetupStatus;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.model.vcs.config.gitlab.GitLabConfig;
 import org.rostilos.codecrow.core.persistence.repository.vcs.BitbucketConnectInstallationRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.core.service.SiteSettingsProvider;
@@ -68,6 +69,8 @@ class VcsProviderCleanupServiceTest {
     void revokesTheExactGitLabOAuthToken() throws Exception {
         VcsConnection connection = appConnection(EVcsProvider.GITLAB);
         connection.setAccessToken("encrypted-token");
+        connection.setConfiguration(new GitLabConfig(
+                null, null, null, "https://gitlab.connection.example/"));
         when(encryptionService.decrypt("encrypted-token")).thenReturn("plain-token");
         when(siteSettingsProvider.getGitLabSettings()).thenReturn(
                 new GitLabSettingsDTO(
@@ -83,7 +86,7 @@ class VcsProviderCleanupServiceTest {
         verify(httpClient).newCall(request.capture());
         assertThat(request.getValue().method()).isEqualTo("POST");
         assertThat(request.getValue().url().toString())
-                .isEqualTo("https://gitlab.example/oauth/revoke");
+                .isEqualTo("https://gitlab.connection.example/oauth/revoke");
         Buffer body = new Buffer();
         request.getValue().body().writeTo(body);
         assertThat(body.readUtf8())
@@ -108,6 +111,27 @@ class VcsProviderCleanupServiceTest {
         assertThatThrownBy(() -> service.removeProviderAuthorization(connection))
                 .isInstanceOf(IntegrationException.class)
                 .hasMessageContaining("kept so deletion can be retried");
+    }
+
+    @Test
+    void legacyGitLabOAuthConnectionStillRevokesOnGitLabCom() throws Exception {
+        VcsConnection connection = appConnection(EVcsProvider.GITLAB);
+        connection.setAccessToken("encrypted-token");
+        when(encryptionService.decrypt("encrypted-token")).thenReturn("plain-token");
+        when(siteSettingsProvider.getGitLabSettings()).thenReturn(
+                new GitLabSettingsDTO(
+                        "client-id",
+                        "client-secret",
+                        "https://new-self-managed.example"));
+        when(httpClient.newCall(any(Request.class))).thenReturn(call);
+        when(call.execute()).thenAnswer(invocation -> response(200));
+
+        service.removeProviderAuthorization(connection);
+
+        ArgumentCaptor<Request> request = ArgumentCaptor.forClass(Request.class);
+        verify(httpClient).newCall(request.capture());
+        assertThat(request.getValue().url().toString())
+                .isEqualTo("https://gitlab.com/oauth/revoke");
     }
 
     @Test

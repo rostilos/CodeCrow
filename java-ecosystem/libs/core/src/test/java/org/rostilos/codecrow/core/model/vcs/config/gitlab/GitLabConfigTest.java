@@ -38,6 +38,13 @@ class GitLabConfigTest {
     }
 
     @Test
+    void testEffectiveBaseUrl_NormalizesApiSuffixAndTrailingSlash() {
+        GitLabConfig config = new GitLabConfig(
+                "token", "group-id", null, " https://gitlab.mycompany.com/api/v4/ ");
+        assertThat(config.effectiveBaseUrl()).isEqualTo("https://gitlab.mycompany.com");
+    }
+
+    @Test
     void testEffectiveBaseUrl_WithNullBaseUrl() {
         GitLabConfig config = new GitLabConfig("token", "group-id", null, null);
         assertThat(config.effectiveBaseUrl()).isEqualTo("https://gitlab.com");

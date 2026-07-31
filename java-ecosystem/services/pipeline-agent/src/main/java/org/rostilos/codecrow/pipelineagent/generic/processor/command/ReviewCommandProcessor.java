@@ -187,7 +187,8 @@ public class ReviewCommandProcessor implements CommentCommandProcessor {
                 credentials.oAuthSecret(),
                 credentials.accessToken(),
                 project.getEffectiveConfig().maxAnalysisTokenLimit(),
-                credentials.vcsProviderString()
+                credentials.vcsProviderString(),
+                credentials.vcsBaseUrl()
             );
             
         } catch (GeneralSecurityException e) {

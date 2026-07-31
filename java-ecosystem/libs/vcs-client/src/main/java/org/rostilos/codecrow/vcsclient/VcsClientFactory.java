@@ -33,7 +33,12 @@ public class VcsClientFactory {
             case BITBUCKET_CLOUD -> createBitbucketCloudClient(connection, accessToken, refreshToken);
             case BITBUCKET_SERVER -> throw new UnsupportedOperationException("Bitbucket Server not yet implemented");
             case GITHUB -> createGitHubClient(accessToken);
-            case GITLAB -> createGitLabClient(accessToken);
+            case GITLAB -> createGitLabClient(
+                    accessToken,
+                    connection.getConfiguration()
+                            instanceof org.rostilos.codecrow.core.model.vcs.config.gitlab.GitLabConfig config
+                            ? config.effectiveBaseUrl()
+                            : null);
         };
     }
     
@@ -42,7 +47,7 @@ public class VcsClientFactory {
             case BITBUCKET_CLOUD -> createBitbucketCloudClientFromTokens(accessToken, refreshToken);
             case BITBUCKET_SERVER -> throw new UnsupportedOperationException("Bitbucket Server not yet implemented");
             case GITHUB -> createGitHubClient(accessToken);
-            case GITLAB -> createGitLabClient(accessToken);
+            case GITLAB -> createGitLabClient(accessToken, null);
         };
     }
     
@@ -61,9 +66,9 @@ public class VcsClientFactory {
         return new GitHubClient(httpClient);
     }
 
-    private GitLabClient createGitLabClient(String accessToken) {
-        OkHttpClient httpClient = httpClientFactory.createClientWithBearerToken(accessToken);
-        return new GitLabClient(httpClient);
+    public GitLabClient createGitLabClient(String accessToken, String instanceBaseUrl) {
+        return org.rostilos.codecrow.vcsclient.gitlab.GitLabClientFactory
+                .createWithAccessToken(accessToken, instanceBaseUrl);
     }
     
     public VcsClient createClientWithOAuth(EVcsProvider provider, String oAuthKey, String oAuthSecret) {
