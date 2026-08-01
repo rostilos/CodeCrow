@@ -23,6 +23,8 @@ import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.HttpAuthorizedClientFactory;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthConfigurationException;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.SearchBitbucketCloudReposAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.ValidateBitbucketCloudConnectionAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.dto.response.RepositorySearchResult;
@@ -370,6 +372,25 @@ public class VcsConnectionWebService {
         GitLabConfig currentConfig = connection.getConfiguration() instanceof GitLabConfig 
                 ? (GitLabConfig) connection.getConfiguration() 
                 : null;
+
+        if (isGitLabOAuthConnection(connection) && request.getBaseUrl() != null) {
+            String currentBaseUrl = currentConfig != null
+                    ? currentConfig.effectiveBaseUrl()
+                    : GitLabConfig.DEFAULT_BASE_URL;
+            final boolean sameIssuer;
+            try {
+                sameIssuer = GitLabOAuthProvider.sameIssuer(
+                        currentBaseUrl, request.getBaseUrl());
+            } catch (GitLabOAuthConfigurationException e) {
+                throw new IllegalArgumentException(e.getMessage(), e);
+            }
+            if (!sameIssuer) {
+                throw new IllegalArgumentException(
+                        "The GitLab instance of an OAuth connection cannot be changed. "
+                                + "Create a new connection or reauthorize with the OAuth "
+                                + "application configured for that instance.");
+            }
+        }
         
         GitLabConfig updatedConfig = new GitLabConfig(
                 request.getAccessToken() != null ? request.getAccessToken() : 
@@ -401,6 +422,11 @@ public class VcsConnectionWebService {
             updatedConnection = syncGitLabConnectionInfo(connection, updatedConfig);
         }
         return vcsConnectionRepository.save(updatedConnection);
+    }
+
+    private boolean isGitLabOAuthConnection(VcsConnection connection) {
+        return connection.getConnectionType() == EVcsConnectionType.APP
+                || connection.getConnectionType() == EVcsConnectionType.APPLICATION;
     }
 
     @Transactional

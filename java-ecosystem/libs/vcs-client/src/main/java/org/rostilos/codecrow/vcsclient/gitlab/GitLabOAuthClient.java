@@ -33,20 +33,22 @@ public final class GitLabOAuthClient {
     }
 
     GitLabOAuthClient(OkHttpClient httpClient, ObjectMapper objectMapper) {
-        this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
+        this.httpClient = Objects.requireNonNull(httpClient, "httpClient")
+                .newBuilder()
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .build();
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
     }
 
     public static String authorizationUrl(
-            String instanceBaseUrl,
-            String clientId,
+            GitLabOAuthProvider provider,
             String redirectUri,
             String state,
             String scopes
     ) {
-        String baseUrl = GitLabConfig.instanceBaseUrl(instanceBaseUrl);
-        return baseUrl + "/oauth/authorize"
-                + "?client_id=" + encode(clientId)
+        return provider.instanceBaseUrl() + "/oauth/authorize"
+                + "?client_id=" + encode(provider.clientId())
                 + "&redirect_uri=" + encode(redirectUri)
                 + "&response_type=code"
                 + "&scope=" + encode(scopes)
@@ -54,52 +56,46 @@ public final class GitLabOAuthClient {
     }
 
     public GitLabOAuthTokens exchangeAuthorizationCode(
-            String instanceBaseUrl,
-            String clientId,
-            String clientSecret,
+            GitLabOAuthProvider provider,
             String code,
             String redirectUri
     ) throws IOException {
         RequestBody body = new FormBody.Builder()
-                .add("client_id", clientId)
-                .add("client_secret", clientSecret)
+                .add("client_id", provider.clientId())
+                .add("client_secret", provider.clientSecret())
                 .add("code", code)
                 .add("grant_type", "authorization_code")
                 .add("redirect_uri", redirectUri)
                 .build();
-        return requestTokens(instanceBaseUrl, body, "exchange GitLab authorization code");
+        return requestTokens(provider, body, "exchange GitLab authorization code");
     }
 
     public GitLabOAuthTokens refreshToken(
-            String instanceBaseUrl,
-            String clientId,
-            String clientSecret,
+            GitLabOAuthProvider provider,
             String refreshToken,
             String redirectUri
     ) throws IOException {
         RequestBody body = new FormBody.Builder()
                 .add("grant_type", "refresh_token")
                 .add("refresh_token", refreshToken)
-                .add("client_id", clientId)
-                .add("client_secret", clientSecret)
+                .add("client_id", provider.clientId())
+                .add("client_secret", provider.clientSecret())
                 .add("redirect_uri", redirectUri)
                 .build();
-        return requestTokens(instanceBaseUrl, body, "refresh GitLab token");
+        return requestTokens(provider, body, "refresh GitLab token");
     }
 
     public void revokeToken(
-            String instanceBaseUrl,
-            String clientId,
-            String clientSecret,
+            GitLabOAuthProvider provider,
             String accessToken
     ) throws IOException {
         RequestBody body = new FormBody.Builder()
-                .add("client_id", clientId)
-                .add("client_secret", clientSecret)
+                .add("client_id", provider.clientId())
+                .add("client_secret", provider.clientSecret())
                 .add("token", accessToken)
                 .build();
         Request request = new Request.Builder()
-                .url(GitLabConfig.instanceBaseUrl(instanceBaseUrl) + "/oauth/revoke")
+                .url(provider.instanceBaseUrl() + "/oauth/revoke")
                 .header("Accept", "application/json")
                 .post(body)
                 .build();
@@ -115,12 +111,12 @@ public final class GitLabOAuthClient {
     }
 
     private GitLabOAuthTokens requestTokens(
-            String instanceBaseUrl,
+            GitLabOAuthProvider provider,
             RequestBody body,
             String operation
     ) throws IOException {
         Request request = new Request.Builder()
-                .url(GitLabConfig.instanceBaseUrl(instanceBaseUrl) + "/oauth/token")
+                .url(provider.instanceBaseUrl() + "/oauth/token")
                 .header("Accept", "application/json")
                 .post(body)
                 .build();

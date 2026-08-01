@@ -54,6 +54,9 @@ public final class GitLabClientFactory {
     }
 
     public static GitLabOAuthClient createOAuthClient(OkHttpClient httpClient) {
-        return new GitLabOAuthClient(httpClient);
+        return new GitLabOAuthClient(httpClient.newBuilder()
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .build());
     }
 }

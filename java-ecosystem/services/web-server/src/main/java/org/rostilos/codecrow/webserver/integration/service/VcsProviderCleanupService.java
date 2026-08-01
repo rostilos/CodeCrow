@@ -16,7 +16,7 @@ import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService;
 import org.rostilos.codecrow.vcsclient.gitlab.GitLabClientFactory;
-import org.rostilos.codecrow.vcsclient.gitlab.GitLabConfig;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthProvider;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -181,18 +181,12 @@ public class VcsProviderCleanupService {
             return;
         }
 
-        var settings = siteSettingsProvider.getGitLabSettings();
-        if (settings.clientId() == null || settings.clientId().isBlank()
-                || settings.clientSecret() == null || settings.clientSecret().isBlank()) {
-            throw new IntegrationException("GitLab OAuth application credentials are not configured");
-        }
-
-        String baseUrl = GitLabConfig.instanceBaseUrl(connection);
+        GitLabOAuthProvider oAuthProvider = GitLabOAuthProvider
+                .from(siteSettingsProvider.getGitLabSettings())
+                .requireConnectionIssuer(connection);
         String accessToken = encryptionService.decrypt(connection.getAccessToken());
         GitLabClientFactory.createOAuthClient(httpClient).revokeToken(
-                baseUrl,
-                settings.clientId(),
-                settings.clientSecret(),
+                oAuthProvider,
                 accessToken);
         log.info("Revoked GitLab OAuth grant for connection {}", connection.getId());
     }

@@ -20,6 +20,7 @@ import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionReposi
 import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.gitlab.GitLabClient;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthProvider;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -28,6 +29,8 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -184,13 +187,17 @@ class VcsClientProviderTest {
             ));
 
             Method refreshGitLabToken = VcsClientProvider.class
-                    .getDeclaredMethod("refreshGitLabToken", String.class, String.class);
+                    .getDeclaredMethod(
+                            "refreshGitLabToken",
+                            String.class,
+                            GitLabOAuthProvider.class);
             refreshGitLabToken.setAccessible(true);
 
             Object tokenResponse = refreshGitLabToken.invoke(
                     provider,
                     "old-refresh-token",
-                    gitLab.url("").toString());
+                    GitLabOAuthProvider.from(
+                            siteSettingsProvider.getGitLabSettings()));
 
             assertThat(tokenResponse).isNotNull();
 
@@ -206,6 +213,34 @@ class VcsClientProviderTest {
         } finally {
             gitLab.shutdown();
         }
+    }
+
+    @Test
+    void gitLabTokenRefresh_rejectsConnectionFromAnotherIssuer() throws Exception {
+        VcsConnection connection = new VcsConnection();
+        setId(connection, 91L);
+        connection.setProviderType(EVcsProvider.GITLAB);
+        connection.setConnectionType(EVcsConnectionType.APP);
+        connection.setRefreshToken("encrypted-refresh-token");
+        connection.setConfiguration(new GitLabConfig(
+                null,
+                "group",
+                List.of(),
+                "https://attacker.example"));
+        when(siteSettingsProvider.getGitLabSettings()).thenReturn(
+                new GitLabSettingsDTO(
+                        "gitlab-client-id",
+                        "gitlab-client-secret",
+                        "https://gitlab.example"));
+
+        assertThatThrownBy(() -> provider.refreshToken(connection))
+                .isInstanceOf(VcsClientException.class)
+                .hasRootCauseMessage(
+                        "GitLab OAuth connection issuer https://attacker.example "
+                                + "does not match the configured OAuth issuer "
+                                + "https://gitlab.example. Update the token connection or "
+                                + "configure the deployment OAuth application for this GitLab instance.");
+        verify(encryptionService, never()).decrypt("encrypted-refresh-token");
     }
 
     // ── getClient ────────────────────────────────────────────────────────

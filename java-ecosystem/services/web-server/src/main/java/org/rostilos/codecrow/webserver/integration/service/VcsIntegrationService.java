@@ -22,7 +22,9 @@ import org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService;
 import org.rostilos.codecrow.vcsclient.github.GitHubInstallationNotFoundException;
 import org.rostilos.codecrow.vcsclient.gitlab.GitLabClientFactory;
 import org.rostilos.codecrow.vcsclient.gitlab.GitLabConfig;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthConfigurationException;
 import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthClient;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthProvider;
 import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthTokens;
 import org.rostilos.codecrow.vcsclient.model.VcsRepository;
 import org.rostilos.codecrow.vcsclient.model.VcsRepositoryPage;
@@ -378,38 +380,19 @@ public class VcsIntegrationService {
      * Supports both GitLab.com and self-hosted GitLab instances.
      */
     private InstallUrlResponse getGitLabInstallUrl(Long workspaceId, Long connectionId) {
-        var glSettings = siteSettingsProvider.getGitLabSettings();
-        String glClientId = glSettings.clientId();
-        String glClientSecret = glSettings.clientSecret();
-        if (glClientId == null || glClientId.isBlank()) {
-            throw new IntegrationException(
-                "GitLab OAuth Application is not configured. " +
-                "Please configure GitLab settings in Site Admin."
-            );
-        }
-        
-        if (glClientSecret == null || glClientSecret.isBlank()) {
-            throw new IntegrationException(
-                "GitLab OAuth Application secret is not configured. " +
-                "Please configure GitLab settings in Site Admin."
-            );
-        }
-        
-        String state = generateState(EVcsProvider.GITLAB, workspaceId, connectionId);
-        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/gitlab/app/callback";
-        
-        // A reconnect must return to the instance stored on the connection.
-        // Missing configuration is the legacy GitLab.com representation.
-        String gitlabHost;
+        VcsConnection connection = null;
         if (connectionId != null) {
-            VcsConnection connection = getConnection(workspaceId, connectionId);
+            connection = getConnection(workspaceId, connectionId);
             if (connection.getProviderType() != EVcsProvider.GITLAB) {
                 throw new IntegrationException("Connection is not a GitLab connection");
             }
-            gitlabHost = GitLabConfig.instanceBaseUrl(connection);
-        } else {
-            gitlabHost = GitLabConfig.instanceBaseUrl(glSettings.baseUrl());
         }
+
+        GitLabOAuthProvider oAuthProvider = resolveGitLabOAuthProvider(connection);
+        String gitlabHost = oAuthProvider.instanceBaseUrl();
+        String state = generateState(EVcsProvider.GITLAB, workspaceId, connectionId);
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl()
+                + "/api/integrations/gitlab/app/callback";
         
         log.info("Generated GitLab OAuth URL with callback: {} (host: {}, reconnect: {})", callbackUrl, gitlabHost, connectionId != null);
         
@@ -417,8 +400,7 @@ public class VcsIntegrationService {
         String scope = "api read_user read_repository write_repository";
         
         String installUrl = GitLabOAuthClient.authorizationUrl(
-                gitlabHost,
-                glClientId,
+                oAuthProvider,
                 callbackUrl,
                 state,
                 scope);
@@ -1419,26 +1401,20 @@ public class VcsIntegrationService {
             throws GeneralSecurityException, IOException {
 
         VcsConnection connection = null;
-        String gitlabHost;
         if (connectionId != null) {
             connection = getConnection(workspaceId, connectionId);
             if (connection.getProviderType() != EVcsProvider.GITLAB) {
                 throw new IntegrationException("Connection is not a GitLab connection");
             }
-            gitlabHost = GitLabConfig.instanceBaseUrl(connection);
-        } else {
-            gitlabHost = GitLabConfig.instanceBaseUrl(
-                    siteSettingsProvider.getGitLabSettings().baseUrl());
         }
 
-        var glExchSettings = siteSettingsProvider.getGitLabSettings();
+        GitLabOAuthProvider oAuthProvider = resolveGitLabOAuthProvider(connection);
+        String gitlabHost = oAuthProvider.instanceBaseUrl();
         String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl()
                 + "/api/integrations/gitlab/app/callback";
         GitLabOAuthTokens tokens = GitLabClientFactory.createOAuthClient()
                 .exchangeAuthorizationCode(
-                        gitlabHost,
-                        glExchSettings.clientId(),
-                        glExchSettings.clientSecret(),
+                        oAuthProvider,
                         code,
                         callbackUrl);
 
@@ -1461,7 +1437,8 @@ public class VcsIntegrationService {
             connection = existingConnections.stream()
                     .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
                     .filter(c -> username.equals(c.getExternalWorkspaceSlug()))
-                    .filter(c -> gitlabHost.equals(GitLabConfig.instanceBaseUrl(c)))
+                    .filter(c -> GitLabOAuthProvider.sameIssuer(
+                            gitlabHost, GitLabConfig.instanceBaseUrl(c)))
                     .findFirst()
                     .orElse(null);
             
@@ -1476,8 +1453,10 @@ public class VcsIntegrationService {
             connection = new VcsConnection();
             connection.setWorkspace(workspace);
             connection.setProviderType(EVcsProvider.GITLAB);
-            connection.setConnectionType(EVcsConnectionType.APP);  // OAuth connection type
         }
+
+        // Reconnecting a token connection is an explicit conversion to OAuth.
+        connection.setConnectionType(EVcsConnectionType.APP);
         
         // Update connection with new tokens (encrypted at rest)
         connection.setSetupStatus(EVcsSetupStatus.CONNECTED);
@@ -1518,6 +1497,20 @@ public class VcsIntegrationService {
                 saved.getId(), workspaceId, username);
         
         return VcsConnectionDTO.fromEntity(saved);
+    }
+
+    private GitLabOAuthProvider resolveGitLabOAuthProvider(VcsConnection connection) {
+        try {
+            GitLabOAuthProvider provider = GitLabOAuthProvider.from(
+                    siteSettingsProvider.getGitLabSettings());
+            return connection == null
+                    ? provider
+                    : provider.requireConnectionIssuer(connection);
+        } catch (GitLabOAuthConfigurationException e) {
+            throw new IntegrationException(
+                    e.getMessage(),
+                    "GITLAB_OAUTH_CONFIGURATION_ERROR");
+        }
     }
     
     /**

@@ -21,6 +21,7 @@ import org.rostilos.codecrow.vcsclient.bitbucket.cloud.BitbucketCloudClient;
 import org.rostilos.codecrow.vcsclient.github.GitHubClient;
 import org.rostilos.codecrow.vcsclient.gitlab.GitLabClient;
 import org.rostilos.codecrow.vcsclient.gitlab.GitLabClientFactory;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthProvider;
 import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthTokens;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
@@ -446,11 +447,13 @@ public class VcsClientProvider {
             throw new VcsClientException("No refresh token available for GitLab connection: " + connection.getId());
         }
         
+        GitLabOAuthProvider oAuthProvider = GitLabOAuthProvider
+                .from(siteSettingsProvider.getGitLabSettings())
+                .requireConnectionIssuer(connection);
         String decryptedRefreshToken = encryptionService.decrypt(connection.getRefreshToken());
         TokenResponse newTokens = refreshGitLabToken(
                 decryptedRefreshToken,
-                org.rostilos.codecrow.vcsclient.gitlab.GitLabConfig
-                        .instanceBaseUrl(connection));
+                oAuthProvider);
         
         // Update connection with new tokens
         connection.setAccessToken(encryptionService.encrypt(newTokens.accessToken()));
@@ -467,20 +470,15 @@ public class VcsClientProvider {
     /**
      * Refresh GitLab access token using refresh token.
      */
-    private TokenResponse refreshGitLabToken(String refreshToken, String gitLabBaseUrl) throws IOException {
-        String glClientId = siteSettingsProvider.getGitLabSettings().clientId();
-        String glClientSecret = siteSettingsProvider.getGitLabSettings().clientSecret();
-        if (glClientId == null || glClientId.isBlank() ||
-            glClientSecret == null || glClientSecret.isBlank()) {
-            throw new IOException("GitLab OAuth credentials not configured. Configure GitLab settings in Site Admin.");
-        }
+    private TokenResponse refreshGitLabToken(
+            String refreshToken,
+            GitLabOAuthProvider oAuthProvider
+    ) throws IOException {
         String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() +
                 "/api/integrations/gitlab/app/callback";
 
         GitLabOAuthTokens tokens = GitLabClientFactory.createOAuthClient().refreshToken(
-                gitLabBaseUrl,
-                glClientId,
-                glClientSecret,
+                oAuthProvider,
                 refreshToken,
                 callbackUrl);
         log.debug("GitLab token refreshed successfully. New token expires at: {}",

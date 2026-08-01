@@ -5,6 +5,7 @@ import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.Test;
+import org.rostilos.codecrow.core.dto.admin.GitLabSettingsDTO;
 
 import java.time.LocalDateTime;
 
@@ -36,24 +37,23 @@ class GitLabOAuthClientTest {
             String instanceBase = gitLab.url("/nested/gitlab/api/v4").toString();
             GitLabOAuthClient client = GitLabClientFactory.createOAuthClient(
                     new OkHttpClient());
+            GitLabOAuthProvider provider = GitLabOAuthProvider.from(
+                    new GitLabSettingsDTO(
+                            "client-id",
+                            "client-secret",
+                            instanceBase));
             LocalDateTime beforeRequest = LocalDateTime.now();
 
             GitLabOAuthTokens exchanged = client.exchangeAuthorizationCode(
-                    instanceBase,
-                    "client-id",
-                    "client-secret",
+                    provider,
                     "authorization-code",
                     "https://codecrow.example/callback");
             GitLabOAuthTokens refreshed = client.refreshToken(
-                    instanceBase,
-                    "client-id",
-                    "client-secret",
+                    provider,
                     "refresh-one",
                     "https://codecrow.example/callback");
             client.revokeToken(
-                    instanceBase,
-                    "client-id",
-                    "client-secret",
+                    provider,
                     "access-two");
 
             assertThat(exchanged.accessToken()).isEqualTo("access-one");
@@ -68,22 +68,27 @@ class GitLabOAuthClientTest {
             assertThat(exchangeRequest.getPath()).isEqualTo("/nested/gitlab/oauth/token");
             assertThat(exchangeRequest.getBody().readUtf8())
                     .contains("grant_type=authorization_code")
-                    .contains("code=authorization-code");
+                    .contains("code=authorization-code")
+                    .contains("client_secret=client-secret");
             assertThat(refreshRequest.getPath()).isEqualTo("/nested/gitlab/oauth/token");
             assertThat(refreshRequest.getBody().readUtf8())
                     .contains("grant_type=refresh_token")
-                    .contains("refresh_token=refresh-one");
+                    .contains("refresh_token=refresh-one")
+                    .contains("client_secret=client-secret");
             assertThat(revokeRequest.getPath()).isEqualTo("/nested/gitlab/oauth/revoke");
             assertThat(revokeRequest.getBody().readUtf8())
-                    .contains("token=access-two");
+                    .contains("token=access-two")
+                    .contains("client_secret=client-secret");
         }
     }
 
     @Test
     void authorizationUrlUsesNormalizedInstanceRoot() {
         String url = GitLabOAuthClient.authorizationUrl(
-                "https://gitlab.example/root/api/v4/",
-                "client id",
+                GitLabOAuthProvider.from(new GitLabSettingsDTO(
+                        "client id",
+                        "client secret",
+                        "https://gitlab.example/root/api/v4/")),
                 "https://codecrow.example/callback",
                 "state value",
                 "api read_user");
@@ -95,6 +100,36 @@ class GitLabOAuthClientTest {
                         + "&response_type=code"
                         + "&scope=api+read_user"
                         + "&state=state+value");
+    }
+
+    @Test
+    void tokenRequestDoesNotFollowRedirects() throws Exception {
+        try (MockWebServer issuer = new MockWebServer();
+             MockWebServer redirectedHost = new MockWebServer()) {
+            issuer.start();
+            redirectedHost.start();
+            issuer.enqueue(new MockResponse()
+                    .setResponseCode(307)
+                    .setHeader("Location", redirectedHost.url("/oauth/token")));
+
+            GitLabOAuthClient client = new GitLabOAuthClient(new OkHttpClient());
+            GitLabOAuthProvider provider = GitLabOAuthProvider.from(
+                    new GitLabSettingsDTO(
+                            "client-id",
+                            "client-secret",
+                            issuer.url("/").toString()));
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                    client.exchangeAuthorizationCode(
+                            provider,
+                            "authorization-code",
+                            "https://codecrow.example/callback"))
+                    .isInstanceOf(java.io.IOException.class)
+                    .hasMessageContaining("307");
+
+            assertThat(issuer.getRequestCount()).isEqualTo(1);
+            assertThat(redirectedHost.getRequestCount()).isZero();
+        }
     }
 
     private static MockResponse jsonResponse(String body) {
