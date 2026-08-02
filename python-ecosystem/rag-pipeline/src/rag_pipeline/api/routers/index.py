@@ -10,6 +10,10 @@ from ..models import (
     EstimateRequest, EstimateResponse,
 )
 from ...core.repository_overlay import IncrementalIndexPreconditionError
+from ...core.coordination import (
+    MutationCoordinationUnavailable,
+    MutationLeaseUnavailable,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["index"])
@@ -97,6 +101,10 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
     except ValueError as e:
         logger.warning(f"Validation error indexing repository: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error indexing repository: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -119,6 +127,10 @@ def update_files(request: UpdateFilesRequest):
     except IncrementalIndexPreconditionError as e:
         logger.warning(f"Incremental update precondition failed: {e}")
         raise HTTPException(status_code=409, detail=str(e))
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating files: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -140,6 +152,10 @@ def delete_files(request: DeleteFilesRequest):
     except IncrementalIndexPreconditionError as e:
         logger.warning(f"Incremental delete precondition failed: {e}")
         raise HTTPException(status_code=409, detail=str(e))
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting files: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -170,6 +186,10 @@ def apply_changes(request: ApplyChangesRequest):
     except ValueError as e:
         logger.warning(f"Invalid incremental change set: {e}")
         raise HTTPException(status_code=422, detail=str(e))
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error applying incremental change set: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -182,6 +202,10 @@ def delete_index(workspace: str, project: str, branch: str):
     try:
         index_manager.delete_index(workspace, project, branch)
         return {"message": f"Index deleted for {workspace}/{project}/{branch}"}
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting index: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -205,6 +229,10 @@ def delete_branch(workspace: str, project: str, branch: str):
                 "status": "not_found",
                 "message": f"Branch '{branch}' not found or collection doesn't exist"
             }
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting branch '{branch}': {e}")
         raise HTTPException(status_code=500, detail=str(e))

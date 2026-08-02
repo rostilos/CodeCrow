@@ -740,7 +740,7 @@ class TestFileOperations:
             ]
         )
         point_ops.embed_and_create_points.side_effect = (
-            lambda chunk_data: [
+            lambda chunk_data, **_kwargs: [
                 SimpleNamespace(id=point_id) for point_id, _ in chunk_data
             ]
         )
@@ -864,3 +864,34 @@ class TestFileOperations:
         ops.client.upsert.assert_not_called()
         deleted = ops.client.delete.call_args.kwargs["points_selector"]
         assert [str(point_id) for point_id in deleted.points] == [old_id]
+
+    def test_replace_checks_mutation_lease_after_embedding_before_write(self):
+        from qdrant_client.models import PointStruct
+
+        ops = self._make_file_ops()
+        node = MagicMock()
+        point_id = str(uuid.uuid4())
+        ops.point_ops.prepare_chunks_for_embedding.side_effect = None
+        ops.point_ops.prepare_chunks_for_embedding.return_value = [(point_id, node)]
+        ops.point_ops.embed_and_create_points.side_effect = None
+        ops.point_ops.embed_and_create_points.return_value = [PointStruct(
+            id=point_id,
+            vector=[0.0, 1.0],
+            payload={"path": "new.php", "branch": "main"},
+        )]
+        guard = MagicMock(side_effect=RuntimeError("lease lost"))
+
+        with pytest.raises(RuntimeError, match="lease lost"):
+            ops._replace_points(
+                [node],
+                [],
+                "coll",
+                "ws",
+                "project",
+                "main",
+                guard,
+            )
+
+        ops.point_ops.upsert_points_detailed.assert_not_called()
+        ops.client.upsert.assert_not_called()
+        ops.client.delete.assert_not_called()

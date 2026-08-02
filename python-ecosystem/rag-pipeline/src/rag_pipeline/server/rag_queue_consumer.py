@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 import redis.asyncio as redis
@@ -130,7 +131,18 @@ class RAGQueueConsumer:
                 return
 
             event_queue_key = f"codecrow:analysis:events:{job_id}"
-            logger.info(f"Processing RAG Index Job ID: {job_id}")
+            queued_at_epoch_ms = payload.get("queued_at_epoch_ms")
+            queue_wait_ms = None
+            if isinstance(queued_at_epoch_ms, (int, float)):
+                queue_wait_ms = max(
+                    0,
+                    round(time.time() * 1000 - queued_at_epoch_ms),
+                )
+            logger.info(
+                "Processing RAG index job job_id=%s queue_wait_ms=%s",
+                job_id,
+                queue_wait_ms,
+            )
             
             # The Java pipeline passes IndexRequest payload wrapped inside job_id/request
             request_dto = IndexRequest(**request_data)

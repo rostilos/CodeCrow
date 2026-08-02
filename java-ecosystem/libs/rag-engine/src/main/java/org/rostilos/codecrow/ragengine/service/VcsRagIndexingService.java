@@ -269,6 +269,7 @@ public class VcsRagIndexingService {
 
                     Map<String, Object> jobPayload = Map.of(
                             "job_id", jobId,
+                            "queued_at_epoch_ms", System.currentTimeMillis(),
                             "request", requestPayload);
 
                     String eventQueueKey = "codecrow:analysis:events:" + jobId;

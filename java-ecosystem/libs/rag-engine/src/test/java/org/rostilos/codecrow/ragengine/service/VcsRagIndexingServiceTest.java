@@ -338,6 +338,9 @@ class VcsRagIndexingServiceTest {
                     .path("request")
                     .path("cleanup_repo_path")
                     .asBoolean()).isTrue();
+            assertThat(new ObjectMapper().readTree(queuedPayload.getValue())
+                    .path("queued_at_epoch_ms")
+                    .asLong()).isPositive();
             verify(queueService).setExpiry(startsWith("codecrow:analysis:events:"), anyLong());
 
             // Polling should be called

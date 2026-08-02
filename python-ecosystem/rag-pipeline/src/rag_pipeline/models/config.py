@@ -75,6 +75,44 @@ class RAGConfig(BaseModel):
     openrouter_api_key: str = Field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
     openrouter_model: str = Field(default_factory=lambda: os.getenv("OPENROUTER_MODEL", "qwen/qwen3-embedding-8b"))
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
+    openrouter_batch_size: int = Field(
+        default_factory=lambda: int(os.getenv("OPENROUTER_BATCH_SIZE", "50")),
+        ge=1,
+    )
+    openrouter_index_concurrency: int = Field(
+        default_factory=lambda: int(os.getenv("OPENROUTER_INDEX_CONCURRENCY", "8")),
+        ge=1,
+    )
+    openrouter_max_in_flight: int = Field(
+        default_factory=lambda: int(os.getenv("OPENROUTER_MAX_IN_FLIGHT", "16")),
+        ge=1,
+    )
+    openrouter_index_provider_sort: str = Field(
+        default_factory=lambda: os.getenv(
+            "OPENROUTER_INDEX_PROVIDER_SORT", "throughput"
+        )
+    )
+    openrouter_query_provider_sort: str = Field(
+        default_factory=lambda: os.getenv(
+            "OPENROUTER_QUERY_PROVIDER_SORT", "latency"
+        )
+    )
+
+    # Index writes and cross-worker mutation ownership.
+    qdrant_upsert_batch_size: int = Field(
+        default_factory=lambda: int(os.getenv("QDRANT_UPSERT_BATCH_SIZE", "128")),
+        ge=1,
+    )
+    rag_mutation_lease_seconds: int = Field(
+        default_factory=lambda: int(os.getenv("RAG_MUTATION_LEASE_SECONDS", "300")),
+        ge=30,
+    )
+    rag_mutation_acquire_timeout_seconds: float = Field(
+        default_factory=lambda: float(
+            os.getenv("RAG_MUTATION_ACQUIRE_TIMEOUT_SECONDS", "5")
+        ),
+        ge=0,
+    )
 
     # Embedding dimensions - auto-detected from model or set via env var
     embedding_dim: int = Field(default_factory=lambda: int(os.getenv("EMBEDDING_DIM", "0")))

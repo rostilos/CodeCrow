@@ -7,6 +7,7 @@ with Qdrant and Redis mocked at the boundary.
 import os
 import sys
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 # ── Ensure src/ is on sys.path ────────────────────────────────
@@ -85,6 +86,11 @@ def rag_app(_mock_qdrant, _mock_embedding):
         MockConfig.return_value = mock_config
 
         mock_im = MagicMock()
+        mutation_context = MagicMock()
+        mutation_context.__enter__.return_value = SimpleNamespace(
+            assert_owned=MagicMock()
+        )
+        mock_im.project_mutation.return_value = mutation_context
         mock_im.embed_model = _mock_embedding
         mock_im.qdrant_client = _mock_qdrant
         mock_im.splitter.split_documents_resilient.side_effect = (

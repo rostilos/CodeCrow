@@ -6,6 +6,7 @@ and includes all routers. This is the thin orchestration layer.
 """
 import logging
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
 from fastapi import FastAPI
@@ -21,6 +22,27 @@ logger = logging.getLogger(__name__)
 config: Optional[RAGConfig] = None
 index_manager: Optional[RAGIndexManager] = None
 query_service: Optional[RAGQueryService] = None
+
+
+async def _pending_collection_janitor(manager: RAGIndexManager) -> None:
+    """Periodically remove only expired, unowned pending collections."""
+    interval = max(
+        300,
+        int(os.environ.get("RAG_PENDING_JANITOR_INTERVAL_SECONDS", "3600")),
+    )
+    while True:
+        try:
+            cleaned = await asyncio.to_thread(
+                manager.cleanup_expired_pending_collections
+            )
+            if cleaned:
+                logger.info("Pending collection janitor removed %s collections", cleaned)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Cleanup is auxiliary: retain uncertain collections and keep serving.
+            logger.exception("Pending collection janitor failed")
+        await asyncio.sleep(interval)
 
 
 @asynccontextmanager
@@ -44,16 +66,27 @@ async def lifespan(app: FastAPI):
     rag_queue_consumer = RAGQueueConsumer(index_manager)
     app.state.rag_queue_consumer = rag_queue_consumer
     await rag_queue_consumer.start()
+    app.state.pending_collection_janitor = asyncio.create_task(
+        _pending_collection_janitor(index_manager)
+    )
 
     logger.info("RAG Pipeline API started successfully")
     yield
     logger.info("Shutting down RAG Pipeline API...")
+    if hasattr(app.state, "pending_collection_janitor"):
+        app.state.pending_collection_janitor.cancel()
+        try:
+            await app.state.pending_collection_janitor
+        except asyncio.CancelledError:
+            pass
     if hasattr(app.state, 'rag_queue_consumer'):
         await app.state.rag_queue_consumer.stop()
     if hasattr(index_manager, 'embed_model') and hasattr(index_manager.embed_model, 'close'):
         index_manager.embed_model.close()
     if hasattr(query_service, 'embed_model') and hasattr(query_service.embed_model, 'close'):
         query_service.embed_model.close()
+    if index_manager is not None:
+        index_manager.close()
     logger.info("RAG Pipeline API shutdown complete")
 
 

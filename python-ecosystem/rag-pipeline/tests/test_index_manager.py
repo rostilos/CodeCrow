@@ -396,6 +396,7 @@ class TestRAGIndexManager:
         mock_create.return_value = self._make_embed_mock()
 
         mgr = RAGIndexManager(self._mock_config())
+        mgr._mutation_coordinator.enabled = False
         mgr._collection_manager = MagicMock()
         mgr._collection_manager.collection_exists.return_value = True
         mgr._branch_manager = MagicMock()

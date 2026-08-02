@@ -1,0 +1,104 @@
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from rag_pipeline.core.coordination import (
+    MutationCoordinationUnavailable,
+    MutationLease,
+    MutationLeaseUnavailable,
+    ProjectMutationCoordinator,
+    RedisPermitPool,
+)
+from rag_pipeline.core.index_manager.collection_manager import CollectionManager
+
+
+def _coordinator(timeout=0):
+    coordinator = ProjectMutationCoordinator(
+        "redis://unused",
+        lease_seconds=60,
+        acquire_timeout_seconds=timeout,
+    )
+    coordinator._client = MagicMock()
+    return coordinator
+
+
+def test_project_mutation_lease_is_acquired_verified_and_released():
+    coordinator = _coordinator()
+    coordinator._client.set.side_effect = [True, True]
+    coordinator._client.get.return_value = None
+
+    with patch.object(MutationLease, "start_renewal"):
+        with coordinator.acquire("workspace", "project", "full-index") as lease:
+            coordinator._client.get.return_value = lease.token
+            lease.assert_owned()
+
+    assert coordinator._client.set.call_count == 2
+    coordinator._client.eval.assert_called_once()
+
+
+def test_project_mutation_lease_rejects_an_overlapping_job():
+    coordinator = _coordinator()
+    coordinator._client.set.return_value = False
+
+    with pytest.raises(MutationLeaseUnavailable, match="another RAG mutation"):
+        with coordinator.acquire("workspace", "project", "full-index"):
+            pass
+
+
+def test_project_mutation_coordination_fails_closed_when_redis_is_unavailable():
+    coordinator = _coordinator()
+    coordinator._client.set.side_effect = RuntimeError("redis unavailable")
+
+    with pytest.raises(MutationCoordinationUnavailable, match="Redis is unavailable"):
+        with coordinator.acquire("workspace", "project", "full-index"):
+            pass
+
+
+def test_openrouter_capacity_limiter_falls_back_locally_when_redis_is_unavailable():
+    pool = RedisPermitPool(
+        "redis://unused",
+        2,
+        permit_seconds=60,
+        acquire_timeout_seconds=0.1,
+    )
+    pool._client = MagicMock()
+    pool._client.eval.side_effect = RuntimeError("redis unavailable")
+
+    with pool.permit():
+        pass
+
+    pool._client.eval.assert_called_once()
+    assert pool._local.acquire(blocking=False)
+    pool._local.release()
+
+
+def test_pending_janitor_keeps_live_and_aliased_collections_and_deletes_expired():
+    client = MagicMock()
+    client.get_aliases.return_value.aliases = [
+        SimpleNamespace(
+            alias_name="active",
+            collection_name="base_pending_1000000000_aaaaaaaa_bbbbbbbb",
+        )
+    ]
+    client.get_collections.return_value.collections = [
+        SimpleNamespace(name="base_pending_1000000000_aaaaaaaa_bbbbbbbb"),
+        SimpleNamespace(name="base_pending_1000000000_cccccccc_dddddddd"),
+        SimpleNamespace(name="base_pending_1000000000_eeeeeeee_ffffffff"),
+        SimpleNamespace(name="legacy_pending_unknown"),
+    ]
+    manager = CollectionManager(client, 3)
+
+    with patch(
+        "rag_pipeline.core.index_manager.collection_manager.time.time",
+        return_value=1000100000,
+    ):
+        cleaned = manager.cleanup_expired_pending_collections(
+            is_operation_active=lambda token: token == "cccccccc",
+            min_age_seconds=300,
+        )
+
+    assert cleaned == 1
+    client.delete_collection.assert_called_once_with(
+        "base_pending_1000000000_eeeeeeee_ffffffff"
+    )

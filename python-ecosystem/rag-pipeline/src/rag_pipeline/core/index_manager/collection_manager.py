@@ -6,8 +6,10 @@ Handles collection creation, alias operations, and resolution.
 
 import logging
 import os
+import re
+import time
 import uuid
-from typing import Optional, List
+from typing import Callable, Optional, List
 
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
@@ -55,12 +57,26 @@ class CollectionManager:
         else:
             logger.info(f"Collection {collection_name} already exists")
 
-    def create_pending_collection(self, base_name: str) -> str:
+    def create_pending_collection(
+        self,
+        base_name: str,
+        *,
+        operation_id: Optional[str] = None,
+    ) -> str:
         """Create an unpublished collection for atomic index activation."""
         # Pending collections can be created by different workers or processes.
-        # A random suffix avoids timestamp collisions without coordination.
+        # Timestamp + operation ownership lets the janitor distinguish a live
+        # build from an expired orphan without touching another worker's work.
         for _ in range(3):
-            pending_name = f"{base_name}_pending_{uuid.uuid4().hex[:16]}"
+            token = re.sub(
+                r"[^a-fA-F0-9]",
+                "",
+                operation_id or uuid.uuid4().hex,
+            )[:32] or uuid.uuid4().hex[:32]
+            pending_name = (
+                f"{base_name}_pending_{int(time.time())}_{token}_"
+                f"{uuid.uuid4().hex[:8]}"
+            )
             logger.info(f"Creating pending collection: {pending_name}")
             if self._create_collection(pending_name):
                 self._ensure_payload_indexes(pending_name)
@@ -214,15 +230,61 @@ class CollectionManager:
         current_target: Optional[str] = None,
         exclude_name: Optional[str] = None
     ) -> int:
-        """Clean up unpublished collections left by interrupted indexing attempts."""
+        """Deprecated safe wrapper retained for internal compatibility.
+
+        Ownership-less cleanup used to delete every sibling pending collection
+        at the start of a job. That could destroy a live build in another
+        worker, so lifecycle cleanup now belongs to the expiry-aware janitor.
+        """
+        logger.debug(
+            "Skipping ownership-less pending cleanup for %s (target=%s exclude=%s)",
+            base_name,
+            current_target,
+            exclude_name,
+        )
+        return 0
+
+    def cleanup_expired_pending_collections(
+        self,
+        *,
+        is_operation_active: Callable[[str], bool],
+        min_age_seconds: Optional[int] = None,
+    ) -> int:
+        """Delete only timestamped, non-aliased pending collections with no lease."""
+        if min_age_seconds is None:
+            min_age_seconds = max(
+                300,
+                int(os.getenv("RAG_PENDING_COLLECTION_MAX_AGE_SECONDS", "21600")),
+            )
+        now = int(time.time())
+        try:
+            aliased_targets = {
+                alias.collection_name for alias in self.client.get_aliases().aliases
+            }
+        except Exception:
+            logger.warning("Pending collection janitor could not read aliases")
+            return 0
+
+        pattern = re.compile(
+            r"_pending_(\d{10})_([a-fA-F0-9]{8,32})_[a-fA-F0-9]{8}$"
+        )
         cleaned = 0
-        collection_names = self.get_collection_names()
-        
-        for coll_name in collection_names:
-            if coll_name.startswith(f"{base_name}_pending_") and coll_name != exclude_name:
-                if current_target != coll_name:
-                    logger.info(f"Cleaning up orphaned pending collection: {coll_name}")
-                    if self.delete_collection(coll_name):
-                        cleaned += 1
-        
+        for collection_name in self.get_collection_names():
+            match = pattern.search(collection_name)
+            if match is None or collection_name in aliased_targets:
+                continue
+            created_at = int(match.group(1))
+            operation_id = match.group(2)
+            if now - created_at < min_age_seconds:
+                continue
+            if is_operation_active(operation_id):
+                continue
+            logger.info(
+                "Cleaning expired pending collection %s operation_id=%s age_seconds=%s",
+                collection_name,
+                operation_id,
+                now - created_at,
+            )
+            if self.delete_collection(collection_name):
+                cleaned += 1
         return cleaned

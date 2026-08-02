@@ -11,6 +11,10 @@ from ...core.repository_overlay import (
     build_overlay_capabilities,
     load_repository_snapshots,
 )
+from ...core.coordination import (
+    MutationCoordinationUnavailable,
+    MutationLeaseUnavailable,
+)
 from ...core.pr_overlay_identity import (
     ZERO_FINGERPRINT,
     is_complete_reusable_generation,
@@ -102,7 +106,14 @@ def index_pr_files(request: PRIndexRequest):
     completely and then replaces the previous points with rollback protection.
     """
     index_manager = _get_index_manager()
+    mutation_context = index_manager.project_mutation(
+        request.workspace,
+        request.project,
+        "index-pr-overlay",
+    )
+    mutation_lease = None
     try:
+        mutation_lease = mutation_context.__enter__()
         collection_name = index_manager._get_project_collection_name(
             request.workspace, request.project
         )
@@ -590,6 +601,7 @@ def index_pr_files(request: PRIndexRequest):
             request.workspace,
             request.project,
             point_id_branch,
+            mutation_lease.assert_owned,
         )
         skipped_points = (
             len(chunks) + len(architecture_nodes) - successful
@@ -639,9 +651,16 @@ def index_pr_files(request: PRIndexRequest):
     except ValueError as e:
         logger.warning(f"Invalid request for PR indexing: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Internal error indexing PR files: {e}")
         raise HTTPException(status_code=500, detail="Internal indexing error")
+    finally:
+        if mutation_lease is not None:
+            mutation_context.__exit__(None, None, None)
 
 
 @router.delete("/index/pr-files/{workspace}/{project}/{pr_number}")
@@ -649,28 +668,38 @@ def delete_pr_files(workspace: str, project: str, pr_number: int):
     """Delete all indexed points for a specific PR."""
     index_manager = _get_index_manager()
     try:
-        collection_name = index_manager._get_project_collection_name(workspace, project)
+        with index_manager.project_mutation(
+            workspace,
+            project,
+            "delete-pr-overlay",
+        ) as lease:
+            collection_name = index_manager._get_project_collection_name(workspace, project)
 
-        if not index_manager._collection_manager.collection_exists(collection_name):
-            return {"status": "skipped", "message": "Collection does not exist"}
+            if not index_manager._collection_manager.collection_exists(collection_name):
+                return {"status": "skipped", "message": "Collection does not exist"}
 
-        index_manager.qdrant_client.delete(
-            collection_name=collection_name,
-            points_selector=Filter(
-                must=[
-                    FieldCondition(key="pr_number", match=MatchValue(value=pr_number))
-                ]
+            lease.assert_owned()
+            index_manager.qdrant_client.delete(
+                collection_name=collection_name,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(key="pr_number", match=MatchValue(value=pr_number))
+                    ]
+                )
             )
-        )
 
-        logger.info(f"Deleted PR #{pr_number} points from {collection_name}")
+            logger.info(f"Deleted PR #{pr_number} points from {collection_name}")
 
-        return {
-            "status": "deleted",
-            "pr_number": pr_number,
-            "collection": collection_name
-        }
+            return {
+                "status": "deleted",
+                "pr_number": pr_number,
+                "collection": collection_name
+            }
 
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting PR files: {e}")
         raise HTTPException(status_code=500, detail=str(e))
