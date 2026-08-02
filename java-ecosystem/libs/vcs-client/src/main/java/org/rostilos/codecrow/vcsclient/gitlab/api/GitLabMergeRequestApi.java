@@ -155,6 +155,31 @@ public final class GitLabMergeRequestApi {
                         + "?per_page=100"));
     }
 
+    public JsonNode getDiscussion(
+            String namespace,
+            String project,
+            long mergeRequestIid,
+            String discussionId
+    ) throws IOException {
+        return api.executeJson(
+                "get merge request discussion",
+                api.get(discussionUrl(namespace, project, mergeRequestIid, discussionId)));
+    }
+
+    public JsonNode postDiscussionReply(
+            String namespace,
+            String project,
+            long mergeRequestIid,
+            String discussionId,
+            String body
+    ) throws IOException {
+        return api.executeJson(
+                "reply to merge request discussion",
+                api.postJson(
+                        discussionUrl(namespace, project, mergeRequestIid, discussionId) + "/notes",
+                        api.objectMapper().writeValueAsString(Map.of("body", body))));
+    }
+
     public JsonNode getCommits(String namespace, String project, long mergeRequestIid)
             throws IOException {
         return api.executeJson(
@@ -324,5 +349,15 @@ public final class GitLabMergeRequestApi {
             long mergeRequestIid
     ) {
         return mergeRequestUrl(namespace, project, mergeRequestIid) + "/notes";
+    }
+
+    private String discussionUrl(
+            String namespace,
+            String project,
+            long mergeRequestIid,
+            String discussionId
+    ) {
+        return mergeRequestUrl(namespace, project, mergeRequestIid)
+                + "/discussions/" + api.encode(discussionId);
     }
 }

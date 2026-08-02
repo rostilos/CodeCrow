@@ -86,7 +86,8 @@ These features are platform-independent and available through the CodeCrow web U
 
 | Method                   | Bitbucket Cloud |               GitHub                |                  GitLab                   |
 | :----------------------- | :-------------: | :---------------------------------: | :---------------------------------------: |
-| OAuth / App Installation |   ✅ (OAuth)    | ✅ (GitHub App with OAuth fallback) | ✅ (OAuth, including self-managed GitLab) |
+| OAuth / App Installation |   ✅ (OAuth)    | ✅ (GitHub App with OAuth fallback) |           ✅ (GitLab.com only)            |
+| Self-managed VCS         |        —          |                  —                  |    ✅ (personal or project access token)   |
 | Manual Webhook           |       ✅        |                 ✅                  |                    ✅                     |
 | CI Pipeline Action       |       ✅        |                  —                  |                     —                     |
 

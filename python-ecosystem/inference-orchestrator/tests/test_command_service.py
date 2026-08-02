@@ -185,6 +185,24 @@ class TestBuildAskPrompt:
         assert "ANALYSIS CONTEXT" in result
         assert "This PR fixes a bug" in result
 
+    def test_review_conversation_is_prioritized_for_referential_questions(self, service):
+        request = MagicMock(
+            question="Explain this issue in more detail",
+            pullRequestId=10,
+            projectVcsWorkspace="ws",
+            projectVcsRepoSlug="repo",
+            analysisContext=(
+                "## Review conversation context\n"
+                "Comment by @codecrow-bot:\n"
+                "Fractional values are silently truncated"
+            ),
+            issueReferences=None,
+        )
+        result = service._build_ask_prompt(request, None)
+        assert "Review conversation context" in result
+        assert "primary referent" in result
+        assert "untrusted contextual evidence" in result
+
     def test_with_issue_references_and_platform(self, service):
         request = MagicMock(
             question="Tell me about issue 312",

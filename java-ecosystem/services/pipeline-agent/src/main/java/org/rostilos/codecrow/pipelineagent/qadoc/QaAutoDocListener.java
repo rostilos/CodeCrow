@@ -59,10 +59,10 @@ public class QaAutoDocListener {
 
     private static final Logger log = LoggerFactory.getLogger(QaAutoDocListener.class);
 
-    /** Hidden marker embedded in auto-doc comments for detection/replacement. */
+    /** Provider-neutral ownership marker used to detect and replace auto-doc comments. */
     public static final String COMMENT_MARKER = "<!-- codecrow-qa-autodoc -->";
 
-    /** Prefix of the PR-tracking marker variant, e.g. {@code <!-- codecrow-qa-autodoc:prs=42,57 -->}. */
+    /** Prefix of the PR-tracking marker variant used by legacy and generated documents. */
     public static final String COMMENT_MARKER_PREFIX = "<!-- codecrow-qa-autodoc";
 
     private final ProjectRepository projectRepository;

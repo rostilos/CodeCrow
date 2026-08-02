@@ -7,6 +7,7 @@ import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.github.actions.CheckFileExistsInBranchAction;
 import org.rostilos.codecrow.vcsclient.github.actions.GetCommitDiffAction;
 import org.rostilos.codecrow.vcsclient.github.actions.GetCommitRangeDiffAction;
+import org.rostilos.codecrow.vcsclient.github.actions.CommentOnPullRequestAction;
 import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestAction;
 import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestDiffAction;
 import org.rostilos.codecrow.vcsclient.model.*;
@@ -23,6 +24,7 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * VcsClient implementation for GitHub.
@@ -760,6 +762,45 @@ public class GitHubClient implements VcsClient {
     }
 
     @Override
+    public List<VcsPullRequestComment> getPullRequestCommentThread(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber,
+            String triggeringCommentId,
+            String parentOrThreadId,
+            boolean inlineComment
+    ) throws IOException {
+        if (!inlineComment || triggeringCommentId == null) {
+            return List.of();
+        }
+
+        List<Map<String, Object>> comments = new CommentOnPullRequestAction(httpClient)
+                .listReviewComments(workspaceId, repoIdOrSlug, Math.toIntExact(pullRequestNumber));
+        String rootId = parentOrThreadId;
+        if (rootId == null || rootId.isBlank()) {
+            rootId = comments.stream()
+                    .filter(comment -> triggeringCommentId.equals(valueAsString(comment.get("id"))))
+                    .map(comment -> valueAsString(comment.get("in_reply_to_id")))
+                    .filter(value -> value != null && !value.isBlank())
+                    .findFirst()
+                    .orElse(triggeringCommentId);
+        }
+
+        final String threadRootId = rootId;
+        return comments.stream()
+                .filter(comment -> threadRootId.equals(valueAsString(comment.get("id")))
+                        || threadRootId.equals(valueAsString(comment.get("in_reply_to_id"))))
+                .map(comment -> new VcsPullRequestComment(
+                        valueAsString(comment.get("id")),
+                        valueAsString(comment.get("in_reply_to_id")),
+                        threadRootId,
+                        nestedValueAsString(comment.get("user"), "login"),
+                        valueAsString(comment.get("body")),
+                        valueAsString(comment.get("created_at"))))
+                .toList();
+    }
+
+    @Override
     public String getPullRequestDiff(
             String workspaceId,
             String repoIdOrSlug,
@@ -1236,6 +1277,17 @@ public class GitHubClient implements VcsClient {
         return results;
     }
     
+
+    private static String valueAsString(Object value) {
+        return value != null ? String.valueOf(value) : null;
+    }
+
+    private static String nestedValueAsString(Object value, String key) {
+        if (value instanceof Map<?, ?> map) {
+            return valueAsString(map.get(key));
+        }
+        return null;
+    }
 
     private record GitHubWebhookRequest(
             String name,

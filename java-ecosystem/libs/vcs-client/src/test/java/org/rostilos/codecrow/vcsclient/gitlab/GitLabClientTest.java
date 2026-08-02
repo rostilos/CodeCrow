@@ -8,6 +8,9 @@ import org.junit.jupiter.api.Test;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.vcsclient.gitlab.api.GitLabApiContext;
 import org.rostilos.codecrow.vcsclient.model.VcsPullRequest;
+import org.rostilos.codecrow.vcsclient.model.VcsPullRequestComment;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -86,6 +89,47 @@ class GitLabClientTest {
             assertThat(request.getPath()).isEqualTo("/gitlab/api/v4/user");
             assertThat(request.getHeader("Authorization"))
                     .isEqualTo("Bearer self-managed-token");
+        }
+    }
+
+    @Test
+    void loadsAndRepliesToMergeRequestDiscussion() throws Exception {
+        try (MockWebServer gitLab = new MockWebServer()) {
+            gitLab.enqueue(jsonResponse("""
+                    {
+                      "id": "discussion-abc",
+                      "notes": [
+                        {"id":41,"body":"CodeCrow finding","created_at":"2026-08-01T10:00:00Z","author":{"username":"codecrow-bot"}},
+                        {"id":42,"body":"Why is this a problem?","created_at":"2026-08-01T10:01:00Z","author":{"username":"reviewer"}}
+                      ]
+                    }
+                    """));
+            gitLab.enqueue(new MockResponse()
+                    .setResponseCode(201)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"id\":43,\"body\":\"Thread-aware answer\"}"));
+            gitLab.start();
+
+            GitLabClient client = new GitLabClient(
+                    new OkHttpClient(), gitLab.url("/gitlab").toString());
+            List<VcsPullRequestComment> comments = client.getPullRequestCommentThread(
+                    "team", "repo", 17L, "42", "discussion-abc", true);
+            String replyId = client.postMergeRequestDiscussionReply(
+                    "team", "repo", 17L, "discussion-abc", "Thread-aware answer");
+
+            assertThat(comments).extracting(VcsPullRequestComment::id)
+                    .containsExactly("41", "42");
+            assertThat(comments.get(1).parentId()).isEqualTo("41");
+            assertThat(replyId).isEqualTo("43");
+
+            RecordedRequest getDiscussion = gitLab.takeRequest();
+            RecordedRequest postReply = gitLab.takeRequest();
+            assertThat(getDiscussion.getPath()).isEqualTo(
+                    "/gitlab/api/v4/projects/team%2Frepo/merge_requests/17/discussions/discussion-abc");
+            assertThat(postReply.getPath()).isEqualTo(
+                    "/gitlab/api/v4/projects/team%2Frepo/merge_requests/17/discussions/discussion-abc/notes");
+            assertThat(postReply.getMethod()).isEqualTo("POST");
+            assertThat(postReply.getBody().readUtf8()).contains("Thread-aware answer");
         }
     }
 

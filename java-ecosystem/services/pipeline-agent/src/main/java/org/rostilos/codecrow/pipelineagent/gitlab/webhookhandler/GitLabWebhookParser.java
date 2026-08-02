@@ -166,16 +166,12 @@ public class GitLabWebhookParser {
             authorUsername = user.path("username").asText(null);
         }
         
-        // GitLab uses discussion_id for threaded comments
-        String parentCommentId = null;
-        String discussionId = objectAttributes.path("discussion_id").asText(null);
-        // If this is a reply, the discussion_id references the parent
-        if (discussionId != null && objectAttributes.path("type").asText("").equals("DiscussionNote")) {
-            parentCommentId = discussionId;
-        }
+        // GitLab uses discussion_id as the stable thread identifier for both
+        // the root diff note and its replies.
+        String parentCommentId = objectAttributes.path("discussion_id").asText(null);
         
         // Check if this is an inline comment (on a specific file/line)
-        boolean isInlineComment = !objectAttributes.path("position").isMissingNode();
+        boolean isInlineComment = objectAttributes.hasNonNull("position");
         String filePath = null;
         Integer lineNumber = null;
         

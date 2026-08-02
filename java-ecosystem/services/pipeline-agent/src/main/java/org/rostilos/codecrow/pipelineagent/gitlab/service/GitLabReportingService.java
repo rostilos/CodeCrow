@@ -405,12 +405,30 @@ public class GitLabReportingService implements VcsReportingService {
             Project project,
             Long mergeRequestIid,
             String parentCommentId,
+            boolean inlineComment,
             String content,
             String originalAuthorUsername,
             String originalCommentBody
     ) throws IOException {
-        // GitLab doesn't support threading on MR notes
-        // Format reply with quote and @mention to create a visual connection
+        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+        GitLabClient client = getClient(vcsRepoInfo);
+        if (parentCommentId != null && !parentCommentId.isBlank()
+                && !parentCommentId.chars().allMatch(Character::isDigit)) {
+            try {
+                return client.postMergeRequestDiscussionReply(
+                        vcsRepoInfo.getRepoWorkspace(),
+                        vcsRepoInfo.getRepoSlug(),
+                        mergeRequestIid,
+                        parentCommentId,
+                        content);
+            } catch (IOException error) {
+                log.warn("Failed to reply to GitLab discussion {}; using MR note fallback: {}",
+                        parentCommentId, error.getMessage());
+            }
+        }
+
+        // General MR notes do not have native threads. Format a fallback note
+        // with a quote and mention to retain a visible connection.
         StringBuilder formattedReply = new StringBuilder();
         
         // Add mention of original author

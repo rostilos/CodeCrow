@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -33,11 +34,16 @@ public class BitbucketReportingService implements VcsReportingService {
     private static final Logger log = LoggerFactory.getLogger(BitbucketReportingService.class);
     
     private static final String CODECROW_REVIEW_MARKER = "<!-- codecrow-review -->";
-    private static final String CODECROW_ISSUES_MARKER = "<!-- codecrow-issues -->";
+    private static final String CODECROW_INLINE_ISSUE_MARKER = "[codecrow-inline-issue]: #";
+    private static final String LEGACY_CODECROW_INLINE_ISSUE_MARKER =
+            "<!-- codecrow-inline-issue -->";
+    private static final String LEGACY_CODECROW_ISSUES_MARKER = "<!-- codecrow-issues -->";
 
     private final ReportGenerator reportGenerator;
     private final VcsClientProvider vcsClientProvider;
     private final VcsRepoBindingRepository vcsRepoBindingRepository;
+    private final BitbucketInlineCommentFormatter inlineCommentFormatter =
+            new BitbucketInlineCommentFormatter();
 
     public BitbucketReportingService(
             ReportGenerator reportGenerator,
@@ -122,7 +128,6 @@ public class BitbucketReportingService implements VcsReportingService {
 
         AnalysisSummary summary = reportGenerator.createAnalysisSummary(codeAnalysis, platformPrEntityId);
         String markdownSummary = reportGenerator.createMarkdownSummary(codeAnalysis, summary);
-        String detailedIssuesMarkdown = reportGenerator.createDetailedIssuesMarkdown(summary, false);
         CodeInsightsReport report = reportGenerator.createCodeInsightsReport(
                 summary,
                 codeAnalysis
@@ -138,13 +143,13 @@ public class BitbucketReportingService implements VcsReportingService {
                 vcsRepoInfo.getVcsConnection()
         );
 
-        // Post summary comment (or update placeholder)
-        String summaryCommentId = postOrUpdateComment(httpClient, vcsRepoInfo, pullRequestNumber, markdownSummary, placeholderCommentId);
-        
-        // Post detailed issues as a separate comment reply if there are issues
-        if (detailedIssuesMarkdown != null && !detailedIssuesMarkdown.isEmpty() && summaryCommentId != null) {
-            postDetailedIssuesReply(httpClient, vcsRepoInfo, pullRequestNumber, summaryCommentId, detailedIssuesMarkdown);
-        }
+        // Code Insights annotations are not discussion threads. Publish each
+        // confidently anchored finding as a native Bitbucket inline comment first.
+        postInlineIssueComments(httpClient, vcsRepoInfo, pullRequestNumber, summary);
+
+        // Bitbucket presents the most recently active comment first. Finalize the
+        // summary after the inline threads so the report appears above the issues.
+        postOrUpdateComment(httpClient, vcsRepoInfo, pullRequestNumber, markdownSummary, placeholderCommentId);
         
         postReport(httpClient, vcsRepoInfo, codeAnalysis.getCommitHash(), report);
         postAnnotations(httpClient, vcsRepoInfo, codeAnalysis.getCommitHash(), annotations);
@@ -180,28 +185,74 @@ public class BitbucketReportingService implements VcsReportingService {
         }
     }
     
-    private void postDetailedIssuesReply(
+    private void postInlineIssueComments(
             OkHttpClient httpClient,
             VcsRepoInfo vcsRepoInfo,
             Long pullRequestNumber,
-            String parentCommentId,
-            String detailedIssuesMarkdown
-    ) throws IOException {
+            AnalysisSummary summary
+    ) {
+        CommentOnBitbucketCloudAction commentAction = new CommentOnBitbucketCloudAction(
+                httpClient,
+                vcsRepoInfo,
+                pullRequestNumber
+        );
+
+        cleanupPreviousIssueComments(commentAction, pullRequestNumber);
+
+        List<BitbucketInlineCommentFormatter.InlineComment> comments =
+                inlineCommentFormatter.formatComments(
+                        summary.getIssues(), CODECROW_INLINE_ISSUE_MARKER);
+        if (comments.isEmpty()) {
+            log.debug("No confidently anchored issues to post as Bitbucket inline comments");
+            return;
+        }
+
+        int posted = 0;
         try {
-            log.debug("Posting detailed issues as reply to comment {} on PR {}", parentCommentId, pullRequestNumber);
-            
-            CommentOnBitbucketCloudAction commentAction = new CommentOnBitbucketCloudAction(
-                    httpClient,
-                    vcsRepoInfo,
-                    pullRequestNumber
-            );
-            
-            String content = detailedIssuesMarkdown + "\n\n" + CODECROW_ISSUES_MARKER;
-            commentAction.postCommentReply(parentCommentId, content);
-            
-            log.debug("Posted detailed issues reply to PR {}", pullRequestNumber);
+            for (BitbucketInlineCommentFormatter.InlineComment comment : comments) {
+                try {
+                    commentAction.postInlineComment(
+                            comment.path(), comment.line(), comment.body());
+                    posted++;
+                } catch (Exception e) {
+                    // A stale or non-diff line can be rejected independently.
+                    // Continue so one invalid anchor does not hide other findings.
+                    log.warn("Failed to post Bitbucket inline issue on PR {} at {}:{}: {}",
+                            pullRequestNumber, comment.path(), comment.line(), e.getMessage());
+                }
+            }
+        } finally {
+            log.info("Posted {}/{} Bitbucket inline issue comment(s) on PR {}",
+                    posted, comments.size(), pullRequestNumber);
+        }
+    }
+
+    private void cleanupPreviousIssueComments(
+            CommentOnBitbucketCloudAction commentAction,
+            Long pullRequestNumber
+    ) {
+        deleteCommentsByMarkerBestEffort(
+                commentAction, CODECROW_INLINE_ISSUE_MARKER, pullRequestNumber);
+        deleteCommentsByMarkerBestEffort(
+                commentAction, LEGACY_CODECROW_INLINE_ISSUE_MARKER, pullRequestNumber);
+        deleteCommentsByMarkerBestEffort(
+                commentAction, LEGACY_CODECROW_ISSUES_MARKER, pullRequestNumber);
+    }
+
+    private void deleteCommentsByMarkerBestEffort(
+            CommentOnBitbucketCloudAction commentAction,
+            String marker,
+            Long pullRequestNumber
+    ) {
+        try {
+            int deleted = commentAction.deleteCommentsByMarker(marker);
+            if (deleted > 0) {
+                log.info("Deleted {} previous Bitbucket issue comment(s) with marker {} from PR {}",
+                        deleted, marker, pullRequestNumber);
+            }
         } catch (Exception e) {
-            log.warn("Failed to post detailed issues as reply, will be included in annotations: {}", e.getMessage());
+            log.warn("Failed to clean previous Bitbucket issue comments with marker {} from PR {}: {}",
+                    marker, pullRequestNumber, e.getMessage());
         }
     }
 

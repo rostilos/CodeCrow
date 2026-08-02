@@ -684,6 +684,41 @@ public class GitLabClient implements VcsClient {
     }
 
     @Override
+    public List<VcsPullRequestComment> getPullRequestCommentThread(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber,
+            String triggeringCommentId,
+            String parentOrThreadId,
+            boolean inlineComment
+    ) throws IOException {
+        if (parentOrThreadId == null || parentOrThreadId.isBlank()) {
+            return List.of();
+        }
+
+        JsonNode discussion = mergeRequestApi.getDiscussion(
+                workspaceId, repoIdOrSlug, pullRequestNumber, parentOrThreadId);
+        JsonNode notes = discussion.path("notes");
+        if (!notes.isArray()) {
+            return List.of();
+        }
+
+        List<VcsPullRequestComment> comments = new ArrayList<>();
+        String rootNoteId = notes.isEmpty() ? null : notes.get(0).path("id").asText(null);
+        for (JsonNode note : notes) {
+            String noteId = note.path("id").asText();
+            comments.add(new VcsPullRequestComment(
+                    noteId,
+                    noteId.equals(rootNoteId) ? null : rootNoteId,
+                    parentOrThreadId,
+                    note.path("author").path("username").asText(null),
+                    note.path("body").asText(null),
+                    note.path("created_at").asText(null)));
+        }
+        return List.copyOf(comments);
+    }
+
+    @Override
     public String getPullRequestDiff(
             String workspaceId,
             String repoIdOrSlug,
@@ -753,6 +788,18 @@ public class GitLabClient implements VcsClient {
     ) throws IOException {
         mergeRequestApi.postComment(
                 workspaceId, repoIdOrSlug, mergeRequestIid, body);
+    }
+
+    public String postMergeRequestDiscussionReply(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid,
+            String discussionId,
+            String body
+    ) throws IOException {
+        JsonNode note = mergeRequestApi.postDiscussionReply(
+                workspaceId, repoIdOrSlug, mergeRequestIid, discussionId, body);
+        return note.hasNonNull("id") ? note.path("id").asText() : null;
     }
 
     public void postMergeRequestLineComment(

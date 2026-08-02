@@ -174,6 +174,26 @@ public interface VcsClient {
     ) throws IOException;
 
     /**
+     * Get the comments that belong to the conversation containing a triggering
+     * pull-request comment. Providers without native threads may return an
+     * empty list; interactive answering must remain usable without enrichment.
+     *
+     * @param triggeringCommentId comment that triggered the interaction
+     * @param parentOrThreadId provider parent-comment or discussion identifier
+     * @param inlineComment whether the trigger belongs to a diff discussion
+     */
+    default List<VcsPullRequestComment> getPullRequestCommentThread(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber,
+            String triggeringCommentId,
+            String parentOrThreadId,
+            boolean inlineComment
+    ) throws IOException {
+        return List.of();
+    }
+
+    /**
      * Get the complete unified diff for a pull/merge request.
      */
     String getPullRequestDiff(

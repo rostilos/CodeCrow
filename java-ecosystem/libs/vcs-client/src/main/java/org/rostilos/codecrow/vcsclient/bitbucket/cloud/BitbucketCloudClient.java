@@ -20,7 +20,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * VcsClient implementation for Bitbucket Cloud.
@@ -797,6 +802,103 @@ public class BitbucketCloudClient implements VcsClient {
                 state,
                 "MERGED".equalsIgnoreCase(state),
                 null);
+    }
+
+    @Override
+    public List<VcsPullRequestComment> getPullRequestCommentThread(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber,
+            String triggeringCommentId,
+            String parentOrThreadId,
+            boolean inlineComment
+    ) throws IOException {
+        if (triggeringCommentId == null) {
+            return List.of();
+        }
+
+        List<JsonNode> comments = new ArrayList<>();
+        String url = API_BASE + "/repositories/" + workspaceId + "/" + repoIdOrSlug
+                + "/pullrequests/" + pullRequestNumber + "/comments?pagelen=100";
+        while (url != null) {
+            Request request = new Request.Builder()
+                    .url(url)
+                    .header("Accept", "application/json")
+                    .get()
+                    .build();
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    throw createException("list pull request comments", response);
+                }
+                JsonNode page = objectMapper.readTree(response.body().string());
+                JsonNode values = page.path("values");
+                if (values.isArray()) {
+                    values.forEach(comment -> comments.add(comment.deepCopy()));
+                }
+                url = page.hasNonNull("next") ? page.path("next").asText() : null;
+            }
+        }
+
+        Map<String, JsonNode> commentsById = new HashMap<>();
+        comments.forEach(comment -> commentsById.put(comment.path("id").asText(), comment));
+
+        String rootId = parentOrThreadId == null || parentOrThreadId.isBlank()
+                ? triggeringCommentId
+                : parentOrThreadId;
+        JsonNode ancestor = commentsById.get(rootId);
+        while (ancestor != null) {
+            String parentId = bitbucketParentId(ancestor);
+            if (parentId == null || !commentsById.containsKey(parentId)) {
+                break;
+            }
+            rootId = parentId;
+            ancestor = commentsById.get(rootId);
+        }
+
+        Set<String> threadIds = new LinkedHashSet<>();
+        threadIds.add(rootId);
+        boolean changed;
+        do {
+            changed = false;
+            for (JsonNode comment : comments) {
+                String id = comment.path("id").asText();
+                String parentId = bitbucketParentId(comment);
+                if (parentId != null && threadIds.contains(parentId)) {
+                    changed |= threadIds.add(id);
+                }
+            }
+        } while (changed);
+
+        final String threadRootId = rootId;
+        return comments.stream()
+                .filter(comment -> threadIds.contains(comment.path("id").asText()))
+                .filter(comment -> !comment.path("deleted").asBoolean(false))
+                .sorted(Comparator.comparing(comment -> comment.path("created_on").asText("")))
+                .map(comment -> new VcsPullRequestComment(
+                        comment.path("id").asText(),
+                        bitbucketParentId(comment),
+                        threadRootId,
+                        bitbucketUsername(comment.path("user")),
+                        comment.path("content").path("raw").asText(null),
+                        comment.path("created_on").asText(null)))
+                .toList();
+    }
+
+    private static String bitbucketParentId(JsonNode comment) {
+        JsonNode parent = comment.path("parent");
+        return parent.isObject() && parent.hasNonNull("id")
+                ? parent.path("id").asText()
+                : null;
+    }
+
+    private static String bitbucketUsername(JsonNode user) {
+        if (user.hasNonNull("nickname")) {
+            return user.path("nickname").asText();
+        }
+        if (user.hasNonNull("display_name")) {
+            return user.path("display_name").asText();
+        }
+        return user.path("username").asText(null);
     }
 
     @Override

@@ -36,12 +36,12 @@ import java.util.function.Consumer;
 
 /**
  * Generic handler for comment-triggered CodeCrow commands.
- * Supports both Bitbucket Cloud and GitHub comment webhooks.
+ * Supports Bitbucket Cloud, GitHub, and GitLab comment webhooks.
  * 
  * Commands:
  * - /codecrow analyze - Trigger PR analysis
  * - /codecrow summarize - Generate PR summary with diagrams
- * - /codecrow ask <question> - Ask questions about the code/analysis
+ * - /codecrow ask <question> or an addressed @codecrow question - Ask about the code/analysis
  * - /codecrow qa-doc [TASK-KEY] - Generate QA documentation and post to Jira
  */
 @Component

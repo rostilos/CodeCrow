@@ -113,11 +113,11 @@ public interface TaskManagementClient {
 
     /**
      * Search for a comment containing a specific marker string.
-     * Used to detect existing auto-documentation comments via an embedded
-     * hidden marker (e.g. {@code <!-- codecrow-qa-autodoc -->}).
+     * Providers may keep ownership markers in non-rendered metadata while
+     * continuing to recognize legacy markers embedded in visible content.
      *
      * @param taskId the task identifier
-     * @param marker the marker string to search for in comment bodies
+     * @param marker the provider-neutral marker string to search for
      * @return the matching comment, or empty if not found
      * @throws IOException on transport failure
      */
