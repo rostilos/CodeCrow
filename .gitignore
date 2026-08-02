@@ -21,6 +21,8 @@ Thumbs.db
 coverage.xml
 htmlcov/
 .ci-test-results/
+build/coverage/
+.coverage-venvs/
 
 # Python environments and packaging output
 .venv/

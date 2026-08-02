@@ -22,6 +22,11 @@ os.environ.setdefault("OLLAMA_BASE_URL", "http://localhost:11434")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/1")
 
 
+async def _run_in_threadpool_inline(function, *args, **kwargs):
+    """Execute mocked sync endpoints without an environment-owned worker pool."""
+    return function(*args, **kwargs)
+
+
 @pytest.fixture(scope="session")
 def _mock_qdrant():
     """Mock qdrant_client so no real Qdrant connection is needed."""
@@ -63,7 +68,11 @@ def rag_app(_mock_qdrant, _mock_embedding):
     with patch("rag_pipeline.models.config.RAGConfig") as MockConfig, \
          patch("rag_pipeline.core.index_manager.RAGIndexManager") as MockIM, \
          patch("rag_pipeline.services.query_service.RAGQueryService") as MockQS, \
-         patch("rag_pipeline.server.rag_queue_consumer.RAGQueueConsumer") as MockRQC:
+         patch("rag_pipeline.server.rag_queue_consumer.RAGQueueConsumer") as MockRQC, \
+         patch(
+             "fastapi.routing.run_in_threadpool",
+             new=_run_in_threadpool_inline,
+         ):
 
         mock_config = MagicMock()
         mock_config.qdrant_url = "http://localhost:6333"

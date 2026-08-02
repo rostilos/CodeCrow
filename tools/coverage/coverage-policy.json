@@ -1,0 +1,80 @@
+{
+  "overallMinimum": {
+    "line": 50,
+    "branch": 35
+  },
+  "java": {
+    "sourceRoots": [
+      "java-ecosystem",
+      "analysis-plugins"
+    ],
+    "excludeModules": [
+      "java-ecosystem/libs/test-support"
+    ],
+    "minimum": {
+      "line": 40,
+      "branch": 30
+    }
+  },
+  "pythonEnvironments": {
+    "rag": {
+      "requirements": "python-ecosystem/rag-pipeline/requirements.txt"
+    },
+    "inference": {
+      "requirements": "python-ecosystem/inference-orchestrator/src/requirements.test.txt"
+    }
+  },
+  "pythonDiscoveryRoots": [
+    "python-ecosystem"
+  ],
+  "python": {
+    "analysis-plugin-contracts": {
+      "environment": "rag",
+      "workingDirectory": ".",
+      "pytestConfig": "analysis-plugins/contracts/python/pytest.ini",
+      "tests": [
+        "analysis-plugins/contracts/python/tests"
+      ],
+      "sources": [
+        "analysis-plugins/contracts/python/codecrow_plugins",
+        "analysis-plugins/domains",
+        "analysis-plugins/frameworks",
+        "analysis-plugins/languages"
+      ],
+      "minimum": {
+        "line": 75,
+        "branch": 60
+      }
+    },
+    "rag-pipeline": {
+      "environment": "rag",
+      "workingDirectory": "python-ecosystem/rag-pipeline",
+      "tests": [
+        "tests",
+        "integration"
+      ],
+      "sources": [
+        "src/rag_pipeline"
+      ],
+      "minimum": {
+        "line": 80,
+        "branch": 65
+      }
+    },
+    "inference-orchestrator": {
+      "environment": "inference",
+      "workingDirectory": "python-ecosystem/inference-orchestrator",
+      "tests": [
+        "tests",
+        "integration"
+      ],
+      "sources": [
+        "src"
+      ],
+      "minimum": {
+        "line": 80,
+        "branch": 65
+      }
+    }
+  }
+}

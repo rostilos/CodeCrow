@@ -1,0 +1,71 @@
+name: Repository Coverage
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+concurrency:
+  group: repository-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: Test coverage policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            python-ecosystem/rag-pipeline/requirements.txt
+            python-ecosystem/inference-orchestrator/src/requirements.txt
+            python-ecosystem/inference-orchestrator/src/requirements.test.txt
+
+      - name: Run repository coverage gate
+        run: bash tools/coverage/check-repository-coverage.sh
+
+      - name: Publish coverage summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f build/coverage/summary.md ]; then
+            cat build/coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "# Repository coverage gate" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The coverage runner stopped before it could create a summary." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload coverage and test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-coverage-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/coverage/
+            java-ecosystem/**/target/site/jacoco/
+            analysis-plugins/**/target/site/jacoco/
+            java-ecosystem/**/target/surefire-reports/
+            java-ecosystem/**/target/failsafe-reports/
