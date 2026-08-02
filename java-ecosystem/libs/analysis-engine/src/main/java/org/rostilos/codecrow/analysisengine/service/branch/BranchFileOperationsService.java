@@ -9,11 +9,13 @@ import org.rostilos.codecrow.filecontent.model.BranchFile;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.filecontent.persistence.BranchFileRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -36,6 +38,7 @@ public class BranchFileOperationsService {
 
     private final BranchFileRepository branchFileRepository;
     private final BranchRepository branchRepository;
+    private final ProjectRepository projectRepository;
     private final BranchIssueRepository branchIssueRepository;
     private final CodeAnalysisIssueRepository codeAnalysisIssueRepository;
     private final CodeAnalysisRepository codeAnalysisRepository;
@@ -47,6 +50,7 @@ public class BranchFileOperationsService {
     public BranchFileOperationsService(
             BranchFileRepository branchFileRepository,
             BranchRepository branchRepository,
+            ProjectRepository projectRepository,
             BranchIssueRepository branchIssueRepository,
             CodeAnalysisIssueRepository codeAnalysisIssueRepository,
             CodeAnalysisRepository codeAnalysisRepository,
@@ -56,6 +60,7 @@ public class BranchFileOperationsService {
             VcsFileRetrievalPolicy fileRetrievalPolicy) {
         this.branchFileRepository = branchFileRepository;
         this.branchRepository = branchRepository;
+        this.projectRepository = projectRepository;
         this.branchIssueRepository = branchIssueRepository;
         this.codeAnalysisIssueRepository = codeAnalysisIssueRepository;
         this.codeAnalysisRepository = codeAnalysisRepository;
@@ -187,7 +192,33 @@ public class BranchFileOperationsService {
             branch.setBranchName(request.getTargetBranchName());
         }
         branch.setCommitHash(request.getCommitHash());
-        return branchRepository.save(branch);
+        Branch savedBranch = branchRepository.save(branch);
+
+        ProjectConfig config = project.getConfiguration();
+        String configuredMainBranch = config != null ? config.mainBranch() : null;
+        if ((configuredMainBranch == null || configuredMainBranch.isBlank())
+                && project.getVcsRepoBinding() != null) {
+            configuredMainBranch = project.getVcsRepoBinding().getDefaultBranch();
+        }
+
+        boolean isConfiguredMainBranch = configuredMainBranch != null
+                && configuredMainBranch.equals(savedBranch.getBranchName());
+        boolean shouldSelectBranch = project.getDefaultBranch() == null
+                || (isConfiguredMainBranch
+                    && !Objects.equals(savedBranch.getId(), project.getDefaultBranch().getId()));
+
+        if (shouldSelectBranch) {
+            project.setDefaultBranch(savedBranch);
+            if (config != null && (config.mainBranch() == null || config.mainBranch().isBlank())) {
+                config.setMainBranch(savedBranch.getBranchName());
+                config.ensureMainBranchInPatterns();
+            }
+            projectRepository.save(project);
+            log.info("Selected branch {} as the default analysis branch for project {}",
+                    savedBranch.getBranchName(), project.getId());
+        }
+
+        return savedBranch;
     }
 
     // ──────────────────── File snapshot updates ──────────────────────────────

@@ -56,6 +56,50 @@ async def test_active_indexing_emits_heartbeats_and_refreshes_event_ttl(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_indexer_progress_is_published_to_the_durable_event_stream(tmp_path):
+    owned_repo = tmp_path / "codecrow-rag-owned"
+    owned_repo.mkdir()
+
+    manager = Mock()
+
+    def index_with_progress(**kwargs):
+        kwargs["progress_callback"]({
+            "stage": "indexing",
+            "message": "Indexed 20 of 100 files",
+            "progress": 40,
+            "total": 100,
+        })
+        return _Stats()
+
+    manager.index_repository.side_effect = index_with_progress
+    consumer = RAGQueueConsumer(manager)
+    consumer._redis = AsyncMock()
+    payload = json.dumps({
+        "job_id": "job-progress",
+        "request": {
+            "repo_path": str(owned_repo),
+            "workspace": "ws",
+            "project": "project",
+            "branch": "main",
+            "commit": "abc123",
+            "cleanup_repo_path": False,
+        },
+    })
+
+    await consumer._handle_job(payload)
+
+    events = [
+        json.loads(call.args[1])
+        for call in consumer._redis.lpush.await_args_list
+    ]
+    assert any(
+        event.get("stage") == "indexing" and event.get("progress") == 40
+        for event in events
+    )
+    assert events[-1]["type"] == "final"
+
+
+@pytest.mark.asyncio
 async def test_consumer_removes_only_explicitly_owned_workspace(tmp_path):
     owned_repo = tmp_path / "codecrow-rag-owned"
     owned_repo.mkdir()

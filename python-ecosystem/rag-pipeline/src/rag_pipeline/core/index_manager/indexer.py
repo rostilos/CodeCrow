@@ -484,8 +484,33 @@ class RepositoryIndexer:
         exclude_patterns: Optional[List[str]] = None,
         operation_id: Optional[str] = None,
         activation_guard: Optional[Callable[[], None]] = None,
+        progress_callback: Optional[Callable[[dict], None]] = None,
     ) -> IndexStats:
         """Index entire repository for a branch using atomic swap strategy."""
+        def report_progress(
+            stage: str,
+            message: str,
+            progress: Optional[int] = None,
+            total: Optional[int] = None,
+        ) -> None:
+            if progress_callback is None:
+                return
+            event = {"stage": stage, "message": message}
+            if progress is not None:
+                event["progress"] = max(0, min(100, progress))
+            if total is not None:
+                event["total"] = total
+            try:
+                progress_callback(event)
+            except Exception as exception:
+                # Progress reporting is optional enrichment. It must never fail
+                # an otherwise healthy index operation.
+                logger.warning(
+                    "RAG progress callback failed at stage %s: %s",
+                    stage,
+                    exception,
+                )
+
         operation_id = operation_id or hashlib.sha256(
             f"{workspace}\0{project}\0{branch}\0{commit}\0{time.time_ns()}".encode()
         ).hexdigest()[:32]
@@ -499,6 +524,7 @@ class RepositoryIndexer:
             branch,
             repo_path,
         )
+        report_progress("preparing", "Preparing the pending vector collection", 2)
 
         repo_path_obj = Path(repo_path)
         pending_collection_name = self.collection_manager.create_pending_collection(
@@ -529,6 +555,12 @@ class RepositoryIndexer:
             "Found %s repository files before plugin file policy for branch '%s'",
             len(repository_file_list),
             branch,
+        )
+        report_progress(
+            "scanning",
+            f"Discovered {len(repository_file_list)} repository files",
+            7,
+            len(repository_file_list),
         )
         
         if not repository_file_list:
@@ -563,6 +595,12 @@ class RepositoryIndexer:
                 commit,
                 ", ".join(capabilities.repository_plugins) or "generic fallback",
             )
+            report_progress(
+                "framework",
+                "Selected repository plugins: "
+                + (", ".join(capabilities.repository_plugins) or "generic fallback"),
+                10,
+            )
 
         file_list = repository_file_list
         semantic_paths = {
@@ -596,6 +634,12 @@ class RepositoryIndexer:
                 len(file_list) - len(semantic_paths),
             )
         total_files = len(semantic_paths)
+        report_progress(
+            "scope",
+            f"Selected {total_files} semantic files for indexing",
+            12,
+            total_files,
+        )
 
         analysis_handle = None
         if self.plugin_runtime is not None and capabilities is not None:
@@ -610,6 +654,7 @@ class RepositoryIndexer:
         
         if self.config.max_chunks_per_index > 0:
             logger.info("Estimating chunk count before indexing...")
+            report_progress("estimating", "Estimating repository chunk count", 14)
             _, estimated_chunks = self.estimate_repository_size(
                 repo_path,
                 include_patterns,
@@ -650,6 +695,12 @@ class RepositoryIndexer:
             logger.info("Starting memory-efficient streaming indexing...")
             batch_num = 0
             total_batches = (len(file_list) + DOCUMENT_BATCH_SIZE - 1) // DOCUMENT_BATCH_SIZE
+            report_progress(
+                "indexing",
+                f"Starting {total_batches} indexing batches",
+                18,
+                total_batches,
+            )
             
             # Architecture-only files still have to reach the repository
             # resolver.  ``total_files`` counts only embedding-bearing files
@@ -777,6 +828,17 @@ class RepositoryIndexer:
                     point_pipeline_duration_ms,
                     round((time.perf_counter() - batch_started) * 1000),
                 )
+                batch_progress = 18 + round(67 * batch_num / max(total_batches, 1))
+                report_progress(
+                    "indexing",
+                    (
+                        f"Indexed batch {batch_num}/{total_batches}: "
+                        f"{document_count}/{total_files} files, "
+                        f"{successful_chunks} chunks"
+                    ),
+                    batch_progress,
+                    total_batches,
+                )
                 
                 del documents
                 del chunks
@@ -789,6 +851,11 @@ class RepositoryIndexer:
             context_nodes = []
             snapshot_nodes = []
             if analysis_handle is not None:
+                report_progress(
+                    "architecture",
+                    "Building deterministic architecture context",
+                    88,
+                )
                 repository_analysis, diagnostics = analysis_handle.finish()
                 skipped_file_paths.update(
                     self.accept_recoverable_repository_diagnostics(
@@ -890,6 +957,7 @@ class RepositoryIndexer:
             )
 
             # Verify and perform atomic swap
+            report_progress("verifying", "Verifying the pending vector collection", 94)
             pending_info = self.point_ops.client.get_collection(pending_collection_name)
             actual_point_count = int(pending_info.points_count or 0)
             expected_point_count = preserved_point_count + successful_chunks
@@ -925,6 +993,7 @@ class RepositoryIndexer:
                 )
 
             activation_started = time.perf_counter()
+            report_progress("activating", "Activating the completed vector collection", 97)
             old_target = self._perform_atomic_swap(
                 alias_name, pending_collection_name, old_alias_exists
             )
@@ -973,6 +1042,12 @@ class RepositoryIndexer:
             embedding_metrics["reused"],
             embedding_metrics["embedded"],
             round((time.perf_counter() - operation_started) * 1000),
+        )
+        report_progress(
+            "complete",
+            f"Indexed {document_count} files into {successful_chunks} chunks",
+            100,
+            document_count,
         )
         return IndexStats(
             namespace=namespace,

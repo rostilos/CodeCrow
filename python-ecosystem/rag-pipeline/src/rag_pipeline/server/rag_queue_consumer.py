@@ -157,6 +157,29 @@ class RAGQueueConsumer:
             # Start indexing - it takes a long time
             # index_manager.index_repository is synchronous, so we run it in an executor
             loop = asyncio.get_running_loop()
+            progress_delivery_available = True
+
+            def publish_progress(event: Dict[str, Any]) -> None:
+                nonlocal progress_delivery_available
+                if not progress_delivery_available:
+                    return
+                payload = {"type": "status", **event}
+                future = asyncio.run_coroutine_threadsafe(
+                    self._publish_event(event_queue_key, payload),
+                    loop,
+                )
+                # Surface Redis publication failures promptly without coupling
+                # indexing correctness to progress delivery.
+                try:
+                    future.result(timeout=5)
+                except Exception as exception:
+                    progress_delivery_available = False
+                    logger.warning(
+                        "Could not publish RAG progress for job %s: %s",
+                        job_id,
+                        exception,
+                    )
+
             indexing_future = loop.run_in_executor(
                 None,
                 lambda: self.index_manager.index_repository(
@@ -167,7 +190,8 @@ class RAGQueueConsumer:
                     commit=request_dto.commit,
                     preserve_other_branches=request_dto.preserve_other_branches,
                     include_patterns=request_dto.include_patterns,
-                    exclude_patterns=request_dto.exclude_patterns
+                    exclude_patterns=request_dto.exclude_patterns,
+                    progress_callback=publish_progress,
                 )
             )
             while True:

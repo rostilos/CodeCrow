@@ -6,7 +6,7 @@ Composes all index management components and provides the public API.
 
 import logging
 import os
-from typing import Optional, List
+from typing import Callable, Optional, List
 
 from llama_index.core import Settings
 from qdrant_client import QdrantClient
@@ -209,7 +209,8 @@ class RAGIndexManager:
         commit: str,
         preserve_other_branches: bool = False,
         include_patterns: Optional[List[str]] = None,
-        exclude_patterns: Optional[List[str]] = None
+        exclude_patterns: Optional[List[str]] = None,
+        progress_callback: Optional[Callable[[dict], None]] = None,
     ) -> IndexStats:
         """Index entire repository for a branch using atomic swap strategy."""
         alias_name = self._get_project_collection_name(workspace, project)
@@ -230,6 +231,7 @@ class RAGIndexManager:
                 exclude_patterns=exclude_patterns,
                 operation_id=lease.token,
                 activation_guard=lease.assert_owned,
+                progress_callback=progress_callback,
             )
 
     # File operations

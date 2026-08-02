@@ -16,6 +16,7 @@ import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
 import org.rostilos.codecrow.core.model.analysis.RagIndexStatus;
 import org.rostilos.codecrow.core.model.job.Job;
+import org.rostilos.codecrow.core.model.job.JobLogLevel;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
@@ -304,6 +305,7 @@ class VcsRagIndexingServiceTest {
             when(analysisLockService.acquireLock(any(), anyString(), any())).thenReturn(Optional.of("lock-key"));
 
             Job mockJob = mock(Job.class);
+            when(mockJob.getExternalId()).thenReturn("rag-job-123");
             when(jobService.createRagIndexJob(any(), isNull())).thenReturn(mockJob);
 
             VcsClient mockVcs = mock(VcsClient.class);
@@ -321,6 +323,7 @@ class VcsRagIndexingServiceTest {
 
             assertThat(result).containsEntry("status", "queued");
             assertThat(result).containsEntry("branch", "main");
+            assertThat(result).containsEntry("jobId", "rag-job-123");
             verify(ragIndexTrackingService).markIndexingStarted(testProject, "main", "abc123");
             verify(mockVcs).downloadRepositoryArchiveToFile(
                     eq("my-workspace"),
@@ -411,9 +414,10 @@ class VcsRagIndexingServiceTest {
     @Test
     @DisplayName("worker status heartbeats refresh the observable index status")
     void workerStatusHeartbeatRefreshesObservableIndexStatus() {
+        Job job = mock(Job.class);
         when(queueService.rightPop("events", 5))
                 .thenReturn(
-                        "{\"type\":\"status\",\"state\":\"processing\"}",
+                        "{\"type\":\"status\",\"stage\":\"indexing\",\"message\":\"Indexed 20 of 100 files\",\"progress\":40}",
                         "{\"type\":\"final\",\"result\":{\"document_count\":12,\"chunk_count\":34}}");
         when(analysisLockService.renewLock("lock-key", 30)).thenReturn(true);
 
@@ -425,11 +429,18 @@ class VcsRagIndexingServiceTest {
                 "abc123",
                 Path.of("/tmp/codecrow-rag-consumer-owned"),
                 "lock-key",
-                null,
+                job,
                 "codecrow:queue:rag",
                 "queued-payload");
 
         verify(ragIndexTrackingService).markIndexingHeartbeat(testProject);
+        verify(jobService).logToJob(
+                eq(job),
+                eq(JobLogLevel.INFO),
+                eq("indexing"),
+                eq("Indexed 20 of 100 files"),
+                argThat(event -> Integer.valueOf(40).equals(event.get("progress"))));
+        verify(jobService).completeJob(job, null);
         verify(ragIndexTrackingService).markIndexingCompleted(
                 testProject,
                 "main",

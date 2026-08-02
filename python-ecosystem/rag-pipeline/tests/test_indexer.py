@@ -135,9 +135,42 @@ class TestIndexRepository:
         stats_mgr.get_branch_stats.return_value = mock_stats
 
         indexer = RepositoryIndexer(config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader)
-        result = indexer.index_repository("/repo", "ws", "proj", "main", "abc123", "alias1")
+        progress_events = []
+        result = indexer.index_repository(
+            "/repo", "ws", "proj", "main", "abc123", "alias1",
+            progress_callback=progress_events.append,
+        )
 
         coll_mgr.delete_collection.assert_called_with("pending")
+        assert result.document_count == 0
+        assert [event["stage"] for event in progress_events] == [
+            "preparing", "scanning",
+        ]
+        assert progress_events[-1]["total"] == 0
+
+    def test_progress_callback_failure_does_not_fail_indexing(self):
+        config = _mock_config()
+        coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader = _mock_components()
+        loader.iter_repository_files.return_value = iter([])
+        coll_mgr.create_pending_collection.return_value = "pending"
+        coll_mgr.alias_exists.return_value = False
+        coll_mgr.collection_exists.return_value = False
+        coll_mgr.resolve_alias.return_value = None
+        stats_mgr.get_branch_stats.return_value = IndexStats(
+            namespace="ws__proj__main", document_count=0, chunk_count=0,
+            last_updated="2024-01-01", workspace="ws", project="proj", branch="main"
+        )
+        indexer = RepositoryIndexer(
+            config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader,
+        )
+
+        result = indexer.index_repository(
+            "/repo", "ws", "proj", "main", "abc123", "alias1",
+            progress_callback=lambda _event: (_ for _ in ()).throw(
+                RuntimeError("event sink unavailable")
+            ),
+        )
+
         assert result.document_count == 0
 
     def test_architecture_files_are_ingested_while_generated_files_are_not_loaded(self, tmp_path):

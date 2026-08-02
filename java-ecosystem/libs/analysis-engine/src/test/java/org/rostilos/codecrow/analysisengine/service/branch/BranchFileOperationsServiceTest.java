@@ -6,15 +6,19 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.VcsFileRetrievalPolicy;
+import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.filecontent.persistence.BranchFileRepository;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
@@ -41,6 +45,7 @@ class BranchFileOperationsServiceTest {
 
     @Mock private BranchFileRepository branchFileRepository;
     @Mock private BranchRepository branchRepository;
+    @Mock private ProjectRepository projectRepository;
     @Mock private BranchIssueRepository branchIssueRepository;
     @Mock private CodeAnalysisIssueRepository codeAnalysisIssueRepository;
     @Mock private CodeAnalysisRepository codeAnalysisRepository;
@@ -60,6 +65,7 @@ class BranchFileOperationsServiceTest {
         service = new BranchFileOperationsService(
                 branchFileRepository,
                 branchRepository,
+                projectRepository,
                 branchIssueRepository,
                 codeAnalysisIssueRepository,
                 codeAnalysisRepository,
@@ -149,6 +155,25 @@ class BranchFileOperationsServiceTest {
                 "workspace", "repo", "main", "src/A.java");
         verify(vcsClient, never()).fileExists(
                 "workspace", "repo", "main", "src/B.java");
+    }
+
+    @Test
+    void selectsTheFirstAnalyzedBranchAsTheProjectDefault() {
+        ProjectConfig config = new ProjectConfig(false, "main");
+        when(project.getConfiguration()).thenReturn(config);
+        when(project.getDefaultBranch()).thenReturn(null);
+        when(branchRepository.save(any(Branch.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        BranchProcessRequest request = new BranchProcessRequest();
+        request.targetBranchName = "feature/first-analysis";
+        request.commitHash = "abc123";
+
+        Branch saved = service.createOrUpdateProjectBranch(project, request, null);
+
+        assertThat(saved.getBranchName()).isEqualTo("feature/first-analysis");
+        verify(project).setDefaultBranch(saved);
+        verify(projectRepository).save(project);
     }
 
     private void configureProjectRepository() {
