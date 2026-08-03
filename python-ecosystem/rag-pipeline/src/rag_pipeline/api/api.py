@@ -23,13 +23,30 @@ config: Optional[RAGConfig] = None
 index_manager: Optional[RAGIndexManager] = None
 query_service: Optional[RAGQueryService] = None
 
+_DEFAULT_PENDING_JANITOR_INTERVAL_SECONDS = 3600
+_MIN_PENDING_JANITOR_INTERVAL_SECONDS = 300
+
+
+def _pending_janitor_interval_seconds() -> int:
+    raw_interval = os.environ.get(
+        "RAG_PENDING_JANITOR_INTERVAL_SECONDS",
+        str(_DEFAULT_PENDING_JANITOR_INTERVAL_SECONDS),
+    )
+    try:
+        configured_interval = int(raw_interval)
+    except ValueError:
+        logger.warning(
+            "Invalid RAG_PENDING_JANITOR_INTERVAL_SECONDS=%r; using default %s",
+            raw_interval,
+            _DEFAULT_PENDING_JANITOR_INTERVAL_SECONDS,
+        )
+        return _DEFAULT_PENDING_JANITOR_INTERVAL_SECONDS
+    return max(_MIN_PENDING_JANITOR_INTERVAL_SECONDS, configured_interval)
+
 
 async def _pending_collection_janitor(manager: RAGIndexManager) -> None:
     """Periodically remove only expired, unowned pending collections."""
-    interval = max(
-        300,
-        int(os.environ.get("RAG_PENDING_JANITOR_INTERVAL_SECONDS", "3600")),
-    )
+    interval = _pending_janitor_interval_seconds()
     while True:
         try:
             cleaned = await asyncio.to_thread(

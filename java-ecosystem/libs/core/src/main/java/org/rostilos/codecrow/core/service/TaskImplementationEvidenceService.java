@@ -9,6 +9,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -288,10 +289,12 @@ public class TaskImplementationEvidenceService {
 
     private Integer positiveInteger(Object value) {
         if (value instanceof Number number) {
-            long result = number.longValue();
-            return result > 0 && result <= Integer.MAX_VALUE
-                    ? (int) result
-                    : null;
+            try {
+                int result = new BigDecimal(number.toString()).intValueExact();
+                return result > 0 ? result : null;
+            } catch (ArithmeticException | NumberFormatException ignored) {
+                return null;
+            }
         }
         return null;
     }

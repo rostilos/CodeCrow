@@ -207,4 +207,50 @@ class CommentOnPullRequestActionTest {
         assertThat(requests.get(0).url().queryParameter("per_page")).isEqualTo("100");
         assertThat(requests.get(0).url().queryParameter("page")).isEqualTo("1");
     }
+
+    @Test
+    void clearPreviousReviewBodies_clearsOnlyMarkedReviewSummaries() throws IOException {
+        List<Request> requests = new ArrayList<>();
+        when(okHttpClient.newCall(any(Request.class))).thenAnswer(invocation -> {
+            Request request = invocation.getArgument(0);
+            requests.add(request);
+
+            String responseJson = request.method().equals("GET")
+                    ? "[{\"id\":51,\"body\":\"## CodeCrow Review\\n\\n"
+                            + "<!-- codecrow-analysis-review -->\"},"
+                            + "{\"id\":52,\"body\":\"human review\"}]"
+                    : "{}";
+            Response requestResponse = new Response.Builder()
+                    .request(request)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(ResponseBody.create(responseJson, MediaType.parse("application/json")))
+                    .build();
+            Call requestCall = mock(Call.class);
+            when(requestCall.execute()).thenReturn(requestResponse);
+            return requestCall;
+        });
+
+        int cleared = action.clearPreviousReviewBodies(
+                "owner",
+                "repo",
+                123,
+                "<!-- codecrow-analysis-review -->",
+                "<!-- codecrow-analysis-review-cleared -->");
+
+        assertThat(cleared).isEqualTo(1);
+        assertThat(requests).extracting(request -> request.method() + " " + request.url().encodedPath())
+                .containsExactly(
+                        "GET /repos/owner/repo/pulls/123/reviews",
+                        "PUT /repos/owner/repo/pulls/123/reviews/51"
+                );
+        assertThat(requests.get(0).url().queryParameter("per_page")).isEqualTo("100");
+        assertThat(requests.get(0).url().queryParameter("page")).isEqualTo("1");
+
+        Buffer body = new Buffer();
+        requests.get(1).body().writeTo(body);
+        assertThat(new ObjectMapper().readTree(body.readUtf8()).path("body").asText())
+                .isEqualTo("<!-- codecrow-analysis-review-cleared -->");
+    }
 }

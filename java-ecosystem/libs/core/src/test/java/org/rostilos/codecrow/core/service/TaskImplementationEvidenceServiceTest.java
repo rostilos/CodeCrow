@@ -162,6 +162,29 @@ class TaskImplementationEvidenceServiceTest {
         verify(repository, never()).saveAll(anyList());
     }
 
+    @Test
+    @DisplayName("rejects fractional evidence line numbers instead of truncating them")
+    void rejectsFractionalLineNumbers() {
+        CodeAnalysis analysis = analysis(101L, "SHOP-42");
+        when(repository.findFingerprintsByAnalysisId(101L)).thenReturn(List.of());
+
+        TaskImplementationEvidenceService.PersistenceResult result =
+                service.persistFromAnalysisResponse(
+                        analysis,
+                        payload("SHOP-42", Map.of(
+                                "evidenceRef", "PRF001",
+                                "filePath", "src/File.php",
+                                "hunkId", "hunk-1",
+                                "lineStart", 18.5,
+                                "lineEnd", 21,
+                                "excerpt", "fractional start line"
+                        )));
+
+        assertThat(result.persisted()).isZero();
+        assertThat(result.rejected()).isEqualTo(1);
+        verify(repository, never()).saveAll(anyList());
+    }
+
     private Map<String, Object> payload(
             String taskKey,
             Map<String, Object> item) {

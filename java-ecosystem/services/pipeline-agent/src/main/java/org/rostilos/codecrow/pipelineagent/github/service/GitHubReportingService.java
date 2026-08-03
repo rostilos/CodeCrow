@@ -35,6 +35,8 @@ public class GitHubReportingService implements VcsReportingService {
      */
     private static final String CODECROW_COMMENT_MARKER = "<!-- codecrow-analysis-comment -->";
     private static final String CODECROW_REVIEW_MARKER = "<!-- codecrow-analysis-review -->";
+    private static final String CODECROW_CLEARED_REVIEW_MARKER =
+            "<!-- codecrow-analysis-review-cleared -->";
 
     private final ReportGenerator reportGenerator;
     private final VcsClientProvider vcsClientProvider;
@@ -260,6 +262,26 @@ public class GitHubReportingService implements VcsReportingService {
             // Cleanup is best effort. A temporary list/delete failure must not hide
             // the current analysis or block Check Run publication.
             log.warn("Failed to delete previous CodeCrow inline review comments from PR {}: {}",
+                    pullRequestNumber, e.getMessage());
+        }
+
+        try {
+            int cleared = commentAction.clearPreviousReviewBodies(
+                    vcsRepoInfo.getRepoWorkspace(),
+                    vcsRepoInfo.getRepoSlug(),
+                    pullRequestNumber.intValue(),
+                    CODECROW_REVIEW_MARKER,
+                    CODECROW_CLEARED_REVIEW_MARKER
+            );
+            if (cleared > 0) {
+                log.info("Cleared {} previous CodeCrow review summary body/bodies from PR {}",
+                        cleared, pullRequestNumber);
+            }
+        } catch (Exception e) {
+            // A submitted GitHub review cannot be deleted. Clearing its generated
+            // summary is independent from inline-comment cleanup and remains
+            // best effort so current result publication can continue.
+            log.warn("Failed to clear previous CodeCrow review summaries from PR {}: {}",
                     pullRequestNumber, e.getMessage());
         }
     }

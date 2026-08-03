@@ -1,6 +1,7 @@
 """
 Tests for rag_pipeline.api.api — App creation, middleware, lifespan.
 """
+import logging
 import os
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -106,3 +107,33 @@ class TestAppCreation:
         from rag_pipeline.api.api import app
         assert app is not None
         assert app.title == "CodeCrow RAG API"
+
+
+class TestPendingCollectionJanitor:
+
+    @pytest.mark.parametrize(
+        ("configured", "expected"),
+        [("120", 300), ("900", 900)],
+    )
+    def test_interval_applies_minimum(self, configured, expected):
+        from rag_pipeline.api.api import _pending_janitor_interval_seconds
+
+        with patch.dict(
+            os.environ,
+            {"RAG_PENDING_JANITOR_INTERVAL_SECONDS": configured},
+        ):
+            assert _pending_janitor_interval_seconds() == expected
+
+    def test_malformed_interval_falls_back_to_default(self, caplog):
+        from rag_pipeline.api.api import _pending_janitor_interval_seconds
+
+        with (
+            patch.dict(
+                os.environ,
+                {"RAG_PENDING_JANITOR_INTERVAL_SECONDS": "not-a-number"},
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            assert _pending_janitor_interval_seconds() == 3600
+
+        assert "Invalid RAG_PENDING_JANITOR_INTERVAL_SECONDS" in caplog.text

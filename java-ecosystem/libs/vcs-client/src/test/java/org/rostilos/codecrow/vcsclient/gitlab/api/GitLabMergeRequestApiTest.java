@@ -1,5 +1,7 @@
 package org.rostilos.codecrow.vcsclient.gitlab.api;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.OkHttpClient;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -11,6 +13,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class GitLabMergeRequestApiTest {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Test
     void metadataAndCommentsUseOneConfiguredContext() throws Exception {
@@ -68,6 +72,60 @@ class GitLabMergeRequestApiTest {
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("403")
                     .hasMessageContaining("Forbidden");
+        }
+    }
+
+    @Test
+    void lineCommentIncludesCompleteDiffPosition() throws Exception {
+        try (MockWebServer gitLab = new MockWebServer()) {
+            gitLab.enqueue(new MockResponse().setResponseCode(201).setBody("{}"));
+            gitLab.start();
+
+            GitLabMergeRequestApi mergeRequests =
+                    new GitLabMergeRequestApi(new GitLabApiContext(
+                            new OkHttpClient(),
+                            gitLab.url("/").toString()));
+
+            mergeRequests.postLineComment(
+                    "team", "repo", 17, "Finding",
+                    "base-sha", "head-sha", "start-sha",
+                    "src/App.java", 42);
+
+            var request = gitLab.takeRequest();
+            JsonNode position = OBJECT_MAPPER.readTree(
+                    request.getBody().readUtf8()).path("position");
+            assertThat(request.getPath()).isEqualTo(
+                    "/api/v4/projects/team%2Frepo/merge_requests/17/discussions");
+            assertThat(position.path("base_sha").asText()).isEqualTo("base-sha");
+            assertThat(position.path("head_sha").asText()).isEqualTo("head-sha");
+            assertThat(position.path("start_sha").asText()).isEqualTo("start-sha");
+            assertThat(position.path("position_type").asText()).isEqualTo("text");
+            assertThat(position.path("old_path").asText()).isEqualTo("src/App.java");
+            assertThat(position.path("new_path").asText()).isEqualTo("src/App.java");
+            assertThat(position.path("new_line").asInt()).isEqualTo(42);
+        }
+    }
+
+    @Test
+    void lineCommentFailureIsReported() throws Exception {
+        try (MockWebServer gitLab = new MockWebServer()) {
+            gitLab.enqueue(new MockResponse()
+                    .setResponseCode(422)
+                    .setBody("Invalid diff position"));
+            gitLab.start();
+
+            GitLabMergeRequestApi mergeRequests =
+                    new GitLabMergeRequestApi(new GitLabApiContext(
+                            new OkHttpClient(),
+                            gitLab.url("/").toString()));
+
+            assertThatThrownBy(() -> mergeRequests.postLineComment(
+                    "team", "repo", 17, "Finding",
+                    "base-sha", "head-sha", "start-sha",
+                    "src/App.java", 42))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("422")
+                    .hasMessageContaining("Invalid diff position");
         }
     }
 

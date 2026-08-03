@@ -103,7 +103,8 @@ class GitHubReportingServiceTest {
                 .contains("summary")
                 .contains("details");
 
-        CapturedRequest review = requestAt(requests, "/repos/owner/repo/pulls/42/reviews");
+        CapturedRequest review = requestAt(
+                requests, "POST", "/repos/owner/repo/pulls/42/reviews");
         JsonNode reviewPayload = OBJECT_MAPPER.readTree(review.body());
         assertThat(review.method()).isEqualTo("POST");
         assertThat(reviewPayload.path("commit_id").asText()).isEqualTo("head-sha");
@@ -124,7 +125,7 @@ class GitHubReportingServiceTest {
     }
 
     @Test
-    void removesPreviousGeneratedReviewCommentsBeforePostingReplacement() throws IOException {
+    void removesPreviousGeneratedReviewArtifactsBeforePostingReplacement() throws IOException {
         List<CapturedRequest> requests = new ArrayList<>();
         when(vcsClientProvider.getHttpClient(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(capturingClient(requests, false, true));
@@ -132,9 +133,14 @@ class GitHubReportingServiceTest {
         service.postAnalysisResults(analysis, project, 42L, 77L, "99");
 
         int deleteIndex = indexOf(requests, "DELETE", "/repos/owner/repo/pulls/comments/321");
+        int clearIndex = indexOf(requests, "PUT", "/repos/owner/repo/pulls/42/reviews/654");
         int reviewIndex = indexOf(requests, "POST", "/repos/owner/repo/pulls/42/reviews");
         assertThat(deleteIndex).isGreaterThanOrEqualTo(0);
+        assertThat(clearIndex).isGreaterThan(deleteIndex);
         assertThat(reviewIndex).isGreaterThan(deleteIndex);
+        assertThat(reviewIndex).isGreaterThan(clearIndex);
+        assertThat(OBJECT_MAPPER.readTree(requests.get(clearIndex).body()).path("body").asText())
+                .isEqualTo("<!-- codecrow-analysis-review-cleared -->");
     }
 
     @Test
@@ -202,11 +208,18 @@ class GitHubReportingServiceTest {
             boolean reviewPost = request.method().equals("POST") && path.endsWith("/reviews");
             boolean reviewCommentList = request.method().equals("GET")
                     && path.endsWith("/pulls/42/comments");
+            boolean reviewList = request.method().equals("GET")
+                    && path.endsWith("/pulls/42/reviews");
             boolean rejected = rejectReviews && reviewPost;
             String responseJson;
             if (reviewCommentList) {
                 responseJson = includePreviousReviewComment
                         ? "[{\"id\":321,\"body\":\"old <!-- codecrow-analysis-review -->\"}]"
+                        : "[]";
+            } else if (reviewList) {
+                responseJson = includePreviousReviewComment
+                        ? "[{\"id\":654,\"body\":\"## CodeCrow Review\\n\\n"
+                                + "<!-- codecrow-analysis-review -->\"}]"
                         : "[]";
             } else if (reviewPost && !rejected) {
                 responseJson = "{\"id\":456}";
@@ -232,6 +245,18 @@ class GitHubReportingServiceTest {
                 .filter(request -> request.path().equals(path))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("Missing request to " + path));
+    }
+
+    private CapturedRequest requestAt(
+            List<CapturedRequest> requests,
+            String method,
+            String path
+    ) {
+        return requests.stream()
+                .filter(request -> request.method().equals(method) && request.path().equals(path))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(
+                        "Missing " + method + " request to " + path));
     }
 
     private int indexOf(List<CapturedRequest> requests, String method, String path) {

@@ -243,6 +243,7 @@ public final class GitLabMergeRequestApi {
         position.put("head_sha", headSha);
         position.put("start_sha", startSha);
         position.put("position_type", "text");
+        position.put("old_path", filePath);
         position.put("new_path", filePath);
         position.put("new_line", newLine);
 
@@ -252,14 +253,11 @@ public final class GitLabMergeRequestApi {
 
         String url = mergeRequestUrl(namespace, project, mergeRequestIid)
                 + "/discussions";
-        try (Response response = api.execute(api.postJson(
-                url,
-                api.objectMapper().writeValueAsString(payload)))) {
-            if (!response.isSuccessful()) {
-                log.warn("Failed to post GitLab line comment: HTTP {} - {}",
-                        response.code(), api.bodyOr(response, ""));
-            }
-        }
+        api.executeSuccessfully(
+                "post merge request line comment",
+                api.postJson(
+                        url,
+                        api.objectMapper().writeValueAsString(payload)));
     }
 
     public List<Map<String, Object>> listNotes(
