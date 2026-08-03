@@ -5,24 +5,82 @@ Supports batch embeddings for efficient processing.
 """
 
 import asyncio
+from contextlib import nullcontext
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import os
+import threading
+import time
 from typing import Any, List, Optional
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from openai import OpenAI
 import logging
 
 from ..models.config import get_embedding_dim_for_model
+from .coordination import RedisPermitPool
 from .ollama_embedding import EmbeddingError
 
 logger = logging.getLogger(__name__)
 
 # Batch size for embedding requests (OpenAI/OpenRouter limit is typically 2048)
-EMBEDDING_BATCH_SIZE = int(os.getenv("OPENROUTER_BATCH_SIZE", "100"))
+EMBEDDING_BATCH_SIZE = int(os.getenv("OPENROUTER_BATCH_SIZE", "50"))
 MAX_CHARS = int(os.getenv("OPENROUTER_MAX_CHARS", "24000"))
 OPENROUTER_APP_HEADERS = {
     "HTTP-Referer": "https://codecrow.cloud",
     "X-Title": "CodeCrow AI",
 }
+
+
+class _AdaptiveConcurrencyGate:
+    """Reduce live requests after overload and recover after stable success."""
+
+    def __init__(self, limit: int, recovery_successes: int = 8):
+        self.maximum = max(1, limit)
+        self.limit = self.maximum
+        self.recovery_successes = max(1, recovery_successes)
+        self.active = 0
+        self.successes = 0
+        self.condition = threading.Condition()
+
+    def acquire(self) -> None:
+        with self.condition:
+            while self.active >= self.limit:
+                self.condition.wait()
+            self.active += 1
+
+    def record_overload(self) -> None:
+        with self.condition:
+            previous = self.limit
+            self.limit = max(1, self.limit // 2)
+            self.successes = 0
+            if self.limit != previous:
+                logger.warning(
+                    "Reduced OpenRouter index concurrency from %s to %s",
+                    previous,
+                    self.limit,
+                )
+            self.condition.notify_all()
+
+    def release(self, *, successful: bool) -> None:
+        with self.condition:
+            self.active -= 1
+            if successful:
+                self.successes += 1
+                if (
+                    self.limit < self.maximum
+                    and self.successes >= self.recovery_successes
+                ):
+                    self.limit += 1
+                    self.successes = 0
+                    logger.info(
+                        "Recovered OpenRouter index concurrency to %s",
+                        self.limit,
+                    )
+            self.condition.notify_all()
+
+    def snapshot(self) -> tuple[int, int]:
+        with self.condition:
+            return self.limit, self.active
 
 
 class OpenRouterEmbedding(BaseEmbedding):
@@ -45,6 +103,11 @@ class OpenRouterEmbedding(BaseEmbedding):
         embed_batch_size: int = EMBEDDING_BATCH_SIZE,
         expected_dim: Optional[int] = None,
         max_chars: Optional[int] = None,
+        workload: str = "index",
+        provider_sort: Optional[str] = None,
+        index_concurrency: int = 8,
+        service_max_in_flight: int = 16,
+        redis_url: str = "redis://redis:6379/1",
         **kwargs: Any
     ):
         # Pass embed_batch_size to parent class so get_text_embedding_batch uses correct batch size
@@ -77,14 +140,43 @@ class OpenRouterEmbedding(BaseEmbedding):
             "embed_batch_size": embed_batch_size,
             "embedding_dim": embedding_dim,
             "max_chars": max_chars if max_chars is not None else MAX_CHARS,
+            "workload": workload,
+            "provider_sort": provider_sort,
+            "index_concurrency": max(1, index_concurrency),
+            "service_max_in_flight": max(1, service_max_in_flight),
         })
+
+        object.__setattr__(
+            self,
+            "_adaptive_gate",
+            _AdaptiveConcurrencyGate(index_concurrency)
+            if workload == "index"
+            else None,
+        )
+        object.__setattr__(
+            self,
+            "_permit_pool",
+            RedisPermitPool(
+                redis_url,
+                service_max_in_flight,
+                permit_seconds=max(
+                    60,
+                    int(timeout) * (max_retries + 1) + 60,
+                ),
+                acquire_timeout_seconds=min(30.0, max(1.0, timeout)),
+            )
+            if workload == "index"
+            else None,
+        )
 
         # Initialize OpenAI client pointed at OpenRouter
         object.__setattr__(self, '_client', OpenAI(
             api_key=api_key,
             base_url=api_base,
             timeout=timeout,
-            max_retries=max_retries,
+            # Retry explicitly so every rejected attempt is observable and
+            # can reduce indexing concurrency. All retries retain the batch.
+            max_retries=0,
             default_headers=OPENROUTER_APP_HEADERS,
         ))
 
@@ -96,6 +188,9 @@ class OpenRouterEmbedding(BaseEmbedding):
             if hasattr(self, '_client') and self._client:
                 self._client.close()
                 logger.info("OpenRouter embedding client closed")
+            permit_pool = getattr(self, "_permit_pool", None)
+            if permit_pool is not None:
+                permit_pool.close()
         except Exception as e:
             logger.warning(f"Error closing OpenRouter client: {e}")
 
@@ -107,6 +202,174 @@ class OpenRouterEmbedding(BaseEmbedding):
     def model(self) -> str:
         """Get the model name."""
         return self._config["model"]
+
+    @staticmethod
+    def _status_code(exception: Exception) -> Optional[int]:
+        status_code = getattr(exception, "status_code", None)
+        if isinstance(status_code, int):
+            return status_code
+        response = getattr(exception, "response", None)
+        status_code = getattr(response, "status_code", None)
+        return status_code if isinstance(status_code, int) else None
+
+    @classmethod
+    def _is_overload(cls, exception: Exception) -> bool:
+        status_code = cls._status_code(exception)
+        if status_code in {408, 409, 425, 429, 529} or (
+            status_code is not None and 500 <= status_code <= 599
+        ):
+            return True
+        name = type(exception).__name__.casefold()
+        message = str(exception).casefold()
+        return any(
+            marker in name or marker in message
+            for marker in ("timeout", "connection", "rate limit", "overload")
+        )
+
+    @staticmethod
+    def _retry_after_seconds(exception: Exception, attempt: int) -> float:
+        """Respect provider retry guidance, with bounded exponential fallback."""
+        response = getattr(exception, "response", None)
+        headers = getattr(response, "headers", None) or {}
+        retry_after_ms = headers.get("retry-after-ms")
+        if retry_after_ms is not None:
+            try:
+                return min(60.0, max(0.0, float(retry_after_ms) / 1000.0))
+            except (TypeError, ValueError):
+                pass
+        retry_after = headers.get("retry-after")
+        if retry_after is not None:
+            try:
+                return min(60.0, max(0.0, float(retry_after)))
+            except (TypeError, ValueError):
+                try:
+                    retry_at = parsedate_to_datetime(str(retry_after))
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=timezone.utc)
+                    return min(
+                        60.0,
+                        max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds()),
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    pass
+        return min(8.0, 0.5 * (2 ** attempt))
+
+    def _request_embeddings(self, input_value):
+        """Issue one measured request through routing and capacity controls."""
+        gate = getattr(self, "_adaptive_gate", None)
+        pool = getattr(self, "_permit_pool", None)
+        if gate is not None:
+            gate.acquire()
+        started = time.perf_counter()
+        successful = False
+        try:
+            extra_body = None
+            provider_sort = self._config.get("provider_sort")
+            if provider_sort and provider_sort != "price":
+                extra_body = {"provider": {"sort": provider_sort}}
+            request_kwargs = {
+                "input": input_value,
+                "model": self._config["model"],
+            }
+            if extra_body is not None:
+                request_kwargs["extra_body"] = extra_body
+            text_count = len(input_value) if isinstance(input_value, list) else 1
+            char_count = (
+                sum(len(value) for value in input_value)
+                if isinstance(input_value, list)
+                else len(input_value)
+            )
+            max_retries = max(0, int(self._config.get("max_retries", 0)))
+            for attempt in range(max_retries + 1):
+                permit_started = time.perf_counter()
+                capacity_wait_ms = 0
+                provider_duration_ms = 0
+                provider_started = None
+                try:
+                    with pool.permit() if pool is not None else nullcontext():
+                        capacity_wait_ms = round(
+                            (time.perf_counter() - permit_started) * 1000
+                        )
+                        provider_started = time.perf_counter()
+                        response = self._client.embeddings.create(**request_kwargs)
+                        provider_duration_ms = round(
+                            (time.perf_counter() - provider_started) * 1000
+                        )
+                    elapsed = time.perf_counter() - started
+                    usage = getattr(response, "usage", None)
+                    token_count = (
+                        getattr(usage, "total_tokens", None) if usage else None
+                    )
+                    model_extra = getattr(response, "model_extra", None) or {}
+                    concurrency_limit, active_requests = (
+                        gate.snapshot() if gate is not None else (None, None)
+                    )
+                    successful = True
+                    logger.info(
+                        "OpenRouter embedding request completed workload=%s "
+                        "texts=%s chars=%s duration_ms=%s provider_duration_ms=%s "
+                        "capacity_wait_ms=%s provider=%s request_id=%s tokens=%s "
+                        "retry_count=%s concurrency_limit=%s active_requests=%s",
+                        self._config.get("workload", "index"),
+                        text_count,
+                        char_count,
+                        round(elapsed * 1000),
+                        provider_duration_ms,
+                        capacity_wait_ms,
+                        model_extra.get("provider", "unknown"),
+                        getattr(response, "_request_id", None),
+                        token_count,
+                        attempt,
+                        concurrency_limit,
+                        active_requests,
+                    )
+                    return response
+                except Exception as exception:
+                    if provider_started is not None:
+                        provider_duration_ms = round(
+                            (time.perf_counter() - provider_started) * 1000
+                        )
+                    overloaded = self._is_overload(exception)
+                    if overloaded and gate is not None:
+                        gate.record_overload()
+                    concurrency_limit, active_requests = (
+                        gate.snapshot() if gate is not None else (None, None)
+                    )
+                    will_retry = overloaded and attempt < max_retries
+                    retry_after = (
+                        self._retry_after_seconds(exception, attempt)
+                        if will_retry
+                        else None
+                    )
+                    logger.warning(
+                        "OpenRouter embedding request attempt failed workload=%s "
+                        "texts=%s chars=%s duration_ms=%s provider_duration_ms=%s "
+                        "capacity_wait_ms=%s status=%s "
+                        "overload=%s error_type=%s attempt=%s/%s "
+                        "will_retry=%s retry_after_ms=%s concurrency_limit=%s "
+                        "active_requests=%s",
+                        self._config.get("workload", "index"),
+                        text_count,
+                        char_count,
+                        round((time.perf_counter() - started) * 1000),
+                        provider_duration_ms,
+                        capacity_wait_ms,
+                        self._status_code(exception),
+                        overloaded,
+                        type(exception).__name__,
+                        attempt + 1,
+                        max_retries + 1,
+                        will_retry,
+                        round(retry_after * 1000) if retry_after is not None else None,
+                        concurrency_limit,
+                        active_requests,
+                    )
+                    if not will_retry:
+                        raise
+                    time.sleep(retry_after)
+        finally:
+            if gate is not None:
+                gate.release(successful=successful)
 
     def _get_query_embedding(self, query: str) -> List[float]:
         """Get embedding for a query text."""
@@ -158,10 +421,7 @@ class OpenRouterEmbedding(BaseEmbedding):
 
         try:
             # Send all texts in a single API call
-            response = self._client.embeddings.create(
-                input=processed_texts,
-                model=self._config["model"]
-            )
+            response = self._request_embeddings(processed_texts)
 
             # Validate response
             if not response.data or len(response.data) != len(processed_texts):
@@ -188,9 +448,9 @@ class OpenRouterEmbedding(BaseEmbedding):
             raise
         except Exception as e:
             logger.error(f"Error getting batch embeddings from OpenRouter: {e}")
-            logger.warning("Falling back to individual embedding requests")
-            # Fall back to individual processing — failures propagate
-            return [self._get_embedding(t) for t in processed_texts]
+            # Transient provider failures stay as batch failures. PointOperations
+            # subdivides only provider-rejected request shapes (400/413/422).
+            raise
 
     def _get_embedding(self, text: str) -> List[float]:
         """Get embedding from OpenRouter API.
@@ -216,10 +476,7 @@ class OpenRouterEmbedding(BaseEmbedding):
             raise EmbeddingError("Text became empty after stripping — refusing to produce zero vector")
 
         try:
-            response = self._client.embeddings.create(
-                input=text,
-                model=self._config["model"]
-            )
+            response = self._request_embeddings(text)
 
             # Validate response
             if not response.data or len(response.data) == 0:
@@ -243,7 +500,7 @@ class OpenRouterEmbedding(BaseEmbedding):
             raise
         except Exception as e:
             logger.error(f"Error getting embedding from OpenRouter: {e}")
-            logger.error(f"Text length: {len(text) if text else 0}, Text preview: {text[:100] if text else 'None'}...")
+            logger.error("Rejected OpenRouter embedding text length: %s", len(text))
             raise
 
     async def _aget_query_embedding(self, query: str) -> List[float]:

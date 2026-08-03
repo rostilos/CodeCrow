@@ -22,7 +22,6 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.persistence.repository.taskmanagement.TaskManagementConnectionRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.QaDocDocumentService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler.WebhookResult;
@@ -59,7 +58,6 @@ class QaDocCommandProcessorTest {
     @Mock private CodeAnalysisService codeAnalysisService;
     @Mock private TaskManagementClient taskManagementClient;
     @Mock private VcsClientProvider vcsClientProvider;
-    @Mock private VcsServiceFactory vcsServiceFactory;
     @Mock private QaDocStateRepository qaDocStateRepository;
     @Mock private QaDocDocumentService qaDocDocumentService;
     @Mock private PrFileEnrichmentService enrichmentService;
@@ -86,7 +84,6 @@ class QaDocCommandProcessorTest {
                 qaDocGenerationService,
                 codeAnalysisService,
                 vcsClientProvider,
-                vcsServiceFactory,
                 qaDocStateRepository,
                 qaDocDocumentService,
                 enrichmentService,

@@ -1,6 +1,5 @@
 package org.rostilos.codecrow.analysisengine.processor.analysis;
 
-import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.commitgraph.dag.CommitRangeContext;
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
@@ -21,7 +20,6 @@ import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestStatusSyncService;
 import org.rostilos.codecrow.commitgraph.service.CommitCoverageService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
@@ -195,9 +193,8 @@ public class BranchAnalysisProcessor {
 					"Branch analysis started for branch: " + request.getTargetBranchName());
 
 			VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
-			OkHttpClient client = vcsClientProvider.getHttpClient(vcsRepoInfoImpl.vcsConnection());
+			VcsClient client = vcsClientProvider.getClient(vcsRepoInfoImpl.vcsConnection());
 			EVcsProvider provider = ProjectVcsInfoRetriever.getVcsProvider(project);
-			VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
 
 			// ── Commit range resolution ───────────────────────────────────
 			CommitRangeContext rangeCtx = branchCommitService.resolveCommitRange(project,
@@ -209,7 +206,7 @@ public class BranchAnalysisProcessor {
 			EventNotificationEmitter.emitStatus(consumer, "fetching_diff", "Fetching diff for analysis");
 
 			// ── PR number resolution ─────────────────────────────────────────
-			Long prNumber = resolvePrNumber(request, operationsService, client, vcsRepoInfoImpl);
+			Long prNumber = resolvePrNumber(request, client, vcsRepoInfoImpl);
 			List<String> prLookupCommitCandidates = new ArrayList<>();
 			if (request.getCommitHash() != null && !request.getCommitHash().isBlank()) {
 				prLookupCommitCandidates.add(request.getCommitHash());
@@ -242,8 +239,8 @@ public class BranchAnalysisProcessor {
 						String sourceParent = headCommits.get(0).parentHashes().get(1);
 						prLookupCommitCandidates.add(sourceParent);
 						try {
-							prNumber = operationsService.findPullRequestForCommit(
-									client, vcsRepoInfoImpl.workspace(),
+							prNumber = client.findPullRequestForCommit(
+									vcsRepoInfoImpl.workspace(),
 									vcsRepoInfoImpl.repoSlug(), sourceParent);
 							if (isValidPrNumber(prNumber)) {
 								log.info("Found PR #{} from merge commit's second parent {}",
@@ -309,7 +306,7 @@ public class BranchAnalysisProcessor {
 			// ── Multi-tier diff strategy ─────────────────────────────────────
 			Long diffPrNumber = mergedPrNumbers.size() > 1 ? null : prNumber;
 			String repositoryDiff = branchDiffFetcher.fetchDiff(request, existingBranchOpt.orElse(null), rangeCtx,
-					operationsService, client, vcsRepoInfoImpl, diffPrNumber, unanalyzedCommits);
+					client, vcsRepoInfoImpl, diffPrNumber, unanalyzedCommits);
 			String rawDiff = AnalysisScopeFilter.filterDiff(repositoryDiff, project);
 
 			Set<String> changedFiles = DiffParsingUtils.parseFilePathsFromDiff(rawDiff);
@@ -399,13 +396,14 @@ public class BranchAnalysisProcessor {
 			EventNotificationEmitter.emitStatus(consumer, "analyzing_files",
 					"Analyzing " + changedFiles.size() + " changed files");
 
-			Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
+			BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
+					branchFileOperationsService.downloadBranchFileSnapshot(
 					vcsRepoInfoImpl, request.getCommitHash(), changedFiles);
 			log.info("Branch archive: {} files extracted for {} changed files",
-					archiveContents.size(), changedFiles.size());
+					branchFileSnapshot.contents().size(), changedFiles.size());
 
 			Set<String> existingFiles = branchFileOperationsService.updateBranchFiles(
-					changedFiles, project, request.getTargetBranchName(), archiveContents);
+					changedFiles, project, request.getTargetBranchName(), branchFileSnapshot);
 
 			Branch branch = branchFileOperationsService.createOrUpdateProjectBranch(
 					project, request, existingBranchOpt.orElse(null));
@@ -428,25 +426,19 @@ public class BranchAnalysisProcessor {
 
 			branchIssueReconciliationService.reanalyzeCandidateIssues(
 					changedFiles, existingFiles, refreshedBranch, project,
-					request, consumer, archiveContents, rawDiff);
+					request, consumer, branchFileSnapshot.contents(), rawDiff,
+					branchFileSnapshot.allowContentApiFallback());
 
-			// ── Deterministic sweep: catch stale issues in non-diff files ────
-			// The normal reconciliation above only checks files in the diff.
-			// The sweep checks ALL remaining unresolved issues that have reliable
-			// content anchors (codeSnippet/lineHash). Zero AI cost.
-			int sweptCount = directPushLimited ? 0
-					: branchIssueReconciliationService.sweepDeterministicResolutions(
-							changedFiles, refreshedBranch, project, request, archiveContents);
-			if (directPushLimited) {
-				log.info("Skipping all-files deterministic sweep for oversized direct push "
-						+ "(project={}, branch={})", project.getId(), request.getTargetBranchName());
-			}
-			if (sweptCount > 0) {
-				refreshedBranch = refreshAndSaveIssueCounts(refreshedBranch);
-			}
+			// An incremental push can only change issues in the files present in its
+			// diff. Repository-wide issue checks belong to the explicit full
+			// reconciliation operation; doing them here caused a sequential VCS read
+			// for every unrelated unresolved file and could hold a one-file job for
+			// nearly an hour.
+			EventNotificationEmitter.emitStatus(consumer, "finalizing_branch_state",
+					"Saving changed-file reconciliation results");
 
 			branchFileOperationsService.updateFileSnapshotsForBranch(existingFiles, project, request,
-					archiveContents);
+					branchFileSnapshot);
 
 			Branch branchForVerify = branchRepository.findByProjectIdAndBranchName(
 					project.getId(), request.getTargetBranchName()).orElse(refreshedBranch);
@@ -502,10 +494,11 @@ public class BranchAnalysisProcessor {
 			AnalysisScopeFilter.retainIncluded(branchFiles, project);
 
 			if (!branchFiles.isEmpty()) {
-				Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
+				BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
+						branchFileOperationsService.downloadBranchFileSnapshot(
 						vcsRepoInfoImpl, request.getCommitHash(), branchFiles);
 				branchFileOperationsService.updateFileSnapshotsForBranch(
-						branchFiles, project, request, archiveContents);
+						branchFiles, project, request, branchFileSnapshot);
 			}
 		} catch (Exception snapEx) {
 			log.warn("Failed to refresh file snapshots on skip path (non-critical): {}",
@@ -522,16 +515,15 @@ public class BranchAnalysisProcessor {
 	 * This handles cases where branch analysis is triggered by push events.
 	 */
 	private Long resolvePrNumber(BranchProcessRequest request,
-			VcsOperationsService operationsService,
-			OkHttpClient client, VcsRepoInfoImpl vcsRepoInfoImpl) {
+			VcsClient client, VcsRepoInfoImpl vcsRepoInfoImpl) {
 		Long prNumber = request.getSourcePrNumber();
 		if (!isValidPrNumber(prNumber)) {
 			prNumber = null;
 		}
 		if (prNumber == null && request.getCommitHash() != null) {
 			try {
-				prNumber = operationsService.findPullRequestForCommit(
-						client, vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(),
+				prNumber = client.findPullRequestForCommit(
+						vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(),
 						request.getCommitHash());
 				if (isValidPrNumber(prNumber)) {
 					log.info("Found PR #{} for commit {} via API lookup", prNumber,
@@ -763,10 +755,11 @@ public class BranchAnalysisProcessor {
 			// computation
 			try {
 				VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
-				Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
+				BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
+						branchFileOperationsService.downloadBranchFileSnapshot(
 						vcsRepoInfoImpl, request.getCommitHash(), changedFiles);
-				if (!archiveContents.isEmpty()) {
-					fileContents = archiveContents;
+				if (!branchFileSnapshot.contents().isEmpty()) {
+					fileContents = branchFileSnapshot.contents();
 				}
 			} catch (Exception e) {
 				log.warn("Failed to download archive for direct push analysis file contents (non-critical): {}",
@@ -884,12 +877,21 @@ public class BranchAnalysisProcessor {
 						scopedOnly
 								? "Updating RAG index for changed files with previous issues only"
 								: "Updating RAG index with changed files for main branch push");
-				ragOperationsService.triggerIncrementalUpdate(
+				boolean ragUpdated = ragOperationsService.triggerIncrementalUpdate(
 						project, targetBranch, request.getCommitHash(), commitDiff, consumer);
+				if (!ragUpdated) {
+					log.warn("RAG incremental update did not complete for project={}, branch={}, commit={}",
+							project.getId(), targetBranch, request.getCommitHash());
+					return;
+				}
 			} else {
 				log.info("Non-main branch push - updating branch index for project={}, branch={}",
 						project.getId(), targetBranch);
-				ragOperationsService.updateBranchIndex(project, targetBranch, consumer);
+				if (!ragOperationsService.updateBranchIndex(project, targetBranch, consumer)) {
+					log.warn("RAG branch index update did not complete for project={}, branch={}",
+							project.getId(), targetBranch);
+					return;
+				}
 			}
 
 			log.info("RAG update completed for project={}, branch={}, commit={}",

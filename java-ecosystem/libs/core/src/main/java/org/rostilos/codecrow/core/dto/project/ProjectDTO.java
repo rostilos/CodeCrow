@@ -10,6 +10,7 @@ import org.rostilos.codecrow.core.model.project.config.RagConfig;
 import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
+import org.rostilos.codecrow.core.model.vcs.config.gitlab.GitLabConfig;
 
 import java.util.List;
 
@@ -21,6 +22,7 @@ public record ProjectDTO(
         Long vcsConnectionId,
         String vcsConnectionType,
         String vcsProvider,
+        String vcsBaseUrl,
         String projectVcsWorkspace,
         String projectVcsRepoSlug,
         Long aiConnectionId,
@@ -46,6 +48,7 @@ public record ProjectDTO(
         Long vcsConnectionId = null;
         String vcsConnectionType = null;
         String vcsProvider = null;
+        String vcsBaseUrl = null;
         String vcsWorkspace = null;
         String repoSlug = null;
 
@@ -61,6 +64,11 @@ public record ProjectDTO(
                 }
                 if (conn.getProviderType() != null) {
                     vcsProvider = conn.getProviderType().name();
+                    if (conn.getProviderType() == org.rostilos.codecrow.core.model.vcs.EVcsProvider.GITLAB) {
+                        vcsBaseUrl = conn.getConfiguration() instanceof GitLabConfig gitLabConfig
+                                ? gitLabConfig.effectiveBaseUrl()
+                                : GitLabConfig.DEFAULT_BASE_URL;
+                    }
                 }
             }
             vcsWorkspace = vcsInfo.getRepoWorkspace();
@@ -165,6 +173,7 @@ public record ProjectDTO(
                 vcsConnectionId,
                 vcsConnectionType,
                 vcsProvider,
+                vcsBaseUrl,
                 vcsWorkspace,
                 repoSlug,
                 aiConnectionId,

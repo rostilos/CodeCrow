@@ -309,6 +309,15 @@ public class ProviderWebhookController {
 
         // Create a Job for tracking
         Job job = createJobForWebhook(payload, project);
+        try {
+            job = jobService.queueWebhookJob(job, objectMapper.writeValueAsString(payload));
+        } catch (Exception dispatchPersistenceError) {
+            jobService.failJob(job, "Could not persist webhook work for processing: "
+                    + dispatchPersistenceError.getMessage());
+            throw new IllegalStateException(
+                    "Webhook was not accepted because its work item could not be persisted",
+                    dispatchPersistenceError);
+        }
         
         // Return immediately with job link
         String jobUrl = buildJobUrl(project, job);
@@ -318,13 +327,20 @@ public class ProviderWebhookController {
                 job.getExternalId(), payload.eventType());
         
         // Process webhook asynchronously with proper transactional context
-        webhookAsyncProcessor.processWebhookAsync(
-            provider, 
-            project.getId(), 
-            payload, 
-            handlerOpt.get(), 
-            job
-        );
+        try {
+            webhookAsyncProcessor.processWebhookAsync(
+                provider,
+                project.getId(),
+                payload,
+                handlerOpt.get(),
+                job
+            );
+        } catch (java.util.concurrent.RejectedExecutionException saturated) {
+            log.warn("Webhook workers are saturated; job {} remains durably queued",
+                    job.getExternalId());
+            jobService.info(job, "queued",
+                    "Review is waiting for pipeline worker capacity");
+        }
         
         log.info("Webhook dispatched to async processor: job={}", job.getExternalId());
         

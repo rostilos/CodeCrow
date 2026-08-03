@@ -254,6 +254,31 @@ class ASTCodeSplitter:
         
         return all_nodes
 
+    def split_documents_resilient(
+        self,
+        documents: List[LlamaDocument],
+        capabilities: Any = None,
+    ) -> tuple[List[TextNode], tuple[str, ...]]:
+        """Split documents independently and quarantine file-local failures."""
+        nodes: List[TextNode] = []
+        skipped_paths: list[str] = []
+        for document in documents:
+            path = document.metadata.get("path", "unknown")
+            try:
+                nodes.extend(self.split_documents(
+                    [document],
+                    capabilities=capabilities,
+                ))
+            except MemoryError:
+                raise
+            except Exception:
+                skipped_paths.append(path)
+                logger.exception(
+                    "Skipping repository file that failed parsing/enrichment: %s",
+                    path,
+                )
+        return nodes, tuple(skipped_paths)
+
     @staticmethod
     def _attach_syntax_metadata(
         nodes: List[TextNode],

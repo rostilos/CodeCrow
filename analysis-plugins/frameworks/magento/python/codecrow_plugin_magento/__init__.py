@@ -11,6 +11,7 @@ from codecrow_plugins import (
     ValidationResult,
 )
 
+from .architecture import is_magento_config_xml
 from .repository import MagentoRepositorySession
 
 
@@ -101,7 +102,7 @@ class MagentoPlugin:
         ):
             return PluginOutcome.handled(FileDisposition.ARCHITECTURE_ONLY)
         if normalized.endswith(".xml") and (
-            "/etc/" in normalized
+            is_magento_config_xml(path)
             or "/layout/" in normalized
             or "/ui_component/" in normalized
         ):

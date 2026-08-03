@@ -98,12 +98,9 @@ def load_repository_snapshots(client, collection_name: str, branch: str):
             identity_initialized = True
         elif (
             plugin_ids != candidate_ids
-            or fingerprint != candidate_fingerprint
-            or descriptor_fingerprint != candidate_descriptor_fingerprint
-            or implementation_fingerprint != candidate_implementation_fingerprint
         ):
             raise IncrementalIndexPreconditionError(
-                "repository snapshot capability metadata is inconsistent; "
+                "repository snapshot plugin selection is inconsistent; "
                 "fully reindex the branch"
             )
 
@@ -196,6 +193,7 @@ def load_repository_facts(client, collection_name: str, branch: str):
         )
 
     identity = None
+    plugin_ids_identity = None
     for payload in ordered:
         candidate = (
             tuple(payload.get("plugin_ids", ())),
@@ -205,9 +203,10 @@ def load_repository_facts(client, collection_name: str, branch: str):
         )
         if identity is None:
             identity = candidate
-        elif identity != candidate:
+            plugin_ids_identity = candidate[0]
+        elif plugin_ids_identity != candidate[0]:
             raise IncrementalIndexPreconditionError(
-                "repository detection facts capability metadata is inconsistent; "
+                "repository detection facts plugin selection is inconsistent; "
                 "fully reindex the branch"
             )
 
@@ -267,10 +266,6 @@ def load_branch_capability_metadata(client, collection_name: str, branch: str):
             ):
                 raise RuntimeError(
                     "indexed branch capability metadata has invalid plugin identities"
-                )
-            if not isinstance(candidate_fingerprint, str) or not candidate_fingerprint:
-                raise RuntimeError(
-                    "indexed branch capability metadata has no fingerprint"
                 )
             return (
                 tuple(candidate_ids),

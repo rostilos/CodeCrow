@@ -83,26 +83,37 @@ SAMPLE
   fi
 done
 
-# New Relic config for inference-orchestrator (Python agent)
-NR_INI="$DEPLOY_DIR/config/inference-orchestrator/newrelic.ini"
-if [ ! -f "$NR_INI" ]; then
-  cat > "$NR_INI" <<'SAMPLE'
+# New Relic configs for Python services (different app_name per service)
+for nr_svc in inference-orchestrator rag-pipeline; do
+  case "$nr_svc" in
+    inference-orchestrator)
+      NR_APP_NAME="CodeCrow Inference Orchestrator"
+      ;;
+    rag-pipeline)
+      NR_APP_NAME="CodeCrow RAG Pipeline"
+      ;;
+  esac
+
+  NR_INI="$DEPLOY_DIR/config/$nr_svc/newrelic.ini"
+  if [ ! -f "$NR_INI" ]; then
+    cat > "$NR_INI" <<SAMPLE
 # ============================================================================
-# New Relic Python agent config for inference-orchestrator
+# New Relic Python agent config for ${nr_svc}
 # See https://docs.newrelic.com/docs/apm/agents/python-agent/configuration/python-agent-configuration/
 # Copy your newrelic.ini here with your license_key and app_name
 # ============================================================================
 [newrelic]
 license_key = REPLACE_WITH_YOUR_LICENSE_KEY
-app_name = CodeCrow Inference Orchestrator
+app_name = ${NR_APP_NAME}
 monitor_mode = true
 log_level = info
 SAMPLE
-  echo "  ✓ Created placeholder: inference-orchestrator/newrelic.ini"
-  echo "    → EDIT THIS FILE with your New Relic license key!"
-else
-  echo "  ○ inference-orchestrator/newrelic.ini already exists (skipped)"
-fi
+    echo "  ✓ Created placeholder: $nr_svc/newrelic.ini"
+    echo "    → EDIT THIS FILE with your New Relic license key!"
+  else
+    echo "  ○ $nr_svc/newrelic.ini already exists (skipped)"
+  fi
+done
 
 # Docker Compose .env (DB creds, internal secrets — never committed to git)
 ENV_FILE="$DEPLOY_DIR/.env"
@@ -155,7 +166,8 @@ echo "      ├── inference-orchestrator/"
 echo "      │   ├── .env                    ← YOUR secrets"
 echo "      │   └── newrelic.ini             ← YOUR New Relic Python agent config"
 echo "      └── rag-pipeline/"
-echo "          └── .env                    ← YOUR secrets"
+echo "          ├── .env                    ← YOUR secrets"
+echo "          └── newrelic.ini             ← YOUR New Relic Python agent config"
 echo ""
 echo "  NEXT STEPS:"
 echo "  1. Edit all config files above with your actual values"

@@ -166,7 +166,9 @@ services:
       ANALYSIS_MAX_TOTAL_TOKENS: ${ANALYSIS_MAX_TOTAL_TOKENS:-1000000}
       PR_ENRICHMENT_MAX_FILE_SIZE_BYTES: ${PR_ENRICHMENT_MAX_FILE_SIZE_BYTES:-5242880}
       PR_ENRICHMENT_MAX_TOTAL_SIZE_BYTES: ${PR_ENRICHMENT_MAX_TOTAL_SIZE_BYTES:-20971520}
+      CODECROW_VCS_FILE_RETRIEVAL_ARCHIVE_THRESHOLD: ${VCS_FILE_RETRIEVAL_ARCHIVE_THRESHOLD:-25}
       ANALYSIS_QUEUE_INACTIVITY_TIMEOUT_MINUTES: ${ANALYSIS_QUEUE_INACTIVITY_TIMEOUT_MINUTES:-15}
+      ANALYSIS_QUEUE_ADMISSION_TIMEOUT_MINUTES: ${ANALYSIS_QUEUE_ADMISSION_TIMEOUT_MINUTES:-5}
       ANALYSIS_PROMPT_DRY_RUN_ENABLED: ${ANALYSIS_PROMPT_DRY_RUN_ENABLED:-false}
       ANALYSIS_PROMPT_DRY_RUN_PROJECT_IDS: ${ANALYSIS_PROMPT_DRY_RUN_PROJECT_IDS:-}
       LOGGING_FILE_NAME: /app/logs/codecrow-pipeline-agent.log
@@ -176,6 +178,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      inference-orchestrator:
         condition: service_healthy
       fix-permissions:
         condition: service_completed_successfully
@@ -203,9 +207,12 @@ services:
     ports:
       - "127.0.0.1:${INFERENCE_ORCHESTRATOR_HOST_PORT:-8000}:8000"
     depends_on:
-      - rag-pipeline
-      - web-server
-      - redis
+      rag-pipeline:
+        condition: service_healthy
+      web-server:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       # API access for Platform MCP (internal network only)
       CODECROW_API_URL: http://codecrow-web-application:8081
@@ -214,6 +221,7 @@ services:
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       ANALYSIS_QUEUE_HEARTBEAT_SECONDS: ${ANALYSIS_QUEUE_HEARTBEAT_SECONDS:-30}
+      ANALYSIS_CONSUMER_HEARTBEAT_SECONDS: ${ANALYSIS_CONSUMER_HEARTBEAT_SECONDS:-5}
       ANALYSIS_PROMPT_DRY_RUN_ENABLED: ${ANALYSIS_PROMPT_DRY_RUN_ENABLED:-false}
       ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_PER_FILE: ${ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_PER_FILE:-6}
       ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_MAX_TOTAL: ${ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_MAX_TOTAL:-24}
@@ -232,6 +240,12 @@ services:
       - ./config/inference-orchestrator/.env:/app/.env
       - ./config/inference-orchestrator/newrelic.ini:/app/newrelic.ini:ro
       - inference_orchestrator_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -253,6 +267,8 @@ services:
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
       REDIS_URL: redis://redis:6379/1
+      # New Relic APM — points to the mounted config file
+      NEW_RELIC_CONFIG_FILE: /app/newrelic.ini
     ports:
       - "127.0.0.1:${RAG_PIPELINE_HOST_PORT:-8001}:8001"
     depends_on:
@@ -268,6 +284,7 @@ services:
       - source_code_tmp:/tmp
       - rag_logs:/app/logs
       - ./config/rag-pipeline/.env:/app/.env
+      - ./config/rag-pipeline/newrelic.ini:/app/newrelic.ini:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s

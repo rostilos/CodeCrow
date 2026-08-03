@@ -7,6 +7,7 @@ with Qdrant and Redis mocked at the boundary.
 import os
 import sys
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 # ── Ensure src/ is on sys.path ────────────────────────────────
@@ -20,6 +21,11 @@ os.environ.setdefault("QDRANT_URL", "http://localhost:6333")
 os.environ.setdefault("EMBEDDING_PROVIDER", "ollama")
 os.environ.setdefault("OLLAMA_BASE_URL", "http://localhost:11434")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/1")
+
+
+async def _run_in_threadpool_inline(function, *args, **kwargs):
+    """Execute mocked sync endpoints without an environment-owned worker pool."""
+    return function(*args, **kwargs)
 
 
 @pytest.fixture(scope="session")
@@ -63,7 +69,11 @@ def rag_app(_mock_qdrant, _mock_embedding):
     with patch("rag_pipeline.models.config.RAGConfig") as MockConfig, \
          patch("rag_pipeline.core.index_manager.RAGIndexManager") as MockIM, \
          patch("rag_pipeline.services.query_service.RAGQueryService") as MockQS, \
-         patch("rag_pipeline.server.rag_queue_consumer.RAGQueueConsumer") as MockRQC:
+         patch("rag_pipeline.server.rag_queue_consumer.RAGQueueConsumer") as MockRQC, \
+         patch(
+             "fastapi.routing.run_in_threadpool",
+             new=_run_in_threadpool_inline,
+         ):
 
         mock_config = MagicMock()
         mock_config.qdrant_url = "http://localhost:6333"
@@ -76,8 +86,22 @@ def rag_app(_mock_qdrant, _mock_embedding):
         MockConfig.return_value = mock_config
 
         mock_im = MagicMock()
+        mutation_context = MagicMock()
+        mutation_context.__enter__.return_value = SimpleNamespace(
+            assert_owned=MagicMock()
+        )
+        mock_im.project_mutation.return_value = mutation_context
         mock_im.embed_model = _mock_embedding
         mock_im.qdrant_client = _mock_qdrant
+        mock_im.splitter.split_documents_resilient.side_effect = (
+            lambda documents, capabilities=None: (
+                mock_im.splitter.split_documents(
+                    documents,
+                    capabilities=capabilities,
+                ),
+                (),
+            )
+        )
         MockIM.return_value = mock_im
 
         mock_qs = MagicMock()

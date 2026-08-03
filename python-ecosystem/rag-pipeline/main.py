@@ -1,10 +1,43 @@
 """
 Main entry point for the RAG Pipeline API server
 """
+
+import os as _os
+
+# Load deployment configuration before importing modules that read env vars at
+# import time. Keep this before New Relic and application imports.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(interpolate=False)
+except Exception as _dotenv_err:
+    print(f"[ENV-BOOT] ERROR loading .env: {_dotenv_err}", flush=True)
+
+# New Relic APM must be initialized before any application imports.
+_nr_config = _os.environ.get("NEW_RELIC_CONFIG_FILE")
+print(f"[NR-BOOT] NEW_RELIC_CONFIG_FILE = {_nr_config!r}", flush=True)
+if _nr_config:
+    _nr_exists = _os.path.exists(_nr_config)
+    print(f"[NR-BOOT] Config file exists: {_nr_exists}", flush=True)
+    if _nr_exists:
+        try:
+            import newrelic.agent
+            print(
+                f"[NR-BOOT] newrelic.agent imported, version={newrelic.version}",
+                flush=True,
+            )
+            newrelic.agent.initialize(_nr_config)
+            print(
+                "[NR-BOOT] newrelic.agent.initialize() completed successfully",
+                flush=True,
+            )
+        except Exception as _nr_err:
+            print(f"[NR-BOOT] ERROR during initialization: {_nr_err}", flush=True)
+else:
+    print("[NR-BOOT] Skipping — no config file env var set", flush=True)
+
 import os
 import sys
 import logging
-from dotenv import load_dotenv
 
 # Configure logging early
 logging.basicConfig(
@@ -12,7 +45,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-load_dotenv(interpolate=False)
 
 # In community/self-hosted mode, fetch embedding config from the Java web-server
 # before reading env vars. This is a no-op if CODECROW_WEB_SERVER_URL is not set.
@@ -101,5 +133,8 @@ if __name__ == "__main__":
         "rag_pipeline.api.api:app",
         host="0.0.0.0",
         port=8001,
-        workers=workers
+        workers=workers,
+        # New Relic exports a callable wrapper whose signature Uvicorn 0.27
+        # otherwise misclassifies as an ASGI2 application.
+        interface="asgi3",
     )

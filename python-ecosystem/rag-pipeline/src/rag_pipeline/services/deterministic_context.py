@@ -305,7 +305,7 @@ class DeterministicContextMixin:
             if normalize_repository_path(path)
         }
         branches = list(dict.fromkeys(branch for branch in branches if branch))
-        self._require_compatible_branches(collection_name, branches)
+        self._observe_branches(collection_name, branches)
         logger.info(f"Deterministic context: files={file_paths[:5]}, branches={branches}")
 
         # ── Build branch filter ──
@@ -835,7 +835,7 @@ class DeterministicContextMixin:
             if offset is not None:
                 kwargs["offset"] = offset
             page, next_offset = self.qdrant_client.scroll(**kwargs)
-            points.extend(self._filter_plugin_compatible_points(page))
+            points.extend(self._accept_stored_points(page))
             if next_offset is None:
                 return points, False
             offset_key = repr(next_offset)
@@ -858,7 +858,7 @@ class DeterministicContextMixin:
             target_branch_paths: set
     ) -> list:
         """Filter points to prioritize: PR-indexed > target branch > base branch."""
-        points = self._filter_plugin_compatible_points(points)
+        points = self._accept_stored_points(points)
         if not points:
             return points
 
@@ -942,7 +942,7 @@ class DeterministicContextMixin:
         ]
 
         results = sorted(
-            self._filter_plugin_compatible_points(results),
+            self._accept_stored_points(results),
             key=_point_sort_key,
         )
 

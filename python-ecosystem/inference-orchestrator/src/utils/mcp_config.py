@@ -66,7 +66,7 @@ class MCPConfigBuilder:
     def build_jvm_props(project_id: int, pull_request_id: int, workspace: str,
          repo_slug: str, oAuthClient: str = None, oAuthSecret: str = None, 
          access_token: str = None, max_allowed_tokens: int = None,
-         vcs_provider: str = None) -> Dict[str, str]:
+         vcs_provider: str = None, vcs_base_url: str = None) -> Dict[str, str]:
         """
         Build JVM properties dictionary from request parameters.
 
@@ -79,7 +79,8 @@ class MCPConfigBuilder:
             oAuthSecret: OAuth consumer secret (for OAUTH_MANUAL connections)
             access_token: Bearer token (for APP connections - used instead of oAuthClient/oAuthSecret)
             max_allowed_tokens: Optional per-request token limit to pass to the MCP server.
-            vcs_provider: VCS provider type (github, bitbucket_cloud) for MCP server selection.
+            vcs_provider: VCS provider type (github, bitbucket_cloud, gitlab) for MCP server selection.
+            vcs_base_url: GitLab instance root for self-managed GitLab.
 
         Returns:
             Dictionary of JVM properties
@@ -115,5 +116,7 @@ class MCPConfigBuilder:
         # VCS provider type for MCP server to select the correct client factory
         if vcs_provider is not None:
             jvm_props["vcs.provider"] = vcs_provider
+        if vcs_base_url is not None:
+            jvm_props["vcs.baseUrl"] = vcs_base_url
 
         return jvm_props

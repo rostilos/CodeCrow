@@ -1,30 +1,29 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-MCP_SERVERS_JAR_PATH="java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar"
-PLATFORM_MCP_JAR_PATH="java-ecosystem/mcp-servers/platform-mcp/target/codecrow-platform-mcp-1.0.jar"
 FRONTEND_DIR="frontend"
-JAVA_DIR="java-ecosystem"
 DOCKER_PATH="deployment"
 CONFIG_PATH="deployment/config"
+PYTHON_BOOTSTRAP="${PYTHON_BOOTSTRAP:-python3.11}"
+LOCAL_CI_VENV_ROOT="${CODECROW_CI_VENV_ROOT:-${TMPDIR:-/tmp}/codecrow-ci-python-${UID:-local}}"
 
 cd "$(dirname "$0")/../../"
 
-echo "--- 1. Synchronizing the pinned frontend submodule ---"
-git submodule update --init --recursive -- "$FRONTEND_DIR"
+echo "=========================================="
+echo "  CodeCrow local production build"
+echo "  Mirrors the CI/CD verification pipeline"
+echo "=========================================="
 
-PINNED_FRONTEND_COMMIT="$(git rev-parse "HEAD:$FRONTEND_DIR")"
+echo "--- 1. Synchronizing the frontend submodule with origin/main ---"
+git submodule update --init --recursive --remote -- "$FRONTEND_DIR"
+
 ACTUAL_FRONTEND_COMMIT="$(git -C "$FRONTEND_DIR" rev-parse HEAD)"
-if [ "$ACTUAL_FRONTEND_COMMIT" != "$PINNED_FRONTEND_COMMIT" ]; then
-    echo "Frontend submodule is not at the commit pinned by this checkout." >&2
-    exit 1
-fi
 FRONTEND_WORKTREE_STATUS="$(git -C "$FRONTEND_DIR" status --porcelain --untracked-files=normal)"
 if [ -n "$FRONTEND_WORKTREE_STATUS" ]; then
     echo "Frontend submodule has non-ignored local changes; refusing a non-reproducible production build." >&2
     exit 1
 fi
-echo "Frontend at pinned commit: $ACTUAL_FRONTEND_COMMIT"
+echo "Frontend at latest origin/main commit: $ACTUAL_FRONTEND_COMMIT"
 
 echo "--- 2. Injecting Environment Configurations ---"
 
@@ -38,30 +37,42 @@ echo "Copying web-frontend .env..."
 # Using the variable ensures we target the folder defined at the top
 cp "$CONFIG_PATH/web-frontend/.env" "$FRONTEND_DIR/.env"
 
-
-echo "--- 3. Building Java Artifacts (mvn clean package) ---"
-(cd "$JAVA_DIR" && mvn clean package)
-
-echo "--- 4. Assembling independently packaged Java plugins ---"
-python3 tools/assemble_java_plugins.py
-
-echo "--- 5. MCP Servers jar update ---"
-cp "$MCP_SERVERS_JAR_PATH" python-ecosystem/inference-orchestrator/src/codecrow-vcs-mcp-1.0.jar
-
-echo "--- 5.1. Platform MCP jar update ---"
-if [ -f "$PLATFORM_MCP_JAR_PATH" ]; then
-    cp "$PLATFORM_MCP_JAR_PATH" python-ecosystem/inference-orchestrator/src/codecrow-platform-mcp-1.0.jar
-    echo "Platform MCP JAR copied successfully."
-else
-    echo "Warning: Platform MCP JAR not found at $PLATFORM_MCP_JAR_PATH"
+if ! command -v "$PYTHON_BOOTSTRAP" >/dev/null 2>&1; then
+    echo "Python 3.11 is required to mirror GitHub Actions; '$PYTHON_BOOTSTRAP' was not found." >&2
+    exit 1
 fi
 
-echo "--- 6. Shutting down existing services cleanly ---"
+run_python_ci_group() {
+    local group="$1"
+    local venv_path="$LOCAL_CI_VENV_ROOT/$group"
+    local python_bin="$venv_path/bin/python"
+
+    echo "--- Python CI matrix: $group ---"
+    "$PYTHON_BOOTSTRAP" -m venv --clear "$venv_path"
+    PYTHON_BIN="$python_bin" \
+        PYTHON_TEST_GROUP="$group" \
+        deployment/ci/install-python-test-dependencies.sh
+    PYTHON_BIN="$python_bin" \
+        PYTHON_TEST_GROUP="$group" \
+        deployment/ci/python-tests.sh
+}
+
+echo "--- 3. Running the same isolated Python matrices as CI/CD ---"
+run_python_ci_group rag
+run_python_ci_group inference
+
+echo "--- 4. Running the shared Java, plugin, and Docker CI build ---"
+CODECROW_DOCKER_OUTPUT=load \
+CODECROW_LOCAL_IMAGE_PREFIX=codecrow-local \
+CODECROW_DEPLOY_SERVICES=all \
+deployment/ci/ci-build.sh
+
+echo "--- 5. Shutting down existing services cleanly ---"
 cd "$DOCKER_PATH"
 docker compose down --remove-orphans
 
-echo "--- 7. Building Docker images and starting services ---"
-docker compose up -d --build --wait
+echo "--- 6. Starting the locally loaded CI-equivalent images ---"
+docker compose up -d --no-build --wait
 
 echo "--- Deployment Complete! Services are up and healthy. ---"
 docker compose ps

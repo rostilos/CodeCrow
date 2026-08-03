@@ -19,6 +19,8 @@ public interface BranchRepository extends JpaRepository<Branch, Long> {
 
     List<Branch> findByProjectId(Long projectId);
 
+    Optional<Branch> findFirstByProjectIdOrderByIdAsc(Long projectId);
+
     void deleteByProjectId(Long projectId);
 
     @Query("SELECT b FROM Branch b LEFT JOIN FETCH b.issues WHERE b.id = :id")

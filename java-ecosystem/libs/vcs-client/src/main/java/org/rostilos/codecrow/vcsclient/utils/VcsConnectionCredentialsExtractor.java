@@ -106,8 +106,20 @@ public class VcsConnectionCredentialsExtractor {
         }
         
         String vcsProviderString = getVcsProviderString(provider);
+        String vcsBaseUrl = null;
+        if (provider == EVcsProvider.GITLAB) {
+            vcsBaseUrl = org.rostilos.codecrow.vcsclient.gitlab.GitLabConfig
+                    .instanceBaseUrl(vcsConnection);
+        }
         
-        return new VcsConnectionCredentials(oAuthClient, oAuthSecret, accessToken, vcsProviderString, provider, connectionType);
+        return new VcsConnectionCredentials(
+                oAuthClient,
+                oAuthSecret,
+                accessToken,
+                vcsProviderString,
+                provider,
+                connectionType,
+                vcsBaseUrl);
     }
 
     /**
@@ -224,13 +236,32 @@ public class VcsConnectionCredentialsExtractor {
             String accessToken,
             String vcsProviderString,
             EVcsProvider provider,
-            EVcsConnectionType connectionType
+            EVcsConnectionType connectionType,
+            String vcsBaseUrl
     ) {
+        public VcsConnectionCredentials(
+                String oAuthClient,
+                String oAuthSecret,
+                String accessToken,
+                String vcsProviderString,
+                EVcsProvider provider,
+                EVcsConnectionType connectionType
+        ) {
+            this(
+                    oAuthClient,
+                    oAuthSecret,
+                    accessToken,
+                    vcsProviderString,
+                    provider,
+                    connectionType,
+                    null);
+        }
+
         /**
          * Backwards compatible constructor without provider info.
          */
         public VcsConnectionCredentials(String oAuthClient, String oAuthSecret, String accessToken) {
-            this(oAuthClient, oAuthSecret, accessToken, null, null, null);
+            this(oAuthClient, oAuthSecret, accessToken, null, null, null, null);
         }
         
         /**

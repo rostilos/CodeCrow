@@ -453,7 +453,10 @@ public class WebhookAsyncProcessor {
         
         // Get the parent comment info from the payload
         if (payload.commentData() != null) {
-            parentCommentId = payload.commentData().commentId();
+            parentCommentId = payload.commentData().parentCommentId() != null
+                    && !payload.commentData().parentCommentId().isBlank()
+                    ? payload.commentData().parentCommentId()
+                    : payload.commentData().commentId();
             authorUsername = payload.commentData().commentAuthorUsername();
             originalBody = payload.commentData().commentBody();
         }
@@ -464,6 +467,7 @@ public class WebhookAsyncProcessor {
                 project,
                 Long.parseLong(payload.pullRequestId()),
                 parentCommentId,
+                payload.commentData() != null && payload.commentData().isInlineComment(),
                 content,
                 authorUsername,
                 originalBody

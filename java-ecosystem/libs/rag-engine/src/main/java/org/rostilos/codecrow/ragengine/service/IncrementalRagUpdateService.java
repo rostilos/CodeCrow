@@ -1,6 +1,8 @@
 package org.rostilos.codecrow.ragengine.service;
 
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
+import org.rostilos.codecrow.analysisengine.service.VcsFileRetrievalPolicy;
+import org.rostilos.codecrow.analysisengine.util.TextFileEligibility;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -18,6 +20,8 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 @Service
 public class IncrementalRagUpdateService {
@@ -27,15 +31,13 @@ public class IncrementalRagUpdateService {
     private final RagPipelineClient ragPipelineClient;
     private final RagIndexTrackingService ragIndexTrackingService;
     private final BranchArchiveService branchArchiveService;
+    private final VcsFileRetrievalPolicy fileRetrievalPolicy;
 
     @Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
 
     @Value("${codecrow.rag.parallel.requests:10}")
     private int parallelRequests;
-
-    @Value("${codecrow.rag.incremental.archive-file-threshold:25}")
-    private int archiveFileThreshold;
 
     @Value("${codecrow.rag.incremental.max-attempts:3}")
     private int ragApiMaxAttempts;
@@ -47,11 +49,13 @@ public class IncrementalRagUpdateService {
             VcsClientProvider vcsClientProvider,
             RagPipelineClient ragPipelineClient,
             RagIndexTrackingService ragIndexTrackingService,
-            BranchArchiveService branchArchiveService) {
+            BranchArchiveService branchArchiveService,
+            VcsFileRetrievalPolicy fileRetrievalPolicy) {
         this.vcsClientProvider = vcsClientProvider;
         this.ragPipelineClient = ragPipelineClient;
         this.ragIndexTrackingService = ragIndexTrackingService;
         this.branchArchiveService = branchArchiveService;
+        this.fileRetrievalPolicy = fileRetrievalPolicy;
     }
 
     public boolean shouldPerformIncrementalUpdate(Project project) {
@@ -91,10 +95,15 @@ public class IncrementalRagUpdateService {
             Set<String> addedFiles,
             Set<String> modifiedFiles,
             Set<String> deletedFiles) throws IOException {
-        int addedOrModifiedSize = addedFiles.size() + modifiedFiles.size();
+        Set<String> skippedNonTextFiles = new LinkedHashSet<>();
+        Set<String> indexableAddedFiles = filterTextCandidates(addedFiles, skippedNonTextFiles);
+        Set<String> indexableModifiedFiles = filterTextCandidates(modifiedFiles, skippedNonTextFiles);
+        int addedOrModifiedSize = indexableAddedFiles.size() + indexableModifiedFiles.size();
         log.info(
-                "Starting incremental RAG update for project {} branch {}: {} files to update ({} added), {} to delete",
-                project.getName(), branch, addedOrModifiedSize, addedFiles.size(), deletedFiles.size());
+                "Starting incremental RAG update for project {} branch {}: {} text files to update "
+                        + "({} added), {} to delete, {} non-text files skipped",
+                project.getName(), branch, addedOrModifiedSize, indexableAddedFiles.size(),
+                deletedFiles.size(), skippedNonTextFiles.size());
 
         String projectWorkspace = project.getWorkspace().getName();
         String projectNamespace = project.getNamespace();
@@ -102,11 +111,13 @@ public class IncrementalRagUpdateService {
         Map<String, Object> result = new HashMap<>();
         result.put("branch", branch);
         result.put("commitHash", commitHash);
+        result.put("skippedFiles", skippedNonTextFiles.size());
 
         Set<String> addedOrModifiedFiles = new LinkedHashSet<>();
-        addedOrModifiedFiles.addAll(addedFiles);
-        addedOrModifiedFiles.addAll(modifiedFiles);
-        List<String> orderedAddedOrModifiedFiles = sortedList(addedOrModifiedFiles);
+        addedOrModifiedFiles.addAll(indexableAddedFiles);
+        addedOrModifiedFiles.addAll(indexableModifiedFiles);
+        List<String> orderedAddedOrModifiedFiles =
+                new ArrayList<>(sortedList(addedOrModifiedFiles));
         List<String> orderedDeletedFiles = sortedList(deletedFiles);
         if (orderedAddedOrModifiedFiles.isEmpty() && orderedDeletedFiles.isEmpty()) {
             result.put("status", "completed");
@@ -121,30 +132,72 @@ public class IncrementalRagUpdateService {
                 tempDir = Files.createTempDirectory("codecrow-rag-incremental-",
                     PosixFilePermissions.asFileAttribute(
                             PosixFilePermissions.fromString("rwxrwxrwx")));
-                int effectiveArchiveFileThreshold = Math.max(0, archiveFileThreshold);
-                boolean useArchive = orderedAddedOrModifiedFiles.size() > effectiveArchiveFileThreshold;
+                int effectiveArchiveFileThreshold = fileRetrievalPolicy.archiveFileThreshold();
+                boolean useArchive =
+                        fileRetrievalPolicy.shouldUseArchive(orderedAddedOrModifiedFiles.size());
                 Set<String> fetchedFilePaths;
+                Set<String> presentFilePaths = Collections.emptySet();
+                String fileFetchMode;
                 if (useArchive) {
                     log.info("Using one repository archive at revision {} for {} incremental RAG files "
                                     + "(threshold: {})",
                             revision, orderedAddedOrModifiedFiles.size(), effectiveArchiveFileThreshold);
-                    fetchedFilePaths = branchArchiveService.downloadAndExtractFilesToDirectory(
+                    BranchArchiveService.ArchiveDirectorySnapshot archiveSnapshot =
+                            branchArchiveService.downloadAndExtractSnapshotToDirectory(
                             vcsConnection,
                             workspaceSlug,
                             repoSlug,
                             revision,
                             new LinkedHashSet<>(orderedAddedOrModifiedFiles),
                             tempDir);
+                    fetchedFilePaths = archiveSnapshot.extractedFiles();
+                    presentFilePaths = archiveSnapshot.presentFiles();
+                    fileFetchMode = "archive";
                 } else {
                     log.info("Using per-file VCS retrieval for {} incremental RAG files (threshold: {})",
                             orderedAddedOrModifiedFiles.size(), effectiveArchiveFileThreshold);
-                    fetchedFilePaths = fetchFilesToTempDir(
+                    PerFileFetchResult perFileResult = fetchFilesToTempDir(
                             vcsConnection,
                             workspaceSlug,
                             repoSlug,
                             revision,
                             orderedAddedOrModifiedFiles,
                             tempDir);
+                    if (perFileResult.rateLimited()) {
+                        log.warn("Per-file VCS retrieval hit a provider rate limit after {} of {} files; "
+                                        + "switching the batch to one repository archive",
+                                perFileResult.fetchedFiles().size(),
+                                orderedAddedOrModifiedFiles.size());
+                        BranchArchiveService.ArchiveDirectorySnapshot archiveSnapshot =
+                                branchArchiveService.downloadAndExtractSnapshotToDirectory(
+                                vcsConnection,
+                                workspaceSlug,
+                                repoSlug,
+                                revision,
+                                new LinkedHashSet<>(orderedAddedOrModifiedFiles),
+                                tempDir);
+                        fetchedFilePaths = archiveSnapshot.extractedFiles();
+                        presentFilePaths = archiveSnapshot.presentFiles();
+                        fileFetchMode = "archive-after-rate-limit";
+                    } else {
+                        fetchedFilePaths = perFileResult.fetchedFiles();
+                        skippedNonTextFiles.addAll(perFileResult.skippedNonIndexableFiles());
+                        orderedAddedOrModifiedFiles.removeAll(
+                                perFileResult.skippedNonIndexableFiles());
+                        fileFetchMode = "per-file";
+                    }
+                }
+                Set<String> presentButNotText = orderedAddedOrModifiedFiles.stream()
+                        .filter(presentFilePaths::contains)
+                        .filter(path -> !fetchedFilePaths.contains(path))
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+                if (!presentButNotText.isEmpty()) {
+                    skippedNonTextFiles.addAll(presentButNotText);
+                    orderedAddedOrModifiedFiles.removeAll(presentButNotText);
+                    log.warn("Skipping {} changed files that are present at revision {} but "
+                                    + "cannot produce text chunks: {}",
+                            presentButNotText.size(), revision,
+                            String.join(", ", sortedList(presentButNotText)));
                 }
                 List<String> missingFiles = orderedAddedOrModifiedFiles.stream()
                         .filter(path -> !fetchedFilePaths.contains(path))
@@ -157,15 +210,20 @@ public class IncrementalRagUpdateService {
                 }
                 repoBase = tempDir.toString();
                 result.put("updatedFiles", orderedAddedOrModifiedFiles.size());
-                result.put("addedFilesCount", addedFiles.size());
-                result.put("fileFetchMode", useArchive ? "archive" : "per-file");
+                int appliedAddedFiles = (int) orderedAddedOrModifiedFiles.stream()
+                        .filter(indexableAddedFiles::contains)
+                        .count();
+                result.put("addedFilesCount", appliedAddedFiles);
+                result.put("skippedFiles", skippedNonTextFiles.size());
+                result.put("fileFetchMode", fileFetchMode);
             }
 
             String changeSetRepoBase = repoBase;
+            List<String> filesToUpdate = List.copyOf(orderedAddedOrModifiedFiles);
             Map<String, Object> updateResult = executeWithRetry(
                     "apply incremental RAG change set",
                     () -> ragPipelineClient.applyChanges(
-                            orderedAddedOrModifiedFiles,
+                            filesToUpdate,
                             orderedDeletedFiles,
                             changeSetRepoBase,
                             projectWorkspace,
@@ -175,9 +233,10 @@ public class IncrementalRagUpdateService {
             result.put("deletedFiles", orderedDeletedFiles.size());
             result.putAll(updateResult);
             log.info(
-                    "Applied one incremental RAG change set: {} updated, {} deleted",
-                    orderedAddedOrModifiedFiles.size(),
-                    orderedDeletedFiles.size());
+                    "Applied one incremental RAG change set: {} updated, {} deleted, {} skipped",
+                    filesToUpdate.size(),
+                    orderedDeletedFiles.size(),
+                    skippedNonTextFiles.size());
         } finally {
             if (tempDir != null) {
                 deleteDirectory(tempDir.toFile());
@@ -248,7 +307,24 @@ public class IncrementalRagUpdateService {
                 .toList();
     }
 
-    private Set<String> fetchFilesToTempDir(
+    private Set<String> filterTextCandidates(
+            Collection<String> paths,
+            Set<String> skippedNonTextFiles) {
+        Set<String> eligible = new LinkedHashSet<>();
+        if (paths == null) {
+            return eligible;
+        }
+        for (String path : paths) {
+            if (TextFileEligibility.isTextCandidate(path)) {
+                eligible.add(path);
+            } else if (path != null && !path.isBlank()) {
+                skippedNonTextFiles.add(path);
+            }
+        }
+        return eligible;
+    }
+
+    private PerFileFetchResult fetchFilesToTempDir(
             VcsConnection vcsConnection,
             String workspaceSlug,
             String repoSlug,
@@ -259,15 +335,27 @@ public class IncrementalRagUpdateService {
 
         int workerCount = Math.min(Math.max(1, parallelRequests), filePaths.size());
         ExecutorService executor = Executors.newFixedThreadPool(workerCount);
+        AtomicBoolean rateLimited = new AtomicBoolean(false);
+        Set<String> skippedNonIndexableFiles = ConcurrentHashMap.newKeySet();
         try {
             List<CompletableFuture<Boolean>> futures = new ArrayList<>();
 
             for (String filePath : filePaths) {
                 CompletableFuture<Boolean> future = CompletableFuture.supplyAsync(() -> {
+                    if (rateLimited.get()) {
+                        return false;
+                    }
                     try {
                         String content = vcsClient.getFileContent(
                                 workspaceSlug, repoSlug, filePath, branchOrCommit);
                         if (content != null) {
+                            if (!TextFileEligibility.isBoundedTextContent(content)) {
+                                skippedNonIndexableFiles.add(filePath);
+                                log.warn(
+                                        "Skipping provider file response that cannot produce bounded text: {}",
+                                        filePath);
+                                return false;
+                            }
                             Path targetPath = resolveTargetPath(tempDir, filePath);
                             if (targetPath == null) {
                                 log.warn("Skipping file path outside incremental RAG temp directory: {}", filePath);
@@ -287,7 +375,13 @@ public class IncrementalRagUpdateService {
                         }
                         return false;
                     } catch (IOException e) {
-                        log.warn("Failed to fetch file {}: {}", filePath, e.getMessage());
+                        if (fileRetrievalPolicy.isRateLimited(e)) {
+                            rateLimited.set(true);
+                            log.warn("Rate limited while fetching {}; stopping new per-file VCS calls",
+                                    filePath);
+                        } else {
+                            log.warn("Failed to fetch file {}: {}", filePath, e.getMessage());
+                        }
                         return false;
                     }
                 }, executor);
@@ -305,7 +399,10 @@ public class IncrementalRagUpdateService {
                 }
             }
 
-            return fetchedFiles;
+            return new PerFileFetchResult(
+                    fetchedFiles,
+                    Set.copyOf(skippedNonIndexableFiles),
+                    rateLimited.get());
         } finally {
             executor.shutdownNow();
             try {
@@ -317,6 +414,12 @@ public class IncrementalRagUpdateService {
                 log.warn("Interrupted while awaiting executor termination");
             }
         }
+    }
+
+    private record PerFileFetchResult(
+            Set<String> fetchedFiles,
+            Set<String> skippedNonIndexableFiles,
+            boolean rateLimited) {
     }
 
     private Path resolveTargetPath(Path tempDir, String filePath) {

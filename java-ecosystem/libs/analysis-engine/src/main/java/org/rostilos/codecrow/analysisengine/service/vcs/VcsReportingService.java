@@ -138,12 +138,13 @@ public interface VcsReportingService {
     
     /**
      * Post a reply to an existing comment with additional context.
-     * For platforms that don't support threading (GitHub), this will format
+     * For provider comment types that don't support threading, this will format
      * the reply with a quote and mention.
      * 
      * @param project The project entity
      * @param pullRequestNumber The PR number
      * @param parentCommentId The ID of the comment to reply to
+     * @param inlineComment Whether the triggering comment belongs to a diff thread
      * @param content The reply content (markdown)
      * @param originalAuthorUsername Username of original comment author (for @mention)
      * @param originalCommentBody Original comment body (for quoting)
@@ -153,6 +154,7 @@ public interface VcsReportingService {
             Project project,
             Long pullRequestNumber,
             String parentCommentId,
+            boolean inlineComment,
             String content,
             String originalAuthorUsername,
             String originalCommentBody

@@ -121,7 +121,8 @@ class VcsConnectionCredentialsExtractorTest {
 
     @Test
     void testExtractCredentials_PersonalToken_GitLabConfig() throws GeneralSecurityException {
-        GitLabConfig config = new GitLabConfig("gitlab-token", "my-group", List.of(), "https://gitlab.com");
+        GitLabConfig config = new GitLabConfig(
+                "gitlab-token", "my-group", List.of(), "https://gitlab.example.com/");
         when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.GITLAB);
         when(vcsConnection.getConnectionType()).thenReturn(EVcsConnectionType.PERSONAL_TOKEN);
         when(vcsConnection.getConfiguration()).thenReturn(config);
@@ -130,6 +131,21 @@ class VcsConnectionCredentialsExtractorTest {
 
         assertThat(credentials.accessToken()).isEqualTo("gitlab-token");
         assertThat(credentials.vcsProviderString()).isEqualTo("gitlab");
+        assertThat(credentials.vcsBaseUrl()).isEqualTo("https://gitlab.example.com");
+    }
+
+    @Test
+    void testExtractCredentials_LegacyGitLabConnection_DefaultsToGitLabCom()
+            throws GeneralSecurityException {
+        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.GITLAB);
+        when(vcsConnection.getConnectionType()).thenReturn(EVcsConnectionType.APP);
+        when(vcsConnection.getAccessToken()).thenReturn("encrypted-token");
+        when(tokenEncryptionService.decrypt("encrypted-token")).thenReturn("decrypted-token");
+
+        VcsConnectionCredentialsExtractor.VcsConnectionCredentials credentials =
+                extractor.extractCredentials(vcsConnection);
+
+        assertThat(credentials.vcsBaseUrl()).isEqualTo("https://gitlab.com");
     }
 
     @Test

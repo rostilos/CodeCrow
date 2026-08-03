@@ -25,7 +25,7 @@ BASE_PLUGIN_FINGERPRINT = "sha256:" + "7" * 64
 @pytest.fixture(autouse=True)
 def _stable_index_representation(monkeypatch):
     monkeypatch.setattr(
-        "rag_pipeline.api.routers.pr.require_compatible_branch_representation",
+        "rag_pipeline.api.routers.pr.observe_branch_representation",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -57,6 +57,11 @@ def _base_receipt(manifest=BASE_GENERATION_MANIFEST_SHA256):
 
 def _make_index_manager():
     im = MagicMock()
+    mutation_context = MagicMock()
+    mutation_context.__enter__.return_value = SimpleNamespace(
+        assert_owned=MagicMock()
+    )
+    im.project_mutation.return_value = mutation_context
     im.index_representation_fingerprint = REPRESENTATION_FINGERPRINT
     im.pr_overlay_representation_fingerprint = (
         OVERLAY_REPRESENTATION_FINGERPRINT
@@ -67,6 +72,15 @@ def _make_index_manager():
         "rag_ws__proj_active"
     )
     im.splitter.split_documents.return_value = []
+    im.splitter.split_documents_resilient.side_effect = (
+        lambda documents, capabilities=None: (
+            im.splitter.split_documents(
+                documents,
+                capabilities=capabilities,
+            ),
+            (),
+        )
+    )
     im._point_ops.embed_and_create_points.return_value = []
     im._point_ops.upsert_points.return_value = (0, 0)
     im._point_ops.process_and_upsert_chunks.return_value = (0, 0)
@@ -420,37 +434,6 @@ class TestIndexPRFiles:
         im.splitter.split_documents.assert_not_called()
         im.plugin_runtime.start_repository_analysis.assert_not_called()
         im._file_ops._replace_points.assert_not_called()
-
-    @patch("rag_pipeline.api.routers.pr._get_index_manager")
-    def test_incompatible_target_representation_raises_409(
-        self,
-        mock_get,
-        monkeypatch,
-    ):
-        from rag_pipeline.core.index_representation import (
-            IndexCompatibilityError,
-        )
-
-        im = _make_index_manager()
-        mock_get.return_value = im
-
-        def reject(*_args, **_kwargs):
-            raise IndexCompatibilityError(
-                "branch 'main' requires a full reindex"
-            )
-
-        monkeypatch.setattr(
-            "rag_pipeline.api.routers.pr."
-            "require_compatible_branch_representation",
-            reject,
-        )
-
-        from rag_pipeline.api.routers.pr import index_pr_files
-
-        with pytest.raises(HTTPException) as exc_info:
-            index_pr_files(_request([]))
-        assert exc_info.value.status_code == 409
-        assert "full reindex" in exc_info.value.detail
 
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
     def test_empty_content_clears_previous_generation(self, mock_get):
@@ -838,35 +821,40 @@ class TestIndexPRFiles:
         assert "target branch 'main'" in exc_info.value.detail
         assert "magento, php" in exc_info.value.detail
 
+    @patch("rag_pipeline.api.routers.pr.build_overlay_capabilities")
     @patch("rag_pipeline.api.routers.pr.load_repository_snapshots")
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
-    def test_request_descriptor_identity_mismatch_is_rejected_before_mutation(
+    def test_request_descriptor_identity_mismatch_does_not_block_review(
         self,
         mock_get,
         mock_load_snapshots,
+        mock_build_capabilities,
     ):
         im = _make_index_manager()
         mock_get.return_value = im
         mock_load_snapshots.return_value = ((), (), None, None, None)
         req = _request([])
         req.repository_plugins = ["java"]
+        req.plugin_detection_evidence = {"java": ("fixture:java",)}
         req.plugin_descriptor_fingerprint = "sha256:" + "9" * 64
+        im.plugin_runtime.repository_analysis_plugins.return_value = ()
+        mock_build_capabilities.return_value = _capabilities("java")
 
         from rag_pipeline.api.routers.pr import index_pr_files
 
-        with pytest.raises(HTTPException) as exc_info:
-            index_pr_files(req)
+        result = index_pr_files(req)
 
-        assert exc_info.value.status_code == 409
-        assert "plugin descriptors do not match" in exc_info.value.detail
-        im._file_ops._replace_points.assert_not_called()
+        assert result["status"] == "indexed"
+        im._file_ops._replace_points.assert_called_once()
 
+    @patch("rag_pipeline.api.routers.pr.build_overlay_capabilities")
     @patch("rag_pipeline.api.routers.pr.load_repository_snapshots")
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
-    def test_stored_plugin_implementation_mismatch_requires_reindex(
+    def test_stored_plugin_implementation_mismatch_does_not_require_reindex(
         self,
         mock_get,
         mock_load_snapshots,
+        mock_build_capabilities,
     ):
         im = _make_index_manager()
         mock_get.return_value = im
@@ -879,23 +867,24 @@ class TestIndexPRFiles:
         )
         req = _request([])
         req.repository_plugins = ["java"]
+        im.plugin_runtime.repository_analysis_plugins.return_value = ()
+        mock_build_capabilities.return_value = _capabilities("java")
 
         from rag_pipeline.api.routers.pr import index_pr_files
 
-        with pytest.raises(HTTPException) as exc_info:
-            index_pr_files(req)
+        result = index_pr_files(req)
 
-        assert exc_info.value.status_code == 409
-        assert "different or unknown plugin implementation" in exc_info.value.detail
-        assert "reindex target branch 'main'" in exc_info.value.detail
-        im._file_ops._replace_points.assert_not_called()
+        assert result["status"] == "indexed"
+        im._file_ops._replace_points.assert_called_once()
 
+    @patch("rag_pipeline.api.routers.pr.build_overlay_capabilities")
     @patch("rag_pipeline.api.routers.pr.load_repository_snapshots")
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
-    def test_legacy_index_without_plugin_content_identity_requires_reindex(
+    def test_legacy_index_without_plugin_content_identity_is_accepted(
         self,
         mock_get,
         mock_load_snapshots,
+        mock_build_capabilities,
     ):
         im = _make_index_manager()
         mock_get.return_value = im
@@ -908,15 +897,15 @@ class TestIndexPRFiles:
         )
         req = _request([])
         req.repository_plugins = ["java"]
+        im.plugin_runtime.repository_analysis_plugins.return_value = ()
+        mock_build_capabilities.return_value = _capabilities("java")
 
         from rag_pipeline.api.routers.pr import index_pr_files
 
-        with pytest.raises(HTTPException) as exc_info:
-            index_pr_files(req)
+        result = index_pr_files(req)
 
-        assert exc_info.value.status_code == 409
-        assert "different or unknown plugin implementation" in exc_info.value.detail
-        im._file_ops._replace_points.assert_not_called()
+        assert result["status"] == "indexed"
+        im._file_ops._replace_points.assert_called_once()
 
 
 # ─────────────────────────────────────────────────────────────

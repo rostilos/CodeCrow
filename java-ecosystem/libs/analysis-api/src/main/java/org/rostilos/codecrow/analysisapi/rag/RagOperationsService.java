@@ -52,8 +52,11 @@ public interface RagOperationsService {
      * @param commitHash The commit hash of the update
      * @param rawDiff The raw diff from the VCS (used to determine which files changed)
      * @param eventConsumer Consumer to receive status updates during processing
+     * @return {@code true} only when the requested commit is safely represented
+     *         by the RAG index (including an intentional no-op); {@code false}
+     *         when acquisition, locking, or mutation failed
      */
-    void triggerIncrementalUpdate(
+    boolean triggerIncrementalUpdate(
             Project project, 
             String branchName, 
             String commitHash,

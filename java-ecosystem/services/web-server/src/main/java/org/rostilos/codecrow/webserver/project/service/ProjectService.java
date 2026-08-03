@@ -5,6 +5,7 @@ import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.branch.Branch;
@@ -157,14 +158,16 @@ public class ProjectService implements IProjectService {
         this.webhookCleanupService = webhookCleanupService;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<Project> listWorkspaceProjects(Long workspaceId) {
         // Use the method that fetches default branch eagerly to include stats in
         // project list
-        return projectRepository.findByWorkspaceIdWithDefaultBranch(workspaceId);
+        List<Project> projects = projectRepository.findByWorkspaceIdWithDefaultBranch(workspaceId);
+        ensureDefaultAnalysisBranches(projects);
+        return projects;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public org.springframework.data.domain.Page<Project> listWorkspaceProjectsPaginated(
             Long workspaceId,
             String search,
@@ -174,7 +177,52 @@ public class ProjectService implements IProjectService {
                 page,
                 size,
                 org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "id"));
-        return projectRepository.findByWorkspaceIdWithSearchPaginated(workspaceId, search, pageable);
+        var projects = projectRepository.findByWorkspaceIdWithSearchPaginated(workspaceId, search, pageable);
+        ensureDefaultAnalysisBranches(projects.getContent());
+        return projects;
+    }
+
+    /**
+     * Backfill projects created before automatic branch selection was added.
+     * Prefer the configured/provider default when it has been analyzed; otherwise
+     * select the first analyzed branch so project-list issue statistics are useful
+     * without a manual settings visit.
+     */
+    private void ensureDefaultAnalysisBranches(List<Project> projects) {
+        for (Project project : projects) {
+            if (project.getDefaultBranch() != null) {
+                continue;
+            }
+
+            String preferredBranch = project.getConfiguration() != null
+                    ? project.getConfiguration().mainBranch()
+                    : null;
+            if ((preferredBranch == null || preferredBranch.isBlank())
+                    && project.getVcsRepoBinding() != null) {
+                preferredBranch = project.getVcsRepoBinding().getDefaultBranch();
+            }
+
+            Optional<Branch> branch = Optional.empty();
+            if (preferredBranch != null && !preferredBranch.isBlank()) {
+                branch = branchRepository.findByProjectIdAndBranchName(
+                        project.getId(), preferredBranch);
+            }
+            if (branch.isEmpty()) {
+                branch = branchRepository.findFirstByProjectIdOrderByIdAsc(project.getId());
+            }
+
+            branch.ifPresent(defaultBranch -> {
+                project.setDefaultBranch(defaultBranch);
+                ProjectConfig config = project.getConfiguration();
+                if (config != null && (config.mainBranch() == null || config.mainBranch().isBlank())) {
+                    config.setMainBranch(defaultBranch.getBranchName());
+                    config.ensureMainBranchInPatterns();
+                }
+                projectRepository.save(project);
+                log.info("Backfilled default analysis branch {} for project {}",
+                        defaultBranch.getBranchName(), project.getId());
+            });
+        }
     }
 
     @Transactional

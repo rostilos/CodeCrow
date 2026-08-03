@@ -31,6 +31,20 @@ class _StaticEmbedding:
         return [[1.0, 0.0, 0.0, 0.0] for _ in texts]
 
 
+def _splitter_mock():
+    splitter = MagicMock()
+    splitter.split_documents_resilient.side_effect = (
+        lambda documents, capabilities=None: (
+            splitter.split_documents(
+                documents,
+                capabilities=capabilities,
+            ),
+            (),
+        )
+    )
+    return splitter
+
+
 def _write_repository(
     root: Path,
     implementation: str,
@@ -132,7 +146,7 @@ def _repository_facts(root: Path, revision: str, catalog):
     return build_repository_facts(root, revision, paths, catalog.registry)
 
 
-def test_incremental_di_change_restores_snapshot_and_replaces_effective_graph(tmp_path):
+def test_incremental_di_change_accepts_legacy_identity_and_replaces_graph(tmp_path):
     original = "Acme\\Checkout\\Model\\Cart"
     replacement = "Acme\\Checkout\\Model\\AlternativeCart"
     _write_repository(tmp_path, original)
@@ -197,12 +211,24 @@ def test_incremental_di_change_restores_snapshot_and_replaces_effective_graph(tm
     assert successful == len(initial_nodes)
     assert failed == 0
 
+    # A deployment/source change must never make an otherwise usable branch
+    # require a full reindex. Stored identity hashes are provenance only.
+    initial_points = scroll_branch_points(client, collection, "main")
+    client.set_payload(
+        collection_name=collection,
+        points=[point.id for point in initial_points],
+        payload={
+            "plugin_descriptor_fingerprint": "sha256:" + "8" * 64,
+            "plugin_implementation_fingerprint": "sha256:" + "9" * 64,
+        },
+    )
+
     _write_repository(tmp_path, replacement)
     loader = DocumentLoader(SimpleNamespace(
         excluded_patterns=(),
         max_file_size_bytes=1_000_000,
     ))
-    splitter = MagicMock()
+    splitter = _splitter_mock()
     stats = MagicMock()
     operations = FileOperations(
         client,
@@ -353,7 +379,7 @@ def test_incremental_php_change_adds_and_removes_generated_factory_graph(tmp_pat
         excluded_patterns=(),
         max_file_size_bytes=1_000_000,
     ))
-    splitter = MagicMock()
+    splitter = _splitter_mock()
     splitter.split_documents.return_value = []
     operations = FileOperations(
         client,
@@ -497,7 +523,7 @@ def test_incremental_di_change_adds_and_removes_generated_proxy_graph(tmp_path):
         excluded_patterns=(),
         max_file_size_bytes=1_000_000,
     ))
-    splitter = MagicMock()
+    splitter = _splitter_mock()
     operations = FileOperations(
         client,
         point_ops,
@@ -595,7 +621,7 @@ def test_incremental_update_rejects_missing_repository_analysis_snapshots(
 ):
     monkeypatch.setattr(
         "rag_pipeline.core.index_manager.indexer."
-        "require_compatible_branch_representation",
+        "observe_branch_representation",
         lambda *_args, **_kwargs: None,
     )
     _write_repository(tmp_path, "Acme\\Checkout\\Model\\Cart")
@@ -662,7 +688,9 @@ def test_incremental_update_rejects_missing_repository_analysis_snapshots(
     point_ops.prepare_chunks_for_embedding.assert_not_called()
 
 
-def test_generic_change_set_updates_and_deletes_through_one_generation(tmp_path):
+def test_generic_change_set_accepts_older_build_and_updates_one_generation(
+    tmp_path,
+):
     catalog = discover_builtin_plugins()
     runtime = PluginRuntime(catalog)
     selector = ProjectSelector(catalog.registry)
@@ -679,9 +707,7 @@ def test_generic_change_set_updates_and_deletes_through_one_generation(tmp_path)
         catalog.registry,
     )
     capabilities = selector.select(facts)
-    implementation_fingerprint = catalog.implementation_fingerprint(
-        capabilities.repository_plugins
-    )
+    implementation_fingerprint = "sha256:older-rag-build"
 
     client = QdrantClient(":memory:")
     collection = "repository"
@@ -744,7 +770,7 @@ def test_generic_change_set_updates_and_deletes_through_one_generation(tmp_path)
 
     _write("docs/a.md", "new a")
     (tmp_path / "docs/b.md").unlink()
-    splitter = MagicMock()
+    splitter = _splitter_mock()
     splitter.split_documents.side_effect = lambda documents, capabilities: [
         TextNode(
             text=document.text,
@@ -1169,7 +1195,7 @@ def test_framework_change_set_updates_relation_and_deletes_related_source_togeth
 
     _write_repository(tmp_path, replacement)
     (tmp_path / deleted_path).unlink()
-    splitter = MagicMock()
+    splitter = _splitter_mock()
     operations = FileOperations(
         client,
         point_ops,

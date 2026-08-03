@@ -21,37 +21,17 @@ from service.review.quality_capture import (
     review_response_indicates_failure,
     wrap_quality_capture_llm,
 )
+from service.review.evidence_scopes import (
+    process_review_evidence_scopes,
+    select_review_evidence_diff,
+)
 from utils.context_builder import (RAGMetrics, get_rag_cache)
-from utils.diff_processor import DiffProcessor
 from utils.hunk_coverage import validate_acquired_diff_manifest
 from utils.error_sanitizer import create_user_friendly_error
 from service.review.orchestrator import MultiStageReviewOrchestrator
 from service.review.snapshot_identity import validate_review_snapshot_identity
 
 logger = logging.getLogger(__name__)
-
-
-def select_review_evidence_diff(request: ReviewRequestDto) -> Optional[str]:
-    """Return the diff whose manifest and hunks belong to this execution."""
-    if request.analysisMode == "INCREMENTAL" and request.deltaDiff:
-        return request.deltaDiff
-    return request.rawDiff
-
-
-def allow_unbound_global_rag_fallback(request: ReviewRequestDto) -> bool:
-    """Do not race an unsealed query against an exact PR review snapshot."""
-    return not (
-        isinstance(request.pullRequestId, int)
-        and request.pullRequestId > 0
-        and isinstance(request.baseCommitHash, str)
-        and bool(request.baseCommitHash.strip())
-        and isinstance(
-            request.currentCommitHash or request.commitHash,
-            str,
-        )
-        and bool((request.currentCommitHash or request.commitHash).strip())
-    )
-
 
 class ReviewService:
     """Service class for handling code review requests with streaming support."""
@@ -123,12 +103,6 @@ class ReviewService:
                     response,
                     failed=review_response_indicates_failure(response),
                 )
-                if event_callback is not None:
-                    event_callback({
-                        "type": "status",
-                        "state": "review_quality_capture_completed",
-                        "qualityCapture": quality_capture.receipt(),
-                    })
             return response
 
     async def _process_prompt_dry_run(
@@ -261,13 +235,11 @@ class ReviewService:
         # complete changed-file manifest, so their separate direct path is not
         # subject to this full-review equality check.
         processed_diff = None
+        full_pr_processed_diff = None
         if has_raw_diff and needs_multistage_review:
-            diff_processor = DiffProcessor()
-            processed_diff = diff_processor.process(review_evidence_diff)
-            processed_diff = apply_plugin_file_policy(
-                request,
-                processed_diff,
-            )
+            evidence_scopes = process_review_evidence_scopes(request)
+            processed_diff = evidence_scopes.review
+            full_pr_processed_diff = evidence_scopes.full_pr
             validate_acquired_diff_manifest(
                 request.changedFiles or (),
                 request.deletedFiles or (),
@@ -279,6 +251,30 @@ class ReviewService:
                 f"+{processed_diff.total_additions}/-{processed_diff.total_deletions}, "
                 f"skipped: {processed_diff.skipped_files}"
             )
+
+            # Incremental review and PR-wide reasoning use deliberately separate
+            # evidence scopes. Stage 0/1, hunk coverage, RAG overlay indexing,
+            # and publication anchors continue to use only ``processed_diff``
+            # (the delta). Stage 2 receives this bounded base-to-head parse so it
+            # cannot mistake a one-file delta for the complete PR state.
+            if (
+                request.analysisMode == "INCREMENTAL"
+                and request.deltaDiff
+            ):
+                if full_pr_processed_diff is not None:
+                    logger.info(
+                        "Full PR evidence scope prepared separately: %d files; "
+                        "review/publication scope remains %d delta files",
+                        len(full_pr_processed_diff.files),
+                        len(processed_diff.files),
+                    )
+                else:
+                    logger.warning(
+                        "Full PR evidence scope unavailable; continuing the "
+                        "delta review with PR-wide omission claims disabled"
+                    )
+            else:
+                full_pr_processed_diff = processed_diff
 
             if processed_diff.truncated:
                 self._emit_event(event_callback, {
@@ -387,25 +383,13 @@ class ReviewService:
                 # task is only awaited if a batch cannot obtain per-batch
                 # context. Branch reconciliation does not need it.
                 request_rag_client = self._rag_client_for_request(request)
-                if (
-                    needs_multistage_review
-                    and request_rag_client is not None
-                    and allow_unbound_global_rag_fallback(request)
-                ):
+                if needs_multistage_review and request_rag_client is not None:
                     rag_context_task = asyncio.create_task(
                         self._fetch_rag_context(
                             request,
                             event_callback,
                             llm_reranker=llm_reranker,
                         )
-                    )
-                elif (
-                    needs_multistage_review
-                    and request_rag_client is not None
-                ):
-                    logger.info(
-                        "Global RAG fallback disabled for exact PR review; "
-                        "Stage 1 will use the sealed per-batch retrieval path"
                     )
 
                 self._emit_event(event_callback, {
@@ -458,6 +442,7 @@ class ReviewService:
                                  request=request,
                                  rag_context=rag_context_task,
                                  processed_diff=processed_diff,
+                                 full_pr_processed_diff=full_pr_processed_diff,
                              )
                     else:
                         # Execute review with Multi-Stage Orchestrator
@@ -465,7 +450,8 @@ class ReviewService:
                         result = await orchestrator.orchestrate_review(
                             request=request, 
                             rag_context=rag_context_task,
-                            processed_diff=processed_diff
+                            processed_diff=processed_diff,
+                            full_pr_processed_diff=full_pr_processed_diff,
                         )
                 finally:
                     if rag_context_task and not rag_context_task.done():
@@ -556,15 +542,16 @@ class ReviewService:
     ) -> Dict[str, str]:
         """Build JVM properties from request."""
         return MCPConfigBuilder.build_jvm_props(
-            request.projectId,
-            request.pullRequestId,
-            request.projectVcsWorkspace,
-            request.projectVcsRepoSlug,
-            request.oAuthClient,
-            request.oAuthSecret,
-            request.accessToken,
-            request.maxAllowedTokens or max_allowed_tokens,
-            request.vcsProvider
+            project_id=request.projectId,
+            pull_request_id=request.pullRequestId,
+            workspace=request.projectVcsWorkspace,
+            repo_slug=request.projectVcsRepoSlug,
+            oAuthClient=request.oAuthClient,
+            oAuthSecret=request.oAuthSecret,
+            access_token=request.accessToken,
+            max_allowed_tokens=request.maxAllowedTokens or max_allowed_tokens,
+            vcs_provider=request.vcsProvider,
+            vcs_base_url=request.vcsBaseUrl,
         )
 
     async def _fetch_rag_context(

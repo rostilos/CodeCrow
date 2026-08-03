@@ -6,10 +6,13 @@ Handles collection creation, alias operations, and resolution.
 
 import logging
 import os
+import re
 import time
-from typing import Optional, List
+import uuid
+from typing import Callable, Optional, List
 
 from qdrant_client import QdrantClient
+from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import (
     Distance, VectorParams,
     CreateAlias, DeleteAlias, CreateAliasOperation, DeleteAliasOperation,
@@ -21,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 class CollectionManager:
     """Manages Qdrant collections and aliases."""
-    
+
     def __init__(self, client: QdrantClient, embedding_dim: int):
         self.client = client
         self.embedding_dim = embedding_dim
@@ -42,6 +45,53 @@ class CollectionManager:
 
         if collection_name not in collection_names:
             logger.info(f"Creating Qdrant collection: {collection_name} (vectors_on_disk={self.vectors_on_disk})")
+            created = self._create_collection(collection_name)
+            if created:
+                logger.info(f"Created collection {collection_name}")
+            else:
+                logger.info(
+                    "Collection %s was created concurrently; using it",
+                    collection_name,
+                )
+            self._ensure_payload_indexes(collection_name)
+        else:
+            logger.info(f"Collection {collection_name} already exists")
+
+    def create_pending_collection(
+        self,
+        base_name: str,
+        *,
+        operation_id: Optional[str] = None,
+    ) -> str:
+        """Create an unpublished collection for atomic index activation."""
+        # Pending collections can be created by different workers or processes.
+        # Timestamp + operation ownership lets the janitor distinguish a live
+        # build from an expired orphan without touching another worker's work.
+        for _ in range(3):
+            token = re.sub(
+                r"[^a-fA-F0-9]",
+                "",
+                operation_id or uuid.uuid4().hex,
+            )[:32] or uuid.uuid4().hex[:32]
+            pending_name = (
+                f"{base_name}_pending_{int(time.time())}_{token}_"
+                f"{uuid.uuid4().hex[:8]}"
+            )
+            logger.info(f"Creating pending collection: {pending_name}")
+            if self._create_collection(pending_name):
+                self._ensure_payload_indexes(pending_name)
+                return pending_name
+            logger.warning(
+                "Pending collection name %s already exists; generating another",
+                pending_name,
+            )
+        raise RuntimeError(
+            f"Unable to allocate a unique pending collection for {base_name}"
+        )
+
+    def _create_collection(self, collection_name: str) -> bool:
+        """Create one physical collection, accepting only a proven create race."""
+        try:
             self.client.create_collection(
                 collection_name=collection_name,
                 vectors_config=VectorParams(
@@ -51,69 +101,45 @@ class CollectionManager:
                 ),
                 on_disk_payload=self.vectors_on_disk,
             )
-            logger.info(f"Created collection {collection_name}")
-            self._ensure_payload_indexes(collection_name)
-        else:
-            logger.info(f"Collection {collection_name} already exists")
-    
-    def create_pending_collection(self, base_name: str) -> str:
-        """Create an unpublished collection for atomic index activation."""
-        # Use milliseconds to avoid collisions in rapid calls
-        pending_name = f"{base_name}_pending_{int(time.time() * 1000)}"
-        logger.info(f"Creating pending collection: {pending_name}")
-        
-        self.client.create_collection(
-            collection_name=pending_name,
-            vectors_config=VectorParams(
-                size=self.embedding_dim,
-                distance=Distance.COSINE,
-                on_disk=self.vectors_on_disk,
-            ),
-            on_disk_payload=self.vectors_on_disk,
-        )
-        self._ensure_payload_indexes(pending_name)
-        return pending_name
-    
+            return True
+        except UnexpectedResponse as exception:
+            if (
+                exception.status_code == 409
+                and self._physical_collection_exists(collection_name)
+            ):
+                return False
+            raise
+
+    def _physical_collection_exists(self, collection_name: str) -> bool:
+        """Check a physical collection name without treating aliases as matches."""
+        collections = self.client.get_collections().collections
+        return any(collection.name == collection_name for collection in collections)
+
     def _ensure_payload_indexes(self, collection_name: str) -> None:
         """Create payload indexes for efficient filtering on common fields."""
-        try:
-            # Keyword index on 'path' for exact match and prefix filtering
-            self.client.create_payload_index(
-                collection_name=collection_name,
-                field_name="path",
-                field_schema=PayloadSchemaType.KEYWORD,
-            )
-            # Keyword index on 'branch' for branch filtering
-            self.client.create_payload_index(
-                collection_name=collection_name,
-                field_name="branch",
-                field_schema=PayloadSchemaType.KEYWORD,
-            )
-            # Architecture packets carry every repository path they connect.
-            # A keyword index makes changed-path graph expansion exact and cheap.
-            self.client.create_payload_index(
-                collection_name=collection_name,
-                field_name="architecture_paths",
-                field_schema=PayloadSchemaType.KEYWORD,
-            )
-            self.client.create_payload_index(
-                collection_name=collection_name,
-                field_name="architecture_group",
-                field_schema=PayloadSchemaType.KEYWORD,
-            )
-            self.client.create_payload_index(
-                collection_name=collection_name,
-                field_name="snapshot_plugin",
-                field_schema=PayloadSchemaType.KEYWORD,
-            )
-            self.client.create_payload_index(
-                collection_name=collection_name,
-                field_name="snapshot_kind",
-                field_schema=PayloadSchemaType.KEYWORD,
-            )
-            logger.info(f"Payload indexes created for {collection_name}")
-        except Exception as e:
-            logger.warning(f"Failed to create payload indexes for {collection_name}: {e}")
+        fields = (
+            "path",
+            "branch",
+            "architecture_paths",
+            "architecture_group",
+            "snapshot_plugin",
+            "snapshot_kind",
+        )
+        for field_name in fields:
+            try:
+                self.client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name=field_name,
+                    field_schema=PayloadSchemaType.KEYWORD,
+                )
+            except Exception as exception:
+                logger.warning(
+                    "Failed to create payload index %s on %s: %s",
+                    field_name,
+                    collection_name,
+                    exception,
+                )
+        logger.info(f"Payload indexes ensured for {collection_name}")
     
     def delete_collection(self, collection_name: str) -> bool:
         """Delete a collection."""
@@ -228,15 +254,61 @@ class CollectionManager:
         current_target: Optional[str] = None,
         exclude_name: Optional[str] = None
     ) -> int:
-        """Clean up unpublished collections left by interrupted indexing attempts."""
+        """Deprecated safe wrapper retained for internal compatibility.
+
+        Ownership-less cleanup used to delete every sibling pending collection
+        at the start of a job. That could destroy a live build in another
+        worker, so lifecycle cleanup now belongs to the expiry-aware janitor.
+        """
+        logger.debug(
+            "Skipping ownership-less pending cleanup for %s (target=%s exclude=%s)",
+            base_name,
+            current_target,
+            exclude_name,
+        )
+        return 0
+
+    def cleanup_expired_pending_collections(
+        self,
+        *,
+        is_operation_active: Callable[[str], bool],
+        min_age_seconds: Optional[int] = None,
+    ) -> int:
+        """Delete only timestamped, non-aliased pending collections with no lease."""
+        if min_age_seconds is None:
+            min_age_seconds = max(
+                300,
+                int(os.getenv("RAG_PENDING_COLLECTION_MAX_AGE_SECONDS", "21600")),
+            )
+        now = int(time.time())
+        try:
+            aliased_targets = {
+                alias.collection_name for alias in self.client.get_aliases().aliases
+            }
+        except Exception:
+            logger.warning("Pending collection janitor could not read aliases")
+            return 0
+
+        pattern = re.compile(
+            r"_pending_(\d{10})_([a-fA-F0-9]{8,32})_[a-fA-F0-9]{8}$"
+        )
         cleaned = 0
-        collection_names = self.get_collection_names()
-        
-        for coll_name in collection_names:
-            if coll_name.startswith(f"{base_name}_pending_") and coll_name != exclude_name:
-                if current_target != coll_name:
-                    logger.info(f"Cleaning up orphaned pending collection: {coll_name}")
-                    if self.delete_collection(coll_name):
-                        cleaned += 1
-        
+        for collection_name in self.get_collection_names():
+            match = pattern.search(collection_name)
+            if match is None or collection_name in aliased_targets:
+                continue
+            created_at = int(match.group(1))
+            operation_id = match.group(2)
+            if now - created_at < min_age_seconds:
+                continue
+            if is_operation_active(operation_id):
+                continue
+            logger.info(
+                "Cleaning expired pending collection %s operation_id=%s age_seconds=%s",
+                collection_name,
+                operation_id,
+                now - created_at,
+            )
+            if self.delete_collection(collection_name):
+                cleaned += 1
         return cleaned

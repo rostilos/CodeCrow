@@ -153,13 +153,14 @@ public class BranchFullReconciliationService {
                             + allUnresolved.size() + " unresolved issues");
 
             VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
-            Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
+            BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
+                    branchFileOperationsService.downloadBranchFileSnapshot(
                     vcsRepoInfoImpl, commitHash, allFilePaths);
             log.info("Full reconciliation archive: {} files extracted for {} requested",
-                    archiveContents.size(), allFilePaths.size());
+                    branchFileSnapshot.contents().size(), allFilePaths.size());
 
             Set<String> filesExistingInBranch = branchFileOperationsService.updateBranchFiles(
-                    allFilePaths, project, branchName, archiveContents);
+                    allFilePaths, project, branchName, branchFileSnapshot);
 
             EventNotificationEmitter.emitStatus(consumer, "updating_snapshots",
                     "Updating file content snapshots for " + filesExistingInBranch.size()
@@ -168,7 +169,7 @@ public class BranchFullReconciliationService {
             BranchProcessRequest syntheticRequest = buildSyntheticRequest(projectId, branchName, commitHash);
 
             branchFileOperationsService.updateFileSnapshotsForBranch(
-                    filesExistingInBranch, project, syntheticRequest, archiveContents);
+                    filesExistingInBranch, project, syntheticRequest, branchFileSnapshot);
 
             EventNotificationEmitter.emitStatus(consumer, "reanalyzing_issues",
                     "Reanalyzing " + allUnresolved.size() + " issues across "
@@ -176,7 +177,8 @@ public class BranchFullReconciliationService {
 
             branchIssueReconciliationService.reanalyzeCandidateIssues(
                     allFilePaths, filesExistingInBranch, branch, project,
-                    syntheticRequest, consumer, archiveContents);
+                    syntheticRequest, consumer, branchFileSnapshot.contents(), null,
+                    branchFileSnapshot.allowContentApiFallback());
 
             Branch branchForVerify = branchRepository.findByProjectIdAndBranchName(projectId, branchName)
                     .orElse(branch);
@@ -273,10 +275,11 @@ public class BranchFullReconciliationService {
 
         long beforeCount = branchIssueRepository.countAllByBranchId(branch.getId());
         VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
-        Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
+        BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
+                branchFileOperationsService.downloadBranchFileSnapshot(
                 vcsRepoInfoImpl, commitHash, allPrIssuePaths);
         Set<String> filesExistingInBranch = branchFileOperationsService.updateBranchFiles(
-                allPrIssuePaths, project, branch.getBranchName(), archiveContents);
+                allPrIssuePaths, project, branch.getBranchName(), branchFileSnapshot);
 
         for (Map.Entry<Long, Set<String>> entry : issuePathsByPr.entrySet()) {
             Set<String> existingPrPaths = entry.getValue().stream()

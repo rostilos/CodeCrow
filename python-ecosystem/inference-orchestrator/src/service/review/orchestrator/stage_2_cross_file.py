@@ -20,6 +20,10 @@ from utils.llm_response import extract_llm_response_text
 from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
 from service.review.orchestrator.context_helpers import format_duplication_context
 from service.review.orchestrator.stage_helpers import format_project_rules_digest
+from service.review.pr_evidence import (
+    PrEvidenceLedger,
+    build_pr_evidence_ledger,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +68,7 @@ async def execute_stage_2_cross_file(
     ] = None,
     visible_prompt_hunk_ids: Optional[set[str]] = None,
     prompt_provenance: Optional[Dict[str, str]] = None,
+    pr_evidence_ledger: Optional[PrEvidenceLedger] = None,
 ) -> CrossFileAnalysisResult:
     issues_json = _slim_issues_for_stage_2(stage_1_issues)
     architecture_context = _build_architecture_context(
@@ -71,11 +76,27 @@ async def execute_stage_2_cross_file(
         changed_files=request.changedFiles,
     )
     migrations = _detect_migration_paths(processed_diff)
-    pr_change_summary = _build_pr_change_summary(
-        processed_diff=processed_diff,
-        changed_files=request.changedFiles,
-        visible_hunk_ids=visible_prompt_hunk_ids,
+    evidence_ledger = pr_evidence_ledger or build_pr_evidence_ledger(
+        processed_diff,
+        processed_diff,
+        incremental=bool(
+            request.analysisMode == "INCREMENTAL" and request.deltaDiff
+        ),
+        task_context=(
+            request.taskContext
+            if isinstance(request.taskContext, dict)
+            else None
+        ),
+        pr_title=request.prTitle if isinstance(request.prTitle, str) else "",
+        pr_description=(
+            request.prDescription
+            if isinstance(request.prDescription, str)
+            else ""
+        ),
     )
+    if visible_prompt_hunk_ids is not None:
+        visible_prompt_hunk_ids.clear()
+        visible_prompt_hunk_ids.update(evidence_ledger.delta_hunk_ids)
     if prefetched_cross_module_context is not None:
         cross_module_context = prefetched_cross_module_context
     else:
@@ -101,7 +122,8 @@ async def execute_stage_2_cross_file(
             or "No task context available."
         ),
         task_history_context=_build_task_history_context(request),
-        pr_change_summary=pr_change_summary,
+        pr_change_summary=evidence_ledger.full_pr_context,
+        incremental_delta_summary=evidence_ledger.incremental_delta_context,
     )
     if prompt_provenance is not None:
         prompt_provenance.clear()
@@ -510,98 +532,9 @@ def _architecture_payload(
 def _detect_migration_paths(processed_diff: Optional[ProcessedDiff]) -> str:
     return (
         "Migration or schema-related files are not pre-classified by filename. "
-        "Use the PR-wide change summary, structured enrichment context, task "
+        "Use the full PR state ledger, structured enrichment context, task "
         "context, and diff evidence to decide whether migration or schema risks exist."
     )
-
-
-def _build_pr_change_summary(
-    processed_diff: Optional[ProcessedDiff],
-    changed_files: Optional[List[str]],
-    *,
-    max_files: int = 80,
-    max_changed_lines_per_file: int = 24,
-    max_chars: int = 24000,
-    visible_hunk_ids: Optional[set[str]] = None,
-) -> str:
-    if visible_hunk_ids is not None:
-        visible_hunk_ids.clear()
-    if not processed_diff:
-        files = changed_files or []
-        if not files:
-            return "No changed file summary available."
-        listing = "\n".join(f"- {path}" for path in files[:max_files])
-        if len(files) > max_files:
-            listing += f"\n... and {len(files) - max_files} more files"
-        return listing
-
-    sections: List[str] = []
-    included_files = processed_diff.get_included_files()
-
-    for diff_file in included_files[:max_files]:
-        change_type = getattr(diff_file.change_type, "value", str(diff_file.change_type))
-        header = (
-            f"- {diff_file.path} "
-            f"({change_type}, +{diff_file.additions}/-{diff_file.deletions})"
-        )
-        evidence_notes = []
-        if diff_file.skip_reason:
-            evidence_notes.append(
-                f"Diff evidence note: {diff_file.skip_reason}; compact summary evidence is shown."
-            )
-        changed_lines: List[tuple[str, Optional[str]]] = []
-        current_hunk_id: Optional[str] = None
-        hunk_index = -1
-        for line in (diff_file.content or "").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("[CodeCrow Summary") or stripped.startswith("Change statistics:"):
-                evidence_notes.append(stripped)
-            elif stripped.startswith("@@"):
-                evidence_notes.append(f"Affected region: {stripped}")
-                hunk_index += 1
-                current_hunk_id = (
-                    diff_file.hunks[hunk_index].id
-                    if hunk_index < len(diff_file.hunks)
-                    else None
-                )
-            if line.startswith(("+++", "---", "@@")):
-                continue
-            if line.startswith(("+", "-")):
-                changed_lines.append((line[:240], current_hunk_id))
-            if len(changed_lines) >= max_changed_lines_per_file:
-                break
-
-        section_lines: List[tuple[str, Optional[str]]] = [(header, None)]
-        for note in list(dict.fromkeys(evidence_notes))[:12]:
-            section_lines.append((f"  {note}", None))
-        if changed_lines:
-            section_lines.append(("  Representative changed lines:", None))
-            section_lines.extend(
-                (f"  {line}", hunk_id)
-                for line, hunk_id in changed_lines
-            )
-        section = "\n".join(line for line, _ in section_lines)
-        previous = "\n\n".join(sections)
-        section_offset = len(previous) + (2 if previous else 0)
-        sections.append(section)
-
-        current = "\n\n".join(sections)
-        if visible_hunk_ids is not None:
-            line_offset = section_offset
-            for line_index, (rendered_line, hunk_id) in enumerate(section_lines):
-                line_end = line_offset + len(rendered_line)
-                if hunk_id and line_end <= max_chars:
-                    visible_hunk_ids.add(hunk_id)
-                line_offset = line_end + (
-                    1 if line_index < len(section_lines) - 1 else 0
-                )
-        if len(current) >= max_chars:
-            return current[:max_chars] + "\n... PR-wide change summary truncated ..."
-
-    if len(included_files) > max_files:
-        sections.append(f"... and {len(included_files) - max_files} more changed files")
-
-    return "\n\n".join(sections) if sections else "No changed file summary available."
 
 
 def _slim_issues_for_stage_2(

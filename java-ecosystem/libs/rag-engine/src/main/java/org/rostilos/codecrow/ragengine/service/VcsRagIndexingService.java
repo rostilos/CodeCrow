@@ -273,6 +273,7 @@ public class VcsRagIndexingService {
 
                     Map<String, Object> jobPayload = Map.of(
                             "job_id", jobId,
+                            "queued_at_epoch_ms", System.currentTimeMillis(),
                             "request", requestPayload);
 
                     String eventQueueKey = "codecrow:analysis:events:" + jobId;
@@ -294,6 +295,7 @@ public class VcsRagIndexingService {
                     return Map.of(
                             "status", "queued",
                             "message", "RAG indexing job queued in background",
+                            "jobId", job != null ? job.getExternalId() : jobId,
                             "branch", branch,
                             "commitHash", commitHash);
 
@@ -456,6 +458,7 @@ public class VcsRagIndexingService {
         Integer chunkCount = null;
         boolean success = false;
         String errorMessage = null;
+        String lastPersistedStatus = null;
 
         try {
             while (true) {
@@ -498,6 +501,16 @@ public class VcsRagIndexingService {
                         // activity on the existing status row so long-running,
                         // healthy indexes do not look stalled to operators.
                         ragIndexTrackingService.markIndexingHeartbeat(project);
+
+                        String state = String.valueOf(event.getOrDefault("stage",
+                                event.getOrDefault("state", "indexing")));
+                        String message = String.valueOf(event.getOrDefault(
+                                "message", "RAG indexing is processing"));
+                        String statusIdentity = state + "\u0000" + message;
+                        if (job != null && !statusIdentity.equals(lastPersistedStatus)) {
+                            jobService.logToJob(job, JobLogLevel.INFO, state, message, event);
+                            lastPersistedStatus = statusIdentity;
+                        }
                     }
 
                     if ("error".equals(type) || "failed".equals(type)) {

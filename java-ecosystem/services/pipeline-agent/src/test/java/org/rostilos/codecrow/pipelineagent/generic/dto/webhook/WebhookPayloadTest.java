@@ -392,6 +392,64 @@ class WebhookPayloadTest {
         }
 
         @Test
+        @DisplayName("should parse a question addressed to a CodeCrow bot mention")
+        void shouldParseQuestionAddressedToCodecrowMention() {
+            WebhookPayload.CommentData commentData = new WebhookPayload.CommentData(
+                    "id", "@codecrow-local[bot] explain this finding in more detail",
+                    "user", "name", "root", true, "src/App.java", 42);
+
+            WebhookPayload.CodecrowCommand command = commentData.parseCommand();
+
+            assertThat(command).isNotNull();
+            assertThat(command.type()).isEqualTo(WebhookPayload.CommandType.ASK);
+            assertThat(command.arguments()).isEqualTo("explain this finding in more detail");
+        }
+
+        @Test
+        @DisplayName("should parse a question with a trailing CodeCrow mention")
+        void shouldParseQuestionWithTrailingCodecrowMention() {
+            WebhookPayload.CommentData commentData = new WebhookPayload.CommentData(
+                    "id", "Why is this unsafe, @codecrowai?",
+                    "user", "name", "root", true, "src/App.java", 42);
+
+            WebhookPayload.CodecrowCommand command = commentData.parseCommand();
+
+            assertThat(command).isNotNull();
+            assertThat(command.type()).isEqualTo(WebhookPayload.CommandType.ASK);
+            assertThat(command.arguments()).isEqualTo("Why is this unsafe?");
+        }
+
+        @Test
+        @DisplayName("should ignore a CodeCrow mention that is not a question or request")
+        void shouldIgnoreCodecrowMentionWithoutQuestion() {
+            WebhookPayload.CommentData commentData = new WebhookPayload.CommentData(
+                    "id", "Thanks @codecrowai for the review",
+                    "user", "name", "root", true, "src/App.java", 42);
+
+            assertThat(commentData.parseCommand()).isNull();
+        }
+
+        @Test
+        @DisplayName("should ignore a question that refers to rather than addresses CodeCrow")
+        void shouldIgnoreQuestionThatOnlyRefersToCodecrow() {
+            WebhookPayload.CommentData commentData = new WebhookPayload.CommentData(
+                    "id", "Why did @codecrowai flag the other thread?",
+                    "user", "name", "root", true, "src/App.java", 42);
+
+            assertThat(commentData.parseCommand()).isNull();
+        }
+
+        @Test
+        @DisplayName("should ignore ordinary inline conversation between people")
+        void shouldIgnoreOrdinaryInlineConversation() {
+            WebhookPayload.CommentData commentData = new WebhookPayload.CommentData(
+                    "id", "@alice could you explain this finding?",
+                    "user", "name", "root", true, "src/App.java", 42);
+
+            assertThat(commentData.parseCommand()).isNull();
+        }
+
+        @Test
         @DisplayName("should return null for ask command without arguments")
         void shouldReturnNullForAskWithoutArguments() {
             WebhookPayload.CommentData commentData = new WebhookPayload.CommentData(

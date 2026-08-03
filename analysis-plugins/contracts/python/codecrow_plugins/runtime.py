@@ -401,15 +401,18 @@ class RepositoryAnalysisHandle:
             raise ValueError("repository artifacts must be path-sorted")
         retained: list[tuple[str, object]] = []
         for plugin_id, session in self._sessions:
-            try:
-                session.ingest(artifacts)
-                retained.append((plugin_id, session))
-            except Exception as exception:
-                self._diagnostics.append(PluginDiagnostic(
-                    code="plugin-repository-ingest-exception",
-                    message=f"{type(exception).__name__}: {exception}",
-                    plugin_id=plugin_id,
-                ))
+            for artifact in artifacts:
+                try:
+                    session.ingest((artifact,))
+                except Exception as exception:
+                    self._diagnostics.append(PluginDiagnostic(
+                        code="plugin-repository-file-skipped",
+                        message=f"{type(exception).__name__}: {exception}",
+                        plugin_id=plugin_id,
+                        path=artifact.path,
+                        recoverable=True,
+                    ))
+            retained.append((plugin_id, session))
         self._sessions = retained
 
     def finish(self) -> tuple[RepositoryAnalysis, tuple[PluginDiagnostic, ...]]:
@@ -444,6 +447,7 @@ class RepositoryAnalysisHandle:
                     plugin_id=plugin_id,
                 ))
                 continue
+            self._diagnostics.extend(contribution.diagnostics)
             symbols.update(contribution.symbols)
             if len(symbols) > self._runtime.MAX_REPOSITORY_SYMBOLS:
                 self._diagnostics.append(PluginDiagnostic(

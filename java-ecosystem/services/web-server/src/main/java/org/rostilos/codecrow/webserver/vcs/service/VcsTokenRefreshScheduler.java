@@ -71,7 +71,7 @@ public class VcsTokenRefreshScheduler {
                         connection.getProviderType());
                 
                 // This will trigger token refresh via VcsClientProvider
-                vcsClientProvider.getHttpClient(connection);
+                vcsClientProvider.getClient(connection);
                 
                 refreshed++;
                 log.info("Successfully refreshed token for connection {}", connection.getId());

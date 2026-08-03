@@ -1,7 +1,6 @@
 package org.rostilos.codecrow.pipelineagent.gitlab.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
@@ -13,8 +12,7 @@ import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.AnalysisSummary;
 import org.rostilos.codecrow.vcsclient.bitbucket.service.ReportGenerator;
-import org.rostilos.codecrow.vcsclient.gitlab.actions.CommentOnMergeRequestAction;
-import org.rostilos.codecrow.vcsclient.gitlab.actions.GetMergeRequestAction;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -114,15 +112,13 @@ public class GitLabReportingService implements VcsReportingService {
             vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(), 
             vcsRepoInfo.getVcsConnection() != null ? vcsRepoInfo.getVcsConnection().getId() : "null");
 
-        OkHttpClient httpClient = vcsClientProvider.getHttpClient(
-                vcsRepoInfo.getVcsConnection()
-        );
+        GitLabClient client = getClient(vcsRepoInfo);
 
         // Post or update MR comment with detailed analysis
-        postOrUpdateComment(httpClient, vcsRepoInfo, mergeRequestIid, markdownSummary, placeholderCommentId);
+        postOrUpdateComment(client, vcsRepoInfo, mergeRequestIid, markdownSummary, placeholderCommentId);
         
         // Post inline comments on specific lines (like Bitbucket annotations)
-        postInlineComments(httpClient, vcsRepoInfo, mergeRequestIid, codeAnalysis, summary);
+        postInlineComments(client, vcsRepoInfo, mergeRequestIid, codeAnalysis, summary);
 
         log.info("Successfully posted analysis results to GitLab for MR {}", mergeRequestIid);
     }
@@ -132,7 +128,7 @@ public class GitLabReportingService implements VcsReportingService {
      * Similar to Bitbucket's annotations feature.
      */
     private void postInlineComments(
-            OkHttpClient httpClient,
+            GitLabClient client,
             VcsRepoInfo vcsRepoInfo,
             Long mergeRequestIid,
             CodeAnalysis codeAnalysis,
@@ -146,11 +142,10 @@ public class GitLabReportingService implements VcsReportingService {
         
         try {
             // Get MR metadata for diff refs (base_sha, head_sha, start_sha)
-            GetMergeRequestAction mrAction = new GetMergeRequestAction(httpClient);
-            JsonNode mrData = mrAction.getMergeRequest(
+            JsonNode mrData = client.getMergeRequest(
                     vcsRepoInfo.getRepoWorkspace(),
                     vcsRepoInfo.getRepoSlug(),
-                    mergeRequestIid.intValue()
+                    mergeRequestIid
             );
             
             // Extract diff refs from MR metadata
@@ -171,8 +166,6 @@ public class GitLabReportingService implements VcsReportingService {
             }
             
             log.debug("MR diff refs: base={}, head={}, start={}", baseSha, headSha, startSha);
-            
-            CommentOnMergeRequestAction commentAction = new CommentOnMergeRequestAction(httpClient);
             
             // Limit number of inline comments to avoid spam
             int maxInlineComments = 20;
@@ -201,10 +194,10 @@ public class GitLabReportingService implements VcsReportingService {
                 String body = buildInlineCommentBody(issue);
                 
                 try {
-                    commentAction.postLineComment(
+                    client.postMergeRequestLineComment(
                             vcsRepoInfo.getRepoWorkspace(),
                             vcsRepoInfo.getRepoSlug(),
-                            mergeRequestIid.intValue(),
+                            mergeRequestIid,
                             body,
                             baseSha,
                             headSha,
@@ -285,7 +278,7 @@ public class GitLabReportingService implements VcsReportingService {
     }
 
     private void postOrUpdateComment(
-            OkHttpClient httpClient,
+            GitLabClient client,
             VcsRepoInfo vcsRepoInfo,
             Long mergeRequestIid,
             String markdownSummary,
@@ -295,15 +288,13 @@ public class GitLabReportingService implements VcsReportingService {
         log.debug("Posting/updating summary comment to MR {} (placeholderCommentId={})", 
             mergeRequestIid, placeholderCommentId);
 
-        CommentOnMergeRequestAction commentAction = new CommentOnMergeRequestAction(httpClient);
-        
         if (placeholderCommentId != null) {
             // Update the placeholder comment with the analysis results
             String markedComment = CODECROW_COMMENT_MARKER + "\n" + markdownSummary;
-            commentAction.updateNote(
+            client.updateMergeRequestNote(
                     vcsRepoInfo.getRepoWorkspace(),
                     vcsRepoInfo.getRepoSlug(),
-                    mergeRequestIid.intValue(),
+                    mergeRequestIid,
                     Long.parseLong(placeholderCommentId),
                     markedComment
             );
@@ -311,7 +302,7 @@ public class GitLabReportingService implements VcsReportingService {
         } else {
             // Delete previous CodeCrow comments before posting new one
             try {
-                deletePreviousComments(commentAction, vcsRepoInfo, mergeRequestIid.intValue());
+                deletePreviousComments(client, vcsRepoInfo, mergeRequestIid);
                 log.debug("Deleted previous CodeCrow comments from MR {}", mergeRequestIid);
             } catch (Exception e) {
                 log.warn("Failed to delete previous comments: {}", e.getMessage());
@@ -320,21 +311,21 @@ public class GitLabReportingService implements VcsReportingService {
             // Add marker to the comment for future identification
             String markedComment = CODECROW_COMMENT_MARKER + "\n" + markdownSummary;
             
-            commentAction.postComment(
+            client.postMergeRequestComment(
                     vcsRepoInfo.getRepoWorkspace(),
                     vcsRepoInfo.getRepoSlug(),
-                    mergeRequestIid.intValue(),
+                    mergeRequestIid,
                     markedComment
             );
         }
     }
     
     private void deletePreviousComments(
-            CommentOnMergeRequestAction commentAction,
+            GitLabClient client,
             VcsRepoInfo vcsRepoInfo,
-            int mergeRequestIid
+            long mergeRequestIid
     ) throws IOException {
-        List<Map<String, Object>> notes = commentAction.listNotes(
+        List<Map<String, Object>> notes = client.listMergeRequestNotes(
                 vcsRepoInfo.getRepoWorkspace(),
                 vcsRepoInfo.getRepoSlug(),
                 mergeRequestIid
@@ -347,7 +338,7 @@ public class GitLabReportingService implements VcsReportingService {
                 if (idObj instanceof Number) {
                     long noteId = ((Number) idObj).longValue();
                     try {
-                        commentAction.deleteNote(
+                        client.deleteMergeRequestNote(
                                 vcsRepoInfo.getRepoWorkspace(),
                                 vcsRepoInfo.getRepoSlug(),
                                 mergeRequestIid,
@@ -370,9 +361,7 @@ public class GitLabReportingService implements VcsReportingService {
             String marker
     ) throws IOException {
         VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
-        OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
-        
-        CommentOnMergeRequestAction commentAction = new CommentOnMergeRequestAction(httpClient);
+        GitLabClient client = getClient(vcsRepoInfo);
         
         // Add marker at the END as HTML comment (invisible to users) if provided
         String markedContent = content;
@@ -381,18 +370,18 @@ public class GitLabReportingService implements VcsReportingService {
         }
         
         // Post the comment
-        commentAction.postComment(
+        client.postMergeRequestComment(
                 vcsRepoInfo.getRepoWorkspace(),
                 vcsRepoInfo.getRepoSlug(),
-                mergeRequestIid.intValue(),
+                mergeRequestIid,
                 markedContent
         );
         
         // Find the comment we just posted to get its ID
-        Long commentId = commentAction.findCommentByMarker(
+        Long commentId = client.findMergeRequestNoteByMarker(
                 vcsRepoInfo.getRepoWorkspace(),
                 vcsRepoInfo.getRepoSlug(),
-                mergeRequestIid.intValue(),
+                mergeRequestIid,
                 marker != null ? marker : markedContent.substring(0, Math.min(50, markedContent.length()))
         );
         
@@ -416,12 +405,30 @@ public class GitLabReportingService implements VcsReportingService {
             Project project,
             Long mergeRequestIid,
             String parentCommentId,
+            boolean inlineComment,
             String content,
             String originalAuthorUsername,
             String originalCommentBody
     ) throws IOException {
-        // GitLab doesn't support threading on MR notes
-        // Format reply with quote and @mention to create a visual connection
+        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+        GitLabClient client = getClient(vcsRepoInfo);
+        if (parentCommentId != null && !parentCommentId.isBlank()
+                && !parentCommentId.chars().allMatch(Character::isDigit)) {
+            try {
+                return client.postMergeRequestDiscussionReply(
+                        vcsRepoInfo.getRepoWorkspace(),
+                        vcsRepoInfo.getRepoSlug(),
+                        mergeRequestIid,
+                        parentCommentId,
+                        content);
+            } catch (IOException error) {
+                log.warn("Failed to reply to GitLab discussion {}; using MR note fallback: {}",
+                        parentCommentId, error.getMessage());
+            }
+        }
+
+        // General MR notes do not have native threads. Format a fallback note
+        // with a quote and mention to retain a visible connection.
         StringBuilder formattedReply = new StringBuilder();
         
         // Add mention of original author
@@ -449,16 +456,14 @@ public class GitLabReportingService implements VcsReportingService {
             String marker
     ) throws IOException {
         VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
-        OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
-        
-        CommentOnMergeRequestAction commentAction = new CommentOnMergeRequestAction(httpClient);
+        GitLabClient client = getClient(vcsRepoInfo);
         
         int deletedCount = 0;
         try {
-            List<Map<String, Object>> notes = commentAction.listNotes(
+            List<Map<String, Object>> notes = client.listMergeRequestNotes(
                     vcsRepoInfo.getRepoWorkspace(),
                     vcsRepoInfo.getRepoSlug(),
-                    mergeRequestIid.intValue()
+                    mergeRequestIid
             );
             
             for (Map<String, Object> note : notes) {
@@ -468,10 +473,10 @@ public class GitLabReportingService implements VcsReportingService {
                     if (idObj instanceof Number) {
                         long noteId = ((Number) idObj).longValue();
                         try {
-                            commentAction.deleteNote(
+                            client.deleteMergeRequestNote(
                                     vcsRepoInfo.getRepoWorkspace(),
                                     vcsRepoInfo.getRepoSlug(),
-                                    mergeRequestIid.intValue(),
+                                    mergeRequestIid,
                                     noteId
                             );
                             deletedCount++;
@@ -495,13 +500,11 @@ public class GitLabReportingService implements VcsReportingService {
             String commentId
     ) throws IOException {
         VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
-        OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
-        
-        CommentOnMergeRequestAction commentAction = new CommentOnMergeRequestAction(httpClient);
-        commentAction.deleteNote(
+        GitLabClient client = getClient(vcsRepoInfo);
+        client.deleteMergeRequestNote(
                 vcsRepoInfo.getRepoWorkspace(),
                 vcsRepoInfo.getRepoSlug(),
-                mergeRequestIid.intValue(),
+                mergeRequestIid,
                 Long.parseLong(commentId)
         );
     }
@@ -515,9 +518,7 @@ public class GitLabReportingService implements VcsReportingService {
             String marker
     ) throws IOException {
         VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
-        OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
-        
-        CommentOnMergeRequestAction commentAction = new CommentOnMergeRequestAction(httpClient);
+        GitLabClient client = getClient(vcsRepoInfo);
         
         // Add marker at the END as HTML comment (invisible to users) if provided
         String markedContent = newContent;
@@ -525,10 +526,10 @@ public class GitLabReportingService implements VcsReportingService {
             markedContent = newContent + "\n\n" + marker;
         }
         
-        commentAction.updateNote(
+        client.updateMergeRequestNote(
                 vcsRepoInfo.getRepoWorkspace(),
                 vcsRepoInfo.getRepoSlug(),
-                mergeRequestIid.intValue(),
+                mergeRequestIid,
                 Long.parseLong(commentId),
                 markedContent
         );
@@ -540,5 +541,9 @@ public class GitLabReportingService implements VcsReportingService {
         // TODO: Mermaid diagrams disabled for now - AI-generated Mermaid often has syntax errors
         // that fail to render. Using ASCII diagrams until we add validation/fixing.
         return false;
+    }
+
+    private GitLabClient getClient(VcsRepoInfo vcsRepoInfo) {
+        return (GitLabClient) vcsClientProvider.getClient(vcsRepoInfo.getVcsConnection());
     }
 }

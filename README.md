@@ -86,7 +86,8 @@ These features are platform-independent and available through the CodeCrow web U
 
 | Method                   | Bitbucket Cloud |               GitHub                |                  GitLab                   |
 | :----------------------- | :-------------: | :---------------------------------: | :---------------------------------------: |
-| OAuth / App Installation |   ✅ (OAuth)    | ✅ (GitHub App with OAuth fallback) | ✅ (OAuth, including self-managed GitLab) |
+| OAuth / App Installation |   ✅ (OAuth)    | ✅ (GitHub App with OAuth fallback) |           ✅ (GitLab.com only)            |
+| Self-managed VCS         |        —          |                  —                  |    ✅ (personal or project access token)   |
 | Manual Webhook           |       ✅        |                 ✅                  |                    ✅                     |
 | CI Pipeline Action       |       ✅        |                  —                  |                     —                     |
 
@@ -155,9 +156,10 @@ normal review pipeline continues.
 | Retrieval           | Qdrant semantic search combined with deterministic metadata and exact-path lookup                                                                          |
 | Stored Context      | Semantic source chunks plus exact-source, architecture, graph, plugin snapshot, and repository-detection points                                            |
 | Full Reindex        | Builds a pending collection generation and atomically swaps the project alias only after successful completion                                             |
+| Resilient Writes    | Quarantines malformed files and exact rejected points while retaining valid content; systemic Qdrant failures still prevent activation                    |
 | Incremental Reindex | Applies one pinned commit change set and replaces changed semantic chunks together with affected graph and state groups                                    |
 | PR Context          | Uses an immutable, commit-pinned PR overlay so changed files do not retrieve stale base-branch copies                                                      |
-| Compatibility Guard | Returns HTTP 409 for stale or incompatible representation/plugin state before a review-model call; recovery is a full reindex with matching service images |
+| Compatibility Guard | Host, selection, descriptor, and implementation fingerprints are provenance only and never force a reindex or filter context; snapshot integrity and Qdrant vector shape remain enforced |
 | Prompt Budget       | Plugin and RAG evidence share bounded context budgets; plugins cannot create an additional model stage                                                     |
 
 The Vector Storage Explorer exposes the different point types and their
@@ -233,9 +235,12 @@ for the detailed invariants and failure behavior.
 ## Self-Hosting and Build Verification
 
 The interactive setup configures secrets and chooses OpenRouter or Ollama for
-embeddings. The production build synchronizes the pinned frontend submodule,
-rejects local frontend drift, builds Java artifacts, assembles the Java plugin
-bundle, builds the Compose services, and waits for them to become healthy.
+embeddings. The local production build fetches and checks out the latest commit
+from the frontend submodule's configured `main` branch, rejects local frontend
+drift, recreates the two isolated Python 3.11 CI environments, and runs the same
+Python, plugin-boundary, Maven `verify`, and observable-image Buildx gates as
+CI/CD. Only after every gate passes does it replace the local Compose services
+with those validated images and wait for health checks.
 
 ```bash
 cd deployment
@@ -246,8 +251,9 @@ cd deployment
 | Gate                | Command or CI Behavior                                                                                                            |
 | :------------------ | :-------------------------------------------------------------------------------------------------------------------------------- |
 | Java                | `cd java-ecosystem && mvn clean verify`                                                                                           |
-| Python              | `deployment/ci/python-tests.sh` runs plugin-contract, RAG unit/integration, inference unit/integration, and review-quality suites |
+| Python              | CI and `production-build.sh` install each service's requirements separately, then run plugin-contract, RAG unit/integration, inference unit/integration, and review-quality suites |
 | Plugin Boundary     | `python3 tools/validate_plugin_boundaries.py` prevents concrete implementations from leaking into generic hosts                   |
+| Docker Images       | CI pushes and the local build loads images from the same contexts and observable Dockerfiles                                      |
 | Production Workflow | Manual dispatch; deployment waits for both Java/build and full Python test jobs unless explicitly deploying existing images       |
 
 ## Contributing

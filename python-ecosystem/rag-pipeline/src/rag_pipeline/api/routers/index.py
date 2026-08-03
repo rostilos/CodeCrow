@@ -1,17 +1,19 @@
 """Index and branch management endpoints."""
 import logging
 from typing import List
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 
 from ...models.config import IndexStats
 from ..models import (
     IndexRequest, UpdateFilesRequest, DeleteFilesRequest, ApplyChangesRequest,
     DeleteBranchRequest, CleanupStaleBranchesRequest,
-    EstimateRequest, EstimateResponse, RevisionPreflightResponse,
+    EstimateRequest, EstimateResponse,
 )
-from ...core.index_representation import IndexCompatibilityError
 from ...core.repository_overlay import IncrementalIndexPreconditionError
-from ...core.source_tree import RepositorySourceTreeError
+from ...core.coordination import (
+    MutationCoordinationUnavailable,
+    MutationLeaseUnavailable,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["index"])
@@ -91,18 +93,18 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
             project=request.project,
             branch=request.branch,
             commit=request.commit,
-            source_tree_sha256=request.source_tree_sha256,
             preserve_other_branches=request.preserve_other_branches,
             include_patterns=request.include_patterns,
             exclude_patterns=request.exclude_patterns
         )
         return stats
-    except RepositorySourceTreeError as e:
-        logger.warning(f"Repository source precondition failed: {e}")
-        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         logger.warning(f"Validation error indexing repository: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error indexing repository: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -122,9 +124,13 @@ def update_files(request: UpdateFilesRequest):
             commit=request.commit
         )
         return stats
-    except (IndexCompatibilityError, IncrementalIndexPreconditionError) as e:
+    except IncrementalIndexPreconditionError as e:
         logger.warning(f"Incremental update precondition failed: {e}")
         raise HTTPException(status_code=409, detail=str(e))
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating files: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -143,9 +149,13 @@ def delete_files(request: DeleteFilesRequest):
             commit=request.commit,
         )
         return stats
-    except (IndexCompatibilityError, IncrementalIndexPreconditionError) as e:
+    except IncrementalIndexPreconditionError as e:
         logger.warning(f"Incremental delete precondition failed: {e}")
         raise HTTPException(status_code=409, detail=str(e))
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting files: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -170,57 +180,19 @@ def apply_changes(request: ApplyChangesRequest):
             branch=request.branch,
             commit=request.commit,
         )
-    except (IndexCompatibilityError, IncrementalIndexPreconditionError) as e:
+    except IncrementalIndexPreconditionError as e:
         logger.warning(f"Incremental change-set precondition failed: {e}")
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         logger.warning(f"Invalid incremental change set: {e}")
         raise HTTPException(status_code=422, detail=str(e))
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error applying incremental change set: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get(
-    "/index/{workspace}/{project}/revision",
-    response_model=RevisionPreflightResponse,
-)
-def get_revision_preflight(
-    workspace: str,
-    project: str,
-    branch: str = Query(
-        ...,
-        min_length=1,
-        max_length=255,
-        pattern=r"^[^\s]+$",
-    ),
-    commit: str = Query(..., pattern=r"^[0-9a-f]{40}$"),
-):
-    """Verify that one complete, exact branch/commit snapshot is available."""
-    _, index_manager = _get_singletons()
-    try:
-        result = index_manager.get_revision_preflight(
-            workspace,
-            project,
-            branch,
-            commit,
-        )
-    except (IndexCompatibilityError, IncrementalIndexPreconditionError) as e:
-        logger.warning(f"Exact revision preflight failed: {e}")
-        raise HTTPException(status_code=409, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error reading exact revision preflight: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    if result is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"No complete indexed revision found for "
-                f"{workspace}/{project}/{branch}@{commit}"
-            ),
-        )
-    return result
 
 
 @router.delete("/index/{workspace}/{project}/{branch}")
@@ -230,6 +202,10 @@ def delete_index(workspace: str, project: str, branch: str):
     try:
         index_manager.delete_index(workspace, project, branch)
         return {"message": f"Index deleted for {workspace}/{project}/{branch}"}
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting index: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -253,6 +229,10 @@ def delete_branch(workspace: str, project: str, branch: str):
                 "status": "not_found",
                 "message": f"Branch '{branch}' not found or collection doesn't exist"
             }
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting branch '{branch}': {e}")
         raise HTTPException(status_code=500, detail=str(e))

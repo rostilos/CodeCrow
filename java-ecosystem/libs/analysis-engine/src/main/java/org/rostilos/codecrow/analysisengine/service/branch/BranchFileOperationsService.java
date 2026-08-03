@@ -1,29 +1,30 @@
 package org.rostilos.codecrow.analysisengine.service.branch;
 
-import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
+import org.rostilos.codecrow.analysisengine.service.VcsFileRetrievalPolicy;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.filecontent.model.BranchFile;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.filecontent.persistence.BranchFileRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 /**
@@ -37,33 +38,36 @@ public class BranchFileOperationsService {
 
     private final BranchFileRepository branchFileRepository;
     private final BranchRepository branchRepository;
+    private final ProjectRepository projectRepository;
     private final BranchIssueRepository branchIssueRepository;
     private final CodeAnalysisIssueRepository codeAnalysisIssueRepository;
     private final CodeAnalysisRepository codeAnalysisRepository;
-    private final VcsServiceFactory vcsServiceFactory;
     private final VcsClientProvider vcsClientProvider;
     private final FileSnapshotService fileSnapshotService;
     private final BranchArchiveService branchArchiveService;
+    private final VcsFileRetrievalPolicy fileRetrievalPolicy;
 
     public BranchFileOperationsService(
             BranchFileRepository branchFileRepository,
             BranchRepository branchRepository,
+            ProjectRepository projectRepository,
             BranchIssueRepository branchIssueRepository,
             CodeAnalysisIssueRepository codeAnalysisIssueRepository,
             CodeAnalysisRepository codeAnalysisRepository,
-            VcsServiceFactory vcsServiceFactory,
             VcsClientProvider vcsClientProvider,
             FileSnapshotService fileSnapshotService,
-            BranchArchiveService branchArchiveService) {
+            BranchArchiveService branchArchiveService,
+            VcsFileRetrievalPolicy fileRetrievalPolicy) {
         this.branchFileRepository = branchFileRepository;
         this.branchRepository = branchRepository;
+        this.projectRepository = projectRepository;
         this.branchIssueRepository = branchIssueRepository;
         this.codeAnalysisIssueRepository = codeAnalysisIssueRepository;
         this.codeAnalysisRepository = codeAnalysisRepository;
-        this.vcsServiceFactory = vcsServiceFactory;
         this.vcsClientProvider = vcsClientProvider;
         this.fileSnapshotService = fileSnapshotService;
         this.branchArchiveService = branchArchiveService;
+        this.fileRetrievalPolicy = fileRetrievalPolicy;
     }
 
     // ────────────────────────── Archive download ──────────────────────────────
@@ -73,18 +77,41 @@ public class BranchFileOperationsService {
      * <p>
      * Replaces per-file VCS API calls with a single archive download,
      * avoiding rate-limiting issues (e.g. Bitbucket HTTP 429).
-     * Returns an empty map on failure — callers must handle graceful fallback.
+     * Legacy content-only view. New orchestration code must use
+     * {@link #downloadBranchFileSnapshot(VcsRepoInfoImpl, String, Set)} so an
+     * unavailable archive cannot be confused with a successful empty snapshot.
      */
     public Map<String, String> downloadBranchArchive(VcsRepoInfoImpl vcsRepoInfoImpl, String branchOrCommit,
                                                      Set<String> neededFiles) {
+        return downloadBranchFileSnapshot(vcsRepoInfoImpl, branchOrCommit, neededFiles).contents();
+    }
+
+    /**
+     * Downloads one authoritative repository snapshot for a bounded file set.
+     * An unavailable archive is represented explicitly so downstream stages do
+     * not mistake an acquisition failure for an empty repository.
+     */
+    public BranchFileSnapshot downloadBranchFileSnapshot(
+            VcsRepoInfoImpl vcsRepoInfoImpl,
+            String branchOrCommit,
+            Set<String> neededFiles) {
+        Set<String> requestedFiles = neededFiles != null
+                ? new LinkedHashSet<>(neededFiles)
+                : Collections.emptySet();
         try {
-            return branchArchiveService.downloadAndExtractFiles(
+            BranchArchiveService.ArchiveSnapshot snapshot = branchArchiveService.downloadSnapshot(
                     vcsRepoInfoImpl.vcsConnection(), vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(),
-                    branchOrCommit, neededFiles);
+                    branchOrCommit, requestedFiles);
+            return BranchFileSnapshot.fromArchive(snapshot);
         } catch (Exception e) {
-            log.warn("Failed to download branch archive — will fall back to per-file API calls: {}",
-                    e.getMessage());
-            return Collections.emptyMap();
+            boolean allowPerFileFallback =
+                    fileRetrievalPolicy.allowPerFileFallback(requestedFiles.size());
+            log.warn("Failed to download branch archive for {} requested files: {}. {}",
+                    requestedFiles.size(), e.getMessage(),
+                    allowPerFileFallback
+                            ? "A bounded per-file fallback remains available"
+                            : "Per-file fallback is disabled above the shared archive threshold");
+            return BranchFileSnapshot.unavailable(allowPerFileFallback, e.getMessage());
         }
     }
 
@@ -93,40 +120,49 @@ public class BranchFileOperationsService {
     /**
      * Updates branch file records for changed files.
      * <p>
-     * When {@code archiveContents} is non-empty, file existence is determined
-     * from the archive map instead of per-file API calls (avoids rate-limiting).
+     * Prefer the {@link BranchFileSnapshot} overload. It keeps archive
+     * acquisition state and path presence separate from extracted text.
      *
      * @param archiveContents pre-downloaded archive contents (filePath → content).
-     *                        May be empty — in that case, falls back to per-file API.
+     *                        May be empty; retained only for legacy callers.
      * @return the set of file paths confirmed to exist in the branch
      */
     public Set<String> updateBranchFiles(Set<String> changedFiles, Project project,
                                          String branchName, Map<String, String> archiveContents) {
+        return updateBranchFiles(
+                changedFiles, project, branchName, BranchFileSnapshot.legacy(archiveContents));
+    }
+
+    public Set<String> updateBranchFiles(Set<String> changedFiles, Project project,
+                                         String branchName, BranchFileSnapshot fileSnapshot) {
         Set<String> filesExistingInBranch = new HashSet<>();
-        boolean useArchive = archiveContents != null && !archiveContents.isEmpty();
+        BranchFileSnapshot snapshot = fileSnapshot != null
+                ? fileSnapshot
+                : BranchFileSnapshot.unavailable(true, "snapshot not provided");
 
         Branch branchEntity = branchRepository
                 .findByProjectIdAndBranchName(project.getId(), branchName).orElse(null);
 
-        // Always initialise VCS client — used as fallback when a file is missing
-        // from the archive (binary filter, size limit, path encoding mismatch).
-        VcsOperationsService operationsService = null;
-        OkHttpClient client = null;
+        // Resolve provider clients only when a bounded per-file fallback is
+        // actually allowed. An authoritative archive snapshot (including its
+        // binary/large-file presence set) must never trigger extra API calls.
+        VcsClient client = null;
         String workspace = null;
         String repoSlug = null;
         var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
-        if (vcsRepoInfo != null && vcsRepoInfo.getVcsConnection() != null) {
-            EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
-            operationsService = vcsServiceFactory.getOperationsService(provider);
-            client = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+        if (!snapshot.archiveAvailable()
+                && snapshot.allowPerFileFallback()
+                && vcsRepoInfo != null
+                && vcsRepoInfo.getVcsConnection() != null) {
+            client = vcsClientProvider.getClient(vcsRepoInfo.getVcsConnection());
             workspace = vcsRepoInfo.getRepoWorkspace();
             repoSlug = vcsRepoInfo.getRepoSlug();
         }
 
         for (String filePath : changedFiles) {
             boolean fileExists = resolveFileExistence(
-                    filePath, branchName, useArchive, archiveContents,
-                    operationsService, client, workspace, repoSlug);
+                    filePath, branchName, snapshot,
+                    client, workspace, repoSlug);
 
             if (!fileExists) {
                 log.debug("Skipping file {} - does not exist in branch {}", filePath, branchName);
@@ -156,7 +192,33 @@ public class BranchFileOperationsService {
             branch.setBranchName(request.getTargetBranchName());
         }
         branch.setCommitHash(request.getCommitHash());
-        return branchRepository.save(branch);
+        Branch savedBranch = branchRepository.save(branch);
+
+        ProjectConfig config = project.getConfiguration();
+        String configuredMainBranch = config != null ? config.mainBranch() : null;
+        if ((configuredMainBranch == null || configuredMainBranch.isBlank())
+                && project.getVcsRepoBinding() != null) {
+            configuredMainBranch = project.getVcsRepoBinding().getDefaultBranch();
+        }
+
+        boolean isConfiguredMainBranch = configuredMainBranch != null
+                && configuredMainBranch.equals(savedBranch.getBranchName());
+        boolean shouldSelectBranch = project.getDefaultBranch() == null
+                || (isConfiguredMainBranch
+                    && !Objects.equals(savedBranch.getId(), project.getDefaultBranch().getId()));
+
+        if (shouldSelectBranch) {
+            project.setDefaultBranch(savedBranch);
+            if (config != null && (config.mainBranch() == null || config.mainBranch().isBlank())) {
+                config.setMainBranch(savedBranch.getBranchName());
+                config.ensureMainBranchInPatterns();
+            }
+            projectRepository.save(project);
+            log.info("Selected branch {} as the default analysis branch for project {}",
+                    savedBranch.getBranchName(), project.getId());
+        }
+
+        return savedBranch;
     }
 
     // ──────────────────── File snapshot updates ──────────────────────────────
@@ -171,12 +233,20 @@ public class BranchFileOperationsService {
      * preserve the file content at the time each issue was originally detected,
      * which is critical for the Source Context viewer.
      * <p>
-     * When {@code archiveContents} is non-empty, file content is read from the
-     * map directly (no API calls). When empty, falls back to per-file VCS API.
+     * Prefer the {@link BranchFileSnapshot} overload so optional snapshot
+     * persistence follows the same bounded acquisition decision as existence
+     * reconciliation.
      */
     public void updateFileSnapshotsForBranch(Set<String> existingFiles, Project project,
                                              BranchProcessRequest request,
                                              Map<String, String> archiveContents) {
+        updateFileSnapshotsForBranch(
+                existingFiles, project, request, BranchFileSnapshot.legacy(archiveContents));
+    }
+
+    public void updateFileSnapshotsForBranch(Set<String> existingFiles, Project project,
+                                             BranchProcessRequest request,
+                                             BranchFileSnapshot fileSnapshot) {
         if (existingFiles.isEmpty()) return;
 
         try {
@@ -190,7 +260,7 @@ public class BranchFileOperationsService {
             Branch branch = branchOpt.get();
 
             Map<String, String> fileContents = buildFileContentsMap(
-                    existingFiles, project, request, archiveContents);
+                    existingFiles, project, request, fileSnapshot);
 
             if (!fileContents.isEmpty()) {
                 int updated = fileSnapshotService.persistSnapshotsForBranch(
@@ -222,44 +292,28 @@ public class BranchFileOperationsService {
     // ──────────────────── Private helpers ────────────────────────────────────
 
     private boolean resolveFileExistence(String filePath, String branchName,
-                                         boolean useArchive, Map<String, String> archiveContents,
-                                         VcsOperationsService operationsService, OkHttpClient client,
+                                         BranchFileSnapshot snapshot,
+                                         VcsClient client,
                                          String workspace, String repoSlug) {
-        if (useArchive) {
-            if (archiveContents.containsKey(filePath)) {
-                return true;
-            }
-            // Archive miss — the file might still exist (binary filter, size limit,
-            // path encoding mismatch between diff parser and archive extractor).
-            // Verify via per-file API before declaring it deleted.
-            if (operationsService != null && client != null) {
-                try {
-                    boolean existsViaApi = operationsService.checkFileExistsInBranch(
-                            client, workspace, repoSlug, branchName, filePath);
-                    if (existsViaApi) {
-                        log.warn("File {} not in archive but EXISTS via API — archive extraction missed it "
-                                + "(binary/size/path mismatch?). Treating as existing in branch {}.",
-                                filePath, branchName);
-                    } else {
-                        log.debug("File {} confirmed deleted via API (branch {})", filePath, branchName);
-                    }
-                    return existsViaApi;
-                } catch (Exception e) {
-                    log.warn("File {} not in archive and API check failed for branch {}: {}. "
-                            + "Assuming file exists to avoid false deletion resolution.",
-                            filePath, branchName, e.getMessage());
-                    return true; // Fail-open: assume exists to prevent false resolutions
-                }
-            }
-            log.debug("File {} not found in archive and no API fallback available — "
-                    + "treating as deleted from branch {}", filePath, branchName);
-            return false;
+        if (snapshot.archiveAvailable()) {
+            return snapshot.presentFiles().contains(filePath);
+        }
+        if (!snapshot.allowContentApiFallback()) {
+            log.debug("Per-file fallback unavailable for {} in branch {} — "
+                    + "assuming it exists (fail-open)", filePath, branchName);
+            return true;
+        }
+        if (client == null) {
+            log.debug("No VCS fallback available for {} — assuming it exists in branch {}",
+                    filePath, branchName);
+            return true;
         }
         try {
-            return operationsService.checkFileExistsInBranch(
-                    client, workspace, repoSlug, branchName, filePath);
+            return client.fileExists(workspace, repoSlug, branchName, filePath);
         } catch (Exception e) {
-            log.warn("Failed to check file existence for {} in branch {}: {}. Proceeding anyway.",
+            snapshot.stopPerFileFallback();
+            log.warn("File-existence fallback stopped after provider failure for {} in branch {}: {}. "
+                            + "Remaining files will be treated as existing without additional VCS calls.",
                     filePath, branchName, e.getMessage());
             return true;
         }
@@ -311,38 +365,102 @@ public class BranchFileOperationsService {
 
     private Map<String, String> buildFileContentsMap(Set<String> existingFiles, Project project,
                                                      BranchProcessRequest request,
-                                                     Map<String, String> archiveContents) {
+                                                     BranchFileSnapshot fileSnapshot) {
         Map<String, String> fileContents = new LinkedHashMap<>();
-        boolean useArchive = archiveContents != null && !archiveContents.isEmpty();
+        BranchFileSnapshot snapshot = fileSnapshot != null
+                ? fileSnapshot
+                : BranchFileSnapshot.unavailable(true, "snapshot not provided");
 
-        if (useArchive) {
+        if (snapshot.archiveAvailable()) {
             for (String filePath : existingFiles) {
-                String content = archiveContents.get(filePath);
+                String content = snapshot.contents().get(filePath);
                 if (content != null) {
                     fileContents.put(filePath, content);
                 }
             }
-        } else {
+        } else if (snapshot.allowContentApiFallback()) {
             var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
             if (vcsRepoInfo == null || vcsRepoInfo.getVcsConnection() == null) return fileContents;
 
-            EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
-            VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
-            OkHttpClient client = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+            VcsClient client = vcsClientProvider.getClient(vcsRepoInfo.getVcsConnection());
 
             for (String filePath : existingFiles) {
+                if (!snapshot.allowContentApiFallback()) {
+                    break;
+                }
                 try {
-                    String content = operationsService.getFileContent(
-                            client, vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
-                            request.getCommitHash(), filePath);
+                    String content = client.getFileContent(
+                            vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
+                            filePath, request.getCommitHash());
                     if (content != null) {
                         fileContents.put(filePath, content);
                     }
                 } catch (Exception e) {
-                    log.debug("Could not fetch content for {} (snapshot update): {}", filePath, e.getMessage());
+                    snapshot.stopPerFileFallback();
+                    log.warn("Stopping per-file snapshot fallback after provider failure for {}: {}",
+                            filePath, e.getMessage());
+                    break;
                 }
             }
+        } else {
+            log.warn("Skipping branch snapshot content fallback for {} files because the archive "
+                            + "was unavailable and the shared per-file threshold was exceeded",
+                    existingFiles.size());
         }
         return fileContents;
+    }
+
+    public record BranchFileSnapshot(
+            Map<String, String> contents,
+            Set<String> presentFiles,
+            boolean archiveAvailable,
+            boolean allowPerFileFallback,
+            String diagnostic,
+            AtomicBoolean providerUnavailable
+    ) {
+        public BranchFileSnapshot {
+            contents = Collections.unmodifiableMap(new LinkedHashMap<>(
+                    contents != null ? contents : Collections.emptyMap()));
+            presentFiles = Collections.unmodifiableSet(new LinkedHashSet<>(
+                    presentFiles != null ? presentFiles : Collections.emptySet()));
+            providerUnavailable = providerUnavailable != null
+                    ? providerUnavailable
+                    : new AtomicBoolean(false);
+        }
+
+        public static BranchFileSnapshot fromArchive(
+                BranchArchiveService.ArchiveSnapshot snapshot) {
+            return new BranchFileSnapshot(
+                    snapshot.contents(), snapshot.presentFiles(), true, false, null,
+                    new AtomicBoolean(false));
+        }
+
+        public static BranchFileSnapshot unavailable(
+                boolean allowPerFileFallback, String diagnostic) {
+            return new BranchFileSnapshot(
+                    Collections.emptyMap(), Collections.emptySet(), false,
+                    allowPerFileFallback, diagnostic, new AtomicBoolean(false));
+        }
+
+        public static BranchFileSnapshot legacy(Map<String, String> contents) {
+            Map<String, String> safeContents =
+                    contents != null ? contents : Collections.emptyMap();
+            if (safeContents.isEmpty()) {
+                return unavailable(true, "legacy empty archive contents");
+            }
+            return new BranchFileSnapshot(
+                    safeContents, safeContents.keySet(), true, false, null,
+                    new AtomicBoolean(false));
+        }
+
+        public boolean allowContentApiFallback() {
+            return !archiveAvailable
+                    && allowPerFileFallback
+                    && !providerUnavailable.get();
+        }
+
+        public void stopPerFileFallback() {
+            providerUnavailable.set(true);
+        }
     }
 }

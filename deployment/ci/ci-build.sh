@@ -17,6 +17,8 @@
 #                                  all, java, python, frontend, web-server,
 #                                  pipeline-agent, inference-orchestrator,
 #                                  rag-pipeline, web-frontend
+#   CODECROW_DOCKER_OUTPUT      — push (CI default) or load (local validation)
+#   CODECROW_LOCAL_IMAGE_PREFIX — image prefix used by load mode
 ###############################################################################
 set -euo pipefail
 
@@ -33,10 +35,21 @@ CI_TEST_LOG_LEVEL="${CI_TEST_LOG_LEVEL:-WARN}"
 DOCKER_BUILD_NETWORK="${DOCKER_BUILD_NETWORK:-host}"
 DOCKER_BUILD_PROGRESS="${DOCKER_BUILD_PROGRESS:-auto}"
 DOCKER_BUILD_RETRIES="${DOCKER_BUILD_RETRIES:-3}"
+DOCKER_BUILD_OUTPUT="${CODECROW_DOCKER_OUTPUT:-push}"
+LOCAL_IMAGE_PREFIX="${CODECROW_LOCAL_IMAGE_PREFIX:-codecrow-local}"
 # GITHUB_REPOSITORY_OWNER is assumed to be provided for ghcr.io paths
 REPO_OWNER=${GITHUB_REPOSITORY_OWNER:-codecrow}
 REPO_OWNER=$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
 REQUESTED_SERVICES="${CODECROW_DEPLOY_SERVICES:-${CODECROW_BUILD_SERVICES:-all}}"
+
+case "$DOCKER_BUILD_OUTPUT" in
+  push|load)
+    ;;
+  *)
+    echo "ERROR: CODECROW_DOCKER_OUTPUT must be 'push' or 'load'." >&2
+    exit 2
+    ;;
+esac
 
 cd "$ROOT_DIR"
 mkdir -p "$CI_LOG_DIR"
@@ -169,7 +182,7 @@ set_image_definition() {
     rag-pipeline)
       IMAGE_NAME="codecrow/rag-pipeline"
       CONTEXT="."
-      DOCKERFILE="python-ecosystem/rag-pipeline/Dockerfile"
+      DOCKERFILE="python-ecosystem/rag-pipeline/Dockerfile.observable"
       ;;
     web-frontend)
       IMAGE_NAME="codecrow/web-frontend"
@@ -249,19 +262,30 @@ for SERVICE in "${SELECTED_SERVICES[@]}"; do
   # Map codecrow to ghcr.io/<repo-owner>/codecrow-<service>
   # E.g. codecrow/web-server -> ghcr.io/username/codecrow-web-server:latest
   SERVICE_NAME=$(echo "$IMAGE_NAME" | cut -d'/' -f2)
-  FULL_IMAGE_NAME="ghcr.io/$REPO_OWNER/codecrow-$SERVICE_NAME:latest"
+  if [ "$DOCKER_BUILD_OUTPUT" = "push" ]; then
+    FULL_IMAGE_NAME="ghcr.io/$REPO_OWNER/codecrow-$SERVICE_NAME:latest"
+  else
+    FULL_IMAGE_NAME="${LOCAL_IMAGE_PREFIX}-${SERVICE_NAME}:latest"
+  fi
 
-  echo "  Building and pushing $FULL_IMAGE_NAME from $CONTEXT ..."
+  echo "  Building $FULL_IMAGE_NAME from $CONTEXT (output=$DOCKER_BUILD_OUTPUT) ..."
   BUILD_LOG="$CI_LOG_DIR/docker-$SCOPE.log"
   BUILD_ARGS=(
     docker buildx build
-    --cache-from "type=gha,scope=$SCOPE"
-    --cache-to "type=gha,mode=max,scope=$SCOPE"
     --network="$DOCKER_BUILD_NETWORK"
     --progress="$DOCKER_BUILD_PROGRESS"
-    --push
     -t "$FULL_IMAGE_NAME"
   )
+
+  if [ "$DOCKER_BUILD_OUTPUT" = "push" ]; then
+    BUILD_ARGS+=(
+      --cache-from "type=gha,scope=$SCOPE"
+      --cache-to "type=gha,mode=max,scope=$SCOPE"
+      --push
+    )
+  else
+    BUILD_ARGS+=(--load)
+  fi
 
   if [ -n "${DOCKERFILE:-}" ]; then
     BUILD_ARGS+=(-f "$DOCKERFILE")
@@ -269,10 +293,10 @@ for SERVICE in "${SELECTED_SERVICES[@]}"; do
 
   BUILD_ARGS+=("$CONTEXT")
   run_logged "Docker build $FULL_IMAGE_NAME" "$BUILD_LOG" "$DOCKER_BUILD_RETRIES" "${BUILD_ARGS[@]}"
-  echo "  ✓ $FULL_IMAGE_NAME built and pushed"
+  echo "  ✓ $FULL_IMAGE_NAME built ($DOCKER_BUILD_OUTPUT)"
 done
 
 echo ""
 echo "=========================================="
-echo "  Build and push complete for: $SELECTED_SERVICES_LABEL"
+echo "  Build complete for: $SELECTED_SERVICES_LABEL"
 echo "=========================================="

@@ -1,9 +1,12 @@
 package org.rostilos.codecrow.vcsclient.gitlab;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
 import org.rostilos.codecrow.vcsclient.VcsClient;
+import org.rostilos.codecrow.vcsclient.gitlab.api.GitLabApiContext;
+import org.rostilos.codecrow.vcsclient.gitlab.api.GitLabDiffApi;
+import org.rostilos.codecrow.vcsclient.gitlab.api.GitLabMergeRequestApi;
+import org.rostilos.codecrow.vcsclient.gitlab.api.GitLabRepositoryApi;
 import org.rostilos.codecrow.vcsclient.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,13 +14,12 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * VcsClient implementation for GitLab.
@@ -27,31 +29,35 @@ public class GitLabClient implements VcsClient {
     
     private static final Logger log = LoggerFactory.getLogger(GitLabClient.class);
     
-    private static final String API_BASE = GitLabConfig.API_BASE;
     private static final int DEFAULT_PAGE_SIZE = GitLabConfig.DEFAULT_PAGE_SIZE;
-    private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json");
 
-    private static final String ACCEPT_HEADER = "Accept";
-    private static final String GITLAB_ACCEPT_HEADER = "application/json";
-
-    private final OkHttpClient httpClient;
-    private final ObjectMapper objectMapper;
-    private final String baseUrl;
+    private final GitLabApiContext api;
+    private final GitLabDiffApi diffApi;
+    private final GitLabMergeRequestApi mergeRequestApi;
+    private final GitLabRepositoryApi repositoryApi;
     
     public GitLabClient(OkHttpClient httpClient) {
-        this(httpClient, API_BASE);
+        this(httpClient, GitLabConfig.INSTANCE_BASE);
     }
     
-    public GitLabClient(OkHttpClient httpClient, String baseUrl) {
-        this.httpClient = httpClient;
-        this.objectMapper = new ObjectMapper();
-        this.baseUrl = baseUrl != null ? baseUrl : API_BASE;
+    /**
+     * Create a GitLab client for an instance root or REST v4 base URL.
+     *
+     * <p>Both {@code https://gitlab.example.com} and
+     * {@code https://gitlab.example.com/api/v4} are accepted. Normalizing here
+     * keeps callers from having to understand GitLab endpoint construction.</p>
+     */
+    public GitLabClient(OkHttpClient httpClient, String instanceBaseUrl) {
+        this.api = new GitLabApiContext(httpClient, instanceBaseUrl);
+        this.diffApi = new GitLabDiffApi(api);
+        this.mergeRequestApi = new GitLabMergeRequestApi(api);
+        this.repositoryApi = new GitLabRepositoryApi(api);
     }
     
     @Override
     public boolean validateConnection() throws IOException {
-        Request request = createGetRequest(baseUrl + "/user");
-        try (Response response = httpClient.newCall(request).execute()) {
+        Request request = api.get(api.apiBaseUrl() + "/user");
+        try (Response response = api.execute(request)) {
             return response.isSuccessful();
         }
     }
@@ -76,16 +82,16 @@ public class GitLabClient implements VcsClient {
         // GitLab uses groups instead of organizations
         int page = 1;
         while (true) {
-            String url = baseUrl + "/groups?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page + "&min_access_level=10";
+            String url = api.apiBaseUrl() + "/groups?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page + "&min_access_level=10";
             
-            Request request = createGetRequest(url);
+            Request request = api.get(url);
             
-            try (Response response = httpClient.newCall(request).execute()) {
+            try (Response response = api.execute(request)) {
                 if (!response.isSuccessful()) {
-                    throw createException("list groups", response);
+                    throw api.error("list groups", response);
                 }
                 
-                JsonNode root = objectMapper.readTree(response.body().string());
+                JsonNode root = api.objectMapper().readTree(response.body().string());
                 if (!root.isArray() || root.isEmpty()) {
                     break;
                 }
@@ -113,11 +119,11 @@ public class GitLabClient implements VcsClient {
         
         // Check if workspaceId is a group or user
         if (isCurrentUser(workspaceId)) {
-            url = baseUrl + "/projects?membership=true&per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page + sortParams;
+            url = api.apiBaseUrl() + "/projects?membership=true&per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page + sortParams;
         } else {
             // Try as group first
-            String encodedWorkspace = URLEncoder.encode(workspaceId, StandardCharsets.UTF_8);
-            url = baseUrl + "/groups/" + encodedWorkspace + "/projects?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page + sortParams;
+            String encodedWorkspace = api.encode(workspaceId);
+            url = api.apiBaseUrl() + "/groups/" + encodedWorkspace + "/projects?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page + sortParams;
         }
         
         return fetchRepositoryPage(url, workspaceId, page);
@@ -125,14 +131,14 @@ public class GitLabClient implements VcsClient {
     
     @Override
     public VcsRepositoryPage searchRepositories(String workspaceId, String query, int page) throws IOException {
-        String encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8);
+        String encodedQuery = api.encode(query);
         
         String url;
         if (isCurrentUser(workspaceId)) {
-            url = baseUrl + "/projects?search=" + encodedQuery + "&membership=true&per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
+            url = api.apiBaseUrl() + "/projects?search=" + encodedQuery + "&membership=true&per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
         } else {
-            String encodedWorkspace = URLEncoder.encode(workspaceId, StandardCharsets.UTF_8);
-            url = baseUrl + "/groups/" + encodedWorkspace + "/projects?search=" + encodedQuery + "&per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
+            String encodedWorkspace = api.encode(workspaceId);
+            url = api.apiBaseUrl() + "/groups/" + encodedWorkspace + "/projects?search=" + encodedQuery + "&per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
         }
         
         return fetchRepositoryPage(url, workspaceId, page);
@@ -155,31 +161,31 @@ public class GitLabClient implements VcsClient {
             effectiveNamespace = workspaceId;
         }
         
-        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
-        String url = baseUrl + "/projects/" + encodedPath;
+        String encodedPath = api.encode(projectPath);
+        String url = api.apiBaseUrl() + "/projects/" + encodedPath;
 
-        Request request = createGetRequest(url);
-        try (Response response = httpClient.newCall(request).execute()) {
+        Request request = api.get(url);
+        try (Response response = api.execute(request)) {
             if (!response.isSuccessful()) {
                 if (response.code() == 404) {
                     // Try with just the repo ID (might be a numeric ID)
-                    url = baseUrl + "/projects/" + URLEncoder.encode(repoIdOrSlug, StandardCharsets.UTF_8);
-                    Request retryRequest = createGetRequest(url);
-                    try (Response retryResponse = httpClient.newCall(retryRequest).execute()) {
+                    url = api.apiBaseUrl() + "/projects/" + api.encode(repoIdOrSlug);
+                    Request retryRequest = api.get(url);
+                    try (Response retryResponse = api.execute(retryRequest)) {
                         if (!retryResponse.isSuccessful()) {
                             if (retryResponse.code() == 404) {
                                 return null;
                             }
-                            throw createException("get repository", retryResponse);
+                            throw api.error("get repository", retryResponse);
                         }
-                        JsonNode node = objectMapper.readTree(retryResponse.body().string());
+                        JsonNode node = api.objectMapper().readTree(retryResponse.body().string());
                         return parseRepository(node, effectiveNamespace);
                     }
                 }
-                throw createException("get repository", response);
+                throw api.error("get repository", response);
             }
             
-            JsonNode node = objectMapper.readTree(response.body().string());
+            JsonNode node = api.objectMapper().readTree(response.body().string());
             return parseRepository(node, effectiveNamespace);
         }
     }
@@ -205,10 +211,9 @@ public class GitLabClient implements VcsClient {
     
     private String createWebhook(String workspaceId, String repoIdOrSlug, String targetUrl, List<String> events) throws IOException {
         String projectPath = workspaceId + "/" + repoIdOrSlug;
-        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
-        String url = baseUrl + "/projects/" + encodedPath + "/hooks";
+        String url = api.projectUrl(workspaceId, repoIdOrSlug) + "/hooks";
         
-        log.info("createWebhook: projectPath={}, encodedPath={}, url={}", projectPath, encodedPath, url);
+        log.info("createWebhook: projectPath={}, url={}", projectPath, url);
         
         StringBuilder body = new StringBuilder();
         body.append("{\"url\":\"").append(targetUrl).append("\"");
@@ -224,8 +229,8 @@ public class GitLabClient implements VcsClient {
         
         log.info("createWebhook: body={}", body);
 
-        Request request = createPostRequest(url, body.toString());
-        try (Response response = httpClient.newCall(request).execute()) {
+        Request request = api.postJson(url, body.toString());
+        try (Response response = api.execute(request)) {
             if (!response.isSuccessful()) {
                 String responseBody = response.body() != null ? response.body().string() : "null";
                 log.error("createWebhook failed: code={}, body={}", response.code(), responseBody);
@@ -244,10 +249,10 @@ public class GitLabClient implements VcsClient {
                             "Please configure a public URL in your CodeCrow settings or use a tunnel service like ngrok for local development.");
                 }
                 
-                throw createException("create webhook", response);
+                throw api.error("create webhook", response);
             }
             
-            JsonNode node = objectMapper.readTree(response.body().string());
+            JsonNode node = api.objectMapper().readTree(response.body().string());
             String webhookId = String.valueOf(node.get("id").asLong());
             log.info("createWebhook succeeded: webhookId={}", webhookId);
             return webhookId;
@@ -255,9 +260,8 @@ public class GitLabClient implements VcsClient {
     }
     
     private String updateWebhook(String workspaceId, String repoIdOrSlug, String webhookId, String targetUrl, List<String> events) throws IOException {
-        String projectPath = workspaceId + "/" + repoIdOrSlug;
-        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
-        String url = baseUrl + "/projects/" + encodedPath + "/hooks/" + webhookId;
+        String url = api.projectUrl(workspaceId, repoIdOrSlug)
+                + "/hooks/" + webhookId;
         
         StringBuilder body = new StringBuilder();
         body.append("{\"url\":\"").append(targetUrl).append("\"");
@@ -270,10 +274,10 @@ public class GitLabClient implements VcsClient {
         }
         body.append("}");
 
-        Request request = createPutRequest(url, body.toString());
-        try (Response response = httpClient.newCall(request).execute()) {
+        Request request = api.putJson(url, body.toString());
+        try (Response response = api.execute(request)) {
             if (!response.isSuccessful()) {
-                throw createException("update webhook", response);
+                throw api.error("update webhook", response);
             }
             
             return webhookId;
@@ -299,14 +303,13 @@ public class GitLabClient implements VcsClient {
     
     @Override
     public void deleteWebhook(String workspaceId, String repoIdOrSlug, String webhookId) throws IOException {
-        String projectPath = workspaceId + "/" + repoIdOrSlug;
-        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
-        String url = baseUrl + "/projects/" + encodedPath + "/hooks/" + webhookId;
+        String url = api.projectUrl(workspaceId, repoIdOrSlug)
+                + "/hooks/" + webhookId;
 
-        Request request = createDeleteRequest(url);
-        try (Response response = httpClient.newCall(request).execute()) {
+        Request request = api.delete(url);
+        try (Response response = api.execute(request)) {
             if (!response.isSuccessful() && response.code() != 404) {
-                throw createException("delete webhook", response);
+                throw api.error("delete webhook", response);
             }
         }
     }
@@ -315,21 +318,21 @@ public class GitLabClient implements VcsClient {
     public List<VcsWebhook> listWebhooks(String workspaceId, String repoIdOrSlug) throws IOException {
         List<VcsWebhook> webhooks = new ArrayList<>();
         String projectPath = workspaceId + "/" + repoIdOrSlug;
-        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
         int page = 1;
         
-        log.debug("listWebhooks: projectPath={}, encodedPath={}", projectPath, encodedPath);
+        log.debug("listWebhooks: projectPath={}", projectPath);
         
         while (true) {
-            String url = baseUrl + "/projects/" + encodedPath + "/hooks?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
+            String url = api.projectUrl(workspaceId, repoIdOrSlug)
+                    + "/hooks?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
             log.debug("listWebhooks: calling URL={}", url);
-            Request request = createGetRequest(url);
-            try (Response response = httpClient.newCall(request).execute()) {
+            Request request = api.get(url);
+            try (Response response = api.execute(request)) {
                 if (!response.isSuccessful()) {
-                    throw createException("list webhooks", response);
+                    throw api.error("list webhooks", response);
                 }
                 
-                JsonNode root = objectMapper.readTree(response.body().string());
+                JsonNode root = api.objectMapper().readTree(response.body().string());
                 if (!root.isArray() || root.isEmpty()) {
                     break;
                 }
@@ -351,13 +354,13 @@ public class GitLabClient implements VcsClient {
     
     @Override
     public VcsUser getCurrentUser() throws IOException {
-        Request request = createGetRequest(baseUrl + "/user");
-        try (Response response = httpClient.newCall(request).execute()) {
+        Request request = api.get(api.apiBaseUrl() + "/user");
+        try (Response response = api.execute(request)) {
             if (!response.isSuccessful()) {
-                throw createException("get current user", response);
+                throw api.error("get current user", response);
             }
             
-            JsonNode node = objectMapper.readTree(response.body().string());
+            JsonNode node = api.objectMapper().readTree(response.body().string());
             return parseUser(node);
         }
     }
@@ -365,20 +368,20 @@ public class GitLabClient implements VcsClient {
     @Override
     public VcsWorkspace getWorkspace(String workspaceId) throws IOException {
         // Try as group first
-        String encodedWorkspace = URLEncoder.encode(workspaceId, StandardCharsets.UTF_8);
-        Request request = createGetRequest(baseUrl + "/groups/" + encodedWorkspace);
-        try (Response response = httpClient.newCall(request).execute()) {
+        String encodedWorkspace = api.encode(workspaceId);
+        Request request = api.get(api.apiBaseUrl() + "/groups/" + encodedWorkspace);
+        try (Response response = api.execute(request)) {
             if (response.isSuccessful()) {
-                JsonNode node = objectMapper.readTree(response.body().string());
+                JsonNode node = api.objectMapper().readTree(response.body().string());
                 return parseGroup(node);
             }
         }
         
         // Try as user
-        request = createGetRequest(baseUrl + "/users?username=" + encodedWorkspace);
-        try (Response response = httpClient.newCall(request).execute()) {
+        request = api.get(api.apiBaseUrl() + "/users?username=" + encodedWorkspace);
+        try (Response response = api.execute(request)) {
             if (response.isSuccessful()) {
-                JsonNode root = objectMapper.readTree(response.body().string());
+                JsonNode root = api.objectMapper().readTree(response.body().string());
                 if (root.isArray() && !root.isEmpty()) {
                     JsonNode node = root.get(0);
                     VcsUser user = parseUser(node);
@@ -396,21 +399,19 @@ public class GitLabClient implements VcsClient {
             if (response.code() == 404) {
                 return null;
             }
-            throw createException("get workspace/user", response);
+            throw api.error("get workspace/user", response);
         }
     }
     
     @Override
     public byte[] downloadRepositoryArchive(String workspaceId, String repoIdOrSlug, String branchOrCommit) throws IOException {
-        String projectPath = workspaceId + "/" + repoIdOrSlug;
-        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
-        String url = baseUrl + "/projects/" + encodedPath + "/repository/archive.zip?sha=" +
-                     URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8);
+        String url = api.projectUrl(workspaceId, repoIdOrSlug)
+                + "/repository/archive.zip?sha=" + api.encode(branchOrCommit);
         
-        Request request = createGetRequest(url);
-        try (Response response = httpClient.newCall(request).execute()) {
+        Request request = api.get(url);
+        try (Response response = api.execute(request)) {
             if (!response.isSuccessful()) {
-                throw createException("download repository archive", response);
+                throw api.error("download repository archive", response);
             }
             
             ResponseBody body = response.body();
@@ -424,16 +425,14 @@ public class GitLabClient implements VcsClient {
     
     @Override
     public long downloadRepositoryArchiveToFile(String workspaceId, String repoIdOrSlug, String branchOrCommit, Path targetFile) throws IOException {
-        String projectPath = workspaceId + "/" + repoIdOrSlug;
-        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
-        String url = baseUrl + "/projects/" + encodedPath + "/repository/archive.zip?sha=" +
-                     URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8);
+        String url = api.projectUrl(workspaceId, repoIdOrSlug)
+                + "/repository/archive.zip?sha=" + api.encode(branchOrCommit);
         
-        Request request = createGetRequest(url);
+        Request request = api.get(url);
         
-        try (Response response = httpClient.newCall(request).execute()) {
+        try (Response response = api.execute(request)) {
             if (!response.isSuccessful()) {
-                throw createException("download repository archive", response);
+                throw api.error("download repository archive", response);
             }
             
             ResponseBody body = response.body();
@@ -457,19 +456,17 @@ public class GitLabClient implements VcsClient {
     
     @Override
     public String getFileContent(String workspaceId, String repoIdOrSlug, String filePath, String branchOrCommit) throws IOException {
-        String projectPath = workspaceId + "/" + repoIdOrSlug;
-        String encodedProjectPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
-        String encodedFilePath = URLEncoder.encode(filePath, StandardCharsets.UTF_8);
-        String url = baseUrl + "/projects/" + encodedProjectPath + "/repository/files/" + encodedFilePath + 
-                     "/raw?ref=" + URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8);
+        String url = api.projectUrl(workspaceId, repoIdOrSlug)
+                + "/repository/files/" + api.encode(filePath)
+                + "/raw?ref=" + api.encode(branchOrCommit);
         
-        Request request = createGetRequest(url);
-        try (Response response = httpClient.newCall(request).execute()) {
+        Request request = api.get(url);
+        try (Response response = api.execute(request)) {
             if (!response.isSuccessful()) {
                 if (response.code() == 404) {
                     return null;
                 }
-                throw createException("get file content", response);
+                throw api.error("get file content", response);
             }
             
             ResponseBody body = response.body();
@@ -483,18 +480,16 @@ public class GitLabClient implements VcsClient {
     
     @Override
     public String getLatestCommitHash(String workspaceId, String repoIdOrSlug, String branchName) throws IOException {
-        String projectPath = workspaceId + "/" + repoIdOrSlug;
-        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
-        String url = baseUrl + "/projects/" + encodedPath + "/repository/branches/" +
-                     URLEncoder.encode(branchName, StandardCharsets.UTF_8);
+        String url = api.projectUrl(workspaceId, repoIdOrSlug)
+                + "/repository/branches/" + api.encode(branchName);
         
-        Request request = createGetRequest(url);
-        try (Response response = httpClient.newCall(request).execute()) {
+        Request request = api.get(url);
+        try (Response response = api.execute(request)) {
             if (!response.isSuccessful()) {
-                throw createException("get latest commit", response);
+                throw api.error("get latest commit", response);
             }
             
-            JsonNode root = objectMapper.readTree(response.body().string());
+            JsonNode root = api.objectMapper().readTree(response.body().string());
             JsonNode commit = root.get("commit");
             return commit != null ? getTextOrNull(commit, "id") : null;
         }
@@ -502,23 +497,23 @@ public class GitLabClient implements VcsClient {
 
     @Override
     public List<VcsCommit> getCommitHistory(String workspaceId, String repoIdOrSlug, String branchOrCommit, int limit) throws IOException {
-        String projectPath = workspaceId + "/" + repoIdOrSlug;
-        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
-        String encodedRef = URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8);
+        String projectUrl = api.projectUrl(workspaceId, repoIdOrSlug);
+        String encodedRef = api.encode(branchOrCommit);
         int perPage = Math.min(limit, 100); // GitLab max per_page is 100
 
-        String url = baseUrl + "/projects/" + encodedPath + "/repository/commits?ref_name=" + encodedRef + "&per_page=" + perPage;
+        String url = projectUrl + "/repository/commits?ref_name="
+                + encodedRef + "&per_page=" + perPage;
 
         List<VcsCommit> commits = new ArrayList<>();
 
         while (url != null && commits.size() < limit) {
-            Request request = createGetRequest(url);
-            try (Response response = httpClient.newCall(request).execute()) {
+            Request request = api.get(url);
+            try (Response response = api.execute(request)) {
                 if (!response.isSuccessful()) {
-                    throw createException("get commit history", response);
+                    throw api.error("get commit history", response);
                 }
 
-                JsonNode root = objectMapper.readTree(response.body().string());
+                JsonNode root = api.objectMapper().readTree(response.body().string());
                 if (root == null || !root.isArray()) break;
 
                 for (JsonNode commitNode : root) {
@@ -558,7 +553,7 @@ public class GitLabClient implements VcsClient {
                 if (commits.size() < limit) {
                     String nextPage = response.header("X-Next-Page");
                     if (nextPage != null && !nextPage.isEmpty()) {
-                        url = baseUrl + "/projects/" + encodedPath + "/repository/commits?ref_name=" + encodedRef
+                        url = projectUrl + "/repository/commits?ref_name=" + encodedRef
                                 + "&per_page=" + perPage + "&page=" + nextPage;
                     } else {
                         url = null;
@@ -574,92 +569,27 @@ public class GitLabClient implements VcsClient {
 
     @Override
     public String getBranchDiff(String workspaceId, String repoIdOrSlug, String baseBranch, String compareBranch) throws IOException {
-        // GitLab: GET /projects/:id/repository/compare
-        // Returns diff between two branches/commits
-        // API: https://docs.gitlab.com/ee/api/repositories.html#compare-branches-tags-or-commits
-        String projectPath = workspaceId + "/" + repoIdOrSlug;
-        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
-        String encodedFrom = URLEncoder.encode(baseBranch, StandardCharsets.UTF_8);
-        String encodedTo = URLEncoder.encode(compareBranch, StandardCharsets.UTF_8);
-        
-        String url = baseUrl + "/projects/" + encodedPath + "/repository/compare?from=" + encodedFrom + "&to=" + encodedTo;
-        
-        Request request = createGetRequest(url);
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                throw createException("get branch diff", response);
-            }
-            
-            JsonNode root = objectMapper.readTree(response.body().string());
-            JsonNode diffs = root.get("diffs");
-            
-            if (diffs == null || !diffs.isArray() || diffs.isEmpty()) {
-                return "";
-            }
-            
-            // Build unified diff format from GitLab's compare response
-            StringBuilder diffBuilder = new StringBuilder();
-            for (JsonNode diff : diffs) {
-                String oldPath = getTextOrNull(diff, "old_path");
-                String newPath = getTextOrNull(diff, "new_path");
-                boolean newFile = diff.has("new_file") && diff.get("new_file").asBoolean();
-                boolean deletedFile = diff.has("deleted_file") && diff.get("deleted_file").asBoolean();
-                boolean renamedFile = diff.has("renamed_file") && diff.get("renamed_file").asBoolean();
-                String diffContent = getTextOrNull(diff, "diff");
-                
-                // Build git diff header
-                diffBuilder.append("diff --git a/").append(oldPath).append(" b/").append(newPath).append("\n");
-                
-                if (newFile) {
-                    diffBuilder.append("new file mode 100644\n");
-                } else if (deletedFile) {
-                    diffBuilder.append("deleted file mode 100644\n");
-                } else if (renamedFile) {
-                    diffBuilder.append("rename from ").append(oldPath).append("\n");
-                    diffBuilder.append("rename to ").append(newPath).append("\n");
-                }
-                
-                // Proper unified diff headers: /dev/null for new/deleted files
-                if (newFile) {
-                    diffBuilder.append("--- /dev/null\n");
-                    diffBuilder.append("+++ b/").append(newPath).append("\n");
-                } else if (deletedFile) {
-                    diffBuilder.append("--- a/").append(oldPath).append("\n");
-                    diffBuilder.append("+++ /dev/null\n");
-                } else {
-                    diffBuilder.append("--- a/").append(oldPath).append("\n");
-                    diffBuilder.append("+++ b/").append(newPath).append("\n");
-                }
-                
-                if (diffContent != null && !diffContent.isEmpty()) {
-                    diffBuilder.append(diffContent);
-                    if (!diffContent.endsWith("\n")) {
-                        diffBuilder.append("\n");
-                    }
-                }
-            }
-            
-            return diffBuilder.toString();
-        }
+        return diffApi.getCommitRangeDiff(
+                workspaceId, repoIdOrSlug, baseBranch, compareBranch);
     }
 
     @Override
     public List<String> listBranches(String workspaceId, String repoIdOrSlug) throws IOException {
         List<String> branches = new ArrayList<>();
-        String projectPath = workspaceId + "/" + repoIdOrSlug;
-        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
         int page = 1;
         
         while (true) {
-            String url = baseUrl + "/projects/" + encodedPath + "/repository/branches?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
-            Request request = createGetRequest(url);
+            String url = api.projectUrl(workspaceId, repoIdOrSlug)
+                    + "/repository/branches?per_page=" + DEFAULT_PAGE_SIZE
+                    + "&page=" + page;
+            Request request = api.get(url);
             
-            try (Response response = httpClient.newCall(request).execute()) {
+            try (Response response = api.execute(request)) {
                 if (!response.isSuccessful()) {
-                    throw createException("list branches", response);
+                    throw api.error("list branches", response);
                 }
                 
-                JsonNode root = objectMapper.readTree(response.body().string());
+                JsonNode root = api.objectMapper().readTree(response.body().string());
                 
                 if (root == null || !root.isArray() || root.isEmpty()) {
                     break;
@@ -686,23 +616,23 @@ public class GitLabClient implements VcsClient {
     @Override
     public List<VcsCollaborator> getRepositoryCollaborators(String workspaceId, String repoIdOrSlug) throws IOException {
         List<VcsCollaborator> collaborators = new ArrayList<>();
-        String projectPath = workspaceId + "/" + repoIdOrSlug;
-        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
         int page = 1;
         
         while (true) {
-            String url = baseUrl + "/projects/" + encodedPath + "/members/all?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
-            Request request = createGetRequest(url);
+            String url = api.projectUrl(workspaceId, repoIdOrSlug)
+                    + "/members/all?per_page=" + DEFAULT_PAGE_SIZE
+                    + "&page=" + page;
+            Request request = api.get(url);
             
-            try (Response response = httpClient.newCall(request).execute()) {
+            try (Response response = api.execute(request)) {
                 if (!response.isSuccessful()) {
                     if (response.code() == 403) {
                         throw new IOException("No permission to view project members.");
                     }
-                    throw createException("get project members", response);
+                    throw api.error("get project members", response);
                 }
                 
-                JsonNode root = objectMapper.readTree(response.body().string());
+                JsonNode root = api.objectMapper().readTree(response.body().string());
                 
                 if (root != null && root.isArray()) {
                     for (JsonNode memberNode : root) {
@@ -722,6 +652,326 @@ public class GitLabClient implements VcsClient {
         }
         
         return collaborators;
+    }
+
+    @Override
+    public VcsPullRequest getPullRequest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException {
+        JsonNode metadata = getMergeRequest(workspaceId, repoIdOrSlug, pullRequestNumber);
+        String state = getTextOrNull(metadata, "state");
+        String baseCommit = metadata.path("diff_refs").path("base_sha").asText(null);
+        if (baseCommit == null || baseCommit.isBlank()) {
+            baseCommit = metadata.path("diff_refs").path("start_sha").asText(null);
+        }
+        String headCommit = metadata.path("diff_refs").path("head_sha").asText(null);
+        if (headCommit == null || headCommit.isBlank()) {
+            headCommit = metadata.path("sha").asText(null);
+        }
+        return new VcsPullRequest(
+                pullRequestNumber,
+                getTextOrNull(metadata, "title"),
+                getTextOrNull(metadata, "description"),
+                getTextOrNull(metadata, "source_branch"),
+                getTextOrNull(metadata, "target_branch"),
+                baseCommit,
+                headCommit,
+                state,
+                "merged".equalsIgnoreCase(state),
+                getTextOrNull(metadata, "web_url"));
+    }
+
+    @Override
+    public List<VcsPullRequestComment> getPullRequestCommentThread(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber,
+            String triggeringCommentId,
+            String parentOrThreadId,
+            boolean inlineComment
+    ) throws IOException {
+        if (parentOrThreadId == null || parentOrThreadId.isBlank()) {
+            return List.of();
+        }
+
+        JsonNode discussion = mergeRequestApi.getDiscussion(
+                workspaceId, repoIdOrSlug, pullRequestNumber, parentOrThreadId);
+        JsonNode notes = discussion.path("notes");
+        if (!notes.isArray()) {
+            return List.of();
+        }
+
+        List<VcsPullRequestComment> comments = new ArrayList<>();
+        String rootNoteId = notes.isEmpty() ? null : notes.get(0).path("id").asText(null);
+        for (JsonNode note : notes) {
+            String noteId = note.path("id").asText();
+            comments.add(new VcsPullRequestComment(
+                    noteId,
+                    noteId.equals(rootNoteId) ? null : rootNoteId,
+                    parentOrThreadId,
+                    note.path("author").path("username").asText(null),
+                    note.path("body").asText(null),
+                    note.path("created_at").asText(null)));
+        }
+        return List.copyOf(comments);
+    }
+
+    @Override
+    public String getPullRequestDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException {
+        return diffApi.getMergeRequestDiff(
+                workspaceId, repoIdOrSlug, pullRequestNumber);
+    }
+
+    @Override
+    public String getCommitDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commitHash
+    ) throws IOException {
+        return diffApi.getCommitDiff(workspaceId, repoIdOrSlug, commitHash);
+    }
+
+    @Override
+    public String getCommitRangeDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            String baseCommitHash,
+            String headCommitHash
+    ) throws IOException {
+        return diffApi.getCommitRangeDiff(
+                workspaceId, repoIdOrSlug, baseCommitHash, headCommitHash);
+    }
+
+    @Override
+    public boolean fileExists(
+            String workspaceId,
+            String repoIdOrSlug,
+            String branchOrCommit,
+            String filePath
+    ) throws IOException {
+        return repositoryApi.fileExists(
+                workspaceId, repoIdOrSlug, branchOrCommit, filePath);
+    }
+
+    @Override
+    public Long findPullRequestForCommit(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commitHash
+    ) throws IOException {
+        return mergeRequestApi.findForCommit(workspaceId, repoIdOrSlug, commitHash);
+    }
+
+    /**
+     * Provider-specific metadata for consumers that need GitLab diff refs.
+     * Endpoint construction remains owned by this configured client.
+     */
+    public JsonNode getMergeRequest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException {
+        return mergeRequestApi.get(workspaceId, repoIdOrSlug, pullRequestNumber);
+    }
+
+    public void postMergeRequestComment(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid,
+            String body
+    ) throws IOException {
+        mergeRequestApi.postComment(
+                workspaceId, repoIdOrSlug, mergeRequestIid, body);
+    }
+
+    public String postMergeRequestDiscussionReply(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid,
+            String discussionId,
+            String body
+    ) throws IOException {
+        JsonNode note = mergeRequestApi.postDiscussionReply(
+                workspaceId, repoIdOrSlug, mergeRequestIid, discussionId, body);
+        return note.hasNonNull("id") ? note.path("id").asText() : null;
+    }
+
+    public void postMergeRequestLineComment(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid,
+            String body,
+            String baseSha,
+            String headSha,
+            String startSha,
+            String filePath,
+            int newLine
+    ) throws IOException {
+        mergeRequestApi.postLineComment(
+                workspaceId, repoIdOrSlug, mergeRequestIid,
+                body, baseSha, headSha, startSha, filePath, newLine);
+    }
+
+    public List<Map<String, Object>> listMergeRequestNotes(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid
+    ) throws IOException {
+        return mergeRequestApi.listNotes(
+                workspaceId, repoIdOrSlug, mergeRequestIid);
+    }
+
+    public void updateMergeRequestNote(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid,
+            long noteId,
+            String body
+    ) throws IOException {
+        mergeRequestApi.updateNote(
+                workspaceId, repoIdOrSlug, mergeRequestIid, noteId, body);
+    }
+
+    public void deleteMergeRequestNote(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid,
+            long noteId
+    ) throws IOException {
+        mergeRequestApi.deleteNote(
+                workspaceId, repoIdOrSlug, mergeRequestIid, noteId);
+    }
+
+    public Long findMergeRequestNoteByMarker(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid,
+            String marker
+    ) throws IOException {
+        return mergeRequestApi.findNoteByMarker(
+                workspaceId, repoIdOrSlug, mergeRequestIid, marker);
+    }
+
+    public JsonNode listMergeRequests(
+            String workspaceId,
+            String repoIdOrSlug,
+            String state,
+            int limit
+    ) throws IOException {
+        return mergeRequestApi.list(workspaceId, repoIdOrSlug, state, limit);
+    }
+
+    public JsonNode createMergeRequest(
+            String workspaceId,
+            String repoIdOrSlug,
+            String title,
+            String description,
+            String sourceBranch,
+            String targetBranch,
+            List<String> reviewerIds
+    ) throws IOException {
+        return mergeRequestApi.create(
+                workspaceId,
+                repoIdOrSlug,
+                title,
+                description,
+                sourceBranch,
+                targetBranch,
+                reviewerIds);
+    }
+
+    public JsonNode updateMergeRequest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid,
+            String title,
+            String description
+    ) throws IOException {
+        return mergeRequestApi.update(
+                workspaceId, repoIdOrSlug, mergeRequestIid, title, description);
+    }
+
+    public JsonNode getMergeRequestActivity(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid
+    ) throws IOException {
+        return mergeRequestApi.getActivity(
+                workspaceId, repoIdOrSlug, mergeRequestIid);
+    }
+
+    public JsonNode approveMergeRequest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid
+    ) throws IOException {
+        return mergeRequestApi.approve(workspaceId, repoIdOrSlug, mergeRequestIid);
+    }
+
+    public JsonNode unapproveMergeRequest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid
+    ) throws IOException {
+        return mergeRequestApi.unapprove(
+                workspaceId, repoIdOrSlug, mergeRequestIid);
+    }
+
+    public JsonNode closeMergeRequest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid
+    ) throws IOException {
+        return mergeRequestApi.close(workspaceId, repoIdOrSlug, mergeRequestIid);
+    }
+
+    public JsonNode mergeMergeRequest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid,
+            String message,
+            String strategy
+    ) throws IOException {
+        return mergeRequestApi.merge(
+                workspaceId,
+                repoIdOrSlug,
+                mergeRequestIid,
+                message,
+                strategy);
+    }
+
+    public JsonNode getMergeRequestNotes(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid
+    ) throws IOException {
+        return mergeRequestApi.getNotes(
+                workspaceId, repoIdOrSlug, mergeRequestIid);
+    }
+
+    public JsonNode getMergeRequestCommits(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid
+    ) throws IOException {
+        return mergeRequestApi.getCommits(
+                workspaceId, repoIdOrSlug, mergeRequestIid);
+    }
+
+    public String getRepositoryTree(
+            String workspaceId,
+            String repoIdOrSlug,
+            String branchOrCommit,
+            String directoryPath
+    ) throws IOException {
+        return repositoryApi.getTree(
+                workspaceId, repoIdOrSlug, branchOrCommit, directoryPath);
     }
     
     private VcsCollaborator parseCollaborator(JsonNode node) {
@@ -761,13 +1011,13 @@ public class GitLabClient implements VcsClient {
     }
     
     private VcsRepositoryPage fetchRepositoryPage(String url, String workspaceId, int page) throws IOException {
-        Request request = createGetRequest(url);
-        try (Response response = httpClient.newCall(request).execute()) {
+        Request request = api.get(url);
+        try (Response response = api.execute(request)) {
             if (!response.isSuccessful()) {
-                throw createException("fetch repositories", response);
+                throw api.error("fetch repositories", response);
             }
             
-            JsonNode root = objectMapper.readTree(response.body().string());
+            JsonNode root = api.objectMapper().readTree(response.body().string());
             
             List<VcsRepository> repos = new ArrayList<>();
             Integer totalCount = null;
@@ -884,44 +1134,6 @@ public class GitLabClient implements VcsClient {
     
     private String getTextOrNull(JsonNode node, String field) {
         return node.has(field) && !node.get(field).isNull() ? node.get(field).asText() : null;
-    }
-    
-    private IOException createException(String operation, Response response) throws IOException {
-        String body = response.body() != null ? response.body().string() : "";
-        GitLabException cause = new GitLabException(operation, response.code(), body);
-        return new IOException(cause.getMessage(), cause);
-    }
-
-    private Request createPostRequest(String url, String jsonBody) {
-        return new Request.Builder()
-                .url(url)
-                .header(ACCEPT_HEADER, GITLAB_ACCEPT_HEADER)
-                .post(RequestBody.create(jsonBody, JSON_MEDIA_TYPE))
-                .build();
-    }
-
-    private Request createPutRequest(String url, String jsonBody) {
-        return new Request.Builder()
-                .url(url)
-                .header(ACCEPT_HEADER, GITLAB_ACCEPT_HEADER)
-                .put(RequestBody.create(jsonBody, JSON_MEDIA_TYPE))
-                .build();
-    }
-
-    private Request createDeleteRequest(String url) {
-        return new Request.Builder()
-                .url(url)
-                .header(ACCEPT_HEADER, GITLAB_ACCEPT_HEADER)
-                .delete()
-                .build();
-    }
-
-    private Request createGetRequest(String url) {
-        return new Request.Builder()
-                .url(url)
-                .header(ACCEPT_HEADER, GITLAB_ACCEPT_HEADER)
-                .get()
-                .build();
     }
     
     /**

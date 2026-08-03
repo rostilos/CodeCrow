@@ -14,6 +14,7 @@ import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibilityOption;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -103,6 +104,108 @@ class JiraCloudClientTest {
         assertThat(visibility.path("type").asText()).isEqualTo("role");
         assertThat(visibility.path("identifier").asText()).isEqualTo("Developers");
         assertThat(visibility.path("value").asText()).isEqualTo("Developers");
+    }
+
+    @Test
+    @DisplayName("stores CodeCrow markers as non-rendered Jira comment properties")
+    void postCommentMovesCodeCrowMarkersOutOfAdfContent() throws Exception {
+        server.enqueue(commentResponse(201));
+
+        client.postComment("PROJ-123", """
+                <!-- codecrow-analysis-review -->
+                <!-- codecrow-issues -->
+                <!-- codecrow-qa-autodoc -->
+                <!-- codecrow-analysis-comment -->
+                <!-- codecrow-command-response -->
+                <!-- codecrow-summary -->
+                <!-- codecrow-review -->
+                <!-- codecrow-ask-response -->
+                ## QA report
+
+                Test checkout flow
+                """);
+
+        JsonNode payload = mapper.readTree(server.takeRequest().getBody().readUtf8());
+        assertThat(payload.path("body").toString())
+                .doesNotContain("codecrow-")
+                .contains("QA report")
+                .contains("Test checkout flow");
+        assertThat(payload.path("properties").get(0).path("key").asText())
+                .isEqualTo("codecrow.comment.markers");
+        assertThat(payload.path("properties").get(0).path("value").path("markers"))
+                .extracting(JsonNode::asText)
+                .containsExactly(
+                        "codecrow-analysis-review",
+                        "codecrow-issues",
+                        "codecrow-qa-autodoc",
+                        "codecrow-analysis-comment",
+                        "codecrow-command-response",
+                        "codecrow-summary",
+                        "codecrow-review",
+                        "codecrow-ask-response");
+    }
+
+    @Test
+    @DisplayName("finds a Jira comment by non-rendered CodeCrow marker property")
+    void findCommentByMarkerUsesCommentProperties() throws Exception {
+        server.enqueue(jsonResponse("""
+                {
+                  "comments": [
+                    {
+                      "id": "10001",
+                      "author": {"displayName": "CodeCrow"},
+                      "body": {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [{
+                          "type": "paragraph",
+                          "content": [{"type": "text", "text": "QA notes"}]
+                        }]
+                      },
+                      "properties": [{
+                        "key": "codecrow.comment.markers",
+                        "value": {"markers": ["codecrow-qa-autodoc:prs=42,57"]}
+                      }]
+                    }
+                  ]
+                }
+                """));
+
+        Optional<org.rostilos.codecrow.taskmanagement.model.TaskComment> result =
+                client.findCommentByMarker("PROJ-123", "<!-- codecrow-qa-autodoc");
+
+        assertThat(result).isPresent();
+        assertThat(result.orElseThrow().commentId()).isEqualTo("10001");
+        assertThat(server.takeRequest().getPath())
+                .contains("orderBy=created")
+                .contains("expand=properties");
+    }
+
+    @Test
+    @DisplayName("continues to find legacy Jira comments with visible markers")
+    void findCommentByMarkerSupportsLegacyVisibleMarker() throws Exception {
+        server.enqueue(jsonResponse("""
+                {
+                  "comments": [
+                    {
+                      "id": "10002",
+                      "author": {"displayName": "CodeCrow"},
+                      "body": {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [{
+                          "type": "paragraph",
+                          "content": [{"type": "text", "text": "<!-- codecrow-qa-autodoc --> QA notes"}]
+                        }]
+                      }
+                    }
+                  ]
+                }
+                """));
+
+        assertThat(client.findCommentByMarker(
+                "PROJ-123", "<!-- codecrow-qa-autodoc"))
+                .isPresent();
     }
 
     @Test

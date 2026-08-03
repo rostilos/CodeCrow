@@ -75,10 +75,49 @@ from service.review.snapshot_identity import (
     ReviewSnapshotPreconditionError,
     validate_review_snapshot_identity,
 )
+from service.review.pr_evidence import (
+    PrEvidenceLedger,
+    STAGE_2_PR_EVIDENCE_CHAR_BUDGET,
+    build_pr_evidence_ledger,
+    gate_task_coverage_candidates,
+)
 
 logger = logging.getLogger(__name__)
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 _SHA256_FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def _task_context_value(
+    task_context: Optional[Dict[str, Any]],
+    *keys: str,
+) -> Optional[str]:
+    if not task_context:
+        return None
+    for key in keys:
+        value = task_context.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _task_evidence_key(request: ReviewRequestDto) -> Optional[str]:
+    task_key = _task_context_value(
+        request.taskContext,
+        "task_key",
+        "taskKey",
+        "key",
+    )
+    if task_key:
+        return task_key
+    # The server-built history can remain available when the live task-provider
+    # lookup is temporarily unavailable. Reuse only its explicit key header.
+    history = request.taskHistoryContext or ""
+    for line in history.splitlines():
+        if line.startswith("Task:"):
+            candidate = line.removeprefix("Task:").split(" - ", 1)[0].strip()
+            if candidate:
+                return candidate
+    return None
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -504,18 +543,19 @@ class MultiStageReviewOrchestrator:
             else:
                 status_code = result.get("status_code")
                 detail = result.get("error") or result
-                raise PrIndexPreconditionError(
-                    "PR context precondition failed"
-                    f"{f' (HTTP {status_code})' if status_code else ''}: "
-                    f"{detail}. No review-model stage was started."
+                logger.warning(
+                    "PR context indexing unavailable%s; continuing review without "
+                    "the PR overlay: %s",
+                    f" (HTTP {status_code})" if status_code else "",
+                    detail,
                 )
-        except PrIndexPreconditionError:
-            raise
         except Exception as e:
-            raise PrIndexPreconditionError(
-                "PR context precondition failed before review-model execution: "
-                f"{type(e).__name__}: {e}"
-            ) from e
+            logger.warning(
+                "PR context indexing failed before model execution; continuing "
+                "without the PR overlay: %s: %s",
+                type(e).__name__,
+                e,
+            )
 
     async def _cleanup_pr_files(self, request: ReviewRequestDto) -> None:
         """Delete PR-indexed data after analysis completes.
@@ -882,7 +922,8 @@ class MultiStageReviewOrchestrator:
         self, 
         request: ReviewRequestDto, 
         rag_context: Optional[Any] = None,
-        processed_diff: Optional[ProcessedDiff] = None
+        processed_diff: Optional[ProcessedDiff] = None,
+        full_pr_processed_diff: Optional[ProcessedDiff] = None,
     ) -> Dict[str, Any]:
         """
         Main entry point for the multi-stage review.
@@ -908,6 +949,36 @@ class MultiStageReviewOrchestrator:
         else:
             logger.info("[%s] FULL mode: initial PR review", _review_log_id(request))
 
+        pr_evidence_ledger: PrEvidenceLedger = build_pr_evidence_ledger(
+            (
+                full_pr_processed_diff
+                if is_incremental
+                else (full_pr_processed_diff or processed_diff)
+            ),
+            processed_diff,
+            incremental=bool(is_incremental),
+            task_context=request.taskContext,
+            pr_title=request.prTitle or "",
+            pr_description=request.prDescription or "",
+        )
+        logger.info(
+            "[%s] PR evidence scopes ready: delta_files=%d, full_pr_files=%d, "
+            "prompt_chars=%d/%d, manifest_complete=%s, evidence_complete=%s",
+            _review_log_id(request),
+            len(processed_diff.files) if processed_diff else 0,
+            len(full_pr_processed_diff.files)
+            if full_pr_processed_diff is not None
+            else (
+                len(processed_diff.files)
+                if not is_incremental and processed_diff
+                else 0
+            ),
+            pr_evidence_ledger.prompt_chars,
+            STAGE_2_PR_EVIDENCE_CHAR_BUDGET,
+            pr_evidence_ledger.manifest_complete,
+            pr_evidence_ledger.full_evidence_complete,
+        )
+
         inference_profile = build_review_inference_profile(request, processed_diff)
         if inference_profile.fast_check_enabled:
             _emit_status(
@@ -932,15 +1003,12 @@ class MultiStageReviewOrchestrator:
         candidate_ledger = CandidateEvidenceLedger()
 
         try:
-            # Establish current-source and repository-snapshot compatibility
-            # before the first review-model call. A 409 or transport failure is
-            # a quality precondition failure, not permission to review using
-            # stale branch context. This also avoids paying for Stage 0 when the
-            # deterministic context required by later stages cannot be built.
+            # Build the optional current-source overlay before the first model
+            # call. RAG/index failures are reported but do not block diff review.
             _emit_status(
                 self.event_callback,
-                "pr_context_preflight_started",
-                "Validating current-source and repository context compatibility...",
+                "pr_context_enrichment_started",
+                "Preparing optional repository context...",
             )
             await self._index_pr_files(
                 request,
@@ -949,8 +1017,8 @@ class MultiStageReviewOrchestrator:
             )
             _emit_status(
                 self.event_callback,
-                "pr_context_preflight_completed",
-                "Current-source and repository context compatibility established",
+                "pr_context_enrichment_completed",
+                "Optional repository context preparation completed",
             )
 
             if (
@@ -1147,7 +1215,42 @@ class MultiStageReviewOrchestrator:
                     visible_evidence_by_id=stage_2_visible_evidence_by_id,
                     visible_prompt_hunk_ids=stage_2_visible_prompt_hunk_ids,
                     prompt_provenance=stage_2_prompt_provenance,
+                    pr_evidence_ledger=pr_evidence_ledger,
                 )
+                coverage_gate = gate_task_coverage_candidates(
+                    cross_file_results.cross_file_issues,
+                    incremental=bool(is_incremental),
+                    task_context=request.taskContext,
+                    previous_issue_ids=(
+                        issue.id
+                        for issue in (request.previousCodeAnalysisIssues or ())
+                    ),
+                    ledger=pr_evidence_ledger,
+                )
+                if coverage_gate.rejected:
+                    cross_file_results.cross_file_issues = list(
+                        coverage_gate.kept
+                    )
+                    rejection_counts: Dict[str, int] = {}
+                    for _, reason in coverage_gate.rejected:
+                        rejection_counts[reason] = (
+                            rejection_counts.get(reason, 0) + 1
+                        )
+                    logger.warning(
+                        "[%s] Suppressed %d unsupported task-coverage "
+                        "candidate(s): %s",
+                        _review_log_id(request),
+                        len(coverage_gate.rejected),
+                        rejection_counts,
+                    )
+                    _emit_status(
+                        self.event_callback,
+                        "task_coverage_candidates_suppressed",
+                        (
+                            "Withheld unsupported PR-wide task-coverage "
+                            f"claim(s): {len(coverage_gate.rejected)}"
+                        ),
+                    )
             else:
                 if stage_2_context_task and not stage_2_context_task.done():
                     stage_2_context_task.cancel()
@@ -1346,6 +1449,10 @@ class MultiStageReviewOrchestrator:
                 fallback_llm=self.llm,
             )
             final_report = stage_3_result["report"]
+            task_key = _task_evidence_key(request)
+            task_evidence_payload = (
+                pr_evidence_ledger.task_implementation_evidence_payload(task_key)
+            )
             dismissed_ids = set(stage_3_result.get("dismissed_issue_ids", []))
 
             # A dismissed historical OPEN issue is a lifecycle update, not an
@@ -1390,13 +1497,18 @@ class MultiStageReviewOrchestrator:
             )
             logger.info("Review hunk coverage complete: %s", hunk_coverage.summary())
 
-            return {
+            response = {
                 "comment": final_report,
                 "issues": [
                     _serialize_issue_for_client(issue)
                     for issue in file_issues
                 ],
             }
+            if task_evidence_payload is not None:
+                # Machine-readable auxiliary output is persisted by the Java
+                # host. It must never be embedded in a PR or task comment.
+                response["taskEvidence"] = task_evidence_payload
+            return response
 
         except Exception as e:
             logger.error(f"Multi-stage review failed: {e}", exc_info=True)

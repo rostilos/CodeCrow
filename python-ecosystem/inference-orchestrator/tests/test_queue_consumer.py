@@ -156,8 +156,8 @@ async def test_neutral_mixed_language_dry_run_traverses_queue_handler(
     assert {
         "acknowledged",
         "prompt_dry_run_started",
-        "pr_context_preflight_started",
-        "pr_context_preflight_completed",
+        "pr_context_enrichment_started",
+        "pr_context_enrichment_completed",
         "stage_0_started",
         "stage_1_started",
         "verification_started",
@@ -186,6 +186,7 @@ async def test_start_uses_blocking_read_safe_redis_timeouts():
     review_service = MagicMock()
     redis_client = MagicMock()
     redis_client.aclose = AsyncMock()
+    redis_client.set = AsyncMock()
     consumer = RedisQueueConsumer(review_service)
     consumer._consume_loop = AsyncMock()
 
@@ -203,6 +204,40 @@ async def test_start_uses_blocking_read_safe_redis_timeouts():
         "socket_timeout": 30,
         "health_check_interval": 30,
     }
+    redis_client.set.assert_awaited()
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_review_consumer_heartbeat_has_a_short_expiry():
+    consumer = RedisQueueConsumer(MagicMock())
+    consumer._redis = MagicMock()
+    consumer._redis.set = AsyncMock()
+    consumer.consumer_heartbeat_ttl_seconds = 15
+
+    await consumer._publish_consumer_heartbeat()
+
+    consumer._redis.set.assert_awaited_once_with(
+        "codecrow:analysis:consumer:heartbeat",
+        "alive",
+        ex=15,
+    )
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_review_consumer_health_requires_live_tasks_and_heartbeat():
+    consumer = RedisQueueConsumer(MagicMock())
+    consumer.is_running = True
+    consumer._redis = MagicMock()
+    consumer._redis.exists = AsyncMock(return_value=1)
+    consumer._task = MagicMock()
+    consumer._task.done.return_value = False
+    consumer._consumer_heartbeat_task = MagicMock()
+    consumer._consumer_heartbeat_task.done.return_value = False
+
+    assert await consumer.is_healthy() is True
+
+    consumer._task.done.return_value = True
+    assert await consumer.is_healthy() is False
 
 
 @pytest.mark.asyncio(loop_scope="function")

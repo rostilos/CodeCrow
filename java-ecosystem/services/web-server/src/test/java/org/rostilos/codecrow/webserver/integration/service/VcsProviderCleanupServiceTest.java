@@ -1,19 +1,11 @@
 package org.rostilos.codecrow.webserver.integration.service;
 
-import okhttp3.Call;
-import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
-import okhttp3.Protocol;
-import okhttp3.Request;
-import okhttp3.Response;
-import okhttp3.ResponseBody;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
-import okio.Buffer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.core.dto.admin.GitLabSettingsDTO;
@@ -22,13 +14,13 @@ import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.EVcsSetupStatus;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.model.vcs.config.gitlab.GitLabConfig;
 import org.rostilos.codecrow.core.persistence.repository.vcs.BitbucketConnectInstallationRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
@@ -50,7 +42,6 @@ class VcsProviderCleanupServiceTest {
     @Mock private BitbucketConnectInstallationRepository connectInstallationRepository;
     @Mock private VcsConnectionRepository connectionRepository;
     @Mock private OkHttpClient httpClient;
-    @Mock private Call call;
 
     private VcsProviderCleanupService service;
 
@@ -66,48 +57,83 @@ class VcsProviderCleanupServiceTest {
 
     @Test
     void revokesTheExactGitLabOAuthToken() throws Exception {
-        VcsConnection connection = appConnection(EVcsProvider.GITLAB);
-        connection.setAccessToken("encrypted-token");
-        when(encryptionService.decrypt("encrypted-token")).thenReturn("plain-token");
-        when(siteSettingsProvider.getGitLabSettings()).thenReturn(
-                new GitLabSettingsDTO(
-                        "client-id",
-                        "client-secret",
-                        "https://gitlab.example/"));
-        when(httpClient.newCall(any(Request.class))).thenReturn(call);
-        when(call.execute()).thenAnswer(invocation -> response(200));
+        try (MockWebServer gitLab = new MockWebServer()) {
+            gitLab.enqueue(new MockResponse().setResponseCode(200));
+            gitLab.start();
+            service = new VcsProviderCleanupService(
+                    siteSettingsProvider,
+                    encryptionService,
+                    connectInstallationRepository,
+                    connectionRepository,
+                    new OkHttpClient());
+            VcsConnection connection = appConnection(EVcsProvider.GITLAB);
+            connection.setAccessToken("encrypted-token");
+            connection.setConfiguration(new GitLabConfig(
+                    null, null, null, gitLab.url("/").toString()));
+            when(encryptionService.decrypt("encrypted-token")).thenReturn("plain-token");
+            when(siteSettingsProvider.getGitLabSettings()).thenReturn(
+                    new GitLabSettingsDTO(
+                            "client-id",
+                            "client-secret",
+                            gitLab.url("/").toString()));
 
-        service.removeProviderAuthorization(connection);
+            service.removeProviderAuthorization(connection);
 
-        ArgumentCaptor<Request> request = ArgumentCaptor.forClass(Request.class);
-        verify(httpClient).newCall(request.capture());
-        assertThat(request.getValue().method()).isEqualTo("POST");
-        assertThat(request.getValue().url().toString())
-                .isEqualTo("https://gitlab.example/oauth/revoke");
-        Buffer body = new Buffer();
-        request.getValue().body().writeTo(body);
-        assertThat(body.readUtf8())
-                .contains("client_id=client-id")
-                .contains("client_secret=client-secret")
-                .contains("token=plain-token");
+            var request = gitLab.takeRequest();
+            assertThat(request.getMethod()).isEqualTo("POST");
+            assertThat(request.getPath()).isEqualTo("/oauth/revoke");
+            assertThat(request.getBody().readUtf8())
+                    .contains("client_id=client-id")
+                    .contains("client_secret=client-secret")
+                    .contains("token=plain-token");
+        }
     }
 
     @Test
     void failedGitLabRevokeKeepsDeletionRetryable() throws Exception {
+        try (MockWebServer gitLab = new MockWebServer()) {
+            gitLab.enqueue(new MockResponse().setResponseCode(503));
+            gitLab.start();
+            service = new VcsProviderCleanupService(
+                    siteSettingsProvider,
+                    encryptionService,
+                    connectInstallationRepository,
+                    connectionRepository,
+                    new OkHttpClient());
+            VcsConnection connection = appConnection(EVcsProvider.GITLAB);
+            connection.setAccessToken("encrypted-token");
+            connection.setConfiguration(new GitLabConfig(
+                    null, null, null, gitLab.url("/").toString()));
+            when(encryptionService.decrypt("encrypted-token")).thenReturn("plain-token");
+            when(siteSettingsProvider.getGitLabSettings()).thenReturn(
+                    new GitLabSettingsDTO(
+                            "client-id",
+                            "client-secret",
+                            gitLab.url("/").toString()));
+
+            assertThatThrownBy(() -> service.removeProviderAuthorization(connection))
+                    .isInstanceOf(IntegrationException.class)
+                    .hasMessageContaining("kept so deletion can be retried");
+        }
+    }
+
+    @Test
+    void mismatchedGitLabIssuerNeverReceivesTheGlobalSecret() throws Exception {
         VcsConnection connection = appConnection(EVcsProvider.GITLAB);
         connection.setAccessToken("encrypted-token");
-        when(encryptionService.decrypt("encrypted-token")).thenReturn("plain-token");
+        connection.setConfiguration(new GitLabConfig(
+                null, null, null, "https://attacker.example"));
         when(siteSettingsProvider.getGitLabSettings()).thenReturn(
                 new GitLabSettingsDTO(
                         "client-id",
                         "client-secret",
                         "https://gitlab.example"));
-        when(httpClient.newCall(any(Request.class))).thenReturn(call);
-        when(call.execute()).thenAnswer(invocation -> response(503));
 
         assertThatThrownBy(() -> service.removeProviderAuthorization(connection))
                 .isInstanceOf(IntegrationException.class)
-                .hasMessageContaining("kept so deletion can be retried");
+                .hasMessageContaining("does not match the configured OAuth issuer");
+        verify(encryptionService, never()).decrypt(any());
+        verifyNoInteractions(httpClient);
     }
 
     @Test
@@ -235,18 +261,5 @@ class VcsProviderCleanupServiceTest {
         connection.setConnectionType(EVcsConnectionType.APP);
         connection.setSetupStatus(EVcsSetupStatus.CONNECTED);
         return connection;
-    }
-
-    private Response response(int status) throws IOException {
-        Request request = new Request.Builder()
-                .url("https://gitlab.example/oauth/revoke")
-                .build();
-        return new Response.Builder()
-                .request(request)
-                .protocol(Protocol.HTTP_1_1)
-                .message("test")
-                .code(status)
-                .body(ResponseBody.create("", MediaType.get("text/plain")))
-                .build();
     }
 }

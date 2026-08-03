@@ -142,6 +142,7 @@ class OAuthCallbackControllerTest {
                 EVcsSetupStatus.CONNECTED,
                 "external-id",
                 "external-slug",
+                null,
                 false,
                 0,
                 null,

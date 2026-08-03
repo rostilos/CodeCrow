@@ -1,11 +1,17 @@
 package org.rostilos.codecrow.pipelineagent.generic.dto.webhook;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Parsed webhook payload common fields.
  * Provider-specific parsers convert raw webhook payloads into this common format.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record WebhookPayload(
     EVcsProvider provider,
 
@@ -45,6 +51,15 @@ public record WebhookPayload(
         String filePath,
         Integer lineNumber
     ) {
+        private static final Pattern CODECROW_MENTION = Pattern.compile(
+                "(?i)(?<![\\p{Alnum}_])@codecrow[a-z0-9_.-]*(?:\\[bot\\])?");
+        private static final Pattern CODECROW_NAME_PREFIX = Pattern.compile(
+                "(?i)^\\s*codecrow(?:\\s+ai)?\\s*[:,]\\s*");
+        private static final Pattern QUESTION_OR_REQUEST_PREFIX = Pattern.compile(
+                "(?i)^(?:why|what|when|where|who|which|how|can|could|would|should|"
+                        + "is|are|was|were|do|does|did|will|explain|clarify|check|review|"
+                        + "investigate|show|tell|help|describe|elaborate|expand|please)\\b");
+
         /**
          * Parse a CodeCrow command from the comment body.
          * @return The parsed command, or null if no valid command is found.
@@ -56,7 +71,7 @@ public record WebhookPayload(
             
             String body = commentBody.trim();
             if (!body.startsWith("/codecrow ")) {
-                return null;
+                return parseAddressedAsk(body);
             }
             
             String commandPart = body.substring("/codecrow ".length()).trim();
@@ -79,6 +94,41 @@ public record WebhookPayload(
                     : null;
                 default -> null;
             };
+        }
+
+        private CodecrowCommand parseAddressedAsk(String body) {
+            Matcher mention = CODECROW_MENTION.matcher(body);
+            String question;
+            if (mention.find()) {
+                String beforeMention = body.substring(0, mention.start());
+                String afterMention = body.substring(mention.end());
+                boolean leadingAddress = beforeMention.isBlank();
+                boolean trailingAddress = afterMention.matches("\\s*[?!.]*\\s*");
+                if (!leadingAddress && !trailingAddress) {
+                    return null;
+                }
+                question = (beforeMention + " " + afterMention).trim();
+            } else {
+                Matcher namePrefix = CODECROW_NAME_PREFIX.matcher(body);
+                if (!namePrefix.find()) {
+                    return null;
+                }
+                question = body.substring(namePrefix.end()).trim();
+            }
+
+            question = question.replaceFirst("^[\\s,:;-]+", "")
+                    .replaceFirst("(?i)^ask\\s+", "")
+                    .replaceAll("\\s{2,}", " ")
+                    .replaceAll("[,;:]?\\s+([?!.])", "$1")
+                    .trim();
+            if (question.isBlank() || !isQuestionOrRequest(question)) {
+                return null;
+            }
+            return new CodecrowCommand(CommandType.ASK, question);
+        }
+
+        private boolean isQuestionOrRequest(String text) {
+            return text.endsWith("?") || QUESTION_OR_REQUEST_PREFIX.matcher(text).find();
         }
     }
     
@@ -147,6 +197,7 @@ public record WebhookPayload(
     /**
      * Check if this is a pull request event.
      */
+    @JsonIgnore
     public boolean isPullRequestEvent() {
         return pullRequestId != null;
     }
@@ -154,6 +205,7 @@ public record WebhookPayload(
     /**
      * Check if this is a push event.
      */
+    @JsonIgnore
     public boolean isPushEvent() {
         return eventType != null && (
             eventType.contains("push") || 
@@ -164,6 +216,7 @@ public record WebhookPayload(
     /**
      * Check if this is a comment event.
      */
+    @JsonIgnore
     public boolean isCommentEvent() {
         return commentData != null;
     }
@@ -178,6 +231,7 @@ public record WebhookPayload(
     /**
      * Get the CodeCrow command from this comment, if present.
      */
+    @JsonIgnore
     public CodecrowCommand getCodecrowCommand() {
         return commentData != null ? commentData.parseCommand() : null;
     }
@@ -185,6 +239,7 @@ public record WebhookPayload(
     /**
      * Get the full repository name (workspace/repo).
      */
+    @JsonIgnore
     public String getFullRepoName() {
         if (workspaceSlug != null && repoSlug != null) {
             return workspaceSlug + "/" + repoSlug;
@@ -263,6 +318,7 @@ public record WebhookPayload(
     /**
      * Check if the comment author is the PR author.
      */
+    @JsonIgnore
     public boolean isCommentByPrAuthor() {
         if (commentData == null || prAuthorId == null) {
             return false;

@@ -9,13 +9,16 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
+import org.rostilos.codecrow.core.model.codeanalysis.TaskImplementationEvidence;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequestState;
 import org.rostilos.codecrow.core.model.qadoc.QaDocDocument;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 import org.rostilos.codecrow.core.service.QaDocDocumentService;
+import org.rostilos.codecrow.core.service.TaskImplementationEvidenceService;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Map;
@@ -40,6 +43,9 @@ class TaskHistoryContextServiceTest {
     @Mock
     private QaDocDocumentService qaDocDocumentService;
 
+    @Mock
+    private TaskImplementationEvidenceService taskImplementationEvidenceService;
+
     private TaskHistoryContextService service;
 
     @BeforeEach
@@ -47,20 +53,33 @@ class TaskHistoryContextServiceTest {
         service = new TaskHistoryContextService(
                 codeAnalysisRepository,
                 pullRequestRepository,
-                qaDocDocumentService);
+                qaDocDocumentService,
+                taskImplementationEvidenceService);
     }
 
     @Test
     @DisplayName("should build bounded context from prior analyses and QA docs")
     void shouldBuildBoundedContextFromPriorAnalysesAndQaDocs() {
         CodeAnalysis analysis = new CodeAnalysis();
+        ReflectionTestUtils.setField(analysis, "id", 501L);
         analysis.setPrNumber(41L);
         analysis.setTaskId("PROJ-123");
         analysis.setTaskSummary("Reopened checkout");
         analysis.setSourceBranchName("feature/PROJ-123-checkout");
         analysis.setBranchName("main");
         analysis.setCommitHash("abcdef1234567890");
-        analysis.setComment("Review summary: discount checkout behavior was implemented in the previous PR.");
+        analysis.setComment(
+                "Review summary: discount checkout behavior was implemented in the previous PR.");
+
+        TaskImplementationEvidence taskEvidence = new TaskImplementationEvidence();
+        taskEvidence.setAnalysis(analysis);
+        taskEvidence.setTaskId("PROJ-123");
+        taskEvidence.setPrNumber(41L);
+        taskEvidence.setEvidenceRef("PRF001");
+        taskEvidence.setFilePath("src/Checkout/NewRelicTracker.php");
+        taskEvidence.setLineStart(18);
+        taskEvidence.setLineEnd(21);
+        taskEvidence.setExcerpt("recordCustomEvent('CouponApplied', $payload);");
 
         CodeAnalysisIssue issue = new CodeAnalysisIssue();
         issue.setSeverity(IssueSeverity.MEDIUM);
@@ -84,6 +103,9 @@ class TaskHistoryContextServiceTest {
                 .thenReturn(List.of(document));
         when(pullRequestRepository.findByProject_IdAndPrNumberIn(eq(1L), anyList()))
                 .thenReturn(List.of(pullRequest));
+        when(taskImplementationEvidenceService.findForTaskHistory(
+                1L, "PROJ-123", 99L, 40))
+                .thenReturn(List.of(taskEvidence));
 
         String context = service.buildTaskHistoryContext(
                 1L,
@@ -93,11 +115,18 @@ class TaskHistoryContextServiceTest {
         assertThat(context).contains("Prior Task Implementation Context");
         assertThat(context).contains("PR #41 (MERGED)");
         assertThat(context).contains("discount checkout behavior was implemented");
+        assertThat(context).contains("Persisted task-relevant implementation evidence");
+        assertThat(context).contains("src/Checkout/NewRelicTracker.php");
+        assertThat(context).contains("recordCustomEvent");
+        assertThat(context).contains("18-21 [PRF001]");
+        assertThat(context).doesNotContain("codecrow-task-evidence");
         assertThat(context).contains("Discount checkout scenarios are covered");
         assertThat(context.length()).isLessThanOrEqualTo(7_000);
         verify(codeAnalysisRepository).findLatestPrAnalysesByProjectIdAndTaskId(
                 1L, "PROJ-123", 99L, PageRequest.of(0, 5));
         verify(qaDocDocumentService).findDocumentsForTask(1L, "PROJ-123", 99L, 3);
+        verify(taskImplementationEvidenceService).findForTaskHistory(
+                1L, "PROJ-123", 99L, 40);
     }
 
     @Test
@@ -120,6 +149,9 @@ class TaskHistoryContextServiceTest {
                 .thenReturn(List.of(analysis));
         when(qaDocDocumentService.findDocumentsForTask(1L, "PROJ-456", 99L, 3))
                 .thenReturn(List.of());
+        when(taskImplementationEvidenceService.findForTaskHistory(
+                1L, "PROJ-456", 99L, 40))
+                .thenReturn(List.of());
         when(pullRequestRepository.findByProject_IdAndPrNumberIn(eq(1L), anyList()))
                 .thenReturn(List.of(pullRequest));
 
@@ -140,6 +172,10 @@ class TaskHistoryContextServiceTest {
         String context = service.buildTaskHistoryContext(1L, 99L, Map.of());
 
         assertThat(context).isEmpty();
-        verifyNoInteractions(codeAnalysisRepository, pullRequestRepository, qaDocDocumentService);
+        verifyNoInteractions(
+                codeAnalysisRepository,
+                pullRequestRepository,
+                qaDocDocumentService,
+                taskImplementationEvidenceService);
     }
 }

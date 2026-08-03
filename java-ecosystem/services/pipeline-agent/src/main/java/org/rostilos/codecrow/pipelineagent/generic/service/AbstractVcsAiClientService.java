@@ -3,11 +3,11 @@ package org.rostilos.codecrow.pipelineagent.generic.service;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
@@ -37,11 +37,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Template for provider-backed AI request construction. Subclasses implement
- * only remote VCS reads; all analysis policy and request assembly lives here.
+ * Template for provider-backed AI request construction. Remote VCS reads are
+ * performed through the authorized client returned by {@link VcsClientProvider};
+ * subclasses only identify their provider.
  */
 public abstract class AbstractVcsAiClientService implements VcsAiClientService {
-    private static final int MINIMUM_TRUSTED_COMMIT_PREFIX_LENGTH = 12;
     private static final java.util.regex.Pattern FULL_GIT_OBJECT_ID =
             java.util.regex.Pattern.compile("(?i)^(?:[0-9a-f]{40}|[0-9a-f]{64})$");
     private final Logger log = LoggerFactory.getLogger(getClass());
@@ -71,17 +71,6 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         this.capabilitySelectionService = capabilitySelectionService;
         this.diffPreparationService = diffPreparationService;
     }
-
-    protected abstract PullRequestData fetchPullRequest(
-            OkHttpClient client,
-            RepositoryInfo repository,
-            long pullRequestId) throws IOException;
-
-    protected abstract String fetchCommitRangeDiff(
-            OkHttpClient client,
-            RepositoryInfo repository,
-            String baseCommit,
-            String headCommit) throws IOException;
 
     @Override
     public final List<AiAnalysisRequest> buildAiAnalysisRequests(
@@ -114,49 +103,77 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
         String previousCommit = previousAnalysis.map(CodeAnalysis::getCommitHash).orElse(null);
         String currentCommit = request.getCommitHash();
-        PullRequestData pullRequest;
+        PullRequestData pullRequest = pullRequestData(
+                null, null, request.sourceBranchName, request.targetBranchName,
+                null, currentCommit);
         PreparedDiff preparedDiff = PreparedDiff.empty(previousCommit, currentCommit);
 
         log.info("Building pull request analysis: project={}, AI model={}, provider={}, connection={}",
                 project.getId(), aiConnection.getAiModel(), aiConnection.getProviderKey(), aiConnection.getId());
 
         try {
-            OkHttpClient client = vcsClientProvider.getHttpClient(repository.connection());
-            pullRequest = fetchPullRequest(client, repository, request.getPullRequestId());
-            if (!isFullGitObjectId(pullRequest.headCommit())
-                    || !isFullGitObjectId(pullRequest.baseCommit())) {
-                throw new IOException("VCS provider did not return immutable pull-request commits");
+            VcsClient client = vcsClientProvider.getClient(repository.connection());
+            try {
+                var metadata = client.getPullRequest(
+                        repository.workspace(), repository.repoSlug(), request.getPullRequestId());
+                pullRequest = pullRequestData(
+                        metadata.title(),
+                        metadata.description(),
+                        metadata.sourceBranch(),
+                        metadata.targetBranch(),
+                        metadata.baseCommit(),
+                        metadata.headCommit());
+            } catch (IOException metadataError) {
+                log.warn("PR metadata enrichment failed for project={}, PR={}; "
+                                + "continuing with webhook identity: {}",
+                        project.getId(), request.getPullRequestId(), metadataError.getMessage());
             }
-            if (!matchesAuthoritativeBranch(
-                    request.targetBranchName, pullRequest.targetBranch())) {
-                throw new IOException("Pull-request target branch changed during acquisition: expected="
-                        + request.targetBranchName + ", actual=" + pullRequest.targetBranch());
+
+            if (hasText(pullRequest.sourceBranch())) {
+                request.sourceBranchName = pullRequest.sourceBranch();
             }
-            if (!matchesAuthoritativeBranch(
-                    request.sourceBranchName, pullRequest.sourceBranch())) {
-                throw new IOException("Pull-request source branch changed during acquisition: expected="
-                        + request.sourceBranchName + ", actual=" + pullRequest.sourceBranch());
+            if (hasText(pullRequest.targetBranch())) {
+                request.targetBranchName = pullRequest.targetBranch();
             }
-            if (!matchesAuthoritativeCommit(currentCommit, pullRequest.headCommit())) {
-                throw new IOException("Pull-request head changed during acquisition: expected="
-                        + currentCommit + ", actual=" + pullRequest.headCommit());
+            if (hasText(pullRequest.headCommit())) {
+                currentCommit = pullRequest.headCommit();
+                request.commitHash = currentCommit;
             }
-            currentCommit = pullRequest.headCommit();
-            // Webhook payloads from some providers contain a stable abbreviation.
-            // All downstream cache, RAG, prompt and persistence identities must use
-            // the full object ID acquired from the provider for this exact PR.
-            request.commitHash = currentCommit;
-            String pinnedDiff = fetchCommitRangeDiff(
-                    client, repository, pullRequest.baseCommit(), pullRequest.headCommit());
+
+            String diff;
+            if (hasText(pullRequest.baseCommit()) && hasText(pullRequest.headCommit())) {
+                try {
+                    diff = client.getCommitRangeDiff(
+                            repository.workspace(), repository.repoSlug(),
+                            pullRequest.baseCommit(), pullRequest.headCommit());
+                } catch (IOException rangeError) {
+                    log.warn("Commit-range PR diff failed for project={}, PR={}; "
+                                    + "using provider-native PR diff: {}",
+                            project.getId(), request.getPullRequestId(), rangeError.getMessage());
+                    diff = client.getPullRequestDiff(
+                            repository.workspace(), repository.repoSlug(),
+                            request.getPullRequestId());
+                }
+            } else {
+                log.warn("PR metadata did not include both commit IDs for project={}, PR={}; "
+                                + "using provider-native PR diff",
+                        project.getId(), request.getPullRequestId());
+                diff = client.getPullRequestDiff(
+                        repository.workspace(), repository.repoSlug(),
+                        request.getPullRequestId());
+            }
+
             preparedDiff = diffPreparationService.prepare(
                     project,
                     request.getPullRequestId(),
-                    pinnedDiff,
+                    diff,
                     previousCommit,
                     currentCommit,
-                    (base, head) -> fetchCommitRangeDiff(client, repository, base, head));
+                    (base, head) -> client.getCommitRangeDiff(
+                            repository.workspace(), repository.repoSlug(), base, head));
         } catch (IOException e) {
-            throw new IllegalStateException("Unable to acquire immutable pull-request snapshot", e);
+            throw new IllegalStateException(
+                    "Unable to fetch pull-request changes from the VCS provider: " + e.getMessage(), e);
         }
 
         if (preparedDiff.isEmpty()) {
@@ -231,10 +248,13 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             String relevantDiff) throws GeneralSecurityException {
         RepositoryInfo repository = repositoryInfo(project);
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
+        String resolvedCommit = resolveCommitBestEffort(
+                repository, request.getCommitHash(), request.getTargetBranchName());
+        request.commitHash = resolvedCommit;
         AiAnalysisRequestImpl.Builder<?> builder = baseBuilder(project, request, repository, aiConnection)
                 .withPullRequestId(null)
                 .withTargetBranchName(request.getTargetBranchName())
-                .withCurrentCommitHash(request.getCommitHash());
+                .withCurrentCommitHash(resolvedCommit);
 
         if (previousIssues != null && !previousIssues.isEmpty()) {
             builder.withPreviousIssues(previousIssues);
@@ -262,16 +282,19 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         BranchProcessRequest branchRequest = (BranchProcessRequest) request;
         RepositoryInfo repository = repositoryInfo(project);
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
+        String resolvedCommit = resolveCommitBestEffort(
+                repository, branchRequest.getCommitHash(), branchRequest.getTargetBranchName());
+        branchRequest.commitHash = resolvedCommit;
         List<String> safeChangedFiles = changedFiles != null ? changedFiles : List.of();
         CapabilityEnrichment capabilityEnrichment = prepareCapabilityEnrichment(
-                repository, branchRequest.getCommitHash(), safeChangedFiles, "direct push");
+                repository, resolvedCommit, safeChangedFiles, "direct push");
         PrEnrichmentDataDto enrichment = capabilityEnrichment.enrichment();
 
         AiAnalysisRequestImpl.Builder<?> builder = baseBuilder(
                 project, branchRequest, repository, aiConnection)
                 .withPullRequestId(null)
                 .withTargetBranchName(branchRequest.getTargetBranchName())
-                .withCurrentCommitHash(branchRequest.getCommitHash())
+                .withCurrentCommitHash(resolvedCommit)
                 .withChangedFiles(safeChangedFiles)
                 .withDeletedFiles(DiffParser.extractDeletedFiles(rawDiff != null ? rawDiff : ""))
                 .withDiffSnippets(DiffParser.extractDiffSnippets(rawDiff != null ? rawDiff : "", 20))
@@ -320,7 +343,9 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         try {
             vcsClient = vcsClientProvider.getClient(repository.connection());
         } catch (Exception e) {
-            throw new IllegalStateException("Unable to obtain a VCS client for " + operation + " enrichment", e);
+            log.warn("Skipping {} enrichment because the VCS client is unavailable: {}",
+                    operation, e.getMessage());
+            return PrEnrichmentDataDto.empty();
         }
 
         PrEnrichmentDataDto enrichment = PrEnrichmentDataDto.empty();
@@ -339,7 +364,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             return enrichmentService.fetchFileContentsOnly(
                     vcsClient, repository.workspace(), repository.repoSlug(), commitHash, changedFiles);
         } catch (Exception e) {
-            throw new IllegalStateException("Unable to fetch " + operation + " file contents", e);
+            log.warn("Skipping {} file-content enrichment: {}", operation, e.getMessage());
+            return PrEnrichmentDataDto.empty();
         }
     }
 
@@ -364,10 +390,44 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                     plan, enrichment);
             return new CapabilityEnrichment(enrichment, capabilities);
         } catch (Exception exception) {
-            throw new IllegalStateException(
-                    "Unable to select project capabilities and file policy at commit " + commit,
-                    exception);
+            log.warn("Skipping project capability enrichment at commit {}: {}",
+                    commit, exception.getMessage());
+            return new CapabilityEnrichment(
+                    enrichFiles(repository, commit, changedFiles, operation),
+                    null);
         }
+    }
+
+    private String resolveCommitBestEffort(
+            RepositoryInfo repository,
+            String suppliedCommit,
+            String branchName) {
+        if (isFullGitObjectId(suppliedCommit)) {
+            return suppliedCommit;
+        }
+        try {
+            VcsClient client = vcsClientProvider.getClient(repository.connection());
+            String candidate = suppliedCommit;
+            if (!hasText(candidate) && hasText(branchName)) {
+                candidate = client.getLatestCommitHash(
+                        repository.workspace(), repository.repoSlug(), branchName);
+            } else if (hasText(candidate)) {
+                List<org.rostilos.codecrow.vcsclient.model.VcsCommit> commits =
+                        client.getCommitHistory(
+                                repository.workspace(), repository.repoSlug(), candidate, 1);
+                if (commits != null && !commits.isEmpty()) {
+                    candidate = commits.get(0).hash();
+                }
+            }
+            if (hasText(candidate)) {
+                return candidate;
+            }
+        } catch (Exception exception) {
+            log.warn("Could not expand commit '{}' for branch '{}'; continuing with "
+                            + "the provider-supplied revision: {}",
+                    suppliedCommit, branchName, exception.getMessage());
+        }
+        return suppliedCommit;
     }
 
     private Map<String, String> resolveTaskContext(
@@ -375,9 +435,27 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             String sourceBranch,
             String title,
             String description) {
-        return taskContextEnrichmentService != null
-                ? taskContextEnrichmentService.resolveTaskContext(project, sourceBranch, title, description)
-                : Collections.emptyMap();
+        if (taskContextEnrichmentService == null) {
+            return Collections.emptyMap();
+        }
+        Map<String, String> resolved =
+                taskContextEnrichmentService.resolveTaskContext(
+                        project, sourceBranch, title, description);
+        if (resolved.containsKey("task_key")) {
+            return resolved;
+        }
+
+        // The task provider may be temporarily unavailable while the task key
+        // remains deterministically identifiable from PR metadata. Preserve
+        // that key for database association and prior-task evidence lookup.
+        Optional<String> fallbackKey = taskContextEnrichmentService.resolveTaskKey(
+                project, sourceBranch, title, description);
+        if (fallbackKey.isEmpty()) {
+            return resolved;
+        }
+        Map<String, String> withFallbackKey = new LinkedHashMap<>(resolved);
+        withFallbackKey.put("task_key", fallbackKey.get());
+        return Map.copyOf(withFallbackKey);
     }
 
     private String resolveTaskHistory(
@@ -406,6 +484,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             AiAnalysisRequestImpl.Builder<?> builder,
             VcsConnection connection) throws GeneralSecurityException {
         VcsConnectionCredentials credentials = credentialsExtractor.extractCredentials(connection);
+        builder.withVcsBaseUrl(credentials.vcsBaseUrl());
         if (VcsConnectionCredentialsExtractor.hasAccessToken(credentials)) {
             builder.withAccessToken(credentials.accessToken());
         } else if (VcsConnectionCredentialsExtractor.hasOAuthCredentials(credentials)) {
@@ -438,34 +517,12 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 headCommit);
     }
 
-    static boolean isFullGitObjectId(String value) {
+    protected static boolean isFullGitObjectId(String value) {
         return value != null && FULL_GIT_OBJECT_ID.matcher(value).matches();
     }
 
-    static boolean matchesAuthoritativeCommit(String supplied, String authoritative) {
-        if (!isFullGitObjectId(authoritative)) {
-            return false;
-        }
-        if (supplied == null) {
-            return true;
-        }
-        if (supplied.isBlank()) {
-            return false;
-        }
-        if (supplied.equals(authoritative)) {
-            return true;
-        }
-        return supplied.length() >= MINIMUM_TRUSTED_COMMIT_PREFIX_LENGTH
-                && supplied.length() < authoritative.length()
-                && authoritative.startsWith(supplied);
-    }
-
-    static boolean matchesAuthoritativeBranch(String supplied, String authoritative) {
-        return supplied != null
-                && authoritative != null
-                && !supplied.isBlank()
-                && !authoritative.isBlank()
-                && supplied.equals(authoritative);
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     protected record RepositoryInfo(

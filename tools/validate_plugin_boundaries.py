@@ -137,7 +137,15 @@ def validate() -> list[str]:
             errors.append(f"Java plugin has no build module: {descriptor.relative_to(ROOT)}")
 
     production_build = (ROOT / "deployment/build/production-build.sh").read_text(encoding="utf-8")
-    if "tools/assemble_java_plugins.py" not in production_build:
+    ci_build = (ROOT / "deployment/ci/ci-build.sh").read_text(encoding="utf-8")
+    production_assembles_plugins = (
+        "tools/assemble_java_plugins.py" in production_build
+        or (
+            "deployment/ci/ci-build.sh" in production_build
+            and "tools/assemble_java_plugins.py" in ci_build
+        )
+    )
+    if not production_assembles_plugins:
         errors.append("production build does not assemble independently packaged Java plugins")
 
     pipeline_dockerfile = (

@@ -1,6 +1,5 @@
 package org.rostilos.codecrow.analysisengine.service.branch;
 
-import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
@@ -11,7 +10,6 @@ import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine.*;
 import org.rostilos.codecrow.astparser.model.ParsedTree;
 import org.rostilos.codecrow.astparser.api.ScopeResolver;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
@@ -25,6 +23,7 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.core.util.tracking.LineHashSequence;
 import org.rostilos.codecrow.core.util.tracking.TrackingConfidence;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -335,9 +334,7 @@ public class BranchIssueReconciliationService {
 
         // Prepare VCS fallback for files not in the archive
         var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
-        EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
-        VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
-        OkHttpClient client = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+        VcsClient client = vcsClientProvider.getClient(vcsRepoInfo.getVcsConnection());
 
         int resolvedCount = 0;
 
@@ -355,9 +352,9 @@ public class BranchIssueReconciliationService {
             try {
                 String fileContent = archiveContents != null ? archiveContents.get(filePath) : null;
                 if (fileContent == null) {
-                    fileContent = operationsService.getFileContent(
-                            client, vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
-                            request.getCommitHash(), filePath);
+                    fileContent = client.getFileContent(
+                            vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
+                            filePath, request.getCommitHash());
                 }
                 if (fileContent == null) {
                     // Content unavailable — verify file existence explicitly.
@@ -365,8 +362,8 @@ public class BranchIssueReconciliationService {
                     // not actual file deletion. Must confirm before resolving (fail-open).
                     boolean confirmedDeleted = false;
                     try {
-                        confirmedDeleted = !operationsService.checkFileExistsInBranch(
-                                client, vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
+                        confirmedDeleted = !client.fileExists(
+                                vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
                                 request.getTargetBranchName(), filePath);
                     } catch (Exception ex) {
                         log.warn("Sweep: file existence check failed for {} — skipping (fail-open): {}",
@@ -469,7 +466,7 @@ public class BranchIssueReconciliationService {
             Consumer<Map<String, Object>> consumer,
             Map<String, String> archiveContents) {
         reanalyzeCandidateIssues(changedFiles, filesExistingInBranch, branch, project,
-                request, consumer, archiveContents, null);
+                request, consumer, archiveContents, null, true);
     }
 
     /**
@@ -491,6 +488,18 @@ public class BranchIssueReconciliationService {
             Consumer<Map<String, Object>> consumer,
             Map<String, String> archiveContents,
             String rawDiff) {
+        reanalyzeCandidateIssues(changedFiles, filesExistingInBranch, branch, project,
+                request, consumer, archiveContents, rawDiff, true);
+    }
+
+    public void reanalyzeCandidateIssues(Set<String> changedFiles,
+            Set<String> filesExistingInBranch,
+            Branch branch, Project project,
+            BranchProcessRequest request,
+            Consumer<Map<String, Object>> consumer,
+            Map<String, String> archiveContents,
+            String rawDiff,
+            boolean allowVcsContentFallback) {
         List<BranchIssue> candidateBranchIssues = collectCandidateIssues(changedFiles, branch);
         if (candidateBranchIssues.isEmpty()) {
             log.info("No pre-existing issues to re-analyze (Branch: {})", request.getTargetBranchName());
@@ -535,7 +544,8 @@ public class BranchIssueReconciliationService {
                         + partitioned.autoResolved.size() + " auto-resolved)"));
 
         TrackingResult tracking = performDeterministicTracking(
-                partitioned.needsTracking, project, request, archiveContents);
+                partitioned.needsTracking, project, request, archiveContents,
+                allowVcsContentFallback);
 
         // Resolve deterministically-resolved issues
         if (!tracking.resolved.isEmpty()) {
@@ -555,7 +565,8 @@ public class BranchIssueReconciliationService {
         // Stage 3: AI reconciliation for ambiguous issues
         if (!tracking.needsAi.isEmpty()) {
             performAiReconciliation(tracking.needsAi, tracking.fetchedFileContents,
-                    branch, project, request, consumer, archiveContents, rawDiff);
+                    branch, project, request, consumer, archiveContents, rawDiff,
+                    allowVcsContentFallback && !tracking.providerUnavailable);
         }
 
         updateBranchCountsAfterReconciliation(branch);
@@ -685,18 +696,22 @@ public class BranchIssueReconciliationService {
     private record TrackingResult(List<BranchIssue> confirmed,
             List<BranchIssue> resolved,
             List<BranchIssue> needsAi,
-            Map<String, String> fetchedFileContents) {
+            Map<String, String> fetchedFileContents,
+            boolean providerUnavailable) {
     }
 
     private TrackingResult performDeterministicTracking(
             List<BranchIssue> needsTracking, Project project,
-            BranchProcessRequest request, Map<String, String> archiveContents) {
+            BranchProcessRequest request, Map<String, String> archiveContents,
+            boolean allowVcsContentFallback) {
 
-        // Resolve VCS clients for fallback file content fetching
         var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
-        EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
-        VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
-        OkHttpClient client = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+        VcsClient client = null;
+        if (allowVcsContentFallback
+                && vcsRepoInfo != null
+                && vcsRepoInfo.getVcsConnection() != null) {
+            client = vcsClientProvider.getClient(vcsRepoInfo.getVcsConnection());
+        }
 
         // Group issues by file
         Map<String, List<BranchIssue>> issuesByFile = new LinkedHashMap<>();
@@ -710,6 +725,7 @@ public class BranchIssueReconciliationService {
         List<BranchIssue> confirmed = new ArrayList<>();
         List<BranchIssue> resolved = new ArrayList<>();
         List<BranchIssue> needsAi = new ArrayList<>();
+        boolean providerUnavailable = false;
 
         // Pre-populate file contents from archive
         Map<String, String> fetchedFileContents = new LinkedHashMap<>();
@@ -731,10 +747,20 @@ public class BranchIssueReconciliationService {
             LineHashSequence currentHashes;
             try {
                 String fileContent = fetchedFileContents.get(filePath);
-                if (fileContent == null) {
-                    fileContent = operationsService.getFileContent(
-                            client, vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
-                            request.getCommitHash(), filePath);
+                if (fileContent == null
+                        && allowVcsContentFallback
+                        && !providerUnavailable
+                        && client != null) {
+                    try {
+                        fileContent = client.getFileContent(
+                                vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
+                                filePath, request.getCommitHash());
+                    } catch (Exception providerFailure) {
+                        providerUnavailable = true;
+                        log.warn("Stopping per-file reconciliation content fallback after provider "
+                                        + "failure for {}: {}",
+                                filePath, providerFailure.getMessage());
+                    }
                 }
                 currentHashes = fileContent != null
                         ? LineHashSequence.from(fileContent)
@@ -761,7 +787,8 @@ public class BranchIssueReconciliationService {
                     confirmed, resolved, needsAi, filePath, fetchedFileContents.get(filePath));
         }
 
-        return new TrackingResult(confirmed, resolved, needsAi, fetchedFileContents);
+        return new TrackingResult(
+                confirmed, resolved, needsAi, fetchedFileContents, providerUnavailable);
     }
 
     /**
@@ -824,7 +851,8 @@ public class BranchIssueReconciliationService {
             BranchProcessRequest request,
             Consumer<Map<String, Object>> consumer,
             Map<String, String> archiveContents,
-            String rawDiff) {
+            String rawDiff,
+            boolean allowVcsContentFallback) {
         consumer.accept(Map.of(
                 "type", "status",
                 "state", "reanalyzing_issues",
@@ -838,15 +866,17 @@ public class BranchIssueReconciliationService {
             var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
             EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
             VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
-            VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
-            OkHttpClient client = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+            VcsClient client = allowVcsContentFallback
+                    ? vcsClientProvider.getClient(vcsRepoInfo.getVcsConnection())
+                    : null;
 
             // Build file contents for AI — only files that have issues needing
             // reconciliation (+ cross-file context from issue descriptions — Fix 3)
             Map<String, String> aiFileContents = buildAiFileContents(
                     needsAiReconciliation, fetchedFileContents, archiveContents,
-                    operationsService, client, vcsRepoInfo.getRepoWorkspace(),
-                    vcsRepoInfo.getRepoSlug(), request.getCommitHash());
+                    client, vcsRepoInfo.getRepoWorkspace(),
+                    vcsRepoInfo.getRepoSlug(), request.getCommitHash(),
+                    allowVcsContentFallback);
 
             // Build relevant per-file diff filtered to only files with AI-bound issues
             // This gives the LLM "before → after" context for recognising applied fixes
@@ -903,8 +933,9 @@ public class BranchIssueReconciliationService {
     private Map<String, String> buildAiFileContents(
             List<BranchIssue> issues, Map<String, String> fetchedFileContents,
             Map<String, String> archiveContents,
-            VcsOperationsService operationsService, OkHttpClient client,
-            String workspace, String repoSlug, String commitHash) {
+            VcsClient client,
+            String workspace, String repoSlug, String commitHash,
+            boolean allowVcsContentFallback) {
 
         Map<String, String> aiFileContents = new LinkedHashMap<>();
 
@@ -925,19 +956,23 @@ public class BranchIssueReconciliationService {
         }
 
         // Fetch any missing primary files — archive first, then per-file API
+        boolean providerUnavailable = false;
         for (String fp : primaryFiles) {
             if (!aiFileContents.containsKey(fp)) {
                 if (archiveContents != null && archiveContents.containsKey(fp)) {
                     aiFileContents.put(fp, archiveContents.get(fp));
-                } else {
+                } else if (allowVcsContentFallback && !providerUnavailable
+                        && client != null) {
                     try {
-                        String content = operationsService.getFileContent(
-                                client, workspace, repoSlug, commitHash, fp);
+                        String content = client.getFileContent(
+                                workspace, repoSlug, fp, commitHash);
                         if (content != null) {
                             aiFileContents.put(fp, content);
                         }
                     } catch (Exception e) {
-                        log.warn("Failed to fetch file content for AI reconciliation: {}", fp);
+                        providerUnavailable = true;
+                        log.warn("Stopping per-file AI reconciliation content fallback after "
+                                + "provider failure for {}: {}", fp, e.getMessage());
                     }
                 }
             }
@@ -960,12 +995,15 @@ public class BranchIssueReconciliationService {
             if (content == null && fetchedFileContents.containsKey(refPath)) {
                 content = fetchedFileContents.get(refPath);
             }
-            if (content == null) {
+            if (content == null && allowVcsContentFallback && !providerUnavailable
+                    && client != null) {
                 try {
-                    content = operationsService.getFileContent(
-                            client, workspace, repoSlug, commitHash, refPath);
+                    content = client.getFileContent(
+                            workspace, repoSlug, refPath, commitHash);
                 } catch (Exception e) {
-                    log.debug("Cross-file fetch skipped for {}: {}", refPath, e.getMessage());
+                    providerUnavailable = true;
+                    log.warn("Stopping per-file cross-file context fallback after provider "
+                            + "failure for {}: {}", refPath, e.getMessage());
                 }
             }
             if (content != null) {

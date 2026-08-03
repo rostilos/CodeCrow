@@ -205,8 +205,39 @@ criterion is missing. The orchestrator handles this in three places:
    from one batch.
 2. `should_run_stage_2()` forces Stage 2 whenever `taskContext` is present, even
    in fast-check mode.
-3. Stage 2 receives a bounded PR-wide change summary, architecture context, RAG
-   context, and all Stage 1 findings before making task-coverage claims.
+3. Stage 2 receives a bounded full-PR state ledger, the current execution delta,
+   architecture context, RAG context, and all Stage 1 findings before making
+   task-coverage claims.
+
+### Incremental Evidence Scopes
+
+Incremental analysis does not send the whole PR through every review stage:
+
+- Stage 0, Stage 1, PR-overlay/RAG work, hunk coverage, and new inline anchors
+  use only `deltaDiff`.
+- Stage 2 gets a locally assembled base-to-head ledger in addition to the delta.
+  The two blocks share the existing 24,000-character PR-evidence budget:
+  18,000 characters for the full-PR ledger and 6,000 for the current delta.
+- The ledger starts with a path manifest and then ranks task-relevant
+  changed-line excerpts. It does not cause another VCS, RAG, embedding, or model
+  call because `rawDiff` is already carried in the incremental request.
+- If all changed-line evidence does not fit, the ledger is marked `BOUNDED`.
+  Omitted excerpts and RAG misses are never treated as evidence that an
+  implementation is absent.
+
+A new incremental task-coverage gap must cite a `DELTA###` excerpt that visibly
+removes the task behavior. Generic or mislabelled "the PR does not implement the
+task" candidates are suppressed by the host publication gate. Full-review
+coverage claims require complete changed-line evidence and prompt-visible
+`PRF###` references.
+
+Successful task-aware reviews return bounded positive evidence in the
+machine-readable `taskEvidence` result field, separately from `comment`. The
+Pipeline Agent validates and stores normalized evidence rows in the database
+for prior same-task context in later PRs. PR and Jira comments contain only the
+human-facing report and are never parsed as evidence storage. The records
+contain task-relevant paths, hunk/line coordinates, and added-line excerpts—not
+historical raw diffs or a model-authored completion claim.
 
 ### Request Shape
 

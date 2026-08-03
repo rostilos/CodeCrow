@@ -94,7 +94,7 @@ class VcsReportingServiceDefaultMethodsTest {
         // Since postCommentReply throws UnsupportedOperationException, 
         // postCommentReplyWithContext should also throw
         assertThatThrownBy(() -> service.postCommentReplyWithContext(
-                mockProject, 1L, "parent-id", "content", "author", "original body"))
+                mockProject, 1L, "parent-id", true, "content", "author", "original body"))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("postCommentReply not implemented");
     }

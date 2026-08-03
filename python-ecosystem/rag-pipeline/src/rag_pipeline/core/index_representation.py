@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Mapping, Optional
 
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
+
+logger = logging.getLogger(__name__)
 
 INDEX_REPRESENTATION_PAYLOAD_KEY = "index_representation_fingerprint"
 
@@ -60,10 +63,6 @@ _REPRESENTATION_DEPENDENCIES = (
     "tree-sitter-rust",
     "tree-sitter-typescript",
 )
-
-
-class IndexCompatibilityError(RuntimeError):
-    """The persisted branch cannot be interpreted by this RAG build."""
 
 
 def _installed_dependency_versions() -> dict[str, str]:
@@ -173,8 +172,7 @@ def read_branch_index_representation(
 ) -> tuple[bool, Optional[str]]:
     """Read one repository point's representation identity for a branch.
 
-    Full branch replacement is atomic and incremental writes are rejected when
-    identity differs, so one non-PR repository point is the branch sentinel.
+    One non-PR repository point is sufficient to observe branch provenance.
     The boolean distinguishes an absent branch from a legacy point with no
     identity.
     """
@@ -205,14 +203,21 @@ def read_branch_index_representation(
             return False, None
 
 
-def require_compatible_branch_representation(
+def observe_branch_representation(
     client,
     collection_name: str,
     branch: str,
     *,
     expected_fingerprint: Optional[str] = None,
 ) -> bool:
-    """Fail closed for a legacy or differently produced indexed branch."""
+    """Return whether a branch exists without gating it on source-code hashes.
+
+    The fingerprint remains stored as build provenance for diagnostics.  It is
+    deliberately not a compatibility boundary: operational changes to the RAG
+    host must not force customers to rebuild otherwise usable embeddings.
+    Structural incompatibilities are enforced by Qdrant and by the persisted
+    snapshot integrity at the points where stored state is used.
+    """
     exists, stored = read_branch_index_representation(
         client,
         collection_name,
@@ -222,9 +227,9 @@ def require_compatible_branch_representation(
         return False
     expected = expected_fingerprint or index_representation_fingerprint()
     if stored != expected:
-        raise IndexCompatibilityError(
-            f"branch '{branch}' was indexed with different or unknown neutral "
-            "RAG representation content; fully reindex the branch before "
-            "retrieval or incremental updates"
+        logger.info(
+            "Branch '%s' has a different or legacy neutral RAG build "
+            "fingerprint; accepting the existing index without reindexing",
+            branch,
         )
     return True

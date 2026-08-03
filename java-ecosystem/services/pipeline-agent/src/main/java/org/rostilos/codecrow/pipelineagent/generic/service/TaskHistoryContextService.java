@@ -3,11 +3,13 @@ package org.rostilos.codecrow.pipelineagent.generic.service;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
+import org.rostilos.codecrow.core.model.codeanalysis.TaskImplementationEvidence;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.qadoc.QaDocDocument;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 import org.rostilos.codecrow.core.service.QaDocDocumentService;
+import org.rostilos.codecrow.core.service.TaskImplementationEvidenceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
@@ -40,19 +42,22 @@ public class TaskHistoryContextService {
     private static final int MAX_PRIOR_ANALYSES = 5;
     private static final int MAX_PRIOR_DOCS = 3;
     private static final int MAX_REVIEW_EXCERPT_CHARS = 700;
+    private static final int MAX_TASK_EVIDENCE_EXCERPT_CHARS = 1_600;
     private static final int MAX_QA_DOC_EXCERPT_CHARS = 1_200;
     private static final int MAX_FINDINGS_PER_ANALYSIS = 3;
-
     private final CodeAnalysisRepository codeAnalysisRepository;
     private final PullRequestRepository pullRequestRepository;
     private final QaDocDocumentService qaDocDocumentService;
+    private final TaskImplementationEvidenceService taskImplementationEvidenceService;
 
     public TaskHistoryContextService(CodeAnalysisRepository codeAnalysisRepository,
                                      PullRequestRepository pullRequestRepository,
-                                     QaDocDocumentService qaDocDocumentService) {
+                                     QaDocDocumentService qaDocDocumentService,
+                                     TaskImplementationEvidenceService taskImplementationEvidenceService) {
         this.codeAnalysisRepository = codeAnalysisRepository;
         this.pullRequestRepository = pullRequestRepository;
         this.qaDocDocumentService = qaDocDocumentService;
+        this.taskImplementationEvidenceService = taskImplementationEvidenceService;
     }
 
     public String buildTaskHistoryContext(Long projectId,
@@ -88,18 +93,29 @@ public class TaskHistoryContextService {
             }
 
             Map<Long, PullRequest> pullRequests = loadPullRequests(projectId, priorAnalyses, priorDocs);
+            Map<Long, List<TaskImplementationEvidence>> evidenceByPr =
+                    loadTaskImplementationEvidence(
+                            projectId, taskId, currentPrNumber);
             StringBuilder sb = new StringBuilder();
 
             appendLine(sb, "### Prior Task Implementation Context");
             appendLine(sb, "Task: " + taskId + taskSummarySuffix(taskContext));
             appendLine(sb, "Current PR: " + (currentPrNumber != null ? "#" + currentPrNumber : "N/A"));
-            appendLine(sb, "History source: persisted CodeCrow PR analyses and QA documents; raw historical diffs are omitted.");
+            appendLine(
+                    sb,
+                    "History source: persisted CodeCrow PR analyses, structured "
+                            + "task evidence, and QA documents; raw historical diffs are omitted.");
 
             if (!priorAnalyses.isEmpty()) {
                 appendLine(sb, "");
                 appendLine(sb, "#### Prior PR Analyses");
                 for (CodeAnalysis analysis : priorAnalyses) {
-                    appendAnalysis(sb, analysis, pullRequests.get(analysis.getPrNumber()));
+                    appendAnalysis(
+                            sb,
+                            analysis,
+                            pullRequests.get(analysis.getPrNumber()),
+                            evidenceByPr.getOrDefault(
+                                    analysis.getPrNumber(), List.of()));
                     if (isFull(sb)) {
                         break;
                     }
@@ -156,7 +172,31 @@ public class TaskHistoryContextService {
                         LinkedHashMap::new));
     }
 
-    private void appendAnalysis(StringBuilder sb, CodeAnalysis analysis, PullRequest pullRequest) {
+    private Map<Long, List<TaskImplementationEvidence>> loadTaskImplementationEvidence(
+            Long projectId,
+            String taskId,
+            Long currentPrNumber) {
+        List<TaskImplementationEvidence> evidence =
+                taskImplementationEvidenceService.findForTaskHistory(
+                        projectId,
+                        taskId,
+                        currentPrNumber,
+                        MAX_PRIOR_ANALYSES * 8);
+        if (evidence == null || evidence.isEmpty()) {
+            return Map.of();
+        }
+        return evidence
+                .stream()
+                .collect(Collectors.groupingBy(
+                        TaskImplementationEvidence::getPrNumber,
+                        LinkedHashMap::new,
+                        Collectors.toList()));
+    }
+
+    private void appendAnalysis(StringBuilder sb,
+                                CodeAnalysis analysis,
+                                PullRequest pullRequest,
+                                List<TaskImplementationEvidence> taskEvidence) {
         String state = pullRequest != null && pullRequest.getState() != null
                 ? pullRequest.getState().name()
                 : "UNKNOWN";
@@ -172,6 +212,24 @@ public class TaskHistoryContextService {
         if (comment != null) {
             appendLine(sb, "  Review summary excerpt: "
                     + truncate(comment, MAX_REVIEW_EXCERPT_CHARS));
+        }
+        if (taskEvidence != null && !taskEvidence.isEmpty()) {
+            appendLine(sb, "  Persisted task-relevant implementation evidence "
+                    + "(positive supporting context; absence is not proof of a gap):");
+            for (TaskImplementationEvidence evidence : taskEvidence) {
+                appendLine(
+                        sb,
+                        "  - " + evidence.getFilePath()
+                                + ":" + evidence.getLineStart()
+                                + "-" + evidence.getLineEnd()
+                                + " [" + evidence.getEvidenceRef() + "] "
+                                + truncate(
+                                        evidence.getExcerpt(),
+                                        MAX_TASK_EVIDENCE_EXCERPT_CHARS));
+                if (isFull(sb)) {
+                    break;
+                }
+            }
         }
 
         List<CodeAnalysisIssue> notableIssues = notableIssues(analysis);

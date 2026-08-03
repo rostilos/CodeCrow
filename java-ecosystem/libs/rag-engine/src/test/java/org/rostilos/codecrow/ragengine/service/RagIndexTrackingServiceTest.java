@@ -269,6 +269,8 @@ class RagIndexTrackingServiceTest {
         RagIndexStatus existing = new RagIndexStatus();
         existing.setProject(testProject);
         existing.setStatus(RagIndexingStatus.INDEXED);
+        existing.setIndexedBranch("main");
+        existing.setIndexedCommitHash("abc123");
 
         when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
@@ -277,7 +279,7 @@ class RagIndexTrackingServiceTest {
 
         assertThat(result.getStatus()).isEqualTo(RagIndexingStatus.UPDATING);
         assertThat(result.getIndexedBranch()).isEqualTo("main");
-        assertThat(result.getIndexedCommitHash()).isEqualTo("def456");
+        assertThat(result.getIndexedCommitHash()).isEqualTo("abc123");
         assertThat(result.getErrorMessage()).isNull();
     }
 
@@ -319,20 +321,45 @@ class RagIndexTrackingServiceTest {
                 .hasMessageContaining("RAG index status not found");
     }
 
+    @Test
+    void testMarkUpdatingCompleted_NonBaseBranchPreservesProjectCheckpoint() {
+        RagIndexStatus existing = new RagIndexStatus();
+        existing.setProject(testProject);
+        existing.setStatus(RagIndexingStatus.UPDATING);
+        existing.setIndexedBranch("main");
+        existing.setIndexedCommitHash("main-commit");
+
+        when(ragIndexStatusRepository.findByProjectId(100L))
+                .thenReturn(Optional.of(existing));
+        when(ragIndexStatusRepository.save(any(RagIndexStatus.class)))
+                .thenAnswer(i -> i.getArgument(0));
+
+        RagIndexStatus result = service.markUpdatingCompleted(
+                testProject, "feature", "feature-commit", 1, 0, null, false);
+
+        assertThat(result.getStatus()).isEqualTo(RagIndexingStatus.INDEXED);
+        assertThat(result.getIndexedBranch()).isEqualTo("main");
+        assertThat(result.getIndexedCommitHash()).isEqualTo("main-commit");
+    }
+
     // ── markIncrementalUpdateFailed ──────────────────────────────────────────
 
     @Test
     void testMarkIncrementalUpdateFailed_Success() {
         RagIndexStatus existing = new RagIndexStatus();
         existing.setProject(testProject);
-        existing.setStatus(RagIndexingStatus.INDEXED);
+        existing.setStatus(RagIndexingStatus.UPDATING);
+        existing.setIndexedBranch("main");
+        existing.setIndexedCommitHash("abc123");
 
         when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
         RagIndexStatus result = service.markIncrementalUpdateFailed(testProject, "timeout error");
 
-        // Status should remain INDEXED (base index still valid)
+        assertThat(result.getStatus()).isEqualTo(RagIndexingStatus.INDEXED);
+        assertThat(result.getIndexedBranch()).isEqualTo("main");
+        assertThat(result.getIndexedCommitHash()).isEqualTo("abc123");
         assertThat(result.getErrorMessage()).contains("Incremental update failed: timeout error");
         verify(ragIndexStatusRepository).save(any());
     }

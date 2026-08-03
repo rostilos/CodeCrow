@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 import redis.asyncio as redis
@@ -130,7 +131,18 @@ class RAGQueueConsumer:
                 return
 
             event_queue_key = f"codecrow:analysis:events:{job_id}"
-            logger.info(f"Processing RAG Index Job ID: {job_id}")
+            queued_at_epoch_ms = payload.get("queued_at_epoch_ms")
+            queue_wait_ms = None
+            if isinstance(queued_at_epoch_ms, (int, float)):
+                queue_wait_ms = max(
+                    0,
+                    round(time.time() * 1000 - queued_at_epoch_ms),
+                )
+            logger.info(
+                "Processing RAG index job job_id=%s queue_wait_ms=%s",
+                job_id,
+                queue_wait_ms,
+            )
             
             # The Java pipeline passes IndexRequest payload wrapped inside job_id/request
             request_dto = IndexRequest(**request_data)
@@ -145,6 +157,29 @@ class RAGQueueConsumer:
             # Start indexing - it takes a long time
             # index_manager.index_repository is synchronous, so we run it in an executor
             loop = asyncio.get_running_loop()
+            progress_delivery_available = True
+
+            def publish_progress(event: Dict[str, Any]) -> None:
+                nonlocal progress_delivery_available
+                if not progress_delivery_available:
+                    return
+                payload = {"type": "status", **event}
+                future = asyncio.run_coroutine_threadsafe(
+                    self._publish_event(event_queue_key, payload),
+                    loop,
+                )
+                # Surface Redis publication failures promptly without coupling
+                # indexing correctness to progress delivery.
+                try:
+                    future.result(timeout=5)
+                except Exception as exception:
+                    progress_delivery_available = False
+                    logger.warning(
+                        "Could not publish RAG progress for job %s: %s",
+                        job_id,
+                        exception,
+                    )
+
             indexing_future = loop.run_in_executor(
                 None,
                 lambda: self.index_manager.index_repository(
@@ -156,7 +191,8 @@ class RAGQueueConsumer:
                     source_tree_sha256=request_dto.source_tree_sha256,
                     preserve_other_branches=request_dto.preserve_other_branches,
                     include_patterns=request_dto.include_patterns,
-                    exclude_patterns=request_dto.exclude_patterns
+                    exclude_patterns=request_dto.exclude_patterns,
+                    progress_callback=publish_progress,
                 )
             )
             while True:

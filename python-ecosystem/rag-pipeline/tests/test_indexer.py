@@ -20,29 +20,8 @@ from rag_pipeline.core.index_manager.indexer import (
     RepositoryIndexer, FileOperations,
     DOCUMENT_BATCH_SIZE, INSERT_BATCH_SIZE,
 )
-from rag_pipeline.core.repository_overlay import (
-    IncrementalIndexPreconditionError,
-)
+from rag_pipeline.core.index_manager.point_operations import PointWriteResult
 from rag_pipeline.models.config import IndexStats
-
-
-@pytest.fixture(autouse=True)
-def _verified_source_tree(monkeypatch):
-    source = SimpleNamespace(
-        commit="abc123",
-        tree_sha256="c" * 64,
-        git_commit_verified=False,
-        file_sha256_by_path={},
-    )
-    monkeypatch.setattr(
-        "rag_pipeline.core.index_manager.indexer.verify_repository_source_tree",
-        lambda *_args, **_kwargs: source,
-    )
-    monkeypatch.setattr(
-        "rag_pipeline.core.index_manager.indexer."
-        "require_repository_source_tree_unchanged",
-        lambda *_args, **_kwargs: None,
-    )
 
 
 def _mock_config(**overrides):
@@ -65,15 +44,18 @@ def _mock_components():
 
     # Default: point_ops returns success
     point_ops.process_and_upsert_chunks.return_value = (1, 0)
-    point_ops.write_repository_generation_manifest.return_value = {
-        "generation_schema": "codecrow.repository-index-generation",
-        "generation_member_count": 1,
-        "generation_members_sha256": "a" * 64,
-        "generation_manifest_sha256": "b" * 64,
-    }
     point_ops.client = MagicMock()
-    branch_mgr.get_branch_point_count.return_value = 2
+    branch_mgr.get_branch_point_count.return_value = 1
     branch_mgr.stream_copy_points_to_collection.return_value = 0
+    splitter.split_documents_resilient.side_effect = (
+        lambda documents, capabilities=None: (
+            splitter.split_documents(
+                documents,
+                capabilities=capabilities,
+            ),
+            (),
+        )
+    )
 
     return coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader
 
@@ -153,9 +135,42 @@ class TestIndexRepository:
         stats_mgr.get_branch_stats.return_value = mock_stats
 
         indexer = RepositoryIndexer(config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader)
-        result = indexer.index_repository("/repo", "ws", "proj", "main", "abc123", "alias1")
+        progress_events = []
+        result = indexer.index_repository(
+            "/repo", "ws", "proj", "main", "abc123", "alias1",
+            progress_callback=progress_events.append,
+        )
 
         coll_mgr.delete_collection.assert_called_with("pending")
+        assert result.document_count == 0
+        assert [event["stage"] for event in progress_events] == [
+            "preparing", "scanning",
+        ]
+        assert progress_events[-1]["total"] == 0
+
+    def test_progress_callback_failure_does_not_fail_indexing(self):
+        config = _mock_config()
+        coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader = _mock_components()
+        loader.iter_repository_files.return_value = iter([])
+        coll_mgr.create_pending_collection.return_value = "pending"
+        coll_mgr.alias_exists.return_value = False
+        coll_mgr.collection_exists.return_value = False
+        coll_mgr.resolve_alias.return_value = None
+        stats_mgr.get_branch_stats.return_value = IndexStats(
+            namespace="ws__proj__main", document_count=0, chunk_count=0,
+            last_updated="2024-01-01", workspace="ws", project="proj", branch="main"
+        )
+        indexer = RepositoryIndexer(
+            config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader,
+        )
+
+        result = indexer.index_repository(
+            "/repo", "ws", "proj", "main", "abc123", "alias1",
+            progress_callback=lambda _event: (_ for _ in ()).throw(
+                RuntimeError("event sink unavailable")
+            ),
+        )
+
         assert result.document_count == 0
 
     def test_architecture_files_are_ingested_while_generated_files_are_not_loaded(self, tmp_path):
@@ -178,9 +193,9 @@ class TestIndexRepository:
         coll_mgr.alias_exists.return_value = False
         coll_mgr.collection_exists.return_value = False
         coll_mgr.resolve_alias.return_value = None
-        point_ops.client.get_collection.return_value = SimpleNamespace(points_count=3)
+        point_ops.client.get_collection.return_value = SimpleNamespace(points_count=2)
         point_ops.process_and_upsert_chunks.return_value = (1, 0)
-        branch_mgr.get_branch_point_count.return_value = 3
+        branch_mgr.get_branch_point_count.return_value = 2
         stats_mgr.store_metadata.return_value = None
         selector = MagicMock()
         selector.select.return_value = ProjectCapabilities(
@@ -275,9 +290,9 @@ class TestIndexRepository:
 
         # After indexing, temp collection has points
         temp_info = MagicMock()
-        temp_info.points_count = 3
+        temp_info.points_count = 2
         point_ops.client.get_collection.return_value = temp_info
-        branch_mgr.get_branch_point_count.return_value = 3
+        branch_mgr.get_branch_point_count.return_value = 2
 
         indexer = RepositoryIndexer(config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader)
         result = indexer.index_repository("/repo", "ws", "proj", "main", "abc123", "alias1")
@@ -286,72 +301,6 @@ class TestIndexRepository:
         assert result.project == "proj"
         assert result.branch == "main"
         stats_mgr.store_metadata.assert_called_once()
-        point_ops.write_repository_generation_manifest.assert_called_once_with(
-            "pending",
-            "ws",
-            "proj",
-            "main",
-            "abc123",
-            expected_member_count=2,
-            expected_members=[],
-            source_tree_sha256="c" * 64,
-            index_include_patterns=[],
-            index_exclude_patterns=[],
-            identity_metadata={
-                "index_representation_fingerprint": (
-                    indexer.representation_fingerprint
-                ),
-            },
-        )
-
-    def test_generation_manifest_failure_never_swaps_alias(self):
-        config = _mock_config()
-        (
-            coll_mgr,
-            branch_mgr,
-            point_ops,
-            stats_mgr,
-            splitter,
-            loader,
-        ) = _mock_components()
-        loader.iter_repository_files.return_value = iter(["a.py"])
-        loader.load_file_batch.return_value = [
-            SimpleNamespace(text="a = 1", metadata={"path": "a.py"})
-        ]
-        splitter.split_documents.return_value = [MagicMock()]
-        coll_mgr.create_pending_collection.return_value = "pending"
-        coll_mgr.alias_exists.return_value = True
-        coll_mgr.collection_exists.return_value = True
-        coll_mgr.resolve_alias.return_value = "active"
-        point_ops.write_repository_generation_manifest.side_effect = (
-            RuntimeError("generation membership is incomplete")
-        )
-
-        indexer = RepositoryIndexer(
-            config,
-            coll_mgr,
-            branch_mgr,
-            point_ops,
-            stats_mgr,
-            splitter,
-            loader,
-        )
-        with pytest.raises(
-            RuntimeError,
-            match="generation membership is incomplete",
-        ):
-            indexer.index_repository(
-                "/repo",
-                "ws",
-                "proj",
-                "main",
-                "abc123",
-                "alias1",
-            )
-
-        coll_mgr.atomic_alias_swap.assert_not_called()
-        stats_mgr.store_metadata.assert_not_called()
-        coll_mgr.delete_collection.assert_called_with("pending")
 
     def test_preserves_other_branches_only_when_explicitly_enabled(self):
         config = _mock_config()
@@ -370,7 +319,7 @@ class TestIndexRepository:
         splitter.split_documents.return_value = [MagicMock()]
 
         temp_info = MagicMock()
-        temp_info.points_count = 4
+        temp_info.points_count = 3
         point_ops.client.get_collection.return_value = temp_info
         branch_mgr.stream_copy_points_to_collection.return_value = 2
 
@@ -403,7 +352,7 @@ class TestIndexRepository:
         ]
         splitter.split_documents.return_value = [MagicMock()]
         temp_info = MagicMock()
-        temp_info.points_count = 2
+        temp_info.points_count = 1
         point_ops.client.get_collection.return_value = temp_info
 
         indexer = RepositoryIndexer(
@@ -425,7 +374,7 @@ class TestIndexRepository:
         splitter.split_documents.return_value = [MagicMock(), MagicMock()]
         point_ops.process_and_upsert_chunks.return_value = (2, 0)
         point_ops.client.get_collection.return_value = SimpleNamespace(
-            points_count=2
+            points_count=1
         )
         branch_mgr.get_branch_point_count.return_value = 2
         coll_mgr.create_pending_collection.return_value = "pending"
@@ -457,7 +406,7 @@ class TestIndexRepository:
         ]
         splitter.split_documents.return_value = [MagicMock()]
         point_ops.client.get_collection.return_value = SimpleNamespace(
-            points_count=2
+            points_count=1
         )
         branch_mgr.get_branch_point_count.return_value = 0
         coll_mgr.create_pending_collection.return_value = "pending"
@@ -500,7 +449,7 @@ class TestIndexRepository:
 
         coll_mgr.delete_collection.assert_called_with("pending")
 
-    def test_partial_vector_write_never_swaps_alias(self):
+    def test_rejected_vector_point_is_skipped_and_valid_index_is_published(self):
         config = _mock_config()
         coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader = _mock_components()
         loader.iter_repository_files.return_value = iter(["a.php"])
@@ -509,6 +458,10 @@ class TestIndexRepository:
         ]
         splitter.split_documents.return_value = [MagicMock(), MagicMock()]
         point_ops.process_and_upsert_chunks.return_value = (1, 1)
+        point_ops.client.get_collection.return_value = SimpleNamespace(
+            points_count=1
+        )
+        branch_mgr.get_branch_point_count.return_value = 1
         coll_mgr.create_pending_collection.return_value = "pending"
         coll_mgr.alias_exists.return_value = True
         coll_mgr.collection_exists.return_value = True
@@ -516,17 +469,21 @@ class TestIndexRepository:
 
         indexer = RepositoryIndexer(config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader)
 
-        with pytest.raises(RuntimeError, match="partial"):
-            indexer.index_repository("/repo", "ws", "proj", "main", "abc123", "alias1")
+        result = indexer.index_repository(
+            "/repo", "ws", "proj", "main", "abc123", "alias1"
+        )
 
-        coll_mgr.atomic_alias_swap.assert_not_called()
-        stats_mgr.store_metadata.assert_not_called()
+        assert result.chunk_count == 1
+        assert result.skipped_chunk_count == 1
+        coll_mgr.atomic_alias_swap.assert_called_once()
+        stats_mgr.store_metadata.assert_called_once()
 
     def test_repository_architecture_is_streamed_and_indexed_as_context(self, tmp_path):
         from codecrow_plugins import (
             ArchitecturePacket,
             FileDisposition,
             GraphFact,
+            PluginDiagnostic,
             RepositoryAnalysis,
         )
 
@@ -543,8 +500,8 @@ class TestIndexRepository:
         loader.load_file_batch.return_value = [document]
         splitter.split_documents.return_value = [MagicMock()]
         point_ops.process_and_upsert_chunks.side_effect = [(1, 0), (2, 0)]
-        point_ops.client.get_collection.return_value = SimpleNamespace(points_count=4)
-        branch_mgr.get_branch_point_count.return_value = 4
+        point_ops.client.get_collection.return_value = SimpleNamespace(points_count=3)
+        branch_mgr.get_branch_point_count.return_value = 3
         coll_mgr.create_pending_collection.return_value = "pending"
         coll_mgr.alias_exists.return_value = False
         coll_mgr.collection_exists.return_value = False
@@ -574,7 +531,13 @@ class TestIndexRepository:
                     related_paths=("app/code/Acme/Module.php",),
                 ),),
             ),)),
-            (),
+            (PluginDiagnostic(
+                code="magento-invalid-xml",
+                message="Cannot parse etc/invalid.xml",
+                plugin_id="magento",
+                path="etc/invalid.xml",
+                recoverable=True,
+            ),),
         )
         runtime = MagicMock()
         runtime.file_disposition.return_value = FileDisposition.FULL
@@ -607,6 +570,7 @@ class TestIndexRepository:
             "app/code/Acme/etc/di.xml",
         ]
         assert result.chunk_count == 3
+        assert result.skipped_file_count == 1
 
 
 # ─────────────────────────────────────────────────────────────
@@ -761,7 +725,7 @@ class TestPerformAtomicSwap:
         coll_mgr.create_pending_collection.return_value = "pending"
         coll_mgr.alias_exists.return_value = True
         coll_mgr.resolve_alias.return_value = "active"
-        point_ops.client.get_collection.return_value = SimpleNamespace(points_count=2)
+        point_ops.client.get_collection.return_value = SimpleNamespace(points_count=1)
         stats_mgr.store_metadata.side_effect = RuntimeError("metadata unavailable")
 
         indexer = RepositoryIndexer(config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader)
@@ -803,19 +767,32 @@ class TestFileOperations:
         loader = MagicMock()
 
         client.scroll.return_value = ([], None)
-        coll_mgr.resolve_collection_target.return_value = "coll"
         point_ops.prepare_chunks_for_embedding.side_effect = (
             lambda nodes, *_: [
                 (f"point-{index}", node) for index, node in enumerate(nodes)
             ]
         )
         point_ops.embed_and_create_points.side_effect = (
-            lambda chunk_data: [
+            lambda chunk_data, **_kwargs: [
                 SimpleNamespace(id=point_id) for point_id, _ in chunk_data
             ]
         )
         point_ops.upsert_points.side_effect = (
             lambda _collection, points: (len(points), 0)
+        )
+        point_ops.upsert_points_detailed.side_effect = (
+            lambda _collection, points: PointWriteResult(
+                successful=len(points)
+            )
+        )
+        splitter.split_documents_resilient.side_effect = (
+            lambda documents, capabilities=None: (
+                splitter.split_documents(
+                    documents,
+                    capabilities=capabilities,
+                ),
+                (),
+            )
         )
 
         stats_mgr.get_project_stats.return_value = MagicMock(spec=IndexStats)
@@ -840,8 +817,8 @@ class TestFileOperations:
             collection_name="coll",
         )
 
-        ops.splitter.split_documents.assert_called_once()
-        ops.point_ops.upsert_points.assert_called_once()
+        ops.splitter.split_documents_resilient.assert_called_once()
+        ops.point_ops.upsert_points_detailed.assert_called_once()
         ops.client.delete.assert_not_called()
 
     def test_update_files_no_documents(self, tmp_path):
@@ -861,7 +838,7 @@ class TestFileOperations:
             collection_name="coll",
         )
         ops.splitter.split_documents.assert_not_called()
-        ops.point_ops.upsert_points.assert_called_once_with("coll", [])
+        ops.point_ops.upsert_points_detailed.assert_called_once_with("coll", [])
 
     def test_delete_files(self):
         ops = self._make_file_ops()
@@ -873,63 +850,10 @@ class TestFileOperations:
             branch="main",
             collection_name="coll",
         )
-        ops.point_ops.upsert_points.assert_called_once_with("coll", [])
+        ops.point_ops.upsert_points_detailed.assert_called_once_with("coll", [])
         ops.client.delete.assert_not_called()
 
-    def test_alias_swap_before_incremental_write_fails_without_mutation(self):
-        ops = self._make_file_ops()
-        ops.collection_manager.resolve_collection_target.side_effect = [
-            "active-before",
-            "active-after",
-        ]
-
-        with pytest.raises(
-            IncrementalIndexPreconditionError,
-            match="active collection changed",
-        ):
-            ops.delete_files(
-                file_paths=["src/Del.java"],
-                workspace="ws",
-                project="proj",
-                branch="main",
-                collection_name="coll",
-                commit="b" * 40,
-            )
-
-        ops.point_ops.upsert_points.assert_not_called()
-        ops.client.delete.assert_not_called()
-        assert {
-            call.kwargs["collection_name"]
-            for call in ops.client.scroll.call_args_list
-        } == {"active-before"}
-
-    def test_sealed_generation_rejects_incremental_change_before_mutation(self):
-        ops = self._make_file_ops()
-        manifest = SimpleNamespace(
-            id="manifest",
-            payload={"repository_generation_manifest": True},
-        )
-        ops.client.scroll.return_value = ([manifest], None)
-
-        with pytest.raises(
-            IncrementalIndexPreconditionError,
-            match="sealed repository generation",
-        ):
-            ops.delete_files(
-                file_paths=["src/Del.java"],
-                workspace="ws",
-                project="proj",
-                branch="main",
-                collection_name="coll",
-                commit="b" * 40,
-            )
-
-        ops.collection_manager.ensure_collection_exists.assert_not_called()
-        ops.loader.load_specific_files.assert_not_called()
-        ops.point_ops.upsert_points.assert_not_called()
-        ops.client.delete.assert_not_called()
-
-    def test_partial_replacement_restores_previous_points(self):
+    def test_rejected_replacement_point_is_quarantined(self):
         from qdrant_client.models import PointStruct
 
         ops = self._make_file_ops()
@@ -949,20 +873,58 @@ class TestFileOperations:
             vector=[0.0, 1.0],
             payload={"path": "new.php", "branch": "main"},
         )]
-        ops.point_ops.upsert_points.side_effect = None
-        ops.point_ops.upsert_points.return_value = (0, 1)
+        ops.point_ops.upsert_points_detailed.side_effect = None
+        ops.point_ops.upsert_points_detailed.return_value = PointWriteResult(
+            skipped_points=(
+                PointStruct(
+                    id=new_id,
+                    vector=[0.0, 1.0],
+                    payload={"path": "new.php", "branch": "main"},
+                ),
+            ),
+        )
 
-        with pytest.raises(RuntimeError, match="write was partial"):
+        successful = ops._replace_points(
+            [node],
+            [old_record],
+            "coll",
+            "ws",
+            "project",
+            "main",
+        )
+
+        assert successful == 0
+        ops.client.upsert.assert_not_called()
+        deleted = ops.client.delete.call_args.kwargs["points_selector"]
+        assert [str(point_id) for point_id in deleted.points] == [old_id]
+
+    def test_replace_checks_mutation_lease_after_embedding_before_write(self):
+        from qdrant_client.models import PointStruct
+
+        ops = self._make_file_ops()
+        node = MagicMock()
+        point_id = str(uuid.uuid4())
+        ops.point_ops.prepare_chunks_for_embedding.side_effect = None
+        ops.point_ops.prepare_chunks_for_embedding.return_value = [(point_id, node)]
+        ops.point_ops.embed_and_create_points.side_effect = None
+        ops.point_ops.embed_and_create_points.return_value = [PointStruct(
+            id=point_id,
+            vector=[0.0, 1.0],
+            payload={"path": "new.php", "branch": "main"},
+        )]
+        guard = MagicMock(side_effect=RuntimeError("lease lost"))
+
+        with pytest.raises(RuntimeError, match="lease lost"):
             ops._replace_points(
                 [node],
-                [old_record],
+                [],
                 "coll",
                 "ws",
                 "project",
                 "main",
+                guard,
             )
 
-        restored = ops.client.upsert.call_args.kwargs["points"]
-        assert [str(point.id) for point in restored] == [old_id]
-        deleted = ops.client.delete.call_args.kwargs["points_selector"]
-        assert [str(point_id) for point_id in deleted.points] == [new_id]
+        ops.point_ops.upsert_points_detailed.assert_not_called()
+        ops.client.upsert.assert_not_called()
+        ops.client.delete.assert_not_called()

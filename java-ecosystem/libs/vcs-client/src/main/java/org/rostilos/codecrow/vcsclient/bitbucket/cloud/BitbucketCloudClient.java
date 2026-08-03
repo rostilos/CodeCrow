@@ -4,6 +4,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
 import org.rostilos.codecrow.vcsclient.VcsClient;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.CheckFileExistsInBranchAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitDiffAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitRangeDiffAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestDiffAction;
 import org.rostilos.codecrow.vcsclient.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,7 +20,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * VcsClient implementation for Bitbucket Cloud.
@@ -764,6 +775,221 @@ public class BitbucketCloudClient implements VcsClient {
             ResponseBody body = response.body();
             return body != null ? body.string() : "";
         }
+    }
+
+    @Override
+    public VcsPullRequest getPullRequest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException {
+        GetPullRequestAction.PullRequestMetadata metadata =
+                new GetPullRequestAction(httpClient).getPullRequest(
+                        workspaceId, repoIdOrSlug, String.valueOf(pullRequestNumber));
+        String baseCommit = resolveCommitHashIfNeeded(
+                workspaceId, repoIdOrSlug, metadata.getDestinationCommit());
+        String headCommit = resolveCommitHashIfNeeded(
+                workspaceId, repoIdOrSlug, metadata.getSourceCommit());
+        String state = metadata.getState();
+        return new VcsPullRequest(
+                pullRequestNumber,
+                metadata.getTitle(),
+                metadata.getDescription(),
+                metadata.getSourceRef(),
+                metadata.getDestRef(),
+                baseCommit,
+                headCommit,
+                state,
+                "MERGED".equalsIgnoreCase(state),
+                null);
+    }
+
+    @Override
+    public List<VcsPullRequestComment> getPullRequestCommentThread(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber,
+            String triggeringCommentId,
+            String parentOrThreadId,
+            boolean inlineComment
+    ) throws IOException {
+        if (triggeringCommentId == null) {
+            return List.of();
+        }
+
+        List<JsonNode> comments = new ArrayList<>();
+        String url = API_BASE + "/repositories/" + workspaceId + "/" + repoIdOrSlug
+                + "/pullrequests/" + pullRequestNumber + "/comments?pagelen=100";
+        while (url != null) {
+            Request request = new Request.Builder()
+                    .url(url)
+                    .header("Accept", "application/json")
+                    .get()
+                    .build();
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    throw createException("list pull request comments", response);
+                }
+                JsonNode page = objectMapper.readTree(response.body().string());
+                JsonNode values = page.path("values");
+                if (values.isArray()) {
+                    values.forEach(comment -> comments.add(comment.deepCopy()));
+                }
+                url = page.hasNonNull("next") ? page.path("next").asText() : null;
+            }
+        }
+
+        Map<String, JsonNode> commentsById = new HashMap<>();
+        comments.forEach(comment -> commentsById.put(comment.path("id").asText(), comment));
+
+        String rootId = parentOrThreadId == null || parentOrThreadId.isBlank()
+                ? triggeringCommentId
+                : parentOrThreadId;
+        JsonNode ancestor = commentsById.get(rootId);
+        while (ancestor != null) {
+            String parentId = bitbucketParentId(ancestor);
+            if (parentId == null || !commentsById.containsKey(parentId)) {
+                break;
+            }
+            rootId = parentId;
+            ancestor = commentsById.get(rootId);
+        }
+
+        Set<String> threadIds = new LinkedHashSet<>();
+        threadIds.add(rootId);
+        boolean changed;
+        do {
+            changed = false;
+            for (JsonNode comment : comments) {
+                String id = comment.path("id").asText();
+                String parentId = bitbucketParentId(comment);
+                if (parentId != null && threadIds.contains(parentId)) {
+                    changed |= threadIds.add(id);
+                }
+            }
+        } while (changed);
+
+        final String threadRootId = rootId;
+        return comments.stream()
+                .filter(comment -> threadIds.contains(comment.path("id").asText()))
+                .filter(comment -> !comment.path("deleted").asBoolean(false))
+                .sorted(Comparator.comparing(comment -> comment.path("created_on").asText("")))
+                .map(comment -> new VcsPullRequestComment(
+                        comment.path("id").asText(),
+                        bitbucketParentId(comment),
+                        threadRootId,
+                        bitbucketUsername(comment.path("user")),
+                        comment.path("content").path("raw").asText(null),
+                        comment.path("created_on").asText(null)))
+                .toList();
+    }
+
+    private static String bitbucketParentId(JsonNode comment) {
+        JsonNode parent = comment.path("parent");
+        return parent.isObject() && parent.hasNonNull("id")
+                ? parent.path("id").asText()
+                : null;
+    }
+
+    private static String bitbucketUsername(JsonNode user) {
+        if (user.hasNonNull("nickname")) {
+            return user.path("nickname").asText();
+        }
+        if (user.hasNonNull("display_name")) {
+            return user.path("display_name").asText();
+        }
+        return user.path("username").asText(null);
+    }
+
+    @Override
+    public String getPullRequestDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException {
+        return new GetPullRequestDiffAction(httpClient).getPullRequestDiff(
+                workspaceId, repoIdOrSlug, String.valueOf(pullRequestNumber));
+    }
+
+    @Override
+    public String getCommitDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commitHash
+    ) throws IOException {
+        return new GetCommitDiffAction(httpClient).getCommitDiff(
+                workspaceId, repoIdOrSlug, commitHash);
+    }
+
+    @Override
+    public String getCommitRangeDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            String baseCommitHash,
+            String headCommitHash
+    ) throws IOException {
+        return new GetCommitRangeDiffAction(httpClient).getCommitRangeDiff(
+                workspaceId, repoIdOrSlug, baseCommitHash, headCommitHash);
+    }
+
+    @Override
+    public boolean fileExists(
+            String workspaceId,
+            String repoIdOrSlug,
+            String branchOrCommit,
+            String filePath
+    ) throws IOException {
+        return new CheckFileExistsInBranchAction(httpClient).fileExists(
+                workspaceId, repoIdOrSlug, branchOrCommit, filePath);
+    }
+
+    @Override
+    public Long findPullRequestForCommit(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commitHash
+    ) throws IOException {
+        String url = API_BASE + "/repositories/" + workspaceId + "/" + repoIdOrSlug
+                + "/commit/" + commitHash + "/pullrequests";
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .get()
+                .build();
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                log.warn("Failed to find Bitbucket PR for commit {}: HTTP {}", commitHash, response.code());
+                return null;
+            }
+            JsonNode root = objectMapper.readTree(
+                    response.body() != null ? response.body().string() : "{}");
+            JsonNode pullRequests = root.path("values");
+            if (!pullRequests.isArray() || pullRequests.isEmpty()) {
+                return null;
+            }
+            for (JsonNode pullRequest : pullRequests) {
+                if ("MERGED".equalsIgnoreCase(pullRequest.path("state").asText())) {
+                    return pullRequest.path("id").asLong();
+                }
+            }
+            return pullRequests.get(0).path("id").asLong();
+        } catch (Exception error) {
+            log.warn("Error finding Bitbucket PR for commit {}: {}",
+                    commitHash, error.getMessage());
+            return null;
+        }
+    }
+
+    private String resolveCommitHashIfNeeded(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commitHash
+    ) throws IOException {
+        if (commitHash == null || commitHash.isBlank() || commitHash.length() >= 40) {
+            return commitHash;
+        }
+        return new GetCommitAction(httpClient).resolveCommitHash(
+                workspaceId, repoIdOrSlug, commitHash);
     }
 
     @Override

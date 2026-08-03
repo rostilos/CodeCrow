@@ -1,11 +1,213 @@
-from unittest.mock import MagicMock, patch
+import uuid
+import threading
+import time
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-from llama_index.core.schema import TextNode
 import pytest
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
+from llama_index.core.schema import TextNode
+from qdrant_client.models import PointStruct
 
-from rag_pipeline.core.index_manager.point_operations import PointOperations
+from rag_pipeline.core.index_manager.point_operations import (
+    EMBEDDING_FINGERPRINT_PAYLOAD_KEY,
+    EMBEDDING_INPUT_HASH_PAYLOAD_KEY,
+    PointOperations,
+    PointWriteInfrastructureError,
+)
+
+
+def test_process_embeds_batches_concurrently_and_aggregates_qdrant_writes():
+    client = MagicMock()
+    embed_model = MagicMock()
+    state_lock = threading.Lock()
+    active = 0
+    maximum_active = 0
+
+    def embed(texts):
+        nonlocal active, maximum_active
+        with state_lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        time.sleep(0.02)
+        with state_lock:
+            active -= 1
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    embed_model.get_text_embedding_batch.side_effect = embed
+    operations = PointOperations(
+        client,
+        embed_model,
+        batch_size=4,
+        embedding_batch_size=1,
+        max_embedding_workers=4,
+        embedding_dim=3,
+        upsert_max_attempts=1,
+    )
+    chunks = [
+        TextNode(
+            text=f"chunk-{index}",
+            metadata={
+                "path": "Service.php",
+                "workspace": "workspace",
+                "project": "project",
+                "branch": "main",
+            },
+        )
+        for index in range(8)
+    ]
+
+    result = operations.process_and_upsert_chunks(
+        chunks,
+        "pending",
+        "workspace",
+        "project",
+        "main",
+    )
+
+    assert result == (8, 0)
+    assert maximum_active > 1
+    assert [
+        len(call.kwargs["points"]) for call in client.upsert.call_args_list
+    ] == [4, 4]
+
+
+def test_matching_active_point_reuses_vector_and_refreshes_payload():
+    client = MagicMock()
+    embed_model = MagicMock()
+    operations = PointOperations(
+        client,
+        embed_model,
+        batch_size=4,
+        embedding_batch_size=2,
+        embedding_dim=3,
+        embedding_fingerprint="sha256:embedding-contract",
+        upsert_max_attempts=1,
+    )
+    chunk = TextNode(
+        text="class Service {}",
+        metadata={
+            "path": "Service.php",
+            "workspace": "workspace",
+            "project": "project",
+            "branch": "main",
+            "commit": "new-commit",
+        },
+    )
+    point_id = operations.generate_point_id(
+        "workspace", "project", "main", "Service.php", 0
+    )
+    client.retrieve.return_value = [SimpleNamespace(
+        id=point_id,
+        vector=[0.4, 0.5, 0.6],
+        payload={
+            "workspace": "workspace",
+            "project": "project",
+            "branch": "main",
+            EMBEDDING_INPUT_HASH_PAYLOAD_KEY: operations._embedding_input_hash(
+                chunk.text
+            ),
+            EMBEDDING_FINGERPRINT_PAYLOAD_KEY: operations.embedding_fingerprint,
+        },
+    )]
+
+    result = operations.process_and_upsert_chunks(
+        [chunk],
+        "pending",
+        "workspace",
+        "project",
+        "main",
+        reuse_collection_name="active",
+    )
+
+    assert result == (1, 0)
+    embed_model.get_text_embedding_batch.assert_not_called()
+    written = client.upsert.call_args.kwargs["points"][0]
+    assert written.vector == [0.4, 0.5, 0.6]
+    assert written.payload["commit"] == "new-commit"
+    assert written.payload[EMBEDDING_FINGERPRINT_PAYLOAD_KEY] == (
+        "sha256:embedding-contract"
+    )
+
+
+def test_legacy_point_without_fingerprint_is_embedded_once():
+    client = MagicMock()
+    embed_model = MagicMock()
+    embed_model.get_text_embedding_batch.return_value = [[0.1, 0.2, 0.3]]
+    operations = PointOperations(
+        client,
+        embed_model,
+        embedding_dim=3,
+        embedding_fingerprint="sha256:embedding-contract",
+        upsert_max_attempts=1,
+    )
+    chunk = TextNode(
+        text="class Service {}",
+        metadata={
+            "path": "Service.php",
+            "workspace": "workspace",
+            "project": "project",
+            "branch": "main",
+        },
+    )
+    point_id = operations.generate_point_id(
+        "workspace", "project", "main", "Service.php", 0
+    )
+    client.retrieve.return_value = [SimpleNamespace(
+        id=point_id,
+        vector=[0.4, 0.5, 0.6],
+        payload={
+            "workspace": "workspace",
+            "project": "project",
+            "branch": "main",
+        },
+    )]
+
+    operations.process_and_upsert_chunks(
+        [chunk],
+        "pending",
+        "workspace",
+        "project",
+        "main",
+        reuse_collection_name="active",
+    )
+
+    embed_model.get_text_embedding_batch.assert_called_once_with(
+        ["class Service {}"]
+    )
+
+
+def test_vector_reuse_lookup_failure_falls_back_to_embedding():
+    client = MagicMock()
+    client.retrieve.side_effect = RuntimeError("temporary read failure")
+    embed_model = MagicMock()
+    embed_model.get_text_embedding_batch.return_value = [[0.1, 0.2, 0.3]]
+    operations = PointOperations(
+        client,
+        embed_model,
+        embedding_dim=3,
+        upsert_max_attempts=1,
+    )
+    chunk = TextNode(
+        text="class Service {}",
+        metadata={
+            "path": "Service.php",
+            "workspace": "workspace",
+            "project": "project",
+            "branch": "main",
+        },
+    )
+
+    result = operations.process_and_upsert_chunks(
+        [chunk],
+        "pending",
+        "workspace",
+        "project",
+        "main",
+        reuse_collection_name="active",
+    )
+
+    assert result == (1, 0)
+    embed_model.get_text_embedding_batch.assert_called_once()
 
 
 def test_architecture_context_uses_zero_vector_without_embedding_request():
@@ -48,10 +250,6 @@ def test_architecture_context_uses_zero_vector_without_embedding_request():
     assert points[1].vector == [0.0, 0.0, 0.0]
     assert points[2].vector == [0.0, 0.0, 0.0]
     assert "_node_content" not in points[2].payload
-    assert all(
-        len(point.payload["generation_member_sha256"]) == 64
-        for point in points
-    )
 
 
 def test_process_streams_embedding_and_pending_writes_in_point_batches():
@@ -66,12 +264,8 @@ def test_process_streams_embedding_and_pending_writes_in_point_batches():
         embed_model,
         embedding_dim=3,
         batch_size=2,
-    )
-    operations._seal_persisted_point_digests = MagicMock(
-        side_effect=lambda _collection, points: [
-            (point.id, point.payload["generation_member_sha256"])
-            for point in points
-        ]
+        upsert_max_attempts=1,
+        upsert_retry_base_seconds=0,
     )
     chunks = [
         TextNode(text=f"chunk-{index}", metadata={"path": "Service.php"})
@@ -96,10 +290,9 @@ def test_process_streams_embedding_and_pending_writes_in_point_batches():
         2,
         1,
     ]
-    assert operations._seal_persisted_point_digests.call_count == 2
 
 
-def test_process_stops_embedding_after_pending_write_failure():
+def test_process_fails_on_qdrant_wide_unavailability():
     client = MagicMock()
     client.upsert.side_effect = RuntimeError("qdrant unavailable")
     embed_model = MagicMock()
@@ -112,10 +305,183 @@ def test_process_stops_embedding_after_pending_write_failure():
         embed_model,
         embedding_dim=3,
         batch_size=2,
+        upsert_max_attempts=1,
+        upsert_retry_base_seconds=0,
     )
     chunks = [
         TextNode(text=f"chunk-{index}", metadata={"path": "Service.php"})
         for index in range(4)
+    ]
+
+    with pytest.raises(PointWriteInfrastructureError):
+        operations.process_and_upsert_chunks(
+            chunks,
+            "pending",
+            "workspace",
+            "project",
+            "main",
+        )
+
+    embed_model.get_text_embedding_batch.assert_called_once()
+
+
+def _points(count: int):
+    return [
+        PointStruct(
+            id=str(uuid.uuid4()),
+            vector=[0.1, 0.2, 0.3],
+            payload={"path": f"src/chunk-{index}.php"},
+        )
+        for index in range(count)
+    ]
+
+
+def test_upsert_retries_transient_qdrant_failure_without_losing_points():
+    client = MagicMock()
+    client.upsert.side_effect = [
+        RuntimeError("temporary transport failure"),
+        None,
+    ]
+    operations = PointOperations(
+        client,
+        MagicMock(),
+        batch_size=4,
+        upsert_max_attempts=3,
+        upsert_retry_base_seconds=0,
+    )
+
+    successful, failed = operations.upsert_points("pending", _points(4))
+
+    assert (successful, failed) == (4, 0)
+    assert client.upsert.call_count == 2
+
+
+def test_upsert_splits_rejected_request_until_smaller_slices_succeed():
+    class RequestTooLarge(RuntimeError):
+        status_code = 413
+
+    client = MagicMock()
+
+    def reject_multi_point_request(**kwargs):
+        if len(kwargs["points"]) > 1:
+            raise RequestTooLarge("request entity too large")
+
+    client.upsert.side_effect = reject_multi_point_request
+    operations = PointOperations(
+        client,
+        MagicMock(),
+        batch_size=4,
+        upsert_max_attempts=3,
+        upsert_retry_base_seconds=0,
+    )
+
+    successful, failed = operations.upsert_points("pending", _points(4))
+
+    assert (successful, failed) == (4, 0)
+    assert client.upsert.call_count == 7
+    accepted = [
+        call.kwargs["points"]
+        for call in client.upsert.call_args_list
+        if len(call.kwargs["points"]) == 1
+    ]
+    assert len(accepted) == 4
+
+
+def test_upsert_isolates_one_rejected_point_without_losing_valid_siblings():
+    class InvalidPoint(RuntimeError):
+        status_code = 400
+
+    points = _points(4)
+    rejected_id = points[2].id
+    client = MagicMock()
+
+    def reject_one_point(**kwargs):
+        if any(point.id == rejected_id for point in kwargs["points"]):
+            raise InvalidPoint("bad request")
+
+    client.upsert.side_effect = reject_one_point
+    operations = PointOperations(
+        client,
+        MagicMock(),
+        batch_size=4,
+        upsert_retry_base_seconds=0,
+    )
+
+    successful, failed = operations.upsert_points("pending", points)
+
+    assert (successful, failed) == (3, 1)
+    assert any(
+        call.kwargs["points"] == [points[2]]
+        for call in client.upsert.call_args_list
+    )
+
+
+def test_upsert_stops_subdivision_when_qdrant_is_globally_unavailable():
+    client = MagicMock()
+    client.upsert.side_effect = RuntimeError("qdrant unavailable")
+    operations = PointOperations(
+        client,
+        MagicMock(),
+        batch_size=4,
+        upsert_max_attempts=2,
+        upsert_retry_base_seconds=0,
+    )
+
+    with pytest.raises(PointWriteInfrastructureError):
+        operations.upsert_points("pending", _points(4))
+
+    assert client.upsert.call_count == 2
+
+
+def test_vector_dimension_mismatch_is_systemic_not_a_skippable_point():
+    class DimensionMismatch(RuntimeError):
+        status_code = 400
+
+    client = MagicMock()
+    client.upsert.side_effect = DimensionMismatch(
+        "vector dimension mismatch: expected dimension 4"
+    )
+    operations = PointOperations(
+        client,
+        MagicMock(),
+        batch_size=4,
+        upsert_max_attempts=2,
+        upsert_retry_base_seconds=0,
+    )
+
+    with pytest.raises(PointWriteInfrastructureError):
+        operations.upsert_points("pending", _points(4))
+
+    assert client.upsert.call_count == 2
+
+
+@pytest.mark.parametrize("status_code", [400, 413, 422])
+def test_process_isolates_provider_rejected_embedding_input(status_code):
+    class InvalidEmbeddingInput(RuntimeError):
+        pass
+
+    InvalidEmbeddingInput.status_code = status_code
+
+    client = MagicMock()
+    embed_model = MagicMock()
+
+    def embed(texts):
+        if "invalid" in texts:
+            raise InvalidEmbeddingInput("bad request")
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    embed_model.get_text_embedding_batch.side_effect = embed
+    operations = PointOperations(
+        client,
+        embed_model,
+        embedding_dim=3,
+        batch_size=3,
+        upsert_retry_base_seconds=0,
+    )
+    chunks = [
+        TextNode(text="valid-one", metadata={"path": "one.php"}),
+        TextNode(text="invalid", metadata={"path": "bad.php"}),
+        TextNode(text="valid-two", metadata={"path": "two.php"}),
     ]
 
     successful, failed = operations.process_and_upsert_chunks(
@@ -126,115 +492,10 @@ def test_process_stops_embedding_after_pending_write_failure():
         "main",
     )
 
-    assert (successful, failed) == (0, 2)
-    embed_model.get_text_embedding_batch.assert_called_once()
-
-
-def test_repository_generation_manifest_seals_exact_written_members():
-    client = QdrantClient(":memory:")
-    client.create_collection(
-        collection_name="pending",
-        vectors_config=VectorParams(size=2, distance=Distance.COSINE),
-    )
-    embed_model = MagicMock()
-    embed_model.get_text_embedding_batch.return_value = [
-        [0.1, 0.2],
-        [0.2, 0.3],
-    ]
-    operations = PointOperations(
-        client,
-        embed_model,
-        embedding_dim=2,
-    )
-    identity = {
-        "plugin_ids": ["php", "magento"],
-        "plugin_fingerprint": "sha256:selection",
-        "plugin_descriptor_fingerprint": "sha256:descriptor",
-        "plugin_implementation_fingerprint": "sha256:implementation",
-        "index_representation_fingerprint": "sha256:representation",
+    assert (successful, failed) == (2, 1)
+    written_paths = {
+        point.payload["path"]
+        for call in client.upsert.call_args_list
+        for point in call.kwargs["points"]
     }
-    nodes = [
-        TextNode(
-            text=f"chunk-{index}",
-            metadata={
-                "workspace": "workspace",
-                "project": "project",
-                "branch": "main",
-                "commit": "a" * 40,
-                "path": f"Service{index}.php",
-                **identity,
-            },
-        )
-        for index in range(2)
-    ]
-    expected_members = []
-    assert operations.process_and_upsert_chunks(
-        nodes,
-        "pending",
-        "workspace",
-        "project",
-        "main",
-        generation_members=expected_members,
-    ) == (2, 0)
-
-    manifest = operations.write_repository_generation_manifest(
-        "pending",
-        "workspace",
-        "project",
-        "main",
-        "a" * 40,
-        expected_member_count=2,
-        expected_members=expected_members,
-        source_tree_sha256="c" * 64,
-        index_include_patterns=["app/code/**"],
-        index_exclude_patterns=["vendor/**"],
-        identity_metadata=identity,
-    )
-
-    assert manifest["generation_member_count"] == 2
-    assert len(manifest["generation_members_sha256"]) == 64
-    points, _ = client.scroll(
-        collection_name="pending",
-        with_payload=True,
-        with_vectors=False,
-        limit=10,
-    )
-    assert len(points) == 3
-    assert sum(
-        (point.payload or {}).get("repository_generation_manifest") is True
-        for point in points
-    ) == 1
-
-
-@patch(
-    "rag_pipeline.core.index_manager.point_operations."
-    "collect_generation_members"
-)
-def test_repository_generation_manifest_rejects_same_count_substitution(
-    mock_collect,
-):
-    expected_members = [("one", "a" * 64), ("two", "b" * 64)]
-    mock_collect.return_value = [
-        ("one", "a" * 64),
-        ("unexpected", "c" * 64),
-    ]
-    operations = PointOperations(
-        MagicMock(),
-        MagicMock(),
-        embedding_dim=2,
-    )
-
-    with pytest.raises(RuntimeError, match="produced point identities"):
-        operations.write_repository_generation_manifest(
-            "pending",
-            "workspace",
-            "project",
-            "main",
-            "a" * 40,
-            expected_member_count=2,
-            expected_members=expected_members,
-            source_tree_sha256="c" * 64,
-            index_include_patterns=[],
-            index_exclude_patterns=[],
-            identity_metadata={},
-        )
+    assert written_paths == {"one.php", "two.php"}

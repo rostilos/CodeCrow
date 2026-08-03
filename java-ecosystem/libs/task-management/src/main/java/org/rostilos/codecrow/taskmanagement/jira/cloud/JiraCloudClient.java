@@ -20,6 +20,8 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Jira Cloud REST API v3 implementation of {@link TaskManagementClient}.
@@ -39,6 +41,12 @@ public class JiraCloudClient implements TaskManagementClient {
 
     private static final MediaType JSON_MEDIA = MediaType.get("application/json; charset=utf-8");
     private static final String API_V3 = "/rest/api/3";
+    private static final String CODECROW_MARKERS_PROPERTY = "codecrow.comment.markers";
+    private static final Pattern CODECROW_HTML_MARKER = Pattern.compile(
+            "<!--\\s*(codecrow-[^>]*?)\\s*-->", Pattern.CASE_INSENSITIVE);
+    private static final Pattern CODECROW_MARKDOWN_MARKER = Pattern.compile(
+            "(?m)^\\s*\\[(codecrow-[^\\]]+)]\\s*:\\s*#\\s*$",
+            Pattern.CASE_INSENSITIVE);
 
     private final JiraCloudConfig config;
     private final OkHttpClient httpClient;
@@ -123,23 +131,12 @@ public class JiraCloudClient implements TaskManagementClient {
 
     @Override
     public List<TaskComment> getComments(String taskId) throws IOException {
-        return RetryExecutor.withExponentialBackoff(() -> {
-            Request request = new Request.Builder()
-                    .url(config.baseUrl() + API_V3 + "/issue/" + taskId + "/comment?orderBy=created")
-                    .get()
-                    .build();
-
-            try (Response response = httpClient.newCall(request).execute()) {
-                ensureSuccess(response, "get comments for " + taskId);
-                JsonNode root = parseBody(response);
-                ArrayNode comments = (ArrayNode) root.path("comments");
-                List<TaskComment> result = new ArrayList<>();
-                for (JsonNode c : comments) {
-                    result.add(parseComment(c));
-                }
-                return result;
-            }
-        });
+        ArrayNode comments = fetchComments(taskId, false);
+        List<TaskComment> result = new ArrayList<>();
+        for (JsonNode comment : comments) {
+            result.add(parseComment(comment));
+        }
+        return result;
     }
 
     @Override
@@ -206,10 +203,36 @@ public class JiraCloudClient implements TaskManagementClient {
 
     @Override
     public Optional<TaskComment> findCommentByMarker(String taskId, String marker) throws IOException {
-        List<TaskComment> comments = getComments(taskId);
-        return comments.stream()
-                .filter(c -> c.body() != null && c.body().contains(marker))
-                .findFirst();
+        String normalizedMarker = normalizeMarker(marker);
+        ArrayNode comments = fetchComments(taskId, true);
+        for (JsonNode comment : comments) {
+            TaskComment parsed = parseComment(comment);
+            if ((marker != null && parsed.body() != null && parsed.body().contains(marker))
+                    || hasMarkerProperty(comment, normalizedMarker)) {
+                return Optional.of(parsed);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private ArrayNode fetchComments(String taskId, boolean includeProperties) throws IOException {
+        return RetryExecutor.withExponentialBackoff(() -> {
+            String url = config.baseUrl() + API_V3 + "/issue/" + taskId
+                    + "/comment?orderBy=created"
+                    + (includeProperties ? "&expand=properties" : "");
+            Request request = new Request.Builder()
+                    .url(url)
+                    .get()
+                    .build();
+
+            try (Response response = httpClient.newCall(request).execute()) {
+                ensureSuccess(response, "get comments for " + taskId);
+                JsonNode comments = parseBody(response).path("comments");
+                return comments.isArray()
+                        ? (ArrayNode) comments
+                        : objectMapper.createArrayNode();
+            }
+        });
     }
 
     @Override
@@ -316,6 +339,9 @@ public class JiraCloudClient implements TaskManagementClient {
      * </p>
      */
     private ObjectNode buildAdfCommentPayload(String bodyText) {
+        MarkerContent markerContent = extractMarkers(bodyText);
+        bodyText = markerContent.visibleContent();
+
         ObjectNode doc = objectMapper.createObjectNode();
         ObjectNode body = objectMapper.createObjectNode();
         body.put("version", 1);
@@ -413,7 +439,93 @@ public class JiraCloudClient implements TaskManagementClient {
 
         body.set("content", content);
         doc.set("body", body);
+        addMarkerProperties(doc, markerContent.markers());
         return doc;
+    }
+
+    private MarkerContent extractMarkers(String content) {
+        if (content == null || content.isEmpty()) {
+            return new MarkerContent(content == null ? "" : content, Set.of());
+        }
+
+        Set<String> markers = new LinkedHashSet<>();
+        Matcher htmlMatcher = CODECROW_HTML_MARKER.matcher(content);
+        StringBuffer withoutHtmlMarkers = new StringBuffer();
+        while (htmlMatcher.find()) {
+            markers.add(normalizeMarker(htmlMatcher.group(1)));
+            htmlMatcher.appendReplacement(withoutHtmlMarkers, "");
+        }
+        htmlMatcher.appendTail(withoutHtmlMarkers);
+
+        Matcher markdownMatcher = CODECROW_MARKDOWN_MARKER.matcher(withoutHtmlMarkers);
+        StringBuffer visibleContent = new StringBuffer();
+        while (markdownMatcher.find()) {
+            markers.add(normalizeMarker(markdownMatcher.group(1)));
+            markdownMatcher.appendReplacement(visibleContent, "");
+        }
+        markdownMatcher.appendTail(visibleContent);
+
+        markers.removeIf(String::isBlank);
+        return new MarkerContent(visibleContent.toString(), markers);
+    }
+
+    private void addMarkerProperties(ObjectNode payload, Set<String> markers) {
+        if (markers.isEmpty()) {
+            return;
+        }
+
+        ObjectNode value = objectMapper.createObjectNode();
+        ArrayNode markerValues = value.putArray("markers");
+        markers.forEach(markerValues::add);
+
+        ObjectNode property = objectMapper.createObjectNode();
+        property.put("key", CODECROW_MARKERS_PROPERTY);
+        property.set("value", value);
+        payload.putArray("properties").add(property);
+    }
+
+    private boolean hasMarkerProperty(JsonNode comment, String expectedMarker) {
+        if (expectedMarker.isBlank()) {
+            return false;
+        }
+
+        JsonNode properties = comment.path("properties");
+        if (!properties.isArray()) {
+            return false;
+        }
+
+        for (JsonNode property : properties) {
+            if (!CODECROW_MARKERS_PROPERTY.equals(property.path("key").asText())) {
+                continue;
+            }
+            JsonNode markers = property.path("value").path("markers");
+            if (markers.isArray()) {
+                for (JsonNode marker : markers) {
+                    if (normalizeMarker(marker.asText()).startsWith(expectedMarker)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private String normalizeMarker(String marker) {
+        if (marker == null) {
+            return "";
+        }
+
+        String normalized = marker
+                .replace("<!--", "")
+                .replace("-->", "")
+                .strip();
+        if (normalized.startsWith("[") && normalized.endsWith("]: #")) {
+            normalized = normalized.substring(1, normalized.length() - 4).strip();
+        }
+        return normalized.toLowerCase(Locale.ROOT);
+    }
+
+    private record MarkerContent(String visibleContent, Set<String> markers) {
     }
 
     private void addVisibility(ObjectNode payload, TaskCommentVisibility visibility) {

@@ -17,6 +17,17 @@ def _mock_config(**overrides):
     cfg.openrouter_api_key = overrides.get("openrouter_api_key", "sk-test-key")
     cfg.openrouter_model = overrides.get("openrouter_model", "openai/text-embedding-3-small")
     cfg.openrouter_base_url = overrides.get("openrouter_base_url", "https://openrouter.ai/api/v1")
+    cfg.openrouter_batch_size = overrides.get("openrouter_batch_size", 50)
+    cfg.openrouter_index_concurrency = overrides.get(
+        "openrouter_index_concurrency", 8
+    )
+    cfg.openrouter_max_in_flight = overrides.get("openrouter_max_in_flight", 16)
+    cfg.openrouter_index_provider_sort = overrides.get(
+        "openrouter_index_provider_sort", "throughput"
+    )
+    cfg.openrouter_query_provider_sort = overrides.get(
+        "openrouter_query_provider_sort", "latency"
+    )
     return cfg
 
 
@@ -42,6 +53,16 @@ class TestCreateEmbeddingModel:
         call_kwargs = MockOR.call_args[1]
         assert call_kwargs["api_key"] == "sk-test-key"
         assert call_kwargs["model"] == "openai/text-embedding-3-small"
+        assert call_kwargs["provider_sort"] == "throughput"
+
+    @patch("rag_pipeline.core.embedding_factory.OpenRouterEmbedding")
+    def test_query_workload_uses_latency_provider_routing(self, MockOR):
+        config = _mock_config(embedding_provider="openrouter")
+
+        create_embedding_model(config, workload="query")
+
+        assert MockOR.call_args.kwargs["provider_sort"] == "latency"
+        assert MockOR.call_args.kwargs["workload"] == "query"
 
     @patch("rag_pipeline.core.embedding_factory.OllamaEmbedding")
     def test_unknown_provider_defaults_to_ollama(self, MockOllama):

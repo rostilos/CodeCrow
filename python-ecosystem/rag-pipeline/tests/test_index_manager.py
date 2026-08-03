@@ -4,6 +4,8 @@ CollectionManager, BranchManager, PointOperations, StatsManager, RAGIndexManager
 """
 import pytest
 import uuid
+from httpx import Headers
+from qdrant_client.http.exceptions import UnexpectedResponse
 from unittest.mock import patch, MagicMock, PropertyMock
 from datetime import datetime
 
@@ -41,6 +43,47 @@ class TestCollectionManager:
         cm.ensure_collection_exists("test_coll")
         cm.client.create_collection.assert_not_called()
 
+    def test_ensure_collection_exists_accepts_concurrent_create(self):
+        cm = self._make()
+        created_collection = MagicMock()
+        created_collection.name = "test_coll"
+        missing = MagicMock()
+        missing.collections = []
+        present = MagicMock()
+        present.collections = [created_collection]
+        cm.client.get_collections.side_effect = [missing, present]
+        cm.client.create_collection.side_effect = UnexpectedResponse(
+            409,
+            "Conflict",
+            b'{"status":{"error":"collection already exists"}}',
+            Headers(),
+        )
+        cm.alias_exists = MagicMock(return_value=False)
+        cm._ensure_payload_indexes = MagicMock()
+
+        cm.ensure_collection_exists("test_coll")
+
+        cm._ensure_payload_indexes.assert_called_once_with("test_coll")
+
+    def test_ensure_collection_exists_does_not_hide_other_conflicts(self):
+        cm = self._make()
+        missing = MagicMock()
+        missing.collections = []
+        cm.client.get_collections.side_effect = [missing, missing]
+        conflict = UnexpectedResponse(
+            409,
+            "Conflict",
+            b'{"status":{"error":"unrelated conflict"}}',
+            Headers(),
+        )
+        cm.client.create_collection.side_effect = conflict
+        cm.alias_exists = MagicMock(return_value=False)
+
+        with pytest.raises(UnexpectedResponse) as exc_info:
+            cm.ensure_collection_exists("test_coll")
+
+        assert exc_info.value is conflict
+
     def test_ensure_collection_exists_is_alias(self):
         cm = self._make()
         cm.alias_exists = MagicMock(return_value=True)
@@ -55,6 +98,30 @@ class TestCollectionManager:
         name = cm.create_pending_collection("base_name")
         assert name.startswith("base_name_pending_")
         cm.client.create_collection.assert_called_once()
+
+    def test_create_pending_collection_uses_unique_names(self):
+        cm = self._make()
+        cm._ensure_payload_indexes = MagicMock()
+
+        first = cm.create_pending_collection("base_name")
+        second = cm.create_pending_collection("base_name")
+
+        assert first != second
+
+    def test_payload_index_failure_does_not_skip_remaining_indexes(self):
+        cm = self._make()
+        cm.client.create_payload_index.side_effect = [
+            RuntimeError("path index already exists"),
+            True,
+            True,
+            True,
+            True,
+            True,
+        ]
+
+        cm._ensure_payload_indexes("test_coll")
+
+        assert cm.client.create_payload_index.call_count == 6
 
     def test_delete_collection(self):
         cm = self._make()
@@ -329,6 +396,7 @@ class TestRAGIndexManager:
         mock_create.return_value = self._make_embed_mock()
 
         mgr = RAGIndexManager(self._mock_config())
+        mgr._mutation_coordinator.enabled = False
         mgr._collection_manager = MagicMock()
         mgr._collection_manager.collection_exists.return_value = True
         mgr._branch_manager = MagicMock()

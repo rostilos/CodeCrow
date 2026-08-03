@@ -28,16 +28,19 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
+import org.rostilos.codecrow.core.service.TaskImplementationEvidenceService;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.pr.PrIssueTrackingService;
 import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -51,6 +54,9 @@ class PullRequestAnalysisProcessorTest {
 
         @Mock
         private CodeAnalysisService codeAnalysisService;
+
+        @Mock
+        private TaskImplementationEvidenceService taskImplementationEvidenceService;
 
         @Mock
         private AiAnalysisClient aiAnalysisClient;
@@ -109,9 +115,15 @@ class PullRequestAnalysisProcessorTest {
         void setUp() {
                 System.setProperty(PromptDryRunMode.ENABLED_KEY, "false");
                 System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
+                lenient().when(taskImplementationEvidenceService.persistFromAnalysisResponse(
+                                any(), any()))
+                                .thenReturn(TaskImplementationEvidenceService.PersistenceResult.empty());
+                lenient().when(taskImplementationEvidenceService.copyForAnalysis(any(), any()))
+                                .thenReturn(TaskImplementationEvidenceService.PersistenceResult.empty());
                 processor = new PullRequestAnalysisProcessor(
                                 pullRequestService,
                                 codeAnalysisService,
+                                taskImplementationEvidenceService,
                                 aiAnalysisClient,
                                 vcsServiceFactory,
                                 analysisLockService,
@@ -235,15 +247,31 @@ class PullRequestAnalysisProcessorTest {
                                         "task_key", "PROJ-123",
                                         "task_summary", "Build export"));
 
+                        Map<String, Object> taskEvidence = Map.of(
+                                        "taskKey", "PROJ-123",
+                                        "source", "DETERMINISTIC_PR_LEDGER",
+                                        "fullEvidenceComplete", true,
+                                        "items", List.of(Map.of(
+                                                        "evidenceRef", "PRF001",
+                                                        "filePath", "src/Export.java",
+                                                        "hunkId", "hunk-1",
+                                                        "lineStart", 10,
+                                                        "lineEnd", 12,
+                                                        "excerpt", "exportService.run();")));
                         Map<String, Object> aiResponse = Map.of(
                                         "comment", "Review comment",
-                                        "issues", List.of());
+                                        "issues", List.of(),
+                                        "taskEvidence", taskEvidence);
                         when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
 
                         when(codeAnalysisService.createAnalysisFromAiResponse(
                                         any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(),
                                         any(), any(), any(), any()))
                                         .thenReturn(codeAnalysis);
+                        when(taskImplementationEvidenceService.persistFromAnalysisResponse(
+                                        codeAnalysis, taskEvidence))
+                                        .thenReturn(new TaskImplementationEvidenceService.PersistenceResult(
+                                                        1, 0, 0));
 
                         Map<String, Object> result = processor.process(request, consumer, project);
 
@@ -265,6 +293,27 @@ class PullRequestAnalysisProcessorTest {
                                         anyMap(),
                                         eq("PROJ-123"),
                                         eq("Build export"));
+                        verify(taskImplementationEvidenceService)
+                                        .persistFromAnalysisResponse(codeAnalysis, taskEvidence);
+                }
+
+                @Test
+                @DisplayName("should fail open when auxiliary task evidence persistence is unavailable")
+                void shouldFailOpenWhenTaskEvidencePersistenceFails() {
+                        Map<String, Object> taskEvidence = Map.of(
+                                        "taskKey", "PROJ-123",
+                                        "source", "DETERMINISTIC_PR_LEDGER",
+                                        "items", List.of());
+                        when(taskImplementationEvidenceService.persistFromAnalysisResponse(
+                                        codeAnalysis, taskEvidence))
+                                        .thenThrow(new RuntimeException("database unavailable"));
+
+                        assertThatCode(() -> ReflectionTestUtils.invokeMethod(
+                                        processor,
+                                        "persistTaskImplementationEvidence",
+                                        codeAnalysis,
+                                        taskEvidence))
+                                        .doesNotThrowAnyException();
                 }
 
                 @Test
@@ -556,6 +605,8 @@ class PullRequestAnalysisProcessorTest {
                         assertThat(result).containsEntry("cached", true);
                         verify(codeAnalysisService).cloneAnalysisForPr(eq(sourceAnalysis), eq(project), eq(42L),
                                         eq("abc123"), eq("main"), eq("feature-branch"), eq(reviewIdentity));
+                        verify(taskImplementationEvidenceService)
+                                        .copyForAnalysis(sourceAnalysis, clonedAnalysis);
                         verify(reportingService).postAnalysisResults(eq(clonedAnalysis), any(), anyLong(), any(),
                                         any());
                         verify(analysisLockService).releaseLock("lock-key");
@@ -613,6 +664,8 @@ class PullRequestAnalysisProcessorTest {
 
                         assertThat(result).containsEntry("status", "cached_by_fingerprint");
                         assertThat(result).containsEntry("cached", true);
+                        verify(taskImplementationEvidenceService)
+                                        .copyForAnalysis(fingerprintSource, clonedAnalysis);
                         verify(analysisLockService).releaseLock("lock-key");
                 }
 
@@ -859,6 +912,7 @@ class PullRequestAnalysisProcessorTest {
                         PullRequestAnalysisProcessor processorWithoutOptional = new PullRequestAnalysisProcessor(
                                         pullRequestService,
                                         codeAnalysisService,
+                                        taskImplementationEvidenceService,
                                         aiAnalysisClient,
                                         vcsServiceFactory,
                                         analysisLockService,

@@ -27,7 +27,13 @@ COPY python-ecosystem/rag-pipeline/src/ ./src/
 COPY python-ecosystem/rag-pipeline/main.py .
 COPY analysis-plugins/ ./plugins/
 
-RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+# Shared repository workspaces are created by the Java services as UID/GID
+# 1001.  RAG owns queued work after handoff, so it must use the same numeric
+# identity to remove the producer-created top-level directory under /tmp's
+# sticky-bit protection.
+RUN groupadd --gid 1001 appgroup && \
+    useradd --uid 1001 --gid appgroup --no-create-home \
+        --shell /usr/sbin/nologin appuser
 
 # Create cache directories with proper permissions
 RUN mkdir -p /tmp/.tiktoken_cache /tmp/.transformers_cache /tmp/.huggingface /tmp/.llama_index && \

@@ -5,13 +5,12 @@ import pytest
 
 from rag_pipeline.core.index_representation import (
     INDEX_REPRESENTATION_PAYLOAD_KEY,
-    IndexCompatibilityError,
     _REPRESENTATION_DEPENDENCIES,
     _REPRESENTATION_SOURCE_PATHS,
     branch_splitter_kwargs,
     compute_index_representation_fingerprint,
+    observe_branch_representation,
     read_branch_index_representation,
-    require_compatible_branch_representation,
 )
 from rag_pipeline.core.pr_overlay_representation import (
     _PR_OVERLAY_DEPENDENCIES,
@@ -210,13 +209,25 @@ def test_branch_identity_distinguishes_absent_legacy_and_current_points():
         "collection",
         "main",
     ) == (True, None)
-    with pytest.raises(IndexCompatibilityError, match="fully reindex"):
-        require_compatible_branch_representation(
-            client,
-            "collection",
-            "main",
-            expected_fingerprint="sha256:current",
-        )
+    assert observe_branch_representation(
+        client,
+        "collection",
+        "main",
+        expected_fingerprint="sha256:current",
+    ) is True
+
+    client.scroll = lambda **_kwargs: (
+        [SimpleNamespace(payload={
+            INDEX_REPRESENTATION_PAYLOAD_KEY: "sha256:older-build",
+        })],
+        None,
+    )
+    assert observe_branch_representation(
+        client,
+        "collection",
+        "main",
+        expected_fingerprint="sha256:current",
+    ) is True
 
     client.scroll = lambda **_kwargs: (
         [SimpleNamespace(payload={
@@ -224,12 +235,12 @@ def test_branch_identity_distinguishes_absent_legacy_and_current_points():
         })],
         None,
     )
-    require_compatible_branch_representation(
+    assert observe_branch_representation(
         client,
         "collection",
         "main",
         expected_fingerprint="sha256:current",
-    )
+    ) is True
 
 
 def test_branch_identity_pages_past_pr_points_and_accepts_missing_pr_as_legacy():

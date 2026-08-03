@@ -1,6 +1,5 @@
 package org.rostilos.codecrow.analysisengine.processor.analysis;
 
-import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -26,11 +25,11 @@ import org.rostilos.codecrow.commitgraph.service.BranchCommitService;
 import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestStatusSyncService;
 import org.rostilos.codecrow.commitgraph.service.CommitCoverageService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.util.AnalysisLimitEnforcer;
@@ -46,6 +45,7 @@ import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.model.VcsCommit;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
 import java.util.*;
@@ -128,16 +128,13 @@ class BranchAnalysisProcessorTest {
     private RagOperationsService ragOperationsService;
 
     @Mock
-    private VcsOperationsService operationsService;
-
-    @Mock
     private Project project;
 
     @Mock
     private VcsConnection vcsConnection;
 
     @Mock
-    private OkHttpClient httpClient;
+    private VcsClient authorizedClient;
 
     @Mock
     private Branch branch;
@@ -146,6 +143,7 @@ class BranchAnalysisProcessorTest {
 
     @BeforeEach
     void setUp() {
+        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(authorizedClient);
         processor = new BranchAnalysisProcessor(
                 projectService,
                 branchRepository,
@@ -405,23 +403,21 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             // DAG sync
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(Collections.emptyList(), null, true));
 
             // Diff fetcher returns the raw diff
             String rawDiff = "diff --git a/src/App.java b/src/App.java\n+new code\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             // Support services return values
             Map<String, String> archiveContents = Map.of("src/App.java", "file content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("src/App.java"));
 
             Branch savedBranch = mock(Branch.class);
@@ -443,17 +439,21 @@ class BranchAnalysisProcessorTest {
             assertThat(result).containsEntry("cached", false);
 
             // Verify orchestration calls to support services
-            verify(branchFileOperationsService).downloadBranchArchive(any(), eq("new-commit"), anySet());
-            verify(branchFileOperationsService).updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents));
+            verify(branchFileOperationsService).downloadBranchFileSnapshot(any(), eq("new-commit"), anySet());
+            verify(branchFileOperationsService).updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot));
             verify(branchFileOperationsService).createOrUpdateProjectBranch(eq(project), eq(request), any());
             verify(branchDiffFetcher).fetchDiff(
-                    any(), any(), any(), any(), any(), any(), isNull(), any());
+                    any(), any(), any(), any(), any(), isNull(), any());
             verify(branchIssueMappingService).mapCodeAnalysisIssuesToBranch(
                     anySet(), anySet(), eq(savedBranch), eq(project), eq(Set.of(40L, 41L, 42L)));
             verify(branchIssueReconciliationService).reconcileIssueLineNumbers(eq(rawDiff), anySet(), eq(savedBranch));
             verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
-                    anySet(), anySet(), eq(savedBranch), eq(project), eq(request), eq(consumer), eq(archiveContents), eq(rawDiff));
-            verify(branchFileOperationsService).updateFileSnapshotsForBranch(anySet(), eq(project), eq(request), eq(archiveContents));
+                    anySet(), anySet(), eq(savedBranch), eq(project), eq(request), eq(consumer),
+                    eq(archiveContents), eq(rawDiff), eq(false));
+            verify(branchIssueReconciliationService, never()).sweepDeterministicResolutions(
+                    anySet(), any(), any(), any(), anyMap());
+            verify(branchFileOperationsService).updateFileSnapshotsForBranch(
+                    anySet(), eq(project), eq(request), eq(archiveSnapshot));
             verify(branchIssueReconciliationService).verifyIssueLineNumbersWithSnippets(anySet(), eq(project), any());
             verify(analysisLockService).releaseLock("lock-key");
         }
@@ -484,23 +484,21 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             // DAG sync
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             // Diff fetcher returns delta diff
             String rawDiff = "diff --git a/src/App.java b/src/App.java\n+delta change\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             // Support services
             Map<String, String> archiveContents = Map.of("src/App.java", "content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("src/App.java"));
             when(branchFileOperationsService.createOrUpdateProjectBranch(eq(project), eq(request), any()))
                     .thenReturn(existingBranch);
@@ -511,7 +509,7 @@ class BranchAnalysisProcessorTest {
             Map<String, Object> result = processor.process(request, consumer);
 
             assertThat(result).containsEntry("status", "accepted");
-            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any(), any());
+            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -547,10 +545,6 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD))
-                    .thenReturn(operationsService);
-
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(List.of("new-commit"), "old-commit", false));
 
@@ -568,7 +562,7 @@ class BranchAnalysisProcessorTest {
                     -old unrelated code
                     +new unrelated code
                     """;
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
             doThrow(new DiffTooLargeException(
                     DiffTooLargeException.LimitType.FILES, 851, 150, 1L, null, null))
@@ -578,10 +572,11 @@ class BranchAnalysisProcessorTest {
                     .thenReturn(Set.of("src/Issue.java"));
 
             Map<String, String> archiveContents = Map.of("src/Issue.java", "new issue code");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
             when(branchFileOperationsService.updateBranchFiles(
-                    anySet(), eq(project), eq("feature-x"), eq(archiveContents)))
+                    anySet(), eq(project), eq("feature-x"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("src/Issue.java"));
             when(branchFileOperationsService.createOrUpdateProjectBranch(eq(project), eq(request), any()))
                     .thenReturn(existingBranch);
@@ -592,7 +587,6 @@ class BranchAnalysisProcessorTest {
             when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
             when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
             when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
-
             Map<String, Object> result = processor.process(request, events::add);
 
             assertThat(result).containsEntry("status", "accepted");
@@ -600,13 +594,13 @@ class BranchAnalysisProcessorTest {
                     assertThat(event).containsEntry("state", "direct_push_analysis_skipped_limit"));
             verify(aiAnalysisClient, never()).performAnalysis(any(), any());
             verify(commitCoverageService, never()).checkCoverage(any(), any(), anyList());
-            verify(branchFileOperationsService).downloadBranchArchive(
+            verify(branchFileOperationsService).downloadBranchFileSnapshot(
                     any(), eq("new-commit"), eq(Set.of("src/Issue.java")));
             verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
                     eq(Set.of("src/Issue.java")), eq(Set.of("src/Issue.java")),
                     eq(existingBranch), eq(project), eq(request), any(), eq(archiveContents),
                     argThat(diff -> diff.contains("src/Issue.java")
-                            && !diff.contains("src/Unrelated.java")));
+                            && !diff.contains("src/Unrelated.java")), eq(false));
             verify(branchIssueReconciliationService, never()).sweepDeterministicResolutions(
                     anySet(), any(), any(), any(), anyMap());
             verify(ragOperationsService).triggerIncrementalUpdate(
@@ -638,23 +632,21 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             // DAG sync
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             // Diff fetcher returns commit diff
             String rawDiff = "diff --git a/README.md b/README.md\n+updated\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             // Support services
             Map<String, String> archiveContents = Map.of("README.md", "content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("README.md"));
 
             Branch savedBranch = mock(Branch.class);
@@ -669,7 +661,7 @@ class BranchAnalysisProcessorTest {
             Map<String, Object> result = processor.process(request, consumer);
 
             assertThat(result).containsEntry("status", "accepted");
-            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any(), any());
+            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -693,21 +685,19 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             // DAG sync
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("f.java", "content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("f.java"));
 
             Branch savedBranch = mock(Branch.class);
@@ -723,6 +713,9 @@ class BranchAnalysisProcessorTest {
             when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
             when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
             when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
+            when(ragOperationsService.triggerIncrementalUpdate(
+                    eq(project), eq("main"), eq("new-commit"), eq(rawDiff), any()))
+                    .thenReturn(true);
 
             // Final markHealthy
             when(branchRepository.findByProjectIdAndBranchName(1L, "main"))
@@ -732,6 +725,38 @@ class BranchAnalysisProcessorTest {
             processor.process(request, consumer);
 
             verify(ragOperationsService).triggerIncrementalUpdate(eq(project), eq("main"), eq("new-commit"), eq(rawDiff), any());
+        }
+
+        @Test
+        @DisplayName("should not emit RAG success after an incremental failure")
+        void shouldNotEmitRagSuccessAfterIncrementalFailure() {
+            BranchProcessRequest request = createRequest();
+            request.commitHash = "failed-commit";
+            request.targetBranchName = "main";
+            String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
+            List<Map<String, Object>> events = new ArrayList<>();
+
+            when(project.getId()).thenReturn(1L);
+            when(ragOperationsService.isRagEnabled(project)).thenReturn(true);
+            when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
+            when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
+            when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
+            when(ragOperationsService.triggerIncrementalUpdate(
+                    eq(project), eq("main"), eq("failed-commit"), eq(rawDiff), any()))
+                    .thenReturn(false);
+
+            ReflectionTestUtils.invokeMethod(
+                    processor,
+                    "performIncrementalRagUpdate",
+                    request,
+                    project,
+                    rawDiff,
+                    (Consumer<Map<String, Object>>) events::add,
+                    false);
+
+            assertThat(events)
+                    .noneSatisfy(event ->
+                            assertThat(event).containsEntry("state", "rag_update_complete"));
         }
 
         @Test
@@ -756,21 +781,19 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             // DAG sync
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("f.java", "content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("feature-x"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("feature-x"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("f.java"));
 
             Branch savedBranch = mock(Branch.class);
@@ -822,22 +845,20 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             // DAG sync
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             // Diff fetcher returns diff (handles fallback internally)
             String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("f.java", "content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("f.java"));
             when(branchFileOperationsService.createOrUpdateProjectBranch(eq(project), eq(request), any()))
                     .thenReturn(existingBranch);
@@ -847,7 +868,7 @@ class BranchAnalysisProcessorTest {
 
             processor.process(request, consumer);
 
-            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any(), any());
+            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -876,21 +897,16 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("ws");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
-
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
                     .thenReturn(new CommitRangeContext(List.of("source-head"), "old-commit", false));
 
-            VcsClient vcsClient = mock(VcsClient.class);
-            when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
-            when(vcsClient.getCommitHistory("ws", "repo", "merge-commit", 1))
+            when(authorizedClient.getCommitHistory("ws", "repo", "merge-commit", 1))
                     .thenReturn(List.of(new VcsCommit(
                             "merge-commit", "Merge PR", null, null, null,
                             List.of("target-parent", "source-head"))));
-            when(operationsService.findPullRequestForCommit(httpClient, "ws", "repo", "merge-commit"))
+            when(authorizedClient.findPullRequestForCommit("ws", "repo", "merge-commit"))
                     .thenReturn(null);
-            when(operationsService.findPullRequestForCommit(httpClient, "ws", "repo", "source-head"))
+            when(authorizedClient.findPullRequestForCommit("ws", "repo", "source-head"))
                     .thenReturn(null);
             when(codeAnalysisService.findReviewedPrNumberByCommitHash(1L, "main", "merge-commit"))
                     .thenReturn(Optional.empty());
@@ -898,13 +914,14 @@ class BranchAnalysisProcessorTest {
                     .thenReturn(Optional.of(42L));
 
             String rawDiff = "diff --git a/src/App.java b/src/App.java\n+change\n";
-            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("src/App.java", "content");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("merge-commit"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+            var archiveSnapshot = archiveSnapshot(archiveContents);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(any(), eq("merge-commit"), anySet()))
+                    .thenReturn(archiveSnapshot);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot)))
                     .thenReturn(Set.of("src/App.java"));
             when(branchFileOperationsService.createOrUpdateProjectBranch(eq(project), eq(request), any()))
                     .thenReturn(existingBranch);
@@ -914,7 +931,7 @@ class BranchAnalysisProcessorTest {
 
             processor.process(request, consumer);
 
-            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), eq(42L), any());
+            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), eq(42L), any());
             verify(branchIssueMappingService).mapCodeAnalysisIssuesToBranch(
                     anySet(), anySet(), eq(existingBranch), eq(project), eq(42L));
             verify(pullRequestService).markPullRequestMerged(1L, 42L);
@@ -947,6 +964,12 @@ class BranchAnalysisProcessorTest {
         // These are tested through process() behavior since the method is private.
         // The key scenarios: ragOperationsService null, rag not enabled, rag index not ready,
         // main branch vs non-main branch are all covered indirectly.
+    }
+
+    private static BranchFileOperationsService.BranchFileSnapshot archiveSnapshot(
+            Map<String, String> contents) {
+        return BranchFileOperationsService.BranchFileSnapshot.fromArchive(
+                new BranchArchiveService.ArchiveSnapshot(contents, contents.keySet()));
     }
 
     @Nested

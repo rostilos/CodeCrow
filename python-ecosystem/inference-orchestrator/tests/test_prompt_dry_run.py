@@ -14,14 +14,17 @@ import pytest
 from llm.llm_factory import LLMFactory
 from model.dtos import ReviewRequestDto
 from model.enrichment import FileContentDto, PrEnrichmentDataDto
+from model.multi_stage import CrossFileAnalysisResult, CrossFileIssue
 from service.review.orchestrator.orchestrator import (
     MultiStageReviewOrchestrator,
     PrIndexPreconditionError,
 )
-from service.review.prompt_dry_run import PromptCaptureSession
+from service.review.prompt_dry_run import PromptCaptureLLM, PromptCaptureSession
 from service.review.prompt_dry_run import capture_review_prompts
 from service.review.prompt_dry_run import capture_and_store_review_prompts
+from service.review.evidence_scopes import process_review_evidence_scopes
 from service.review.review_service import ReviewService
+from service.review.snapshot_identity import validate_review_snapshot_identity
 from utils.diff_processor import DiffProcessor, HunkDisposition
 from utils.hunk_coverage import ReviewManifestPreconditionError
 from .prompt_dry_run_neutral_fixture import (
@@ -512,6 +515,184 @@ async def test_synthetic_findings_capture_conditional_review_prompts(monkeypatch
     assert result["simulation"]["simulatedFindingsProduced"] == 6
 
 
+def _incremental_task_request() -> tuple[ReviewRequestDto, str, str]:
+    prior_path = "app/Tracking/NewRelicCouponTracker.php"
+    delta_path = "app/UPS/GenerateLabel.php"
+    prior_diff = "\n".join([
+        f"diff --git a/{prior_path} b/{prior_path}",
+        f"--- a/{prior_path}",
+        f"+++ b/{prior_path}",
+        "@@ -1 +1 @@",
+        "-return null;",
+        "+return $newRelic->recordCustomEvent('CouponApplied', $payload);",
+        "",
+    ])
+    delta_diff = "\n".join([
+        f"diff --git a/{delta_path} b/{delta_path}",
+        f"--- a/{delta_path}",
+        f"+++ b/{delta_path}",
+        "@@ -1 +1 @@",
+        "-return $label;",
+        "+return $this->normalize($label);",
+        "",
+    ])
+    request = _request().model_copy(update={
+        "analysisMode": "INCREMENTAL",
+        "rawDiff": prior_diff + delta_diff,
+        "deltaDiff": delta_diff,
+        "changedFiles": [delta_path],
+        "previousCommitHash": "3" * 40,
+        "prTitle": "Add coupon and checkout New Relic tracking",
+        "taskContext": {
+            "task_key": "SHOP-42",
+            "task_summary": "Add coupon and checkout New Relic tracking",
+        },
+        "enrichmentData": PrEnrichmentDataDto(fileContents=[
+            FileContentDto(
+                path=delta_path,
+                content="<?php return $this->normalize($label);\n",
+                sizeBytes=43,
+            ),
+        ]),
+    })
+    return request, prior_path, delta_path
+
+
+@pytest.mark.asyncio
+async def test_incremental_prompt_pipeline_keeps_review_delta_small_and_stage_2_pr_aware(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "llm.llm_factory.LLMFactory.create_llm",
+        lambda *_args, **_kwargs: pytest.fail("provider construction is forbidden"),
+    )
+    request, prior_path, delta_path = _incremental_task_request()
+
+    result = await capture_review_prompts(
+        request,
+        DeterministicRagSpy(),
+        include_deterministic_rag=False,
+        simulated_findings_per_file=1,
+    )
+
+    stage_0_and_1 = [
+        prompt["renderedPrompt"]
+        for prompt in result["prompts"]
+        if prompt["stage"] in {"stage_0", "stage_1"}
+    ]
+    stage_2 = next(
+        prompt["renderedPrompt"]
+        for prompt in result["prompts"]
+        if prompt["stage"] == "stage_2"
+    )
+    assert stage_0_and_1
+    assert all(delta_path in prompt for prompt in stage_0_and_1)
+    assert all(prior_path not in prompt for prompt in stage_0_and_1)
+    assert "FULL PR STATE LEDGER (base to current PR head)" in stage_2
+    assert prior_path in stage_2
+    assert "recordCustomEvent" in stage_2
+    assert "CURRENT INCREMENTAL DELTA (publication/review scope)" in stage_2
+    assert delta_path in stage_2
+    assert "[PRF" in stage_2
+    assert "[DELTA" in stage_2
+
+
+@pytest.mark.asyncio
+async def test_pipeline_suppresses_incremental_missing_task_false_positive():
+    class UnsupportedGapSession(PromptCaptureSession):
+        def _structured_response(self, schema, rendered):
+            if schema is CrossFileAnalysisResult:
+                return CrossFileAnalysisResult(
+                    pr_risk_level="MEDIUM",
+                    cross_file_issues=[CrossFileIssue(
+                        id="CROSS_001",
+                        severity="MEDIUM",
+                        category="BUG_RISK",
+                        title=(
+                            "PR does not implement the requested coupon and "
+                            "checkout New Relic tracking"
+                        ),
+                        primary_file="app/UPS/GenerateLabel.php",
+                        line=1,
+                        codeSnippet="return $this->normalize($label);",
+                        affected_files=["app/UPS/GenerateLabel.php"],
+                        description="The PR does not implement the requested tracking.",
+                        evidence="The current delta does not show it.",
+                        business_impact="Tracking would be incomplete.",
+                        suggestion="Add tracking.",
+                        findingScope="CONCRETE_DEFECT",
+                        coverageEvidenceRefs=["DELTA001"],
+                        coverageRegression=False,
+                    )],
+                    pr_recommendation="FAIL",
+                    confidence="HIGH",
+                )
+            return super()._structured_response(schema, rendered)
+
+    request, _, _ = _incremental_task_request()
+    events = []
+    session = UnsupportedGapSession(request=request)
+    scopes = process_review_evidence_scopes(request)
+    orchestrator = MultiStageReviewOrchestrator(
+        llm=PromptCaptureLLM(session),
+        mcp_client=None,
+        rag_client=DeterministicRagSpy(),
+        event_callback=events.append,
+    )
+
+    result = await orchestrator.orchestrate_review(
+        request,
+        processed_diff=scopes.review,
+        full_pr_processed_diff=scopes.full_pr,
+    )
+
+    assert result["issues"] == []
+    assert "PR does not implement" not in result["comment"]
+    assert any(
+        event.get("state") == "task_coverage_candidates_suppressed"
+        for event in events
+    )
+    stage_3_prompt = next(
+        prompt["renderedPrompt"]
+        for prompt in session.prompts
+        if prompt["stage"] == "stage_3"
+    )
+    assert "PR does not implement" not in stage_3_prompt
+
+
+@pytest.mark.asyncio
+async def test_successful_task_review_returns_structured_added_side_evidence():
+    request = _request().model_copy(update={
+        "prTitle": "Set value_0 for checkout tracking",
+        "taskContext": {
+            "task_key": "SHOP-42",
+            "task_summary": "Set value_0 for checkout tracking",
+        },
+    })
+    session = PromptCaptureSession(request=request)
+    scopes = process_review_evidence_scopes(request)
+    orchestrator = MultiStageReviewOrchestrator(
+        llm=PromptCaptureLLM(session),
+        mcp_client=None,
+        rag_client=DeterministicRagSpy(),
+    )
+
+    result = await orchestrator.orchestrate_review(
+        request,
+        processed_diff=scopes.review,
+        full_pr_processed_diff=scopes.full_pr,
+    )
+
+    assert "codecrow-task-evidence" not in result["comment"]
+    assert "SHOP-42" not in result["comment"]
+    assert result["taskEvidence"]["taskKey"] == "SHOP-42"
+    assert result["taskEvidence"]["source"] == "DETERMINISTIC_PR_LEDGER"
+    item = result["taskEvidence"]["items"][0]
+    assert item["filePath"] == "src/file_0.py"
+    assert "value_0 = 1" in item["excerpt"]
+    assert "-value_0 = 0" not in item["excerpt"]
+
+
 def test_synthetic_findings_are_deterministically_bounded_across_large_pr():
     request = _request(file_count=130)
     session = PromptCaptureSession(
@@ -677,7 +858,7 @@ async def test_full_pipeline_capture_persists_real_context_artifact(
 
 
 @pytest.mark.asyncio
-async def test_full_pipeline_capture_fails_when_pr_overlay_is_not_indexed(
+async def test_full_pipeline_capture_continues_when_pr_overlay_is_not_indexed(
     monkeypatch,
     tmp_path,
 ):
@@ -698,15 +879,16 @@ async def test_full_pipeline_capture_fails_when_pr_overlay_is_not_indexed(
         "promptDryRunId": "queue-job-failure",
     })
 
-    with pytest.raises(RuntimeError, match="target branch must be reindexed"):
-        await capture_and_store_review_prompts(
-            request,
-            rag,
-            simulated_findings_per_file=1,
-        )
+    artifact = await capture_and_store_review_prompts(
+        request,
+        rag,
+        simulated_findings_per_file=1,
+    )
 
     assert rag.index_requests
-    assert list(tmp_path.iterdir()) == []
+    assert artifact["status"] == "prompt_capture_completed"
+    assert artifact["promptArtifact"]["pipeline"]["completed"] is True
+    assert list(tmp_path.iterdir())
 
 
 @pytest.mark.asyncio
@@ -714,11 +896,7 @@ async def test_full_pipeline_capture_fails_when_pr_overlay_is_not_indexed(
     ("request_updates", "expected_field"),
     [
         ({"targetBranchName": None}, "targetBranchName"),
-        ({"sourceBranchName": None}, "sourceBranchName"),
         ({"currentCommitHash": None, "commitHash": None}, "currentCommitHash"),
-        ({"currentCommitHash": "HEAD"}, "currentCommitHash"),
-        ({"currentCommitHash": "abc123"}, "currentCommitHash"),
-        ({"baseCommitHash": None}, "baseCommitHash"),
     ],
 )
 async def test_review_snapshot_identity_fails_before_indexing_or_stage_zero(
@@ -751,19 +929,29 @@ async def test_review_snapshot_identity_fails_before_indexing_or_stage_zero(
     stage_0.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_review_service_rejects_snapshot_before_provider_construction(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        "llm.llm_factory.LLMFactory.create_llm",
-        lambda *_args, **_kwargs: pytest.fail("provider construction is forbidden"),
-    )
-    service = ReviewService()
-    request = _request().model_copy(update={"currentCommitHash": "HEAD"})
+def test_review_snapshot_allows_missing_optional_pr_identity():
+    request = _request().model_copy(update={
+        "sourceBranchName": None,
+        "baseCommitHash": None,
+    })
 
-    with pytest.raises(PrIndexPreconditionError, match="currentCommitHash"):
-        await service.process_review_request(request)
+    identity = validate_review_snapshot_identity(request)
+
+    assert identity.source_branch is None
+    assert identity.base_revision is None
+
+
+@pytest.mark.parametrize("revision", ["abc123", "HEAD", "release/10x"])
+def test_review_snapshot_accepts_provider_native_git_revisions(revision):
+    request = _request().model_copy(update={
+        "currentCommitHash": revision,
+        "baseCommitHash": revision,
+    })
+
+    identity = validate_review_snapshot_identity(request)
+
+    assert identity.head_revision == revision
+    assert identity.base_revision == revision
 
 
 @pytest.mark.asyncio
@@ -827,9 +1015,7 @@ async def test_pr_overlay_receives_one_exact_snapshot_identity():
 
 
 @pytest.mark.asyncio
-async def test_pr_index_precondition_fails_before_stage_0_for_normal_review(
-    monkeypatch,
-):
+async def test_pr_index_failure_is_optional_for_normal_review():
     rag = DeterministicRagSpy()
 
     async def reject_overlay(**kwargs):
@@ -844,11 +1030,6 @@ async def test_pr_index_precondition_fails_before_stage_0_for_normal_review(
         }
 
     rag.index_pr_files = reject_overlay
-    stage_0 = AsyncMock()
-    monkeypatch.setattr(
-        "service.review.orchestrator.orchestrator.execute_stage_0_planning",
-        stage_0,
-    )
     request = _request()
     orchestrator = MultiStageReviewOrchestrator(
         llm=object(),
@@ -856,17 +1037,13 @@ async def test_pr_index_precondition_fails_before_stage_0_for_normal_review(
         rag_client=rag,
     )
 
-    with pytest.raises(
-        PrIndexPreconditionError,
-        match="No review-model stage was started",
-    ):
-        await orchestrator.orchestrate_review(
-            request,
-            processed_diff=DiffProcessor().process(request.rawDiff),
-        )
+    await orchestrator._index_pr_files(
+        request,
+        DiffProcessor().process(request.rawDiff),
+    )
 
     assert rag.index_requests
-    stage_0.assert_not_awaited()
+    assert orchestrator._pr_indexed is False
 
 
 @pytest.mark.asyncio

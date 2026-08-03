@@ -56,6 +56,8 @@ public interface AiAnalysisRequest {
 
     String getVcsProvider();
 
+    default String getVcsBaseUrl() { return null; }
+
     String getPrTitle();
 
     String getPrDescription();

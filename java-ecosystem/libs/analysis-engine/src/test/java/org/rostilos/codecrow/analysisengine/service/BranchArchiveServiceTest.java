@@ -186,6 +186,75 @@ class BranchArchiveServiceTest {
         }
 
         @Test
+        void snapshotReportsBinaryPathPresenceWithoutLoadingItsContent(@TempDir Path tempDir)
+                throws Exception {
+            VcsConnection conn = new VcsConnection();
+            when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            try (ZipOutputStream zos = new ZipOutputStream(baos)) {
+                zos.putNextEntry(new ZipEntry("root/binary.dat"));
+                zos.write(new byte[]{0, 1, 2, 3});
+                zos.closeEntry();
+                zos.putNextEntry(new ZipEntry("root/text.txt"));
+                zos.write("hello".getBytes(StandardCharsets.UTF_8));
+                zos.closeEntry();
+            }
+            byte[] zipBytes = baos.toByteArray();
+            when(vcsClient.downloadRepositoryArchiveToFile(
+                    anyString(), anyString(), anyString(), any(Path.class)))
+                    .thenAnswer(inv -> {
+                        Files.write(inv.getArgument(3, Path.class), zipBytes);
+                        return (long) zipBytes.length;
+                    });
+
+            BranchArchiveService.ArchiveSnapshot snapshot = service.downloadSnapshot(
+                    conn, "ws", "repo", "main",
+                    Set.of("binary.dat", "text.txt", "missing.txt"));
+
+            assertThat(snapshot.presentFiles()).containsExactlyInAnyOrder(
+                    "binary.dat", "text.txt");
+            assertThat(snapshot.contents()).containsEntry("text.txt", "hello");
+            assertThat(snapshot.contents()).doesNotContainKey("binary.dat");
+            assertThat(snapshot.presentFiles()).doesNotContain("missing.txt");
+        }
+
+        @Test
+        void directorySnapshotReportsPresentBinaryPathWithoutExtractingIt(@TempDir Path tempDir)
+                throws Exception {
+            VcsConnection conn = new VcsConnection();
+            when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            try (ZipOutputStream zos = new ZipOutputStream(baos)) {
+                zos.putNextEntry(new ZipEntry("root/image.asset"));
+                zos.write(new byte[]{0, 1, 2, 3});
+                zos.closeEntry();
+                zos.putNextEntry(new ZipEntry("root/source.xml"));
+                zos.write("<config/>".getBytes(StandardCharsets.UTF_8));
+                zos.closeEntry();
+            }
+            byte[] zipBytes = baos.toByteArray();
+            when(vcsClient.downloadRepositoryArchiveToFile(
+                    anyString(), anyString(), anyString(), any(Path.class)))
+                    .thenAnswer(inv -> {
+                        Files.write(inv.getArgument(3, Path.class), zipBytes);
+                        return (long) zipBytes.length;
+                    });
+
+            BranchArchiveService.ArchiveDirectorySnapshot snapshot =
+                    service.downloadAndExtractSnapshotToDirectory(
+                            conn, "ws", "repo", "main",
+                            Set.of("image.asset", "source.xml"), tempDir.resolve("repository"));
+
+            assertThat(snapshot.presentFiles())
+                    .containsExactlyInAnyOrder("image.asset", "source.xml");
+            assertThat(snapshot.extractedFiles()).containsExactly("source.xml");
+            assertThat(tempDir.resolve("repository/image.asset")).doesNotExist();
+            assertThat(tempDir.resolve("repository/source.xml")).exists();
+        }
+
+        @Test
         void vcsClientThrows_shouldPropagate() throws Exception {
             VcsConnection conn = new VcsConnection();
             when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);

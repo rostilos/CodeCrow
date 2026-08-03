@@ -522,7 +522,7 @@ def test_capture_rejects_plugin_order_that_runtime_would_expand(
         create_quality_capture_session(request)
 
 
-def test_capture_rejects_request_plugin_descriptor_mismatch(
+def test_capture_records_request_plugin_descriptor_mismatch_as_provenance(
     capture_environment,
 ):
     request = _request(
@@ -536,8 +536,13 @@ def test_capture_rejects_request_plugin_descriptor_mismatch(
         },
     )
 
-    with pytest.raises(ValueError, match="descriptor fingerprint"):
-        create_quality_capture_session(request)
+    session = create_quality_capture_session(request)
+    artifact = json.loads(session.path.read_text(encoding="utf-8"))
+
+    assert artifact["pluginIdentity"]["descriptorMatch"] is False
+    assert artifact["pluginIdentity"]["requestDescriptorFingerprint"] == (
+        "sha256:" + "4" * 64
+    )
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List
+from typing import Callable, Optional, List
 
 from llama_index.core.schema import TextNode
 from qdrant_client.models import (
@@ -28,12 +28,7 @@ from ...utils.utils import clean_archive_path, make_namespace
 from ..index_representation import (
     INDEX_REPRESENTATION_PAYLOAD_KEY,
     index_representation_fingerprint,
-    require_compatible_branch_representation,
-)
-from ..source_tree import (
-    read_repository_file_bytes,
-    require_repository_source_tree_unchanged,
-    verify_repository_source_tree,
+    observe_branch_representation,
 )
 from .collection_manager import CollectionManager
 from .branch_manager import BranchManager
@@ -44,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 # Memory-efficient batch sizes
 DOCUMENT_BATCH_SIZE = 50
-INSERT_BATCH_SIZE = 50
+INSERT_BATCH_SIZE = 128
 
 
 def _plugin_identity_metadata(
@@ -98,6 +93,43 @@ class RepositoryIndexer:
         self.representation_fingerprint = index_representation_fingerprint(
             config
         )
+
+    @staticmethod
+    def accept_recoverable_repository_diagnostics(
+        diagnostics,
+        phase: str,
+    ) -> set[str]:
+        """Log quarantined project inputs and reject only runtime-level faults."""
+        recoverable = [
+            diagnostic for diagnostic in diagnostics
+            if diagnostic.recoverable
+        ]
+        fatal = [
+            diagnostic for diagnostic in diagnostics
+            if not diagnostic.recoverable
+        ]
+        for diagnostic in recoverable:
+            logger.warning(
+                "Skipping invalid repository input during %s "
+                "(plugin=%s code=%s path=%s): %s",
+                phase,
+                diagnostic.plugin_id or "plugin",
+                diagnostic.code,
+                diagnostic.path or "<repository>",
+                diagnostic.message,
+            )
+        if fatal:
+            summary = "; ".join(
+                f"{diagnostic.plugin_id or 'plugin'}:{diagnostic.code}: "
+                f"{diagnostic.message}"
+                for diagnostic in fatal[:10]
+            )
+            raise RuntimeError(f"{phase} failed: {summary}")
+        return {
+            diagnostic.path
+            for diagnostic in recoverable
+            if diagnostic.path is not None
+        }
 
     @staticmethod
     def _architecture_nodes(
@@ -450,18 +482,55 @@ class RepositoryIndexer:
         preserve_other_branches: bool = False,
         include_patterns: Optional[List[str]] = None,
         exclude_patterns: Optional[List[str]] = None,
-        source_tree_sha256: Optional[str] = None,
+        operation_id: Optional[str] = None,
+        activation_guard: Optional[Callable[[], None]] = None,
+        progress_callback: Optional[Callable[[dict], None]] = None,
     ) -> IndexStats:
         """Index entire repository for a branch using atomic swap strategy."""
-        logger.info(f"Indexing repository: {workspace}/{project}/{branch} from {repo_path}")
+        def report_progress(
+            stage: str,
+            message: str,
+            progress: Optional[int] = None,
+            total: Optional[int] = None,
+        ) -> None:
+            if progress_callback is None:
+                return
+            event = {"stage": stage, "message": message}
+            if progress is not None:
+                event["progress"] = max(0, min(100, progress))
+            if total is not None:
+                event["total"] = total
+            try:
+                progress_callback(event)
+            except Exception as exception:
+                # Progress reporting is optional enrichment. It must never fail
+                # an otherwise healthy index operation.
+                logger.warning(
+                    "RAG progress callback failed at stage %s: %s",
+                    stage,
+                    exception,
+                )
+
+        operation_id = operation_id or hashlib.sha256(
+            f"{workspace}\0{project}\0{branch}\0{commit}\0{time.time_ns()}".encode()
+        ).hexdigest()[:32]
+        operation_started = time.perf_counter()
+        logger.info(
+            "Indexing repository operation_id=%s workspace=%s project=%s "
+            "branch=%s repo_path=%s",
+            operation_id,
+            workspace,
+            project,
+            branch,
+            repo_path,
+        )
+        report_progress("preparing", "Preparing the pending vector collection", 2)
 
         repo_path_obj = Path(repo_path)
-        source_tree = verify_repository_source_tree(
-            repo_path_obj,
-            commit,
-            source_tree_sha256,
+        pending_collection_name = self.collection_manager.create_pending_collection(
+            alias_name,
+            operation_id=operation_id,
         )
-        pending_collection_name = self.collection_manager.create_pending_collection(alias_name)
 
         # Check existing collection and preserve other branch data using streaming
         old_alias_exists = self.collection_manager.alias_exists(alias_name)
@@ -477,33 +546,23 @@ class RepositoryIndexer:
         actual_old_collection = None
         if old_collection_exists:
             actual_old_collection = self.collection_manager.resolve_alias(alias_name) or alias_name
-        
-        # Clean up pending collections left by interrupted indexing attempts.
-        current_target = self.collection_manager.resolve_alias(alias_name)
-        self.collection_manager.cleanup_orphaned_pending_collections(
-            alias_name, current_target, pending_collection_name
-        )
 
         # Get file list
         repository_file_list = list(
-            self.loader.iter_repository_files(
-                repo_path_obj,
-                include_patterns,
-                exclude_patterns,
-                expected_file_sha256=source_tree.file_sha256_by_path,
-            )
+            self.loader.iter_repository_files(repo_path_obj, include_patterns, exclude_patterns)
         )
-        index_include_patterns = sorted(set(include_patterns or ()))
-        index_exclude_patterns = sorted(set([
-            *getattr(self.config, "excluded_patterns", ()),
-            *(exclude_patterns or ()),
-        ]))
         logger.info(
             "Found %s repository files before plugin file policy for branch '%s'",
             len(repository_file_list),
             branch,
         )
-        
+        report_progress(
+            "scanning",
+            f"Discovered {len(repository_file_list)} repository files",
+            7,
+            len(repository_file_list),
+        )
+
         if not repository_file_list:
             logger.warning("No documents to index")
             self.collection_manager.delete_collection(pending_collection_name)
@@ -525,27 +584,6 @@ class RepositoryIndexer:
                 repository_file_list,
                 self.plugin_catalog.registry,
             )
-            for marker_path, marker_content in (
-                repository_facts.marker_contents.items()
-            ):
-                expected_digest = source_tree.file_sha256_by_path.get(
-                    marker_path
-                )
-                if expected_digest is None:
-                    raise RuntimeError(
-                        "repository plugin marker was not present in the "
-                        f"attested regular-file tree: {marker_path}"
-                    )
-                expected_content = read_repository_file_bytes(
-                    repo_path_obj,
-                    marker_path,
-                    expected_sha256=expected_digest,
-                ).decode("utf-8")
-                if marker_content != expected_content:
-                    raise RuntimeError(
-                        "repository plugin marker changed while repository "
-                        f"facts were built: {marker_path}"
-                    )
             capabilities = self.plugin_selector.select(repository_facts)
             implementation_fingerprint = (
                 self.plugin_catalog.implementation_fingerprint(
@@ -556,6 +594,12 @@ class RepositoryIndexer:
                 "Selected plugins for %s: %s",
                 commit,
                 ", ".join(capabilities.repository_plugins) or "generic fallback",
+            )
+            report_progress(
+                "framework",
+                "Selected repository plugins: "
+                + (", ".join(capabilities.repository_plugins) or "generic fallback"),
+                10,
             )
 
         file_list = repository_file_list
@@ -590,6 +634,12 @@ class RepositoryIndexer:
                 len(file_list) - len(semantic_paths),
             )
         total_files = len(semantic_paths)
+        report_progress(
+            "scope",
+            f"Selected {total_files} semantic files for indexing",
+            12,
+            total_files,
+        )
 
         analysis_handle = None
         if self.plugin_runtime is not None and capabilities is not None:
@@ -604,6 +654,7 @@ class RepositoryIndexer:
         
         if self.config.max_chunks_per_index > 0:
             logger.info("Estimating chunk count before indexing...")
+            report_progress("estimating", "Estimating repository chunk count", 14)
             _, estimated_chunks = self.estimate_repository_size(
                 repo_path,
                 include_patterns,
@@ -618,21 +669,25 @@ class RepositoryIndexer:
         document_count = 0
         chunk_count = 0
         successful_chunks = 0
-        failed_chunks = 0
+        skipped_chunk_count = 0
+        skipped_file_paths: set[str] = set()
         preserved_point_count = 0
-        generation_members = []
+        embedding_metrics = {"reused": 0, "embedded": 0}
 
         try:
             # A main-only project must not carry stale non-target branches into
             # its next authoritative generation. Multi-branch projects opt in
             # explicitly through the host-owned project configuration.
             if actual_old_collection and preserve_other_branches:
+                copy_batch_size = getattr(self.point_ops, "batch_size", None)
+                if not isinstance(copy_batch_size, int) or copy_batch_size <= 0:
+                    copy_batch_size = INSERT_BATCH_SIZE
                 preserved_point_count = (
                     self.branch_manager.stream_copy_points_to_collection(
                         actual_old_collection,
                         pending_collection_name,
                         branch,
-                        INSERT_BATCH_SIZE,
+                        copy_batch_size,
                     )
                 )
             
@@ -640,7 +695,13 @@ class RepositoryIndexer:
             logger.info("Starting memory-efficient streaming indexing...")
             batch_num = 0
             total_batches = (len(file_list) + DOCUMENT_BATCH_SIZE - 1) // DOCUMENT_BATCH_SIZE
-            
+            report_progress(
+                "indexing",
+                f"Starting {total_batches} indexing batches",
+                18,
+                total_batches,
+            )
+
             # Architecture-only files still have to reach the repository
             # resolver.  ``total_files`` counts only embedding-bearing files
             # for admission control, so using it as the iteration bound would
@@ -649,12 +710,28 @@ class RepositoryIndexer:
             for i in range(0, len(file_list), DOCUMENT_BATCH_SIZE):
                 batch_num += 1
                 file_batch = file_list[i:i + DOCUMENT_BATCH_SIZE]
-                
+                batch_started = time.perf_counter()
+                load_started = time.perf_counter()
                 documents = self.loader.load_file_batch(
                     file_batch, repo_path_obj, workspace, project, branch, commit,
-                    strict=True,
-                    expected_file_sha256=source_tree.file_sha256_by_path,
+                    strict=False,
                 )
+                load_duration_ms = round(
+                    (time.perf_counter() - load_started) * 1000
+                )
+                loaded_paths = {
+                    document.metadata["path"] for document in documents
+                }
+                missing_paths = {
+                    clean_archive_path(Path(path).as_posix())
+                    for path in file_batch
+                } - loaded_paths
+                for path in sorted(missing_paths):
+                    logger.warning(
+                        "Skipping repository file that could not be loaded: %s",
+                        path,
+                    )
+                skipped_file_paths.update(missing_paths)
                 if not documents:
                     continue
 
@@ -678,14 +755,23 @@ class RepositoryIndexer:
                     for document in documents
                     if document.metadata["path"] in semantic_paths
                 ]
-                document_count += len(semantic_documents)
                 if not semantic_documents:
                     del documents
                     continue
                 
-                chunks = self.splitter.split_documents(
+                split_started = time.perf_counter()
+                chunks, split_skipped_paths = (
+                    self.splitter.split_documents_resilient(
                     semantic_documents,
                     capabilities=capabilities,
+                    )
+                )
+                split_duration_ms = round(
+                    (time.perf_counter() - split_started) * 1000
+                )
+                skipped_file_paths.update(split_skipped_paths)
+                document_count += (
+                    len(semantic_documents) - len(split_skipped_paths)
                 )
                 identity_metadata = _plugin_identity_metadata(
                     capabilities,
@@ -703,26 +789,55 @@ class RepositoryIndexer:
                     raise ValueError(f"Repository exceeds chunk limit: {chunk_count}+ chunks.")
                 
                 # Process and upsert
+                point_pipeline_started = time.perf_counter()
                 success, failed = self.point_ops.process_and_upsert_chunks(
                     chunks,
                     pending_collection_name,
                     workspace,
                     project,
                     branch,
-                    generation_members=generation_members,
+                    reuse_collection_name=actual_old_collection,
+                    operation_id=operation_id,
+                    metrics=embedding_metrics,
+                )
+                point_pipeline_duration_ms = round(
+                    (time.perf_counter() - point_pipeline_started) * 1000
                 )
                 successful_chunks += success
-                failed_chunks += failed
-
+                skipped_chunk_count += failed
                 if failed:
-                    raise RuntimeError(
-                        f"Index write was partial in batch {batch_num}: "
-                        f"{failed} of {batch_chunk_count} chunks failed"
+                    logger.warning(
+                        "Skipped %s rejected chunks in batch %s; "
+                        "continuing repository indexing",
+                        failed,
+                        batch_num,
                     )
                 
                 logger.info(
-                    f"Batch {batch_num}/{total_batches}: processed {len(semantic_documents)} semantic files, "
-                    f"{batch_chunk_count} chunks"
+                    "RAG document batch completed operation_id=%s batch=%s/%s "
+                    "semantic_files=%s chunks=%s load_duration_ms=%s "
+                    "split_duration_ms=%s point_pipeline_duration_ms=%s "
+                    "duration_ms=%s",
+                    operation_id,
+                    batch_num,
+                    total_batches,
+                    len(semantic_documents),
+                    batch_chunk_count,
+                    load_duration_ms,
+                    split_duration_ms,
+                    point_pipeline_duration_ms,
+                    round((time.perf_counter() - batch_started) * 1000),
+                )
+                batch_progress = 18 + round(67 * batch_num / max(total_batches, 1))
+                report_progress(
+                    "indexing",
+                    (
+                        f"Indexed batch {batch_num}/{total_batches}: "
+                        f"{document_count}/{total_files} files, "
+                        f"{successful_chunks} chunks"
+                    ),
+                    batch_progress,
+                    total_batches,
                 )
                 
                 del documents
@@ -736,13 +851,18 @@ class RepositoryIndexer:
             context_nodes = []
             snapshot_nodes = []
             if analysis_handle is not None:
+                report_progress(
+                    "architecture",
+                    "Building deterministic architecture context",
+                    88,
+                )
                 repository_analysis, diagnostics = analysis_handle.finish()
-                if diagnostics:
-                    summary = "; ".join(
-                        f"{diagnostic.plugin_id or 'plugin'}:{diagnostic.code}: {diagnostic.message}"
-                        for diagnostic in diagnostics[:10]
+                skipped_file_paths.update(
+                    self.accept_recoverable_repository_diagnostics(
+                        diagnostics,
+                        "repository architecture analysis",
                     )
-                    raise RuntimeError(f"Repository architecture analysis is incomplete: {summary}")
+                )
 
                 architecture_nodes = self._architecture_nodes(
                     repository_analysis,
@@ -808,14 +928,17 @@ class RepositoryIndexer:
                     workspace,
                     project,
                     branch,
-                    generation_members=generation_members,
+                    reuse_collection_name=actual_old_collection,
+                    operation_id=operation_id,
+                    metrics=embedding_metrics,
                 )
                 successful_chunks += success
-                failed_chunks += failed
+                skipped_chunk_count += failed
                 if failed:
-                    raise RuntimeError(
-                        "Architecture context index write was partial: "
-                        f"{failed} of {architecture_count} chunks failed"
+                    logger.warning(
+                        "Skipped %s rejected deterministic context points; "
+                        "continuing repository indexing",
+                        failed,
                     )
                 logger.info(
                     "Indexed %s deterministic architecture packets, %s exact source parts, "
@@ -828,50 +951,16 @@ class RepositoryIndexer:
 
             logger.info(
                 f"Streaming indexing complete: {document_count} files, "
-                f"{successful_chunks}/{chunk_count} chunks indexed ({failed_chunks} failed)"
-            )
-
-            if failed_chunks or successful_chunks != chunk_count:
-                raise RuntimeError(
-                    "Index generation is incomplete: "
-                    f"expected={chunk_count}, successful={successful_chunks}, failed={failed_chunks}"
-                )
-
-            require_repository_source_tree_unchanged(
-                repo_path_obj,
-                source_tree,
-            )
-            generation_manifest = (
-                self.point_ops.write_repository_generation_manifest(
-                    pending_collection_name,
-                    workspace,
-                    project,
-                    branch,
-                    commit,
-                    expected_member_count=successful_chunks,
-                    expected_members=generation_members,
-                    source_tree_sha256=source_tree.tree_sha256,
-                    index_include_patterns=index_include_patterns,
-                    index_exclude_patterns=index_exclude_patterns,
-                    identity_metadata=_plugin_identity_metadata(
-                        capabilities,
-                        implementation_fingerprint,
-                        self.representation_fingerprint,
-                    ),
-                )
-            )
-            logger.info(
-                "Sealed repository generation with %s members (%s)",
-                generation_manifest["generation_member_count"],
-                generation_manifest["generation_members_sha256"],
+                f"{successful_chunks}/{chunk_count} chunks indexed "
+                f"({skipped_chunk_count} skipped across "
+                f"{len(skipped_file_paths)} files)"
             )
 
             # Verify and perform atomic swap
+            report_progress("verifying", "Verifying the pending vector collection", 94)
             pending_info = self.point_ops.client.get_collection(pending_collection_name)
             actual_point_count = int(pending_info.points_count or 0)
-            expected_point_count = preserved_point_count + successful_chunks + 1
-            if actual_point_count == 0:
-                raise RuntimeError("Pending collection is empty after indexing")
+            expected_point_count = preserved_point_count + successful_chunks
             if actual_point_count != expected_point_count:
                 raise RuntimeError(
                     "Pending collection point count is incomplete: "
@@ -884,21 +973,46 @@ class RepositoryIndexer:
                     branch,
                 )
             )
-            expected_target_branch_points = successful_chunks + 1
-            if target_branch_point_count != expected_target_branch_points:
+            if target_branch_point_count != successful_chunks:
                 raise RuntimeError(
                     "Pending target-branch point count is incomplete: "
-                    f"branch={branch}, expected={expected_target_branch_points}, "
+                    f"branch={branch}, expected={successful_chunks}, "
                     f"actual={target_branch_point_count}"
                 )
 
+            if activation_guard is not None:
+                activation_guard()
+            observed_target = self.collection_manager.resolve_alias(alias_name)
+            if old_alias_exists and observed_target != actual_old_collection:
+                raise RuntimeError(
+                    "Active RAG collection changed before pending activation"
+                )
+            if not old_alias_exists and observed_target is not None:
+                raise RuntimeError(
+                    "RAG alias was created concurrently before pending activation"
+                )
+
+            activation_started = time.perf_counter()
+            report_progress("activating", "Activating the completed vector collection", 97)
             old_target = self._perform_atomic_swap(
                 alias_name, pending_collection_name, old_alias_exists
+            )
+            logger.info(
+                "RAG pending collection activated operation_id=%s collection=%s "
+                "duration_ms=%s",
+                operation_id,
+                pending_collection_name,
+                round((time.perf_counter() - activation_started) * 1000),
             )
 
             try:
                 self.stats_manager.store_metadata(
-                    workspace, project, branch, commit, document_count, chunk_count
+                    workspace,
+                    project,
+                    branch,
+                    commit,
+                    document_count,
+                    successful_chunks,
                 )
             except Exception:
                 self._rollback_atomic_swap(alias_name, old_target)
@@ -915,10 +1029,32 @@ class RepositoryIndexer:
             gc.collect()
 
         namespace = make_namespace(workspace, project, branch)
+        logger.info(
+            "RAG repository index completed operation_id=%s workspace=%s "
+            "project=%s branch=%s files=%s chunks=%s reused=%s embedded=%s "
+            "duration_ms=%s",
+            operation_id,
+            workspace,
+            project,
+            branch,
+            document_count,
+            successful_chunks,
+            embedding_metrics["reused"],
+            embedding_metrics["embedded"],
+            round((time.perf_counter() - operation_started) * 1000),
+        )
+        report_progress(
+            "complete",
+            f"Indexed {document_count} files into {successful_chunks} chunks",
+            100,
+            document_count,
+        )
         return IndexStats(
             namespace=namespace,
             document_count=document_count,
             chunk_count=successful_chunks,
+            skipped_file_count=len(skipped_file_paths),
+            skipped_chunk_count=skipped_chunk_count,
             last_updated=datetime.now(timezone.utc).isoformat(),
             workspace=workspace,
             project=project,
@@ -953,7 +1089,11 @@ class RepositoryIndexer:
 
 class FileOperations:
     """Apply rollback-safe file and neutral repository-graph updates."""
-    
+
+    accept_recoverable_repository_diagnostics = staticmethod(
+        RepositoryIndexer.accept_recoverable_repository_diagnostics
+    )
+
     def __init__(
         self,
         client,
@@ -1053,6 +1193,7 @@ class FileOperations:
                 self.client.upsert(
                     collection_name=collection_name,
                     points=old_structs[offset:offset + 128],
+                    wait=True,
                 )
             except Exception as exception:
                 rollback_failures.append(exception)
@@ -1073,6 +1214,7 @@ class FileOperations:
         workspace: str,
         project: str,
         branch: str,
+        mutation_guard: Optional[Callable[[], None]] = None,
     ) -> int:
         """Upsert a prepared generation, delete stale IDs, and roll back on error."""
         old_points = {str(record.id): record for record in old_records}
@@ -1082,33 +1224,59 @@ class FileOperations:
             project,
             branch,
         )
-        new_points = self.point_ops.embed_and_create_points(chunk_data)
+        embedding_metrics = {"reused": 0, "embedded": 0}
+        new_points = self.point_ops.embed_and_create_points(
+            chunk_data,
+            reuse_records=old_points.values(),
+            metrics=embedding_metrics,
+        )
+        logger.info(
+            "Prepared incremental RAG generation collection=%s branch=%s "
+            "points=%s reused=%s embedded=%s",
+            collection_name,
+            branch,
+            len(new_points),
+            embedding_metrics["reused"],
+            embedding_metrics["embedded"],
+        )
         new_ids = {str(point.id) for point in new_points}
         old_ids = set(old_points)
         new_only_ids = [
             point.id for point in new_points if str(point.id) not in old_ids
         ]
 
-        successful, failed = self.point_ops.upsert_points(
-            collection_name,
-            new_points,
-        )
-        if failed or successful != len(new_points):
+        if mutation_guard is not None:
+            mutation_guard()
+        try:
+            write_result = self.point_ops.upsert_points_detailed(
+                collection_name,
+                new_points,
+            )
+        except Exception:
             self._restore_old_points(
                 collection_name,
                 old_points,
                 new_only_ids,
             )
-            raise RuntimeError(
-                "incremental index write was partial: "
-                f"expected={len(new_points)}, successful={successful}, failed={failed}"
+            raise
+
+        skipped_ids = {
+            str(point.id) for point in write_result.skipped_points
+        }
+        if skipped_ids:
+            logger.warning(
+                "Quarantining %s rejected points during incremental replacement",
+                len(skipped_ids),
             )
+        accepted_new_ids = new_ids - skipped_ids
 
         stale_ids = [
             record.id for point_id, record in old_points.items()
-            if point_id not in new_ids
+            if point_id not in accepted_new_ids
         ]
         try:
+            if mutation_guard is not None:
+                mutation_guard()
             self._delete_point_ids(collection_name, stale_ids)
         except Exception:
             self._restore_old_points(
@@ -1117,119 +1285,7 @@ class FileOperations:
                 new_only_ids,
             )
             raise
-        return successful
-
-    def replace_pr_overlay_generation(
-        self,
-        nodes,
-        old_records,
-        collection_name: str,
-        workspace: str,
-        project: str,
-        point_id_branch: str,
-        *,
-        pr_number: int,
-        branch: str,
-        base_branch: str,
-        source_revision: str,
-        base_revision: str,
-        base_generation_manifest_sha256: str,
-        generation_fingerprint: str,
-        overlay_representation_fingerprint: str,
-        identity_metadata,
-    ) -> tuple[int, dict[str, object]]:
-        """Replace one PR overlay and seal its exact persisted membership."""
-        from ..pr_overlay_manifest import build_pr_overlay_manifest_node
-
-        old_points = {str(record.id): record for record in old_records}
-        chunk_data = self.point_ops.prepare_chunks_for_embedding(
-            nodes,
-            workspace,
-            project,
-            point_id_branch,
-        )
-        new_points = self.point_ops.embed_and_create_points(chunk_data)
-        new_ids = {str(point.id) for point in new_points}
-        old_ids = set(old_points)
-        new_only_ids = [
-            point.id for point in new_points if str(point.id) not in old_ids
-        ]
-
-        try:
-            successful, failed = self.point_ops.upsert_points(
-                collection_name,
-                new_points,
-            )
-            if failed or successful != len(new_points):
-                raise RuntimeError(
-                    "PR overlay write was partial: "
-                    f"expected={len(new_points)}, successful={successful}, "
-                    f"failed={failed}"
-                )
-            members = self.point_ops._seal_persisted_point_digests(
-                collection_name,
-                new_points,
-            )
-            manifest_node, receipt = build_pr_overlay_manifest_node(
-                workspace=workspace,
-                project=project,
-                pr_number=pr_number,
-                branch=branch,
-                base_branch=base_branch,
-                source_revision=source_revision,
-                base_revision=base_revision,
-                base_generation_manifest_sha256=(
-                    base_generation_manifest_sha256
-                ),
-                generation_fingerprint=generation_fingerprint,
-                overlay_representation_fingerprint=(
-                    overlay_representation_fingerprint
-                ),
-                members=members,
-                identity_metadata=identity_metadata,
-            )
-            manifest_data = self.point_ops.prepare_chunks_for_embedding(
-                [manifest_node],
-                workspace,
-                project,
-                point_id_branch,
-            )
-            manifest_points = self.point_ops.embed_and_create_points(
-                manifest_data
-            )
-            if len(manifest_points) != 1:
-                raise RuntimeError(
-                    "PR overlay manifest preparation was incomplete"
-                )
-            manifest_point = manifest_points[0]
-            if str(manifest_point.id) not in old_ids:
-                new_only_ids.append(manifest_point.id)
-            new_ids.add(str(manifest_point.id))
-            manifest_successful, manifest_failed = (
-                self.point_ops.upsert_points(
-                    collection_name,
-                    manifest_points,
-                )
-            )
-            if manifest_failed or manifest_successful != 1:
-                raise RuntimeError(
-                    "PR overlay manifest write was incomplete"
-                )
-
-            stale_ids = [
-                record.id
-                for point_id, record in old_points.items()
-                if point_id not in new_ids
-            ]
-            self._delete_point_ids(collection_name, stale_ids)
-        except Exception:
-            self._restore_old_points(
-                collection_name,
-                old_points,
-                new_only_ids,
-            )
-            raise
-        return len(new_points), receipt
+        return write_result.successful
 
     def _apply_change_set(
         self,
@@ -1241,6 +1297,7 @@ class FileOperations:
         branch: str,
         commit: Optional[str],
         collection_name: str,
+        mutation_guard: Optional[Callable[[], None]] = None,
     ) -> IndexStats:
         from codecrow_plugins import (
             FileArtifact,
@@ -1272,56 +1329,6 @@ class FileOperations:
             return self.stats_manager.get_project_stats(
                 workspace, project, collection_name
             )
-        requested_collection_name = collection_name
-        bound_collection_name = (
-            self.collection_manager.resolve_collection_target(
-                requested_collection_name
-            )
-        )
-        if bound_collection_name is None:
-            self.collection_manager.ensure_collection_exists(
-                requested_collection_name
-            )
-            bound_collection_name = (
-                self.collection_manager.resolve_collection_target(
-                    requested_collection_name
-                )
-            )
-        if bound_collection_name is None:
-            raise IncrementalIndexPreconditionError(
-                "incremental mutation could not bind the requested collection "
-                "to one concrete Qdrant target"
-            )
-
-        def require_unsealed_bound_target() -> None:
-            sealed_points, _ = self.client.scroll(
-                collection_name=bound_collection_name,
-                scroll_filter=Filter(must=[
-                    FieldCondition(
-                        key="branch",
-                        match=MatchValue(value=branch),
-                    ),
-                    FieldCondition(
-                        key="repository_generation_manifest",
-                        match=MatchValue(value=True),
-                    ),
-                ]),
-                limit=1,
-                with_payload=False,
-                with_vectors=False,
-            )
-            if sealed_points:
-                raise IncrementalIndexPreconditionError(
-                    f"indexed branch '{branch}' is a sealed repository generation; "
-                    "incremental mutation is disabled because it cannot preserve the "
-                    "content-addressed generation manifest. Fully reindex the branch."
-                )
-
-        require_unsealed_bound_target()
-        # Every subsequent read and write uses this immutable concrete target.
-        # An alias swap can make the work obsolete, but it cannot redirect a
-        # late incremental write into the newly sealed generation.
-        collection_name = bound_collection_name
         if updated_paths:
             if repo_base is None:
                 raise ValueError(
@@ -1341,7 +1348,8 @@ class FileOperations:
                     + ", ".join(missing_files[:10])
                 )
         revision = commit or branch
-        require_compatible_branch_representation(
+        self.collection_manager.ensure_collection_exists(collection_name)
+        observe_branch_representation(
             self.client,
             collection_name,
             branch,
@@ -1363,8 +1371,8 @@ class FileOperations:
             snapshots,
             plugin_ids,
             _fingerprint,
-            stored_descriptor_fingerprint,
-            stored_implementation_fingerprint,
+            _stored_descriptor_fingerprint,
+            _stored_implementation_fingerprint,
         ) = load_repository_snapshots(
             self.client,
             collection_name,
@@ -1413,26 +1421,11 @@ class FileOperations:
         if capabilities is not None:
             if self.plugin_runtime is None or self.plugin_catalog is None:
                 raise RuntimeError("repository plugins are unavailable")
-            current_descriptor_fingerprint = (
-                self.plugin_catalog.registry.fingerprint_for(
-                    capabilities.repository_plugins
-                )
-            )
             implementation_fingerprint = (
                 self.plugin_catalog.implementation_fingerprint(
                     capabilities.repository_plugins
                 )
             )
-            if (
-                stored_descriptor_fingerprint != current_descriptor_fingerprint
-                or stored_implementation_fingerprint
-                != implementation_fingerprint
-            ):
-                raise IncrementalIndexPreconditionError(
-                    "indexed repository plugin implementation is incompatible "
-                    f"with branch '{branch}'; reindex the branch before applying "
-                    "an incremental update"
-                )
             repository_analysis_plugins = (
                 self.plugin_runtime.repository_analysis_plugins(capabilities)
             )
@@ -1483,14 +1476,16 @@ class FileOperations:
             documents_by_path = {
                 document.metadata["path"]: document for document in documents
             }
-            missing = [
+            missing = sorted(
                 path for path in active_updated_paths
                 if path not in documents_by_path
-            ]
+            )
             if missing:
-                raise RuntimeError(
-                    "cannot apply exact repository overlay; changed files were not loaded: "
-                    + ", ".join(missing[:10])
+                logger.warning(
+                    "Quarantining %s changed repository files that could not "
+                    "be loaded during incremental indexing: %s",
+                    len(missing),
+                    ", ".join(missing[:10]),
                 )
             artifacts = tuple(sorted((
                 *(
@@ -1502,7 +1497,7 @@ class FileOperations:
                 ),
                 *(
                     FileArtifact(path=path, content="", deleted=True)
-                    for path in active_deleted_paths
+                    for path in (*active_deleted_paths, *missing)
                 ),
             ), key=lambda artifact: artifact.path))
             handle = self.plugin_runtime.start_repository_analysis(
@@ -1513,24 +1508,32 @@ class FileOperations:
             )
             handle.ingest(artifacts)
             analysis, diagnostics = handle.finish()
-            if diagnostics:
-                summary = "; ".join(
-                    f"{item.plugin_id or 'plugin'}:{item.code}: {item.message}"
-                    for item in diagnostics[:10]
-                )
-                raise RuntimeError(
-                    f"incremental repository overlay is incomplete: {summary}"
-                )
+            self.accept_recoverable_repository_diagnostics(
+                diagnostics,
+                "incremental repository overlay",
+            )
 
         semantic_documents = [
             document for document in documents
             if dispositions.get(document.metadata["path"], FileDisposition.FULL)
             is FileDisposition.FULL
         ]
-        semantic_nodes = self.splitter.split_documents(
-            semantic_documents,
-            capabilities=capabilities,
-        ) if semantic_documents else []
+        if semantic_documents:
+            semantic_nodes, split_skipped_paths = (
+                self.splitter.split_documents_resilient(
+                    semantic_documents,
+                    capabilities=capabilities,
+                )
+            )
+            if split_skipped_paths:
+                logger.warning(
+                    "Quarantining %s changed files that failed semantic "
+                    "parsing/enrichment: %s",
+                    len(split_skipped_paths),
+                    ", ".join(split_skipped_paths[:10]),
+                )
+        else:
+            semantic_nodes = []
         identity_metadata = _plugin_identity_metadata(
             capabilities,
             implementation_fingerprint,
@@ -1549,7 +1552,6 @@ class FileOperations:
                 "architecture_source",
                 "repository_snapshot",
                 "repository_facts_state",
-                "repository_generation_manifest",
             ))
         ]
         new_nodes = list(semantic_nodes)
@@ -1666,16 +1668,6 @@ class FileOperations:
             for record in old_facts_records:
                 old_records[str(record.id)] = record
 
-        current_target = self.collection_manager.resolve_collection_target(
-            requested_collection_name
-        )
-        if current_target != bound_collection_name:
-            raise IncrementalIndexPreconditionError(
-                "the active collection changed while an incremental generation "
-                "was prepared; discard it and fully reindex the branch"
-            )
-        require_unsealed_bound_target()
-
         successful = self._replace_points(
             new_nodes,
             old_records.values(),
@@ -1683,6 +1675,7 @@ class FileOperations:
             workspace,
             project,
             branch,
+            mutation_guard,
         )
         logger.info(
             "Applied incremental branch generation for %s: %s paths, %s points",
@@ -1702,7 +1695,8 @@ class FileOperations:
         project: str,
         branch: str,
         commit: str,
-        collection_name: str
+        collection_name: str,
+        mutation_guard: Optional[Callable[[], None]] = None,
     ) -> IndexStats:
         """Update files and every affected neutral repository-graph group."""
         logger.info(f"Updating {len(file_paths)} files in {workspace}/{project} for branch '{branch}'")
@@ -1715,6 +1709,7 @@ class FileOperations:
             branch,
             commit,
             collection_name,
+            mutation_guard,
         )
 
     def delete_files(
@@ -1725,6 +1720,7 @@ class FileOperations:
         branch: str,
         collection_name: str,
         commit: Optional[str] = None,
+        mutation_guard: Optional[Callable[[], None]] = None,
     ) -> IndexStats:
         """Delete files and refresh every affected repository-graph group."""
         logger.info(f"Deleting {len(file_paths)} files from {workspace}/{project} branch '{branch}'")
@@ -1737,6 +1733,7 @@ class FileOperations:
             branch,
             commit,
             collection_name,
+            mutation_guard,
         )
 
     def apply_changes(
@@ -1749,6 +1746,7 @@ class FileOperations:
         branch: str,
         commit: str,
         collection_name: str,
+        mutation_guard: Optional[Callable[[], None]] = None,
     ) -> IndexStats:
         """Apply one complete commit change set through one rollback boundary."""
         logger.info(
@@ -1769,4 +1767,5 @@ class FileOperations:
             branch,
             commit,
             collection_name,
+            mutation_guard,
         )

@@ -12,7 +12,10 @@ import pytest
 from unittest.mock import patch, MagicMock
 from types import SimpleNamespace
 
-from rag_pipeline.core.openrouter_embedding import OpenRouterEmbedding
+from rag_pipeline.core.openrouter_embedding import (
+    OpenRouterEmbedding,
+    _AdaptiveConcurrencyGate,
+)
 from rag_pipeline.core.ollama_embedding import EmbeddingError
 
 
@@ -20,7 +23,7 @@ DIM = 1536
 MODEL = "openai/text-embedding-3-small"
 
 
-def _build_embedding(max_chars=100):
+def _build_embedding(max_chars=100, max_retries=0):
     """
     Construct an OpenRouterEmbedding instance with all external I/O mocked.
     """
@@ -31,7 +34,7 @@ def _build_embedding(max_chars=100):
         "model": MODEL,
         "api_base": "https://openrouter.ai/api/v1",
         "timeout": 10.0,
-        "max_retries": 0,
+        "max_retries": max_retries,
         "embed_batch_size": 10,
         "embedding_dim": DIM,
         "max_chars": max_chars,
@@ -168,6 +171,20 @@ class TestGetTextEmbeddings:
         assert result[0] == [0.1] * DIM
         assert result[1] == [0.2] * DIM
 
+    def test_index_batch_requests_throughput_provider_routing(self):
+        emb, client = _build_embedding()
+        emb._config["workload"] = "index"
+        emb._config["provider_sort"] = "throughput"
+        resp = MagicMock()
+        resp.data = [_make_embedding_data([0.1] * DIM, index=0)]
+        client.embeddings.create.return_value = resp
+
+        emb._get_text_embeddings(["hello"])
+
+        assert client.embeddings.create.call_args.kwargs["extra_body"] == {
+            "provider": {"sort": "throughput"}
+        }
+
     def test_sorted_by_index(self):
         emb, client = _build_embedding()
         # API returns in reverse order
@@ -209,27 +226,80 @@ class TestGetTextEmbeddings:
         result = emb._get_text_embeddings(["hello", "", "  "])
         assert len(result) == 1
 
-    def test_fallback_to_individual(self):
+    def test_transient_batch_failure_does_not_fan_out_to_individual_requests(self):
         emb, client = _build_embedding()
 
-        # Batch call raises generic error → triggers fallback
-        # Individual calls succeed
-        single_resp = MagicMock()
-        single_resp.data = [_make_embedding_data([0.1] * DIM)]
+        client.embeddings.create.side_effect = ConnectionError("boom")
 
-        call_count = 0
+        with pytest.raises(ConnectionError, match="boom"):
+            emb._get_text_embeddings(["hello", "world"])
 
-        def side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise ConnectionError("boom")
-            return single_resp
+        assert client.embeddings.create.call_count == 1
 
-        client.embeddings.create.side_effect = side_effect
+    @patch("rag_pipeline.core.openrouter_embedding.time.sleep")
+    def test_rate_limit_retries_the_original_batch_and_honors_retry_after(
+        self,
+        mock_sleep,
+    ):
+        emb, client = _build_embedding(max_retries=1)
+        rate_limit = RuntimeError("rate limited")
+        rate_limit.status_code = 429
+        rate_limit.response = SimpleNamespace(headers={"retry-after": "1.5"})
+        gate = _AdaptiveConcurrencyGate(8)
+        object.__setattr__(emb, "_adaptive_gate", gate)
+        response = MagicMock()
+        response.data = [_make_embedding_data([0.1] * DIM, index=0)]
+        client.embeddings.create.side_effect = [rate_limit, response]
 
-        result = emb._get_text_embeddings(["hello", "world"])
-        assert len(result) == 2
+        result = emb._get_text_embeddings(["hello"])
+
+        assert result == [[0.1] * DIM]
+        assert client.embeddings.create.call_count == 2
+        assert all(
+            call.kwargs["input"] == ["hello"]
+            for call in client.embeddings.create.call_args_list
+        )
+        mock_sleep.assert_called_once_with(1.5)
+        assert gate.limit == 4
+        assert gate.active == 0
+
+    def test_non_transient_request_rejection_is_not_retried(self):
+        emb, client = _build_embedding(max_retries=3)
+        rejection = RuntimeError("invalid input")
+        rejection.status_code = 400
+        client.embeddings.create.side_effect = rejection
+
+        with pytest.raises(RuntimeError, match="invalid input"):
+            emb._get_text_embeddings(["hello", "world"])
+
+        assert client.embeddings.create.call_count == 1
+
+    @pytest.mark.parametrize("failure_kind", ["timeout", "503"])
+    @patch("rag_pipeline.core.openrouter_embedding.time.sleep")
+    def test_transient_timeout_and_5xx_retry_the_batch(
+        self,
+        mock_sleep,
+        failure_kind,
+    ):
+        emb, client = _build_embedding(max_retries=1)
+        if failure_kind == "timeout":
+            failure = TimeoutError("provider timeout")
+        else:
+            failure = RuntimeError("provider unavailable")
+            failure.status_code = 503
+        response = MagicMock()
+        response.data = [_make_embedding_data([0.1] * DIM, index=0)]
+        client.embeddings.create.side_effect = [failure, response]
+
+        result = emb._get_text_embeddings(["hello"])
+
+        assert result == [[0.1] * DIM]
+        assert client.embeddings.create.call_count == 2
+        assert all(
+            call.kwargs["input"] == ["hello"]
+            for call in client.embeddings.create.call_args_list
+        )
+        mock_sleep.assert_called_once_with(0.5)
 
     def test_truncation_in_batch(self):
         emb, client = _build_embedding(max_chars=5)

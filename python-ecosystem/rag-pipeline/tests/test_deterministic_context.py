@@ -71,7 +71,7 @@ def _build_service(plugin_catalog=None):
 
         config = _mock_config()
         service = TestService(config, plugin_catalog=plugin_catalog)
-        service._require_compatible_branches = MagicMock()
+        service._observe_branches = MagicMock()
         return service
 
 
@@ -126,7 +126,7 @@ class TestApplyBranchPriority:
         result = svc._apply_branch_priority([pt1, pt2], "main", ["main"], set())
         assert len(result) == 2
 
-    def test_stale_target_plugin_build_cannot_hide_fresh_base_context(self):
+    def test_older_target_plugin_identity_remains_eligible(self):
         catalog = MagicMock()
         catalog.registry.fingerprint_for.return_value = "sha256:descriptor"
         catalog.implementation_fingerprint.return_value = "sha256:implementation"
@@ -135,7 +135,7 @@ class TestApplyBranchPriority:
             "path": "src/Service.java",
             "branch": "feature",
             "plugin_ids": ["java", "spring"],
-            "plugin_descriptor_fingerprint": "sha256:descriptor",
+            "plugin_descriptor_fingerprint": "sha256:old-descriptor",
             "plugin_implementation_fingerprint": "sha256:old",
             "index_representation_fingerprint": (
                 svc.index_representation_fingerprint
@@ -159,7 +159,7 @@ class TestApplyBranchPriority:
             set(),
         )
 
-        assert [point.id for point in result] == ["base"]
+        assert [point.id for point in result] == ["target"]
 
 
 # ─────────────────────────────────────────────────────────────

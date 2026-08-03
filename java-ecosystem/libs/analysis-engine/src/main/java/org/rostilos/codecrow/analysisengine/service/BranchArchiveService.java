@@ -68,7 +68,27 @@ public class BranchArchiveService {
             String branchOrCommit,
             Set<String> neededFiles
     ) throws IOException {
+        return downloadSnapshot(
+                vcsConnection, workspace, repoSlug, branchOrCommit, neededFiles).contents();
+    }
+
+    /**
+     * Downloads one repository snapshot and separately reports path presence
+     * from text-content availability.
+     *
+     * <p>The distinction is important for existence reconciliation: binary and
+     * oversized files are valid repository entries even though they are not
+     * loaded into prompt/snapshot memory.</p>
+     */
+    public ArchiveSnapshot downloadSnapshot(
+            VcsConnection vcsConnection,
+            String workspace,
+            String repoSlug,
+            String branchOrCommit,
+            Set<String> neededFiles
+    ) throws IOException {
         Map<String, String> results = new LinkedHashMap<>();
+        Set<String> presentFiles = new LinkedHashSet<>();
         downloadAndProcessArchive(
                 vcsConnection,
                 workspace,
@@ -77,11 +97,12 @@ public class BranchArchiveService {
                 archiveFile -> extractFilesFromArchive(
                         archiveFile,
                         neededFiles,
+                        presentFiles,
                         (relativePath, bytes) -> {
                             results.put(relativePath, new String(bytes, StandardCharsets.UTF_8));
                             return true;
                         }));
-        return results;
+        return new ArchiveSnapshot(results, presentFiles);
     }
 
     /**
@@ -109,20 +130,48 @@ public class BranchArchiveService {
             Set<String> neededFiles,
             Path targetDirectory
     ) throws IOException {
+        return downloadAndExtractSnapshotToDirectory(
+                vcsConnection,
+                workspace,
+                repoSlug,
+                branchOrCommit,
+                neededFiles,
+                targetDirectory).extractedFiles();
+    }
+
+    /**
+     * Directory-extraction variant that also preserves archive path presence.
+     * A requested path can be present but intentionally not extracted when it
+     * is binary or exceeds the text-file size limit.
+     */
+    public ArchiveDirectorySnapshot downloadAndExtractSnapshotToDirectory(
+            VcsConnection vcsConnection,
+            String workspace,
+            String repoSlug,
+            String branchOrCommit,
+            Set<String> neededFiles,
+            Path targetDirectory
+    ) throws IOException {
         Objects.requireNonNull(targetDirectory, "targetDirectory");
         Path normalizedTarget = targetDirectory.toAbsolutePath().normalize();
         Files.createDirectories(normalizedTarget);
         setWorldReadable(normalizedTarget, true);
 
+        Set<String> presentFiles = new LinkedHashSet<>();
         return downloadAndProcessArchive(
                 vcsConnection,
                 workspace,
                 repoSlug,
                 branchOrCommit,
-                archiveFile -> extractFilesFromArchive(
-                        archiveFile,
-                        neededFiles,
-                        (relativePath, bytes) -> writeFile(normalizedTarget, relativePath, bytes)));
+                archiveFile -> {
+                    Set<String> extractedFiles = extractFilesFromArchive(
+                            archiveFile,
+                            neededFiles,
+                            presentFiles,
+                            (relativePath, bytes) ->
+                                    writeFile(normalizedTarget, relativePath, bytes));
+                    return new ArchiveDirectorySnapshot(extractedFiles, presentFiles);
+                });
     }
 
     private <T> T downloadAndProcessArchive(
@@ -166,6 +215,7 @@ public class BranchArchiveService {
     private Set<String> extractFilesFromArchive(
             Path archiveFile,
             Set<String> neededFiles,
+            Set<String> presentFiles,
             ExtractedFileConsumer consumer
     ) throws IOException {
         Set<String> extractedFiles = new LinkedHashSet<>();
@@ -191,6 +241,8 @@ public class BranchArchiveService {
                     zis.closeEntry();
                     continue;
                 }
+
+                presentFiles.add(relativePath);
 
                 // Read the entry content
                 byte[] bytes = readZipEntry(zis);
@@ -322,5 +374,25 @@ public class BranchArchiveService {
     @FunctionalInterface
     private interface ExtractedFileConsumer {
         boolean accept(String relativePath, byte[] bytes) throws IOException;
+    }
+
+    public record ArchiveSnapshot(
+            Map<String, String> contents,
+            Set<String> presentFiles
+    ) {
+        public ArchiveSnapshot {
+            contents = Collections.unmodifiableMap(new LinkedHashMap<>(contents));
+            presentFiles = Collections.unmodifiableSet(new LinkedHashSet<>(presentFiles));
+        }
+    }
+
+    public record ArchiveDirectorySnapshot(
+            Set<String> extractedFiles,
+            Set<String> presentFiles
+    ) {
+        public ArchiveDirectorySnapshot {
+            extractedFiles = Collections.unmodifiableSet(new LinkedHashSet<>(extractedFiles));
+            presentFiles = Collections.unmodifiableSet(new LinkedHashSet<>(presentFiles));
+        }
     }
 }

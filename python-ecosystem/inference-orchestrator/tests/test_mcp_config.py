@@ -111,6 +111,15 @@ class TestBuildJvmProps:
         )
         assert result["vcs.provider"] == "github"
 
+    def test_vcs_base_url(self):
+        result = MCPConfigBuilder.build_jvm_props(
+            project_id=1, pull_request_id=1,
+            workspace="ws", repo_slug="r",
+            vcs_provider="gitlab",
+            vcs_base_url="https://gitlab.example.com",
+        )
+        assert result["vcs.baseUrl"] == "https://gitlab.example.com"
+
     def test_none_values_excluded(self):
         result = MCPConfigBuilder.build_jvm_props(
             project_id=None, pull_request_id=None,
