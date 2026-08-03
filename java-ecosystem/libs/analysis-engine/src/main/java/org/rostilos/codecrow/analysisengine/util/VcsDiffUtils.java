@@ -37,9 +37,8 @@ public final class VcsDiffUtils {
     /**
      * Provider-agnostic callback for obtaining the raw diff between two commits.
      * <p>
-     * Implementations typically delegate to a VCS-specific action class
-     * (e.g.&nbsp;{@code GetCommitRangeDiffAction}) or to
-     * {@code VcsOperationsService.getCommitRangeDiff}.
+     * Implementations delegate to the authorized
+     * {@code VcsClient.getCommitRangeDiff} operation.
      */
     @FunctionalInterface
     public interface CommitRangeDiffFetcher {

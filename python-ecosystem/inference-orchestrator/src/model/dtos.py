@@ -97,6 +97,7 @@ class ReviewRequestDto(BaseModel):
     previousCodeAnalysisIssues: Optional[List[IssueDTO]] = Field(default_factory=list,
                                                                  description="List of issues from the previous CodeAnalysis version, if available.")
     vcsProvider: Optional[str] = Field(default=None, description="VCS provider type for MCP server selection (github, bitbucket_cloud, gitlab)")
+    vcsBaseUrl: Optional[str] = Field(default=None, description="GitLab instance root for MCP API calls")
     # Incremental analysis fields
     analysisMode: Optional[str] = Field(default="FULL", description="Analysis mode: FULL or INCREMENTAL")
     deltaDiff: Optional[str] = Field(default=None, description="Delta diff between previous and current commit (only for INCREMENTAL mode)")
@@ -174,6 +175,7 @@ class SummarizeRequestDto(BaseModel):
     supportsMermaid: bool = Field(default=True, description="Whether the VCS supports Mermaid diagrams")
     maxAllowedTokens: Optional[int] = None
     vcsProvider: Optional[str] = Field(default=None, description="VCS provider type (github, bitbucket_cloud)")
+    vcsBaseUrl: Optional[str] = Field(default=None, description="GitLab instance root for MCP API calls")
 
     def get_rag_branch(self) -> Optional[str]:
         if self.pullRequestId:
@@ -213,6 +215,7 @@ class AskRequestDto(BaseModel):
     accessToken: Optional[str] = Field(default=None, description="Bearer token for APP connections")
     maxAllowedTokens: Optional[int] = None
     vcsProvider: Optional[str] = Field(default=None, description="VCS provider type (github, bitbucket_cloud)")
+    vcsBaseUrl: Optional[str] = Field(default=None, description="GitLab instance root for MCP API calls")
     # Context data that can be passed from the processor
     analysisContext: Optional[str] = Field(default=None, description="Existing analysis data for context")
     issueReferences: Optional[List[str]] = Field(default_factory=list, description="Issue IDs referenced in the question")

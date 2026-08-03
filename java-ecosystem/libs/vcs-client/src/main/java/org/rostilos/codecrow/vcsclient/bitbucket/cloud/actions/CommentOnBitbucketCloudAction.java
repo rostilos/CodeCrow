@@ -10,7 +10,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 //TODO: bstract or a single client class for actions
 public class CommentOnBitbucketCloudAction {
@@ -20,7 +24,10 @@ public class CommentOnBitbucketCloudAction {
 
     private static final MediaType APPLICATION_JSON_MEDIA_TYPE = MediaType.get("application/json");
     private static final Logger LOGGER = LoggerFactory.getLogger(CommentOnBitbucketCloudAction.class);
-    private static final String AI_SUMMARIZE_MARKER = "[Codecrow AI Summarize]";
+    private static final String AI_SUMMARIZE_MARKER = "[codecrow-ai-summarize]: #";
+    private static final String LEGACY_AI_SUMMARIZE_MARKER = "[Codecrow AI Summarize]";
+    private static final Pattern CODECROW_HTML_MARKER = Pattern.compile(
+            "<!--\\s*(codecrow-[^>]*?)\\s*-->", Pattern.CASE_INSENSITIVE);
 
     public CommentOnBitbucketCloudAction(
             OkHttpClient authorizedOkHttpClient,
@@ -55,7 +62,7 @@ public class CommentOnBitbucketCloudAction {
             throw new IOException("Invalid repository format. VCS binding has UUID instead of repo slug: " + repoSlug);
         }
 
-        textContent = AI_SUMMARIZE_MARKER + "\n" + textContent;
+        textContent = AI_SUMMARIZE_MARKER + "\n" + hideCodeCrowMarkers(textContent);
 
         deleteOldSummarizeComments();
         ObjectMapper objectMapper = new ObjectMapper();
@@ -104,7 +111,7 @@ public class CommentOnBitbucketCloudAction {
         // Bitbucket API format: {"content": {"raw": "text"}, "parent": {"id": 123}}
         String body = objectMapper.writeValueAsString(new java.util.HashMap<String, Object>() {{
             put("content", new java.util.HashMap<String, String>() {{
-                put("raw", textContent);
+                put("raw", hideCodeCrowMarkers(textContent));
             }});
             put("parent", new java.util.HashMap<String, Object>() {{
                 put("id", Integer.parseInt(parentCommentId));
@@ -140,7 +147,8 @@ public class CommentOnBitbucketCloudAction {
         String repoSlug = vcsRepoInfo.getRepoSlug();
 
         ObjectMapper objectMapper = new ObjectMapper();
-        BitbucketCommentContent commentContent = new BitbucketCommentContent(textContent);
+        BitbucketCommentContent commentContent = new BitbucketCommentContent(
+                hideCodeCrowMarkers(textContent));
         BitbucketSummarizeComment comment = createSummarizeComment(commentContent);
 
         String body = objectMapper.writeValueAsString(comment);
@@ -164,9 +172,64 @@ public class CommentOnBitbucketCloudAction {
         }
     }
 
+    /**
+     * Post a pull-request comment attached to a line on the destination side of
+     * the Bitbucket diff.
+     *
+     * <p>Bitbucket Cloud uses {@code inline.path} and {@code inline.to} for a
+     * comment on a line in the proposed file. This is a native review thread,
+     * not a Code Insights annotation.</p>
+     */
+    public String postInlineComment(String filePath, int lineNumber, String textContent) throws IOException {
+        if (filePath == null || filePath.isBlank()) {
+            throw new IllegalArgumentException("Inline comment file path must not be blank");
+        }
+        if (lineNumber <= 0) {
+            throw new IllegalArgumentException("Inline comment line number must be positive");
+        }
+        if (textContent == null || textContent.isBlank()) {
+            throw new IllegalArgumentException("Inline comment content must not be blank");
+        }
+
+        String workspace = vcsRepoInfo.getRepoWorkspace();
+        String repoSlug = vcsRepoInfo.getRepoSlug();
+        ObjectMapper objectMapper = new ObjectMapper();
+
+        Map<String, Object> inline = new LinkedHashMap<>();
+        inline.put("path", filePath);
+        inline.put("to", lineNumber);
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("content", Map.of("raw", hideCodeCrowMarkers(textContent)));
+        payload.put("inline", inline);
+
+        String body = objectMapper.writeValueAsString(payload);
+        String apiUrl = String.format(
+                "https://api.bitbucket.org/2.0/repositories/%s/%s/pullrequests/%s/comments",
+                workspace, repoSlug, prNumber);
+
+        Request request = new Request.Builder()
+                .post(RequestBody.create(body, APPLICATION_JSON_MEDIA_TYPE))
+                .url(apiUrl)
+                .build();
+
+        LOGGER.info("Posting inline comment to Bitbucket Cloud PR {} at {}:{}",
+                prNumber, filePath, lineNumber);
+
+        try (Response response = authorizedOkHttpClient.newCall(request).execute()) {
+            String responseBody = validate(response);
+            JsonNode root = objectMapper.readTree(responseBody);
+            if (root.has("id")) {
+                return root.get("id").asText();
+            }
+            return "bitbucket-inline-comment-" + System.currentTimeMillis();
+        }
+    }
+
     private void deleteComment(JsonNode comment) throws IOException {
         JsonNode content = comment.path("content").path("raw");
-        if (content.asText().contains(AI_SUMMARIZE_MARKER)) {
+        if (content.asText().contains(AI_SUMMARIZE_MARKER)
+                || content.asText().contains(LEGACY_AI_SUMMARIZE_MARKER)) {
             String deleteUrl = comment.path("links").path("self").path("href").asText();
 
             Request deleteRequest = new Request.Builder()
@@ -219,7 +282,8 @@ public class CommentOnBitbucketCloudAction {
         String repoSlug = vcsRepoInfo.getRepoSlug();
 
         ObjectMapper objectMapper = new ObjectMapper();
-        BitbucketCommentContent commentContent = new BitbucketCommentContent(newContent);
+        BitbucketCommentContent commentContent = new BitbucketCommentContent(
+                hideCodeCrowMarkers(newContent));
         BitbucketSummarizeComment comment = createSummarizeComment(commentContent);
 
         String body = objectMapper.writeValueAsString(comment);
@@ -272,7 +336,8 @@ public class CommentOnBitbucketCloudAction {
                         JsonNode content = comment.path("content").path("raw");
                         String contentText = content.asText();
 
-                        if (contentText.contains(marker)) {
+                        String hiddenMarker = hideCodeCrowMarkers(marker);
+                        if (contentText.contains(marker) || contentText.contains(hiddenMarker)) {
                             String commentId = comment.get("id").asText();
                             deleteCommentById(commentId);
                             deletedCount++;
@@ -323,6 +388,26 @@ public class CommentOnBitbucketCloudAction {
 
     private BitbucketSummarizeComment createSummarizeComment(BitbucketCommentContent commentData) {
         return new BitbucketSummarizeComment(commentData);
+    }
+
+    /**
+     * Bitbucket Cloud renders HTML comments as literal text. Convert CodeCrow's
+     * ownership markers to unused Markdown reference definitions: they remain
+     * present in {@code content.raw} for cleanup but do not render in the PR UI.
+     */
+    private String hideCodeCrowMarkers(String textContent) {
+        if (textContent == null || textContent.isEmpty()) {
+            return textContent;
+        }
+
+        Matcher matcher = CODECROW_HTML_MARKER.matcher(textContent);
+        StringBuffer hiddenContent = new StringBuffer();
+        while (matcher.find()) {
+            String marker = "[" + matcher.group(1).trim() + "]: #";
+            matcher.appendReplacement(hiddenContent, Matcher.quoteReplacement(marker));
+        }
+        matcher.appendTail(hiddenContent);
+        return hiddenContent.toString();
     }
 
     private String validate(Response response) throws IOException {

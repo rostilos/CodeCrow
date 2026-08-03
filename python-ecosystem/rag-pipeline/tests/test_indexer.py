@@ -135,9 +135,42 @@ class TestIndexRepository:
         stats_mgr.get_branch_stats.return_value = mock_stats
 
         indexer = RepositoryIndexer(config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader)
-        result = indexer.index_repository("/repo", "ws", "proj", "main", "abc123", "alias1")
+        progress_events = []
+        result = indexer.index_repository(
+            "/repo", "ws", "proj", "main", "abc123", "alias1",
+            progress_callback=progress_events.append,
+        )
 
         coll_mgr.delete_collection.assert_called_with("pending")
+        assert result.document_count == 0
+        assert [event["stage"] for event in progress_events] == [
+            "preparing", "scanning",
+        ]
+        assert progress_events[-1]["total"] == 0
+
+    def test_progress_callback_failure_does_not_fail_indexing(self):
+        config = _mock_config()
+        coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader = _mock_components()
+        loader.iter_repository_files.return_value = iter([])
+        coll_mgr.create_pending_collection.return_value = "pending"
+        coll_mgr.alias_exists.return_value = False
+        coll_mgr.collection_exists.return_value = False
+        coll_mgr.resolve_alias.return_value = None
+        stats_mgr.get_branch_stats.return_value = IndexStats(
+            namespace="ws__proj__main", document_count=0, chunk_count=0,
+            last_updated="2024-01-01", workspace="ws", project="proj", branch="main"
+        )
+        indexer = RepositoryIndexer(
+            config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader,
+        )
+
+        result = indexer.index_repository(
+            "/repo", "ws", "proj", "main", "abc123", "alias1",
+            progress_callback=lambda _event: (_ for _ in ()).throw(
+                RuntimeError("event sink unavailable")
+            ),
+        )
+
         assert result.document_count == 0
 
     def test_architecture_files_are_ingested_while_generated_files_are_not_loaded(self, tmp_path):
@@ -740,7 +773,7 @@ class TestFileOperations:
             ]
         )
         point_ops.embed_and_create_points.side_effect = (
-            lambda chunk_data: [
+            lambda chunk_data, **_kwargs: [
                 SimpleNamespace(id=point_id) for point_id, _ in chunk_data
             ]
         )
@@ -864,3 +897,34 @@ class TestFileOperations:
         ops.client.upsert.assert_not_called()
         deleted = ops.client.delete.call_args.kwargs["points_selector"]
         assert [str(point_id) for point_id in deleted.points] == [old_id]
+
+    def test_replace_checks_mutation_lease_after_embedding_before_write(self):
+        from qdrant_client.models import PointStruct
+
+        ops = self._make_file_ops()
+        node = MagicMock()
+        point_id = str(uuid.uuid4())
+        ops.point_ops.prepare_chunks_for_embedding.side_effect = None
+        ops.point_ops.prepare_chunks_for_embedding.return_value = [(point_id, node)]
+        ops.point_ops.embed_and_create_points.side_effect = None
+        ops.point_ops.embed_and_create_points.return_value = [PointStruct(
+            id=point_id,
+            vector=[0.0, 1.0],
+            payload={"path": "new.php", "branch": "main"},
+        )]
+        guard = MagicMock(side_effect=RuntimeError("lease lost"))
+
+        with pytest.raises(RuntimeError, match="lease lost"):
+            ops._replace_points(
+                [node],
+                [],
+                "coll",
+                "ws",
+                "project",
+                "main",
+                guard,
+            )
+
+        ops.point_ops.upsert_points_detailed.assert_not_called()
+        ops.client.upsert.assert_not_called()
+        ops.client.delete.assert_not_called()

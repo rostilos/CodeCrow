@@ -19,6 +19,10 @@ import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.BitbucketCloudClient;
 import org.rostilos.codecrow.vcsclient.github.GitHubClient;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabClient;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabClientFactory;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthProvider;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthTokens;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
 import org.slf4j.Logger;
@@ -56,7 +60,6 @@ public class VcsClientProvider {
     
     private static final Logger log = LoggerFactory.getLogger(VcsClientProvider.class);
     private static final String BITBUCKET_TOKEN_URL = "https://bitbucket.org/site/oauth2/access_token";
-    private static final String GITLAB_TOKEN_URL = "https://gitlab.com/oauth/token";
     private static final MediaType FORM_MEDIA_TYPE = MediaType.parse("application/x-www-form-urlencoded");
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -102,7 +105,7 @@ public class VcsClientProvider {
      */
     public VcsClient getClient(VcsConnection connection) {
         AuthorizedVcsTransport transport = getAuthorizedTransport(connection);
-        return createVcsClient(connection.getProviderType(), transport);
+        return createVcsClient(connection, transport);
     }
 
     /**
@@ -444,8 +447,13 @@ public class VcsClientProvider {
             throw new VcsClientException("No refresh token available for GitLab connection: " + connection.getId());
         }
         
+        GitLabOAuthProvider oAuthProvider = GitLabOAuthProvider
+                .from(siteSettingsProvider.getGitLabSettings())
+                .requireConnectionIssuer(connection);
         String decryptedRefreshToken = encryptionService.decrypt(connection.getRefreshToken());
-        TokenResponse newTokens = refreshGitLabToken(decryptedRefreshToken);
+        TokenResponse newTokens = refreshGitLabToken(
+                decryptedRefreshToken,
+                oAuthProvider);
         
         // Update connection with new tokens
         connection.setAccessToken(encryptionService.encrypt(newTokens.accessToken()));
@@ -462,62 +470,23 @@ public class VcsClientProvider {
     /**
      * Refresh GitLab access token using refresh token.
      */
-    private TokenResponse refreshGitLabToken(String refreshToken) throws IOException {
-        String glClientId = siteSettingsProvider.getGitLabSettings().clientId();
-        String glClientSecret = siteSettingsProvider.getGitLabSettings().clientSecret();
-        String glBaseUrl = siteSettingsProvider.getGitLabSettings().baseUrl();
-        if (glClientId == null || glClientId.isBlank() ||
-            glClientSecret == null || glClientSecret.isBlank()) {
-            throw new IOException("GitLab OAuth credentials not configured. Configure GitLab settings in Site Admin.");
-        }
+    private TokenResponse refreshGitLabToken(
+            String refreshToken,
+            GitLabOAuthProvider oAuthProvider
+    ) throws IOException {
         String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() +
                 "/api/integrations/gitlab/app/callback";
-        
-        // Use short timeouts to prevent holding database locks during slow network operations
-        OkHttpClient httpClient = new OkHttpClient.Builder()
-                .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-                .writeTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-                .build();
-        
-        // Determine GitLab token URL (support self-hosted)
-        String tokenUrl = (glBaseUrl != null && !glBaseUrl.isBlank() && !glBaseUrl.equals("https://gitlab.com"))
-                ? glBaseUrl.replaceAll("/$", "") + "/oauth/token"
-                : GITLAB_TOKEN_URL;
-        
-        RequestBody body = new FormBody.Builder()
-                .add("grant_type", "refresh_token")
-                .add("refresh_token", refreshToken)
-                .add("client_id", glClientId)
-                .add("client_secret", glClientSecret)
-                .add("redirect_uri", callbackUrl)
-                .build();
-        
-        Request request = new Request.Builder()
-                .url(tokenUrl)
-                .header("Accept", "application/json")
-                .post(body)
-                .build();
-        
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                String errorBody = response.body() != null ? response.body().string() : "";
-                throw new IOException("Failed to refresh GitLab token: " + response.code() + " - " + errorBody);
-            }
-            
-            String responseBody = response.body().string();
-            JsonNode json = objectMapper.readTree(responseBody);
-            
-            String accessToken = json.get("access_token").asText();
-            String newRefreshToken = json.has("refresh_token") ? json.get("refresh_token").asText() : null;
-            int expiresIn = json.has("expires_in") ? json.get("expires_in").asInt() : 7200;
-            
-            LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(expiresIn);
-            
-            log.debug("GitLab token refreshed successfully. New token expires at: {}", expiresAt);
-            
-            return new TokenResponse(accessToken, newRefreshToken, expiresAt);
-        }
+
+        GitLabOAuthTokens tokens = GitLabClientFactory.createOAuthClient().refreshToken(
+                oAuthProvider,
+                refreshToken,
+                callbackUrl);
+        log.debug("GitLab token refreshed successfully. New token expires at: {}",
+                tokens.expiresAt());
+        return new TokenResponse(
+                tokens.accessToken(),
+                tokens.refreshToken(),
+                tokens.expiresAt());
     }
     
     /**
@@ -655,13 +624,21 @@ public class VcsClientProvider {
     /**
      * Create a VcsClient for the given provider with the authorized HTTP client.
      */
-    private VcsClient createVcsClient(EVcsProvider provider, AuthorizedVcsTransport transport) {
-        return switch (provider) {
+    private VcsClient createVcsClient(
+            VcsConnection connection,
+            AuthorizedVcsTransport transport
+    ) {
+        return switch (connection.getProviderType()) {
             case BITBUCKET_CLOUD -> new BitbucketCloudClient(
                     transport.httpClient(), null, transport.accessToken().orElse(null));
             case GITHUB -> new GitHubClient(transport.httpClient());
-            case GITLAB -> new org.rostilos.codecrow.vcsclient.gitlab.GitLabClient(transport.httpClient());
-            default -> throw new VcsClientException("Unsupported provider: " + provider);
+            case GITLAB -> new GitLabClient(
+                    transport.httpClient(),
+                    org.rostilos.codecrow.vcsclient.gitlab.GitLabConfig
+                            .instanceBaseUrl(connection));
+            default -> throw new VcsClientException(
+                    "Unsupported provider: " + connection.getProviderType());
         };
     }
+
 }

@@ -57,6 +57,7 @@ class BitbucketConnectControllerTest {
                         EVcsSetupStatus.CONNECTED,
                         "{workspace-uuid}",
                         "acme-bb",
+                        null,
                         false,
                         0,
                         null,

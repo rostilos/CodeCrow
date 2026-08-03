@@ -86,7 +86,8 @@ These features are platform-independent and available through the CodeCrow web U
 
 | Method                   | Bitbucket Cloud |               GitHub                |                  GitLab                   |
 | :----------------------- | :-------------: | :---------------------------------: | :---------------------------------------: |
-| OAuth / App Installation |   ✅ (OAuth)    | ✅ (GitHub App with OAuth fallback) | ✅ (OAuth, including self-managed GitLab) |
+| OAuth / App Installation |   ✅ (OAuth)    | ✅ (GitHub App with OAuth fallback) |           ✅ (GitLab.com only)            |
+| Self-managed VCS         |        —          |                  —                  |    ✅ (personal or project access token)   |
 | Manual Webhook           |       ✅        |                 ✅                  |                    ✅                     |
 | CI Pipeline Action       |       ✅        |                  —                  |                     —                     |
 
@@ -234,12 +235,12 @@ for the detailed invariants and failure behavior.
 ## Self-Hosting and Build Verification
 
 The interactive setup configures secrets and chooses OpenRouter or Ollama for
-embeddings. The local production build synchronizes the pinned frontend
-submodule, rejects local frontend drift, recreates the two isolated Python 3.11
-CI environments, and runs the same Python, plugin-boundary, Maven `verify`, and
-observable-image Buildx gates as CI/CD. Only after every gate passes does it
-replace the local Compose services with those validated images and wait for
-health checks.
+embeddings. The local production build fetches and checks out the latest commit
+from the frontend submodule's configured `main` branch, rejects local frontend
+drift, recreates the two isolated Python 3.11 CI environments, and runs the same
+Python, plugin-boundary, Maven `verify`, and observable-image Buildx gates as
+CI/CD. Only after every gate passes does it replace the local Compose services
+with those validated images and wait for health checks.
 
 ```bash
 cd deployment

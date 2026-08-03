@@ -152,7 +152,7 @@ class BranchManager:
         source_collection: str,
         target_collection: str,
         exclude_branch: str,
-        batch_size: int = 50
+        batch_size: int = 128
     ) -> int:
         """Stream copy points from one collection to another, excluding a branch.
         
@@ -205,7 +205,8 @@ class BranchManager:
             ]
             self.client.upsert(
                 collection_name=target_collection,
-                points=points_to_upsert
+                points=points_to_upsert,
+                wait=True,
             )
             total_copied += len(points_to_upsert)
         
@@ -217,7 +218,7 @@ class BranchManager:
         self,
         points: List,
         target_collection: str,
-        batch_size: int = 50
+        batch_size: int = 128
     ) -> None:
         """Copy preserved points to a new collection."""
         if not points:
@@ -236,7 +237,8 @@ class BranchManager:
             ]
             self.client.upsert(
                 collection_name=target_collection,
-                points=points_to_upsert
+                points=points_to_upsert,
+                wait=True,
             )
         
         logger.info("Points copied successfully")

@@ -83,6 +83,28 @@ class CrossFileIssue(BaseModel):
             "Structural relationship presence alone is not defect proof."
         ),
     )
+    findingScope: str = Field(
+        default="CONCRETE_DEFECT",
+        description=(
+            "CONCRETE_DEFECT, DUPLICATION, or TASK_COVERAGE_GAP. "
+            "TASK_COVERAGE_GAP is publication-gated against the complete PR "
+            "state and cannot be inferred from an incremental delta or a RAG miss."
+        ),
+    )
+    coverageEvidenceRefs: List[str] = Field(
+        default_factory=list,
+        description=(
+            "PRF### or DELTA### references copied from the bounded PR evidence "
+            "ledger when findingScope is TASK_COVERAGE_GAP."
+        ),
+    )
+    coverageRegression: bool = Field(
+        default=False,
+        description=(
+            "True only when the current incremental delta visibly removes task "
+            "behavior; it requires a cited DELTA### excerpt containing removal evidence."
+        ),
+    )
     business_impact: str = Field(description="Concrete behavior or operation that is currently broken")
     suggestion: str = Field(description="Code change still required; never work already present in the diff")
 

@@ -1,9 +1,11 @@
 package org.rostilos.codecrow.vcsclient;
 
 import org.rostilos.codecrow.vcsclient.model.*;
+import org.rostilos.codecrow.core.model.pullrequest.PullRequestState;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Generic VCS client interface.
@@ -161,6 +163,105 @@ public interface VcsClient {
      * @return commit hash
      */
     String getLatestCommitHash(String workspaceId, String repoIdOrSlug, String branchName) throws IOException;
+
+    /**
+     * Get provider-neutral pull/merge request metadata.
+     */
+    VcsPullRequest getPullRequest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException;
+
+    /**
+     * Get the comments that belong to the conversation containing a triggering
+     * pull-request comment. Providers without native threads may return an
+     * empty list; interactive answering must remain usable without enrichment.
+     *
+     * @param triggeringCommentId comment that triggered the interaction
+     * @param parentOrThreadId provider parent-comment or discussion identifier
+     * @param inlineComment whether the trigger belongs to a diff discussion
+     */
+    default List<VcsPullRequestComment> getPullRequestCommentThread(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber,
+            String triggeringCommentId,
+            String parentOrThreadId,
+            boolean inlineComment
+    ) throws IOException {
+        return List.of();
+    }
+
+    /**
+     * Get the complete unified diff for a pull/merge request.
+     */
+    String getPullRequestDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException;
+
+    /**
+     * Get the unified diff for one commit.
+     */
+    String getCommitDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commitHash
+    ) throws IOException;
+
+    /**
+     * Get the unified diff between two commits.
+     */
+    String getCommitRangeDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            String baseCommitHash,
+            String headCommitHash
+    ) throws IOException;
+
+    /**
+     * Check whether a path exists at a branch or commit.
+     */
+    boolean fileExists(
+            String workspaceId,
+            String repoIdOrSlug,
+            String branchOrCommit,
+            String filePath
+    ) throws IOException;
+
+    /**
+     * Find the pull/merge request associated with a commit.
+     */
+    Long findPullRequestForCommit(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commitHash
+    ) throws IOException;
+
+    /**
+     * Return the current CodeCrow lifecycle state for a pull/merge request.
+     */
+    default Optional<PullRequestState> getPullRequestState(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException {
+        VcsPullRequest pullRequest = getPullRequest(workspaceId, repoIdOrSlug, pullRequestNumber);
+        if (pullRequest == null || pullRequest.state() == null) {
+            return Optional.empty();
+        }
+        if (pullRequest.merged()) {
+            return Optional.of(PullRequestState.MERGED);
+        }
+        return switch (pullRequest.state().toLowerCase()) {
+            case "open", "opened" -> Optional.of(PullRequestState.OPEN);
+            case "closed", "declined", "superseded" -> Optional.of(PullRequestState.DECLINED);
+            case "merged" -> Optional.of(PullRequestState.MERGED);
+            default -> Optional.empty();
+        };
+    }
 
     /**
      * Get the commit history for a branch or commit.

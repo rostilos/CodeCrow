@@ -66,4 +66,24 @@ class GitLabConfigurationTest {
         
         assertThat(config.getMrIid()).isEqualTo("456");
     }
+
+    @Test
+    @DisplayName("should use a configured self-managed API base")
+    void shouldUseConfiguredSelfManagedApiBase() {
+        GitLabConfiguration config = new GitLabConfiguration(
+                "t", "n", "p", "1", "https://gitlab.example.com/root/");
+
+        assertThat(config.getBaseUrl()).isEqualTo("https://gitlab.example.com/root");
+        assertThat(config.getApiBaseUrl())
+                .isEqualTo("https://gitlab.example.com/root/api/v4");
+    }
+
+    @Test
+    @DisplayName("legacy configuration should keep GitLab.com")
+    void legacyConfigurationShouldKeepGitLabCom() {
+        GitLabConfiguration config = new GitLabConfiguration("t", "n", "p", "1");
+
+        assertThat(config.getBaseUrl()).isEqualTo("https://gitlab.com");
+        assertThat(config.getApiBaseUrl()).isEqualTo("https://gitlab.com/api/v4");
+    }
 }

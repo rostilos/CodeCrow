@@ -1,6 +1,5 @@
 package org.rostilos.codecrow.pipelineagent;
 
-import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
@@ -15,7 +14,6 @@ import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchDiffFetcher;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.commitgraph.dag.CommitRangeContext;
@@ -40,6 +38,7 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepos
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -74,7 +73,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
 
     private VcsAiClientService vcsAiClientService;
     private VcsReportingService vcsReportingService;
-    private VcsOperationsService vcsOperationsService;
+    private VcsClient vcsClient;
 
     @Autowired private CodeAnalysisRepository codeAnalysisRepository;
     @Autowired private BranchRepository branchRepository;
@@ -85,7 +84,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
     void configureMocks() throws Exception {
         vcsAiClientService = mock(VcsAiClientService.class);
         vcsReportingService = mock(VcsReportingService.class);
-        vcsOperationsService = mock(VcsOperationsService.class);
+        vcsClient = mock(VcsClient.class);
 
         when(analysisLockService.acquireLockWithWait(any(Project.class), anyString(), any(), anyString(), any(), any()))
                 .thenReturn(Optional.of("it-lock"));
@@ -93,8 +92,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
 
         when(vcsServiceFactory.getAiClientService(EVcsProvider.GITHUB)).thenReturn(vcsAiClientService);
         when(vcsServiceFactory.getReportingService(EVcsProvider.GITHUB)).thenReturn(vcsReportingService);
-        when(vcsServiceFactory.getOperationsService(EVcsProvider.GITHUB)).thenReturn(vcsOperationsService);
-        when(vcsClientProvider.getHttpClient(any(VcsConnection.class))).thenReturn(new OkHttpClient());
+        when(vcsClientProvider.getClient(any(VcsConnection.class))).thenReturn(vcsClient);
         when(ragOperationsService.isRagEnabled(any(Project.class))).thenReturn(false);
 
         when(vcsAiClientService.buildAiAnalysisRequests(
@@ -110,7 +108,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
 
         when(branchCommitService.resolveCommitRange(any(Project.class), any(VcsConnection.class), anyString(), anyString()))
                 .thenAnswer(inv -> CommitRangeContext.firstAnalysis(inv.getArgument(3)));
-        when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), anyList()))
+        when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), anyList()))
                 .thenReturn(resource("line-tracking/diffs/merge-pr3.diff"));
         when(branchArchiveService.downloadSnapshot(any(), anyString(), anyString(), anyString(), anySet()))
                 .thenAnswer(inv -> {

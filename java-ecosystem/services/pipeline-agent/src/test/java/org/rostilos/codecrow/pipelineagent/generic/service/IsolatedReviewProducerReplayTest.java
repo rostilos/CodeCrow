@@ -2,7 +2,6 @@ package org.rostilos.codecrow.pipelineagent.generic.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
@@ -30,6 +29,7 @@ import org.rostilos.codecrow.queue.RedisQueueService;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.rostilos.codecrow.vcsclient.model.VcsPullRequest;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.RestTemplate;
 
@@ -104,10 +104,10 @@ class IsolatedReviewProducerReplayTest {
 
         Project project = project(projectNamespace);
         PrProcessRequest processRequest = processRequest(headRevision);
-        VcsClient vcsClient = syntheticVcsClient(headFiles, headRevision);
-        OkHttpClient httpClient = new OkHttpClient();
+        VcsClient vcsClient = syntheticVcsClient(
+                headFiles, baseRevision, headRevision, rawDiff);
         VcsClientProvider vcsClientProvider =
-                new SyntheticVcsClientProvider(httpClient, vcsClient);
+                new SyntheticVcsClientProvider(vcsClient);
         PrFileEnrichmentService enrichmentService =
                 new SyntheticEnrichmentService(headFiles);
         TokenEncryptionService encryptionService =
@@ -124,10 +124,7 @@ class IsolatedReviewProducerReplayTest {
                     enrichmentService,
                     capabilitySelection,
                     new PullRequestDiffPreparationService(
-                            new AnalysisLimitEnforcer()),
-                    baseRevision,
-                    headRevision,
-                    rawDiff);
+                            new AnalysisLimitEnforcer()));
 
             List<AiAnalysisRequest> requests = producer.buildAiAnalysisRequests(
                     project,
@@ -272,7 +269,9 @@ class IsolatedReviewProducerReplayTest {
 
     private static VcsClient syntheticVcsClient(
             Map<String, String> headFiles,
-            String headRevision) {
+            String baseRevision,
+            String headRevision,
+            String rawDiff) {
         return (VcsClient) java.lang.reflect.Proxy.newProxyInstance(
                 IsolatedReviewProducerReplayTest.class.getClassLoader(),
                 new Class<?>[]{VcsClient.class},
@@ -296,6 +295,30 @@ class IsolatedReviewProducerReplayTest {
                         }
                         return headFiles.get(path);
                     }
+                    if ("getPullRequest".equals(method.getName())) {
+                        return new VcsPullRequest(
+                                PULL_REQUEST_ID,
+                                "Isolated neutral mixed-language context replay",
+                                "Synthetic immutable snapshot with no repository remote",
+                                SOURCE_BRANCH,
+                                TARGET_BRANCH,
+                                baseRevision,
+                                headRevision,
+                                "open",
+                                false,
+                                null);
+                    }
+                    if ("getCommitRangeDiff".equals(method.getName())) {
+                        if (!baseRevision.equals(arguments[2])
+                                || !headRevision.equals(arguments[3])) {
+                            throw new IllegalArgumentException(
+                                    "unexpected synthetic commit range");
+                        }
+                        return rawDiff;
+                    }
+                    if ("getPullRequestDiff".equals(method.getName())) {
+                        return rawDiff;
+                    }
                     throw new UnsupportedOperationException(
                             "unexpected synthetic VCS operation: "
                                     + method.getName());
@@ -304,20 +327,11 @@ class IsolatedReviewProducerReplayTest {
 
     private static final class SyntheticVcsClientProvider
             extends VcsClientProvider {
-        private final OkHttpClient httpClient;
         private final VcsClient vcsClient;
 
-        private SyntheticVcsClientProvider(
-                OkHttpClient httpClient,
-                VcsClient vcsClient) {
+        private SyntheticVcsClientProvider(VcsClient vcsClient) {
             super(null, null, null, null, null);
-            this.httpClient = httpClient;
             this.vcsClient = vcsClient;
-        }
-
-        @Override
-        public OkHttpClient getHttpClient(VcsConnection connection) {
-            return httpClient;
         }
 
         @Override
@@ -466,19 +480,12 @@ class IsolatedReviewProducerReplayTest {
 
     private static final class SyntheticAiClientService
             extends AbstractVcsAiClientService {
-        private final String baseRevision;
-        private final String headRevision;
-        private final String rawDiff;
-
         private SyntheticAiClientService(
                 TokenEncryptionService encryptionService,
                 VcsClientProvider vcsClientProvider,
                 PrFileEnrichmentService enrichmentService,
                 ProjectCapabilitySelectionService capabilitySelection,
-                PullRequestDiffPreparationService diffPreparationService,
-                String baseRevision,
-                String headRevision,
-                String rawDiff) {
+                PullRequestDiffPreparationService diffPreparationService) {
             super(
                     encryptionService,
                     vcsClientProvider,
@@ -487,42 +494,6 @@ class IsolatedReviewProducerReplayTest {
                     null,
                     capabilitySelection,
                     diffPreparationService);
-            this.baseRevision = baseRevision;
-            this.headRevision = headRevision;
-            this.rawDiff = rawDiff;
-        }
-
-        @Override
-        protected PullRequestData fetchPullRequest(
-                OkHttpClient client,
-                RepositoryInfo repository,
-                long pullRequestId) {
-            return pullRequestData(
-                    "Isolated neutral mixed-language context replay",
-                    "Synthetic immutable snapshot with no repository remote",
-                    SOURCE_BRANCH,
-                    TARGET_BRANCH,
-                    baseRevision,
-                    headRevision);
-        }
-
-        @Override
-        protected String fetchCommitRangeDiff(
-                OkHttpClient client,
-                RepositoryInfo repository,
-                String baseCommit,
-                String headCommit) {
-            assertThat(baseCommit).isEqualTo(baseRevision);
-            assertThat(headCommit).isEqualTo(headRevision);
-            return rawDiff;
-        }
-
-        @Override
-        protected String fetchPullRequestDiff(
-                OkHttpClient client,
-                RepositoryInfo repository,
-                long pullRequestId) {
-            return rawDiff;
         }
 
         @Override

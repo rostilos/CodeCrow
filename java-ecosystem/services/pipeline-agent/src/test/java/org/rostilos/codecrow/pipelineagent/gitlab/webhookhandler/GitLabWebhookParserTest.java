@@ -228,6 +228,7 @@ class GitLabWebhookParserTest {
                             "id": 99999999,
                             "note": "Consider refactoring this",
                             "noteable_type": "MergeRequest",
+                            "discussion_id": "discussion-abc",
                             "position": {
                                 "new_path": "src/main/java/App.java",
                                 "new_line": 42
@@ -247,6 +248,7 @@ class GitLabWebhookParserTest {
             WebhookPayload result = parser.parse("note", jsonNode);
 
             assertThat(result.commentData().isInlineComment()).isTrue();
+            assertThat(result.commentData().parentCommentId()).isEqualTo("discussion-abc");
             assertThat(result.commentData().filePath()).isEqualTo("src/main/java/App.java");
             assertThat(result.commentData().lineNumber()).isEqualTo(42);
         }

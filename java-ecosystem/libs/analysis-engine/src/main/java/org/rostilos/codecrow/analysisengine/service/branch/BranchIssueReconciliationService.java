@@ -1,6 +1,5 @@
 package org.rostilos.codecrow.analysisengine.service.branch;
 
-import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
@@ -11,7 +10,6 @@ import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine.*;
 import org.rostilos.codecrow.astparser.model.ParsedTree;
 import org.rostilos.codecrow.astparser.api.ScopeResolver;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
@@ -25,6 +23,7 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.core.util.tracking.LineHashSequence;
 import org.rostilos.codecrow.core.util.tracking.TrackingConfidence;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -335,9 +334,7 @@ public class BranchIssueReconciliationService {
 
         // Prepare VCS fallback for files not in the archive
         var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
-        EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
-        VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
-        OkHttpClient client = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+        VcsClient client = vcsClientProvider.getClient(vcsRepoInfo.getVcsConnection());
 
         int resolvedCount = 0;
 
@@ -355,9 +352,9 @@ public class BranchIssueReconciliationService {
             try {
                 String fileContent = archiveContents != null ? archiveContents.get(filePath) : null;
                 if (fileContent == null) {
-                    fileContent = operationsService.getFileContent(
-                            client, vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
-                            request.getCommitHash(), filePath);
+                    fileContent = client.getFileContent(
+                            vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
+                            filePath, request.getCommitHash());
                 }
                 if (fileContent == null) {
                     // Content unavailable — verify file existence explicitly.
@@ -365,8 +362,8 @@ public class BranchIssueReconciliationService {
                     // not actual file deletion. Must confirm before resolving (fail-open).
                     boolean confirmedDeleted = false;
                     try {
-                        confirmedDeleted = !operationsService.checkFileExistsInBranch(
-                                client, vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
+                        confirmedDeleted = !client.fileExists(
+                                vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
                                 request.getTargetBranchName(), filePath);
                     } catch (Exception ex) {
                         log.warn("Sweep: file existence check failed for {} — skipping (fail-open): {}",
@@ -709,14 +706,11 @@ public class BranchIssueReconciliationService {
             boolean allowVcsContentFallback) {
 
         var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
-        VcsOperationsService operationsService = null;
-        OkHttpClient client = null;
+        VcsClient client = null;
         if (allowVcsContentFallback
                 && vcsRepoInfo != null
                 && vcsRepoInfo.getVcsConnection() != null) {
-            EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
-            operationsService = vcsServiceFactory.getOperationsService(provider);
-            client = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+            client = vcsClientProvider.getClient(vcsRepoInfo.getVcsConnection());
         }
 
         // Group issues by file
@@ -756,12 +750,11 @@ public class BranchIssueReconciliationService {
                 if (fileContent == null
                         && allowVcsContentFallback
                         && !providerUnavailable
-                        && operationsService != null
                         && client != null) {
                     try {
-                        fileContent = operationsService.getFileContent(
-                                client, vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
-                                request.getCommitHash(), filePath);
+                        fileContent = client.getFileContent(
+                                vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
+                                filePath, request.getCommitHash());
                     } catch (Exception providerFailure) {
                         providerUnavailable = true;
                         log.warn("Stopping per-file reconciliation content fallback after provider "
@@ -873,18 +866,15 @@ public class BranchIssueReconciliationService {
             var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
             EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
             VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
-            VcsOperationsService operationsService = allowVcsContentFallback
-                    ? vcsServiceFactory.getOperationsService(provider)
-                    : null;
-            OkHttpClient client = allowVcsContentFallback
-                    ? vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection())
+            VcsClient client = allowVcsContentFallback
+                    ? vcsClientProvider.getClient(vcsRepoInfo.getVcsConnection())
                     : null;
 
             // Build file contents for AI — only files that have issues needing
             // reconciliation (+ cross-file context from issue descriptions — Fix 3)
             Map<String, String> aiFileContents = buildAiFileContents(
                     needsAiReconciliation, fetchedFileContents, archiveContents,
-                    operationsService, client, vcsRepoInfo.getRepoWorkspace(),
+                    client, vcsRepoInfo.getRepoWorkspace(),
                     vcsRepoInfo.getRepoSlug(), request.getCommitHash(),
                     allowVcsContentFallback);
 
@@ -943,7 +933,7 @@ public class BranchIssueReconciliationService {
     private Map<String, String> buildAiFileContents(
             List<BranchIssue> issues, Map<String, String> fetchedFileContents,
             Map<String, String> archiveContents,
-            VcsOperationsService operationsService, OkHttpClient client,
+            VcsClient client,
             String workspace, String repoSlug, String commitHash,
             boolean allowVcsContentFallback) {
 
@@ -972,10 +962,10 @@ public class BranchIssueReconciliationService {
                 if (archiveContents != null && archiveContents.containsKey(fp)) {
                     aiFileContents.put(fp, archiveContents.get(fp));
                 } else if (allowVcsContentFallback && !providerUnavailable
-                        && operationsService != null && client != null) {
+                        && client != null) {
                     try {
-                        String content = operationsService.getFileContent(
-                                client, workspace, repoSlug, commitHash, fp);
+                        String content = client.getFileContent(
+                                workspace, repoSlug, fp, commitHash);
                         if (content != null) {
                             aiFileContents.put(fp, content);
                         }
@@ -1006,10 +996,10 @@ public class BranchIssueReconciliationService {
                 content = fetchedFileContents.get(refPath);
             }
             if (content == null && allowVcsContentFallback && !providerUnavailable
-                    && operationsService != null && client != null) {
+                    && client != null) {
                 try {
-                    content = operationsService.getFileContent(
-                            client, workspace, repoSlug, commitHash, refPath);
+                    content = client.getFileContent(
+                            workspace, repoSlug, refPath, commitHash);
                 } catch (Exception e) {
                     providerUnavailable = true;
                     log.warn("Stopping per-file cross-file context fallback after provider "

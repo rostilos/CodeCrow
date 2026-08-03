@@ -9,6 +9,7 @@ import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
+import org.rostilos.codecrow.core.service.TaskImplementationEvidenceService;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.analysisengine.service.pr.PrIssueTrackingService;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
@@ -62,6 +63,7 @@ public class PullRequestAnalysisProcessor {
     private static final Logger log = LoggerFactory.getLogger(PullRequestAnalysisProcessor.class);
 
     private final CodeAnalysisService codeAnalysisService;
+    private final TaskImplementationEvidenceService taskImplementationEvidenceService;
     private final PullRequestService pullRequestService;
     private final AiAnalysisClient aiAnalysisClient;
     private final VcsServiceFactory vcsServiceFactory;
@@ -77,6 +79,7 @@ public class PullRequestAnalysisProcessor {
     public PullRequestAnalysisProcessor(
             PullRequestService pullRequestService,
             CodeAnalysisService codeAnalysisService,
+            TaskImplementationEvidenceService taskImplementationEvidenceService,
             AiAnalysisClient aiAnalysisClient,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
@@ -89,6 +92,7 @@ public class PullRequestAnalysisProcessor {
             @Autowired(required = false) ApplicationEventPublisher eventPublisher
     ) {
         this.codeAnalysisService = codeAnalysisService;
+        this.taskImplementationEvidenceService = taskImplementationEvidenceService;
         this.pullRequestService = pullRequestService;
         this.aiAnalysisClient = aiAnalysisClient;
         this.vcsServiceFactory = vcsServiceFactory;
@@ -295,6 +299,8 @@ public class PullRequestAnalysisProcessor {
                     fileContents,
                     taskContextValue(aiRequest, "task_key", "taskKey", "key"),
                     taskContextValue(aiRequest, "task_summary", "taskSummary", "summary"));
+
+            persistTaskImplementationEvidence(newAnalysis, aiResponse.get("taskEvidence"));
 
             int issuesFound = newAnalysis.getTotalIssues();
 
@@ -541,6 +547,7 @@ public class PullRequestAnalysisProcessor {
                 fingerprintHit.get(), project, request.getPullRequestId(),
                 request.getCommitHash(), request.getTargetBranchName(),
                 request.getSourceBranchName(), diffFingerprint);
+        copyTaskImplementationEvidence(fingerprintHit.get(), cloned);
         // Persist PR-level snapshots for the source code viewer
         persistPrSnapshotsForCacheHit(pullRequest, cloned, fingerprintHit.get(), project,
                 request.getCommitHash(), aiRequest.getChangedFiles());
@@ -603,6 +610,7 @@ public class PullRequestAnalysisProcessor {
                     commitHashHit.get(), project, prId,
                     commitHash, targetBranch,
                     sourceBranch, commitHashHit.get().getDiffFingerprint());
+            copyTaskImplementationEvidence(commitHashHit.get(), cloned);
             // Persist PR-level snapshots for the source code viewer
             persistPrSnapshotsForCacheHit(pullRequest, cloned, commitHashHit.get(), project,
                     commitHash, null);
@@ -620,6 +628,54 @@ public class PullRequestAnalysisProcessor {
             return CacheHitType.COMMIT_HASH;
         }
         return CacheHitType.NONE;
+    }
+
+    private void persistTaskImplementationEvidence(
+            CodeAnalysis analysis,
+            Object rawTaskEvidence) {
+        try {
+            TaskImplementationEvidenceService.PersistenceResult result =
+                    taskImplementationEvidenceService.persistFromAnalysisResponse(
+                            analysis, rawTaskEvidence);
+            if (result.persisted() > 0 || result.rejected() > 0
+                    || result.duplicate() > 0) {
+                log.info(
+                        "Task implementation evidence for analysis {}: persisted={}, rejected={}, duplicate={}",
+                        analysis.getId(),
+                        result.persisted(),
+                        result.rejected(),
+                        result.duplicate());
+            }
+        } catch (RuntimeException e) {
+            log.warn(
+                    "Task implementation evidence persistence failed for analysis {}; "
+                            + "continuing review publication without auxiliary evidence: {}",
+                    analysis != null ? analysis.getId() : null,
+                    e.getMessage());
+        }
+    }
+
+    private void copyTaskImplementationEvidence(
+            CodeAnalysis source,
+            CodeAnalysis target) {
+        try {
+            TaskImplementationEvidenceService.PersistenceResult result =
+                    taskImplementationEvidenceService.copyForAnalysis(source, target);
+            if (result.persisted() > 0) {
+                log.info(
+                        "Copied {} task implementation evidence record(s) from analysis {} to {}",
+                        result.persisted(),
+                        source.getId(),
+                        target.getId());
+            }
+        } catch (RuntimeException e) {
+            log.warn(
+                    "Task implementation evidence cache copy failed for analysis {} -> {}; "
+                            + "continuing with cached review output: {}",
+                    source != null ? source.getId() : null,
+                    target != null ? target.getId() : null,
+                    e.getMessage());
+        }
     }
 
     private Map<String, String> reviewIdentityInputs(AiAnalysisRequest request) {

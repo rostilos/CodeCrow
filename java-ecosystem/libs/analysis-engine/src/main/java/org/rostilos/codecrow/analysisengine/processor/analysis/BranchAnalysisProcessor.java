@@ -1,6 +1,5 @@
 package org.rostilos.codecrow.analysisengine.processor.analysis;
 
-import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.commitgraph.dag.CommitRangeContext;
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
@@ -21,7 +20,6 @@ import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestStatusSyncService;
 import org.rostilos.codecrow.commitgraph.service.CommitCoverageService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
@@ -195,9 +193,8 @@ public class BranchAnalysisProcessor {
 					"Branch analysis started for branch: " + request.getTargetBranchName());
 
 			VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
-			OkHttpClient client = vcsClientProvider.getHttpClient(vcsRepoInfoImpl.vcsConnection());
+			VcsClient client = vcsClientProvider.getClient(vcsRepoInfoImpl.vcsConnection());
 			EVcsProvider provider = ProjectVcsInfoRetriever.getVcsProvider(project);
-			VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
 
 			// ── Commit range resolution ───────────────────────────────────
 			CommitRangeContext rangeCtx = branchCommitService.resolveCommitRange(project,
@@ -209,7 +206,7 @@ public class BranchAnalysisProcessor {
 			EventNotificationEmitter.emitStatus(consumer, "fetching_diff", "Fetching diff for analysis");
 
 			// ── PR number resolution ─────────────────────────────────────────
-			Long prNumber = resolvePrNumber(request, operationsService, client, vcsRepoInfoImpl);
+			Long prNumber = resolvePrNumber(request, client, vcsRepoInfoImpl);
 			List<String> prLookupCommitCandidates = new ArrayList<>();
 			if (request.getCommitHash() != null && !request.getCommitHash().isBlank()) {
 				prLookupCommitCandidates.add(request.getCommitHash());
@@ -242,8 +239,8 @@ public class BranchAnalysisProcessor {
 						String sourceParent = headCommits.get(0).parentHashes().get(1);
 						prLookupCommitCandidates.add(sourceParent);
 						try {
-							prNumber = operationsService.findPullRequestForCommit(
-									client, vcsRepoInfoImpl.workspace(),
+							prNumber = client.findPullRequestForCommit(
+									vcsRepoInfoImpl.workspace(),
 									vcsRepoInfoImpl.repoSlug(), sourceParent);
 							if (isValidPrNumber(prNumber)) {
 								log.info("Found PR #{} from merge commit's second parent {}",
@@ -309,7 +306,7 @@ public class BranchAnalysisProcessor {
 			// ── Multi-tier diff strategy ─────────────────────────────────────
 			Long diffPrNumber = mergedPrNumbers.size() > 1 ? null : prNumber;
 			String repositoryDiff = branchDiffFetcher.fetchDiff(request, existingBranchOpt.orElse(null), rangeCtx,
-					operationsService, client, vcsRepoInfoImpl, diffPrNumber, unanalyzedCommits);
+					client, vcsRepoInfoImpl, diffPrNumber, unanalyzedCommits);
 			String rawDiff = AnalysisScopeFilter.filterDiff(repositoryDiff, project);
 
 			Set<String> changedFiles = DiffParsingUtils.parseFilePathsFromDiff(rawDiff);
@@ -518,16 +515,15 @@ public class BranchAnalysisProcessor {
 	 * This handles cases where branch analysis is triggered by push events.
 	 */
 	private Long resolvePrNumber(BranchProcessRequest request,
-			VcsOperationsService operationsService,
-			OkHttpClient client, VcsRepoInfoImpl vcsRepoInfoImpl) {
+			VcsClient client, VcsRepoInfoImpl vcsRepoInfoImpl) {
 		Long prNumber = request.getSourcePrNumber();
 		if (!isValidPrNumber(prNumber)) {
 			prNumber = null;
 		}
 		if (prNumber == null && request.getCommitHash() != null) {
 			try {
-				prNumber = operationsService.findPullRequestForCommit(
-						client, vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(),
+				prNumber = client.findPullRequestForCommit(
+						vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(),
 						request.getCommitHash());
 				if (isValidPrNumber(prNumber)) {
 					log.info("Found PR #{} for commit {} via API lookup", prNumber,

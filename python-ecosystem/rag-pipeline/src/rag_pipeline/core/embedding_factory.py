@@ -16,7 +16,11 @@ from .openrouter_embedding import OpenRouterEmbedding
 logger = logging.getLogger(__name__)
 
 
-def create_embedding_model(config: RAGConfig) -> BaseEmbedding:
+def create_embedding_model(
+    config: RAGConfig,
+    *,
+    workload: str = "index",
+) -> BaseEmbedding:
     """
     Create an embedding model based on the configuration.
     
@@ -40,14 +44,32 @@ def create_embedding_model(config: RAGConfig) -> BaseEmbedding:
     
     elif provider == "openrouter":
         timeout = float(os.getenv("OPENROUTER_TIMEOUT", "300"))
-        logger.info(f"Creating OpenRouter embedding model: {config.openrouter_model} (timeout={timeout}s)")
+        provider_sort = (
+            config.openrouter_query_provider_sort
+            if workload == "query"
+            else config.openrouter_index_provider_sort
+        )
+        logger.info(
+            "Creating OpenRouter embedding model: %s "
+            "(workload=%s timeout=%ss provider_sort=%s)",
+            config.openrouter_model,
+            workload,
+            timeout,
+            provider_sort,
+        )
         return OpenRouterEmbedding(
             api_key=config.openrouter_api_key,
             model=config.openrouter_model,
             api_base=config.openrouter_base_url,
             timeout=timeout,
             max_retries=3,
-            expected_dim=config.embedding_dim
+            expected_dim=config.embedding_dim,
+            embed_batch_size=config.openrouter_batch_size,
+            workload=workload,
+            provider_sort=provider_sort,
+            index_concurrency=config.openrouter_index_concurrency,
+            service_max_in_flight=config.openrouter_max_in_flight,
+            redis_url=os.getenv("REDIS_URL", "redis://redis:6379/1"),
         )
     
     else:

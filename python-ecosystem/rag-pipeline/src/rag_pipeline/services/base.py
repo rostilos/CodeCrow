@@ -48,7 +48,7 @@ class RAGQueryBase:
 
         embed_info = get_embedding_model_info(config)
         logger.info(f"QueryService using embedding provider: {embed_info['provider']} ({embed_info['type']})")
-        self.embed_model = create_embedding_model(config)
+        self.embed_model = create_embedding_model(config, workload="query")
 
         self._supports_instructions = config.embedding_supports_instructions
 

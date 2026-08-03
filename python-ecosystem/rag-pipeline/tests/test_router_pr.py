@@ -27,6 +27,11 @@ def _stable_index_representation(monkeypatch):
 
 def _make_index_manager():
     im = MagicMock()
+    mutation_context = MagicMock()
+    mutation_context.__enter__.return_value = SimpleNamespace(
+        assert_owned=MagicMock()
+    )
+    im.project_mutation.return_value = mutation_context
     im.index_representation_fingerprint = REPRESENTATION_FINGERPRINT
     im.pr_overlay_representation_fingerprint = (
         OVERLAY_REPRESENTATION_FINGERPRINT

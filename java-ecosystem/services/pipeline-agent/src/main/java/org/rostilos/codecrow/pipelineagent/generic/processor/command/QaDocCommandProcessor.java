@@ -2,8 +2,6 @@ package org.rostilos.codecrow.pipelineagent.generic.processor.command;
 
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
@@ -42,8 +40,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import okhttp3.OkHttpClient;
-
 import java.util.*;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -72,7 +68,6 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
     private final QaDocGenerationService qaDocGenerationService;
     private final CodeAnalysisService codeAnalysisService;
     private final VcsClientProvider vcsClientProvider;
-    private final VcsServiceFactory vcsServiceFactory;
     private final QaDocStateRepository qaDocStateRepository;
     private final QaDocDocumentService qaDocDocumentService;
     private final PrFileEnrichmentService enrichmentService;
@@ -84,7 +79,6 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             QaDocGenerationService qaDocGenerationService,
             CodeAnalysisService codeAnalysisService,
             VcsClientProvider vcsClientProvider,
-            VcsServiceFactory vcsServiceFactory,
             QaDocStateRepository qaDocStateRepository,
             QaDocDocumentService qaDocDocumentService,
             PrFileEnrichmentService enrichmentService,
@@ -95,7 +89,6 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
         this.qaDocGenerationService = qaDocGenerationService;
         this.codeAnalysisService = codeAnalysisService;
         this.vcsClientProvider = vcsClientProvider;
-        this.vcsServiceFactory = vcsServiceFactory;
         this.qaDocStateRepository = qaDocStateRepository;
         this.qaDocDocumentService = qaDocDocumentService;
         this.enrichmentService = enrichmentService;
@@ -246,15 +239,12 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
 
             // 5b. Fetch the raw PR diff from the VCS platform
             String diff = null;
-            OkHttpClient httpClient = null;
-            VcsOperationsService opsService = null;
+            VcsClient vcsClient = null;
 
             if (vcsConnection != null && prNumber != null) {
                 try {
-                    httpClient = vcsClientProvider.getHttpClient(vcsConnection);
-                    opsService = vcsServiceFactory.getOperationsService(vcsConnection.getProviderType());
-                    diff = opsService.getPullRequestDiff(
-                            httpClient, workspace, repoSlug, String.valueOf(prNumber));
+                    vcsClient = vcsClientProvider.getClient(vcsConnection);
+                    diff = vcsClient.getPullRequestDiff(workspace, repoSlug, prNumber);
                     log.info("qa-doc command: fetched PR diff, size={} chars",
                             diff != null ? diff.length() : 0);
                 } catch (Exception e) {
@@ -337,12 +327,11 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             // 6a. Compute delta diff for same-PR re-runs
             String deltaDiff = null;
             if (isSamePrRerun && state.getLastCommitHash() != null
-                    && commitHash != null && opsService != null && httpClient != null) {
+                    && commitHash != null && vcsClient != null) {
                 DiffContentFilter contentFilter = new DiffContentFilter();
-                final OkHttpClient cl = httpClient;
-                final VcsOperationsService ops = opsService;
+                final VcsClient clientForDiff = vcsClient;
                 deltaDiff = VcsDiffUtils.fetchDeltaDiff(
-                        (ws, repo, base, head) -> ops.getCommitRangeDiff(cl, ws, repo, base, head),
+                        clientForDiff::getCommitRangeDiff,
                         workspace, repoSlug,
                         state.getLastCommitHash(), commitHash, contentFilter);
                 if (deltaDiff != null) {

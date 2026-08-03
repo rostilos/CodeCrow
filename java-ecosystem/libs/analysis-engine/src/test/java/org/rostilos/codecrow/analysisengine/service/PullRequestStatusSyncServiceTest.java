@@ -1,21 +1,18 @@
 package org.rostilos.codecrow.analysisengine.service;
 
-import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequestState;
-import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 
 import java.io.IOException;
@@ -36,11 +33,9 @@ class PullRequestStatusSyncServiceTest {
 
     @Mock private PullRequestRepository pullRequestRepository;
     @Mock private VcsClientProvider vcsClientProvider;
-    @Mock private VcsServiceFactory vcsServiceFactory;
-    @Mock private VcsOperationsService operationsService;
+    @Mock private VcsClient vcsClient;
     @Mock private Project project;
     @Mock private VcsConnection vcsConnection;
-    @Mock private OkHttpClient httpClient;
 
     private PullRequestStatusSyncService service;
 
@@ -48,8 +43,7 @@ class PullRequestStatusSyncServiceTest {
     void setUp() {
         service = new PullRequestStatusSyncService(
                 pullRequestRepository,
-                vcsClientProvider,
-                vcsServiceFactory);
+                vcsClientProvider);
     }
 
     @Test
@@ -66,13 +60,13 @@ class PullRequestStatusSyncServiceTest {
                 .thenReturn(List.of(merged, stillOpen, declined, unknown));
         mockVcsInfo();
 
-        when(operationsService.getPullRequestState(httpClient, "ws", "repo", 11L))
+        when(vcsClient.getPullRequestState("ws", "repo", 11L))
                 .thenReturn(Optional.of(PullRequestState.MERGED));
-        when(operationsService.getPullRequestState(httpClient, "ws", "repo", 12L))
+        when(vcsClient.getPullRequestState("ws", "repo", 12L))
                 .thenReturn(Optional.of(PullRequestState.OPEN));
-        when(operationsService.getPullRequestState(httpClient, "ws", "repo", 13L))
+        when(vcsClient.getPullRequestState("ws", "repo", 13L))
                 .thenReturn(Optional.of(PullRequestState.DECLINED));
-        when(operationsService.getPullRequestState(httpClient, "ws", "repo", 14L))
+        when(vcsClient.getPullRequestState("ws", "repo", 14L))
                 .thenReturn(Optional.empty());
 
         PullRequestStatusSyncService.SyncResult result =
@@ -99,9 +93,7 @@ class PullRequestStatusSyncServiceTest {
         when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
         when(repoInfo.getRepoWorkspace()).thenReturn("ws");
         when(repoInfo.getRepoSlug()).thenReturn("repo");
-        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.GITHUB);
-        when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-        when(vcsServiceFactory.getOperationsService(EVcsProvider.GITHUB)).thenReturn(operationsService);
+        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
     }
 
     private PullRequest pullRequest(Long prNumber) {

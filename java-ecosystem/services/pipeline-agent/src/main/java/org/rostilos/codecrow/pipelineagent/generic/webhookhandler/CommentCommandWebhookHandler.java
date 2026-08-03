@@ -1,7 +1,6 @@
 package org.rostilos.codecrow.pipelineagent.generic.webhookhandler;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.PrSummarizeCache;
@@ -24,7 +23,7 @@ import org.rostilos.codecrow.pipelineagent.generic.service.CommentCommandRateLim
 import org.rostilos.codecrow.analysisengine.service.PromptSanitizationService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload.CodecrowCommand;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
-import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestAction;
+import org.rostilos.codecrow.vcsclient.model.VcsPullRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -37,12 +36,12 @@ import java.util.function.Consumer;
 
 /**
  * Generic handler for comment-triggered CodeCrow commands.
- * Supports both Bitbucket Cloud and GitHub comment webhooks.
+ * Supports Bitbucket Cloud, GitHub, and GitLab comment webhooks.
  * 
  * Commands:
  * - /codecrow analyze - Trigger PR analysis
  * - /codecrow summarize - Generate PR summary with diagrams
- * - /codecrow ask <question> - Ask questions about the code/analysis
+ * - /codecrow ask <question> or an addressed @codecrow question - Ask about the code/analysis
  * - /codecrow qa-doc [TASK-KEY] - Generate QA documentation and post to Jira
  */
 @Component
@@ -536,69 +535,17 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             return null;
         }
         
-        EVcsProvider provider = vcsConnection.getProviderType();
-        
-        if (provider == EVcsProvider.GITHUB) {
-            return fetchGitHubPrDetails(vcsConnection, owner, repoSlug, prNumber);
-        } else if (provider == EVcsProvider.BITBUCKET_CLOUD) {
-            return fetchBitbucketPrDetails(vcsConnection, owner, repoSlug, prNumber);
-        } else {
-            log.warn("Unsupported VCS provider for PR details fetch: {}", provider);
-            return null;
-        }
-    }
-    
-    /**
-     * Fetch PR details from GitHub API.
-     */
-    private PrDetails fetchGitHubPrDetails(VcsConnection connection, String owner, String repo, int prNumber) throws IOException {
-        OkHttpClient client = vcsClientProvider.getHttpClient(connection);
-        GetPullRequestAction action = new GetPullRequestAction(client);
-        JsonNode prData = action.getPullRequest(owner, repo, prNumber);
-        
-        String sourceBranch = null;
-        String targetBranch = null;
-        String headCommitHash = null;
-        
-        if (prData.has("head")) {
-            JsonNode head = prData.get("head");
-            if (head.has("ref")) {
-                sourceBranch = head.get("ref").asText();
-            }
-            if (head.has("sha")) {
-                headCommitHash = head.get("sha").asText();
-            }
-        }
-        
-        if (prData.has("base") && prData.get("base").has("ref")) {
-            targetBranch = prData.get("base").get("ref").asText();
-        }
-        
-        log.info("Fetched GitHub PR details: source={}, target={}, commit={}", 
-            sourceBranch, targetBranch, headCommitHash);
-        
-        return new PrDetails(sourceBranch, targetBranch, headCommitHash);
-    }
-    
-    /**
-     * Fetch PR details from Bitbucket Cloud API.
-     */
-    private PrDetails fetchBitbucketPrDetails(VcsConnection connection, String workspace, String repoSlug, int prNumber) throws IOException {
-        OkHttpClient client = vcsClientProvider.getHttpClient(connection);
-        org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction action = 
-            new org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction(client);
-        
-        var prData = action.getPullRequest(workspace, repoSlug, String.valueOf(prNumber));
-        
-        String sourceBranch = prData.getSourceRef();
-        String targetBranch = prData.getDestRef();
-        // Bitbucket's GetPullRequestAction doesn't return commit hash, so we leave it null
-        String headCommitHash = null;
-        
-        log.info("Fetched Bitbucket PR details: source={}, target={}, commit={}", 
-            sourceBranch, targetBranch, headCommitHash);
-        
-        return new PrDetails(sourceBranch, targetBranch, headCommitHash);
+        VcsPullRequest pullRequest = vcsClientProvider.getClient(vcsConnection)
+                .getPullRequest(owner, repoSlug, prNumber);
+        log.info("Fetched {} PR details: source={}, target={}, commit={}",
+                vcsConnection.getProviderType(),
+                pullRequest.sourceBranch(),
+                pullRequest.targetBranch(),
+                pullRequest.headCommit());
+        return new PrDetails(
+                pullRequest.sourceBranch(),
+                pullRequest.targetBranch(),
+                pullRequest.headCommit());
     }
     
     /**
@@ -741,23 +688,19 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
     
     private WebhookPayload enrichFromGitHub(WebhookPayload payload, VcsConnection vcsConnection, VcsInfo vcsInfo) {
         try {
-            OkHttpClient client = vcsClientProvider.getHttpClient(vcsConnection);
-            GetPullRequestAction action = new GetPullRequestAction(client);
-            JsonNode prData = action.getPullRequest(
+            VcsPullRequest prData = vcsClientProvider.getClient(vcsConnection).getPullRequest(
                     vcsInfo.workspace(),
                     vcsInfo.repoSlug(),
                     Integer.parseInt(payload.pullRequestId())
             );
             
-            String sourceBranch = prData.has("head") && prData.get("head").has("ref") 
-                    ? prData.get("head").get("ref").asText() : null;
-            String targetBranch = prData.has("base") && prData.get("base").has("ref")
-                    ? prData.get("base").get("ref").asText() : null;
-            String commitHash = prData.has("head") && prData.get("head").has("sha")
-                    ? prData.get("head").get("sha").asText() : null;
+            String sourceBranch = prData.sourceBranch();
+            String targetBranch = prData.targetBranch();
+            String commitHash = prData.headCommit();
             
             // Enrich rawPayload with full PR data so downstream processors can extract title/body
-            JsonNode enrichedRawPayload = enrichRawPayloadWithPrNode(payload.rawPayload(), "pull_request", prData);
+            JsonNode enrichedRawPayload = enrichRawPayloadWithPrNode(
+                    payload.rawPayload(), "pull_request", githubPullRequestNode(prData));
             
             log.info("Enriched GitHub payload: sourceBranch={}, targetBranch={}, commitHash={}", 
                     sourceBranch, targetBranch, commitHash);
@@ -772,16 +715,16 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
     
     private WebhookPayload enrichFromBitbucket(WebhookPayload payload, VcsConnection vcsConnection, VcsInfo vcsInfo) {
         try {
-            OkHttpClient client = vcsClientProvider.getHttpClient(vcsConnection);
-            org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction action = 
-                    new org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction(client);
-            org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction.PullRequestMetadata prData = 
-                    action.getPullRequest(vcsInfo.workspace(), vcsInfo.repoSlug(), payload.pullRequestId());
+            VcsPullRequest prData = vcsClientProvider.getClient(vcsConnection).getPullRequest(
+                    vcsInfo.workspace(),
+                    vcsInfo.repoSlug(),
+                    Long.parseLong(payload.pullRequestId()));
             
-            String sourceBranch = prData.getSourceRef();
-            String targetBranch = prData.getDestRef();
-            // Bitbucket PullRequestMetadata doesn't expose commit hash directly, keep existing if any
-            String commitHash = payload.commitHash();
+            String sourceBranch = prData.sourceBranch();
+            String targetBranch = prData.targetBranch();
+            String commitHash = prData.headCommit() != null
+                    ? prData.headCommit()
+                    : payload.commitHash();
             
             // Enrich rawPayload with PR title/description if not already present
             JsonNode enrichedRawPayload = enrichBitbucketRawPayload(payload.rawPayload(), prData);
@@ -815,8 +758,10 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
     /**
      * Enrich Bitbucket rawPayload with PR title/description if not already present.
      */
-    private JsonNode enrichBitbucketRawPayload(JsonNode rawPayload,
-            org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction.PullRequestMetadata prData) {
+    private JsonNode enrichBitbucketRawPayload(
+            JsonNode rawPayload,
+            VcsPullRequest prData
+    ) {
         if (rawPayload != null && rawPayload.has("pullrequest")) {
             return rawPayload; // Already has PR data from the webhook
         }
@@ -827,9 +772,20 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             enriched = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
         }
         com.fasterxml.jackson.databind.node.ObjectNode prNode = enriched.putObject("pullrequest");
-        prNode.put("title", prData.getTitle());
-        prNode.put("description", prData.getDescription());
+        prNode.put("title", prData.title());
+        prNode.put("description", prData.description());
         return enriched;
+    }
+
+    private JsonNode githubPullRequestNode(VcsPullRequest pullRequest) {
+        var node = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+        node.put("title", pullRequest.title());
+        node.put("body", pullRequest.description());
+        node.putObject("head")
+                .put("ref", pullRequest.sourceBranch())
+                .put("sha", pullRequest.headCommit());
+        node.putObject("base").put("ref", pullRequest.targetBranch());
+        return node;
     }
     
     private VcsConnection getVcsConnection(Project project) {

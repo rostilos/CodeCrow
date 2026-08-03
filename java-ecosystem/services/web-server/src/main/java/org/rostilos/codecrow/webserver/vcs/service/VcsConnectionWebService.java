@@ -20,14 +20,16 @@ import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.HttpAuthorizedClientFactory;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthConfigurationException;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.SearchBitbucketCloudReposAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.ValidateBitbucketCloudConnectionAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.dto.response.RepositorySearchResult;
 import org.rostilos.codecrow.vcsclient.github.actions.SearchRepositoriesAction;
 import org.rostilos.codecrow.vcsclient.github.actions.ValidateConnectionAction;
-import org.rostilos.codecrow.vcsclient.gitlab.GitLabClient;
 import org.rostilos.codecrow.vcsclient.model.VcsRepositoryPage;
 import org.rostilos.codecrow.webserver.vcs.dto.request.RepositoryTokenRequest;
 import org.rostilos.codecrow.webserver.vcs.dto.request.cloud.BitbucketCloudCreateRequest;
@@ -370,6 +372,25 @@ public class VcsConnectionWebService {
         GitLabConfig currentConfig = connection.getConfiguration() instanceof GitLabConfig 
                 ? (GitLabConfig) connection.getConfiguration() 
                 : null;
+
+        if (isGitLabOAuthConnection(connection) && request.getBaseUrl() != null) {
+            String currentBaseUrl = currentConfig != null
+                    ? currentConfig.effectiveBaseUrl()
+                    : GitLabConfig.DEFAULT_BASE_URL;
+            final boolean sameIssuer;
+            try {
+                sameIssuer = GitLabOAuthProvider.sameIssuer(
+                        currentBaseUrl, request.getBaseUrl());
+            } catch (GitLabOAuthConfigurationException e) {
+                throw new IllegalArgumentException(e.getMessage(), e);
+            }
+            if (!sameIssuer) {
+                throw new IllegalArgumentException(
+                        "The GitLab instance of an OAuth connection cannot be changed. "
+                                + "Create a new connection or reauthorize with the OAuth "
+                                + "application configured for that instance.");
+            }
+        }
         
         GitLabConfig updatedConfig = new GitLabConfig(
                 request.getAccessToken() != null ? request.getAccessToken() : 
@@ -377,7 +398,8 @@ public class VcsConnectionWebService {
                 request.getGroupId() != null ? request.getGroupId() : 
                         (currentConfig != null ? currentConfig.groupId() : null),
                 currentConfig != null ? currentConfig.allowedRepos() : null,
-                currentConfig != null ? currentConfig.baseUrl() : null
+                request.getBaseUrl() != null ? request.getBaseUrl()
+                        : (currentConfig != null ? currentConfig.baseUrl() : null)
         );
         
         connection.setConfiguration(updatedConfig);
@@ -387,16 +409,24 @@ public class VcsConnectionWebService {
         if (request.getConnectionName() != null) {
             connection.setConnectionName(request.getConnectionName());
         }
+
+        // A URL or token update must not reuse the previous instance transport.
+        vcsClientProvider.evictCachedClient(connection.getId());
         
         // Use appropriate sync method based on connection type
         VcsConnection updatedConnection;
         if (connection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN) {
             String repositoryPath = connection.getRepositoryPath();
-            updatedConnection = syncGitLabRepositoryTokenInfo(connection, updatedConfig, repositoryPath);
+            updatedConnection = syncGitLabRepositoryTokenInfo(connection, repositoryPath);
         } else {
             updatedConnection = syncGitLabConnectionInfo(connection, updatedConfig);
         }
         return vcsConnectionRepository.save(updatedConnection);
+    }
+
+    private boolean isGitLabOAuthConnection(VcsConnection connection) {
+        return connection.getConnectionType() == EVcsConnectionType.APP
+                || connection.getConnectionType() == EVcsConnectionType.APPLICATION;
     }
 
     @Transactional
@@ -410,8 +440,7 @@ public class VcsConnectionWebService {
 
     private VcsConnection syncGitLabConnectionInfo(VcsConnection vcsConnection, GitLabConfig gitLabConfig) {
         try {
-            OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsConnection);
-            GitLabClient gitLabClient = new GitLabClient(httpClient, gitLabConfig.effectiveBaseUrl());
+            VcsClient gitLabClient = vcsClientProvider.getClient(vcsConnection);
 
             boolean isConnectionValid = gitLabClient.validateConnection();
             vcsConnection.setSetupStatus(isConnectionValid ? EVcsSetupStatus.CONNECTED : EVcsSetupStatus.ERROR);
@@ -439,12 +468,7 @@ public class VcsConnectionWebService {
             throw new IllegalArgumentException("Not a GitLab connection");
         }
         
-        OkHttpClient client = vcsClientProvider.getHttpClient(connection);
-        GitLabConfig gitLabConfig = connection.getConfiguration() instanceof GitLabConfig 
-                ? (GitLabConfig) connection.getConfiguration() 
-                : null;
-        String baseUrl = gitLabConfig != null ? gitLabConfig.effectiveBaseUrl() : "https://gitlab.com";
-        GitLabClient gitLabClient = new GitLabClient(client, baseUrl);
+        VcsClient gitLabClient = vcsClientProvider.getClient(connection);
         
         String groupId = getExternalWorkspaceId(connection);
         
@@ -692,7 +716,7 @@ public class VcsConnectionWebService {
         connection.setRepoCount(1); // Repository tokens only have access to one repo
         
         VcsConnection createdConnection = vcsConnectionRepository.save(connection);
-        VcsConnection updatedConnection = syncGitLabRepositoryTokenInfo(createdConnection, gitLabConfig, repositoryPath);
+        VcsConnection updatedConnection = syncGitLabRepositoryTokenInfo(createdConnection, repositoryPath);
 
         return vcsConnectionRepository.save(updatedConnection);
     }
@@ -700,10 +724,12 @@ public class VcsConnectionWebService {
     /**
      * Validate a GitLab repository token connection by checking access to the specific repository.
      */
-    private VcsConnection syncGitLabRepositoryTokenInfo(VcsConnection vcsConnection, GitLabConfig gitLabConfig, String repositoryPath) {
+    private VcsConnection syncGitLabRepositoryTokenInfo(
+            VcsConnection vcsConnection,
+            String repositoryPath
+    ) {
         try {
-            OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsConnection);
-            GitLabClient gitLabClient = new GitLabClient(httpClient, gitLabConfig.effectiveBaseUrl());
+            VcsClient gitLabClient = vcsClientProvider.getClient(vcsConnection);
 
             // For repository tokens, validate by trying to access the specific project
             boolean isConnectionValid = gitLabClient.validateConnection();

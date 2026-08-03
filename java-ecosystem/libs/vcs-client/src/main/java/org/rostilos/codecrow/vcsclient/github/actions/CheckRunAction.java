@@ -1,7 +1,6 @@
 package org.rostilos.codecrow.vcsclient.github.actions;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import okhttp3.*;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
@@ -12,11 +11,12 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.List;
 
 /**
  * Action to create GitHub Check Runs for code analysis results.
- * Check Runs appear in the GitHub UI under the "Checks" tab of a PR.
+ * Check Runs appear in the GitHub UI under the "Checks" tab of a PR. Line-level
+ * findings are intentionally left to native pull-request review comments so the
+ * same issue is not rendered twice in the diff.
  */
 public class CheckRunAction {
     
@@ -71,11 +71,6 @@ public class CheckRunAction {
         output.put("title", buildTitle(summary));
         output.put("summary", buildSummaryText(summary));
         output.put("text", buildDetailedText(summary));
-        
-        ArrayNode annotations = buildAnnotations(summary);
-        if (annotations.size() > 0) {
-            output.set("annotations", annotations);
-        }
         
         root.set("output", output);
         
@@ -170,86 +165,4 @@ public class CheckRunAction {
         return sb.toString();
     }
     
-    private ArrayNode buildAnnotations(AnalysisSummary summary) {
-        ArrayNode annotations = objectMapper.createArrayNode();
-        
-        List<AnalysisSummary.IssueSummary> issues = summary.getIssues();
-        if (issues == null || issues.isEmpty()) {
-            return annotations;
-        }
-        
-        int limit = Math.min(issues.size(), 50);
-        int skippedNoLine = 0;
-        
-        for (int i = 0; i < limit; i++) {
-            AnalysisSummary.IssueSummary issue = issues.get(i);
-            
-            ObjectNode annotation = objectMapper.createObjectNode();
-            
-            String path = issue.getFilePath();
-            if (path == null || path.isEmpty()) {
-                continue;
-            }
-            
-            if (path.startsWith("/")) {
-                path = path.substring(1);
-            }
-            
-            int line = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
-            
-            // Skip line-level annotations for issues that have no confident line anchor.
-            // If the AI returned line <= 1 AND no codeSnippet, the line number is unreliable
-            // (typically an architectural/cross-file issue). These issues are still visible
-            // in the summary text and on the CodeCrow dashboard — just not pinned to a
-            // potentially misleading line 1 in the GitHub diff.
-            boolean hasCodeSnippet = issue.getCodeSnippet() != null && !issue.getCodeSnippet().isBlank();
-            if (line <= 1 && !hasCodeSnippet) {
-                skippedNoLine++;
-                continue;
-            }
-            if (line <= 0) {
-                line = 1; // Safety fallback — should not happen if codeSnippet is present
-            }
-            
-            annotation.put("path", path);
-            annotation.put("start_line", line);
-            annotation.put("end_line", line);
-            
-            String level = switch (issue.getSeverity()) {
-                case HIGH -> "failure";
-                case MEDIUM -> "warning";
-                default -> "notice";
-            };
-            annotation.put("annotation_level", level);
-            
-            String message = issue.getReason();
-            if (message != null && message.length() > 500) {
-                message = message.substring(0, 497) + "...";
-            }
-            annotation.put("message", message != null ? message : "Issue detected");
-            
-            // Use actual issue title if available, otherwise fall back to severity-based label
-            String title = (issue.getTitle() != null && !issue.getTitle().isBlank())
-                    ? issue.getTitle()
-                    : String.format("%s severity issue", issue.getSeverity());
-            annotation.put("title", title);
-            
-            if (issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty()) {
-                String rawDetails = "Suggested fix:\n" + issue.getSuggestedFix();
-                if (rawDetails.length() > 64000) {
-                    rawDetails = rawDetails.substring(0, 63997) + "...";
-                }
-                annotation.put("raw_details", rawDetails);
-            }
-            
-            annotations.add(annotation);
-        }
-        
-        if (skippedNoLine > 0) {
-            log.info("Skipped {} annotation(s) with no confident line anchor (line <= 1, no codeSnippet). " +
-                    "These issues are still visible in the summary text.", skippedNoLine);
-        }
-        
-        return annotations;
-    }
 }

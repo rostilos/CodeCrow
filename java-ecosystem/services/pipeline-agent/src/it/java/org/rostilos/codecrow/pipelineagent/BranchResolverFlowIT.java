@@ -1,6 +1,5 @@
 package org.rostilos.codecrow.pipelineagent;
 
-import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
@@ -13,7 +12,6 @@ import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchDiffFetcher;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.commitgraph.dag.CommitRangeContext;
 import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
@@ -39,6 +37,7 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository
 import org.rostilos.codecrow.core.util.tracking.LineHashSequence;
 import org.rostilos.codecrow.core.util.tracking.TrackingConfidence;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -81,7 +80,7 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
     @MockBean private AnalyzedCommitService analyzedCommitService;
 
     private VcsAiClientService vcsAiClientService;
-    private VcsOperationsService vcsOperationsService;
+    private VcsClient vcsClient;
 
     @Autowired private BranchRepository branchRepository;
     @Autowired private BranchIssueRepository branchIssueRepository;
@@ -91,20 +90,18 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
     @BeforeEach
     void configureMocks() throws Exception {
         vcsAiClientService = mock(VcsAiClientService.class);
-        vcsOperationsService = mock(VcsOperationsService.class);
+        vcsClient = mock(VcsClient.class);
 
         when(analysisLockService.acquireLockWithWait(any(Project.class), anyString(), any(), anyString(), any(), any()))
                 .thenReturn(Optional.of("branch-resolver-it-lock"));
         when(analysisLockService.isLocked(any(), anyString(), any())).thenReturn(false);
 
         when(vcsServiceFactory.getAiClientService(EVcsProvider.GITHUB)).thenReturn(vcsAiClientService);
-        when(vcsServiceFactory.getOperationsService(EVcsProvider.GITHUB)).thenReturn(vcsOperationsService);
-        when(vcsClientProvider.getHttpClient(any(VcsConnection.class))).thenReturn(new OkHttpClient());
+        when(vcsClientProvider.getClient(any(VcsConnection.class))).thenReturn(vcsClient);
         when(ragOperationsService.isRagEnabled(any(Project.class))).thenReturn(false);
 
-        when(vcsOperationsService.checkFileExistsInBranch(
-                any(OkHttpClient.class), anyString(), anyString(), anyString(), anyString()))
-                .thenAnswer(inv -> !DELETED_PATH.equals(inv.getArgument(4)));
+        when(vcsClient.fileExists(anyString(), anyString(), anyString(), anyString()))
+                .thenAnswer(inv -> !DELETED_PATH.equals(inv.getArgument(3)));
 
         when(branchCommitService.resolveCommitRange(any(Project.class), any(VcsConnection.class), anyString(), anyString()))
                 .thenAnswer(inv -> {
@@ -112,7 +109,7 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
                     return new CommitRangeContext(List.of(headCommit), "base-commit", false);
                 });
 
-        when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), anyList()))
+        when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), anyList()))
                 .thenAnswer(inv -> diffForCommit(inv.getArgument(0, org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest.class)
                         .getCommitHash()));
 

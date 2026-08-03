@@ -107,23 +107,8 @@ public class HttpAuthorizedClientFactory {
      * @return configured OkHttpClient for GitLab API
      */
     public OkHttpClient createGitLabClient(String accessToken) {
-        if (accessToken == null || accessToken.isBlank()) {
-            throw new IllegalArgumentException("Access token cannot be null or empty");
-        }
-        
-        return new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(60, TimeUnit.SECONDS)
-                .writeTimeout(60, TimeUnit.SECONDS)
-                .addInterceptor(chain -> {
-                    Request original = chain.request();
-                    Request authorized = original.newBuilder()
-                            .header("Authorization", "Bearer " + accessToken)
-                            .header("Accept", "application/json")
-                            .build();
-                    return chain.proceed(authorized);
-                })
-                .build();
+        return org.rostilos.codecrow.vcsclient.gitlab.GitLabClientFactory
+                .createAuthorizedHttpClient(accessToken);
     }
 
     private void validateSettings(String clientId, String clientSecret) {

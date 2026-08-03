@@ -3,11 +3,11 @@ package org.rostilos.codecrow.pipelineagent.generic.service;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
@@ -37,8 +37,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Template for provider-backed AI request construction. Subclasses implement
- * only remote VCS reads; all analysis policy and request assembly lives here.
+ * Template for provider-backed AI request construction. Remote VCS reads are
+ * performed through the authorized client returned by {@link VcsClientProvider};
+ * subclasses only identify their provider.
  */
 public abstract class AbstractVcsAiClientService implements VcsAiClientService {
     private static final java.util.regex.Pattern FULL_GIT_OBJECT_ID =
@@ -70,22 +71,6 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         this.capabilitySelectionService = capabilitySelectionService;
         this.diffPreparationService = diffPreparationService;
     }
-
-    protected abstract PullRequestData fetchPullRequest(
-            OkHttpClient client,
-            RepositoryInfo repository,
-            long pullRequestId) throws IOException;
-
-    protected abstract String fetchCommitRangeDiff(
-            OkHttpClient client,
-            RepositoryInfo repository,
-            String baseCommit,
-            String headCommit) throws IOException;
-
-    protected abstract String fetchPullRequestDiff(
-            OkHttpClient client,
-            RepositoryInfo repository,
-            long pullRequestId) throws IOException;
 
     @Override
     public final List<AiAnalysisRequest> buildAiAnalysisRequests(
@@ -127,9 +112,17 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 project.getId(), aiConnection.getAiModel(), aiConnection.getProviderKey(), aiConnection.getId());
 
         try {
-            OkHttpClient client = vcsClientProvider.getHttpClient(repository.connection());
+            VcsClient client = vcsClientProvider.getClient(repository.connection());
             try {
-                pullRequest = fetchPullRequest(client, repository, request.getPullRequestId());
+                var metadata = client.getPullRequest(
+                        repository.workspace(), repository.repoSlug(), request.getPullRequestId());
+                pullRequest = pullRequestData(
+                        metadata.title(),
+                        metadata.description(),
+                        metadata.sourceBranch(),
+                        metadata.targetBranch(),
+                        metadata.baseCommit(),
+                        metadata.headCommit());
             } catch (IOException metadataError) {
                 log.warn("PR metadata enrichment failed for project={}, PR={}; "
                                 + "continuing with webhook identity: {}",
@@ -150,20 +143,24 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             String diff;
             if (hasText(pullRequest.baseCommit()) && hasText(pullRequest.headCommit())) {
                 try {
-                    diff = fetchCommitRangeDiff(
-                            client, repository, pullRequest.baseCommit(), pullRequest.headCommit());
+                    diff = client.getCommitRangeDiff(
+                            repository.workspace(), repository.repoSlug(),
+                            pullRequest.baseCommit(), pullRequest.headCommit());
                 } catch (IOException rangeError) {
                     log.warn("Commit-range PR diff failed for project={}, PR={}; "
                                     + "using provider-native PR diff: {}",
                             project.getId(), request.getPullRequestId(), rangeError.getMessage());
-                    diff = fetchPullRequestDiff(
-                            client, repository, request.getPullRequestId());
+                    diff = client.getPullRequestDiff(
+                            repository.workspace(), repository.repoSlug(),
+                            request.getPullRequestId());
                 }
             } else {
                 log.warn("PR metadata did not include both commit IDs for project={}, PR={}; "
                                 + "using provider-native PR diff",
                         project.getId(), request.getPullRequestId());
-                diff = fetchPullRequestDiff(client, repository, request.getPullRequestId());
+                diff = client.getPullRequestDiff(
+                        repository.workspace(), repository.repoSlug(),
+                        request.getPullRequestId());
             }
 
             preparedDiff = diffPreparationService.prepare(
@@ -172,7 +169,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                     diff,
                     previousCommit,
                     currentCommit,
-                    (base, head) -> fetchCommitRangeDiff(client, repository, base, head));
+                    (base, head) -> client.getCommitRangeDiff(
+                            repository.workspace(), repository.repoSlug(), base, head));
         } catch (IOException e) {
             throw new IllegalStateException(
                     "Unable to fetch pull-request changes from the VCS provider: " + e.getMessage(), e);
@@ -437,9 +435,27 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             String sourceBranch,
             String title,
             String description) {
-        return taskContextEnrichmentService != null
-                ? taskContextEnrichmentService.resolveTaskContext(project, sourceBranch, title, description)
-                : Collections.emptyMap();
+        if (taskContextEnrichmentService == null) {
+            return Collections.emptyMap();
+        }
+        Map<String, String> resolved =
+                taskContextEnrichmentService.resolveTaskContext(
+                        project, sourceBranch, title, description);
+        if (resolved.containsKey("task_key")) {
+            return resolved;
+        }
+
+        // The task provider may be temporarily unavailable while the task key
+        // remains deterministically identifiable from PR metadata. Preserve
+        // that key for database association and prior-task evidence lookup.
+        Optional<String> fallbackKey = taskContextEnrichmentService.resolveTaskKey(
+                project, sourceBranch, title, description);
+        if (fallbackKey.isEmpty()) {
+            return resolved;
+        }
+        Map<String, String> withFallbackKey = new LinkedHashMap<>(resolved);
+        withFallbackKey.put("task_key", fallbackKey.get());
+        return Map.copyOf(withFallbackKey);
     }
 
     private String resolveTaskHistory(
@@ -468,6 +484,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             AiAnalysisRequestImpl.Builder<?> builder,
             VcsConnection connection) throws GeneralSecurityException {
         VcsConnectionCredentials credentials = credentialsExtractor.extractCredentials(connection);
+        builder.withVcsBaseUrl(credentials.vcsBaseUrl());
         if (VcsConnectionCredentialsExtractor.hasAccessToken(credentials)) {
             builder.withAccessToken(credentials.accessToken());
         } else if (VcsConnectionCredentialsExtractor.hasOAuthCredentials(credentials)) {

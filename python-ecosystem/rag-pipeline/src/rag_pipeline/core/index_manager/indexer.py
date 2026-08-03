@@ -11,7 +11,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List
+from typing import Callable, Optional, List
 
 from llama_index.core.schema import TextNode
 from qdrant_client.models import (
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 # Memory-efficient batch sizes
 DOCUMENT_BATCH_SIZE = 50
-INSERT_BATCH_SIZE = 50
+INSERT_BATCH_SIZE = 128
 
 
 def _plugin_identity_metadata(
@@ -481,13 +481,56 @@ class RepositoryIndexer:
         alias_name: str,
         preserve_other_branches: bool = False,
         include_patterns: Optional[List[str]] = None,
-        exclude_patterns: Optional[List[str]] = None
+        exclude_patterns: Optional[List[str]] = None,
+        operation_id: Optional[str] = None,
+        activation_guard: Optional[Callable[[], None]] = None,
+        progress_callback: Optional[Callable[[dict], None]] = None,
     ) -> IndexStats:
         """Index entire repository for a branch using atomic swap strategy."""
-        logger.info(f"Indexing repository: {workspace}/{project}/{branch} from {repo_path}")
+        def report_progress(
+            stage: str,
+            message: str,
+            progress: Optional[int] = None,
+            total: Optional[int] = None,
+        ) -> None:
+            if progress_callback is None:
+                return
+            event = {"stage": stage, "message": message}
+            if progress is not None:
+                event["progress"] = max(0, min(100, progress))
+            if total is not None:
+                event["total"] = total
+            try:
+                progress_callback(event)
+            except Exception as exception:
+                # Progress reporting is optional enrichment. It must never fail
+                # an otherwise healthy index operation.
+                logger.warning(
+                    "RAG progress callback failed at stage %s: %s",
+                    stage,
+                    exception,
+                )
+
+        operation_id = operation_id or hashlib.sha256(
+            f"{workspace}\0{project}\0{branch}\0{commit}\0{time.time_ns()}".encode()
+        ).hexdigest()[:32]
+        operation_started = time.perf_counter()
+        logger.info(
+            "Indexing repository operation_id=%s workspace=%s project=%s "
+            "branch=%s repo_path=%s",
+            operation_id,
+            workspace,
+            project,
+            branch,
+            repo_path,
+        )
+        report_progress("preparing", "Preparing the pending vector collection", 2)
 
         repo_path_obj = Path(repo_path)
-        pending_collection_name = self.collection_manager.create_pending_collection(alias_name)
+        pending_collection_name = self.collection_manager.create_pending_collection(
+            alias_name,
+            operation_id=operation_id,
+        )
 
         # Check existing collection and preserve other branch data using streaming
         old_alias_exists = self.collection_manager.alias_exists(alias_name)
@@ -504,12 +547,6 @@ class RepositoryIndexer:
         if old_collection_exists:
             actual_old_collection = self.collection_manager.resolve_alias(alias_name) or alias_name
         
-        # Clean up pending collections left by interrupted indexing attempts.
-        current_target = self.collection_manager.resolve_alias(alias_name)
-        self.collection_manager.cleanup_orphaned_pending_collections(
-            alias_name, current_target, pending_collection_name
-        )
-
         # Get file list
         repository_file_list = list(
             self.loader.iter_repository_files(repo_path_obj, include_patterns, exclude_patterns)
@@ -518,6 +555,12 @@ class RepositoryIndexer:
             "Found %s repository files before plugin file policy for branch '%s'",
             len(repository_file_list),
             branch,
+        )
+        report_progress(
+            "scanning",
+            f"Discovered {len(repository_file_list)} repository files",
+            7,
+            len(repository_file_list),
         )
         
         if not repository_file_list:
@@ -552,6 +595,12 @@ class RepositoryIndexer:
                 commit,
                 ", ".join(capabilities.repository_plugins) or "generic fallback",
             )
+            report_progress(
+                "framework",
+                "Selected repository plugins: "
+                + (", ".join(capabilities.repository_plugins) or "generic fallback"),
+                10,
+            )
 
         file_list = repository_file_list
         semantic_paths = {
@@ -585,6 +634,12 @@ class RepositoryIndexer:
                 len(file_list) - len(semantic_paths),
             )
         total_files = len(semantic_paths)
+        report_progress(
+            "scope",
+            f"Selected {total_files} semantic files for indexing",
+            12,
+            total_files,
+        )
 
         analysis_handle = None
         if self.plugin_runtime is not None and capabilities is not None:
@@ -599,6 +654,7 @@ class RepositoryIndexer:
         
         if self.config.max_chunks_per_index > 0:
             logger.info("Estimating chunk count before indexing...")
+            report_progress("estimating", "Estimating repository chunk count", 14)
             _, estimated_chunks = self.estimate_repository_size(
                 repo_path,
                 include_patterns,
@@ -616,18 +672,22 @@ class RepositoryIndexer:
         skipped_chunk_count = 0
         skipped_file_paths: set[str] = set()
         preserved_point_count = 0
+        embedding_metrics = {"reused": 0, "embedded": 0}
 
         try:
             # A main-only project must not carry stale non-target branches into
             # its next authoritative generation. Multi-branch projects opt in
             # explicitly through the host-owned project configuration.
             if actual_old_collection and preserve_other_branches:
+                copy_batch_size = getattr(self.point_ops, "batch_size", None)
+                if not isinstance(copy_batch_size, int) or copy_batch_size <= 0:
+                    copy_batch_size = INSERT_BATCH_SIZE
                 preserved_point_count = (
                     self.branch_manager.stream_copy_points_to_collection(
                         actual_old_collection,
                         pending_collection_name,
                         branch,
-                        INSERT_BATCH_SIZE,
+                        copy_batch_size,
                     )
                 )
             
@@ -635,6 +695,12 @@ class RepositoryIndexer:
             logger.info("Starting memory-efficient streaming indexing...")
             batch_num = 0
             total_batches = (len(file_list) + DOCUMENT_BATCH_SIZE - 1) // DOCUMENT_BATCH_SIZE
+            report_progress(
+                "indexing",
+                f"Starting {total_batches} indexing batches",
+                18,
+                total_batches,
+            )
             
             # Architecture-only files still have to reach the repository
             # resolver.  ``total_files`` counts only embedding-bearing files
@@ -644,10 +710,14 @@ class RepositoryIndexer:
             for i in range(0, len(file_list), DOCUMENT_BATCH_SIZE):
                 batch_num += 1
                 file_batch = file_list[i:i + DOCUMENT_BATCH_SIZE]
-                
+                batch_started = time.perf_counter()
+                load_started = time.perf_counter()
                 documents = self.loader.load_file_batch(
                     file_batch, repo_path_obj, workspace, project, branch, commit,
                     strict=False,
+                )
+                load_duration_ms = round(
+                    (time.perf_counter() - load_started) * 1000
                 )
                 loaded_paths = {
                     document.metadata["path"] for document in documents
@@ -689,11 +759,15 @@ class RepositoryIndexer:
                     del documents
                     continue
                 
+                split_started = time.perf_counter()
                 chunks, split_skipped_paths = (
                     self.splitter.split_documents_resilient(
                     semantic_documents,
                     capabilities=capabilities,
                     )
+                )
+                split_duration_ms = round(
+                    (time.perf_counter() - split_started) * 1000
                 )
                 skipped_file_paths.update(split_skipped_paths)
                 document_count += (
@@ -715,8 +789,19 @@ class RepositoryIndexer:
                     raise ValueError(f"Repository exceeds chunk limit: {chunk_count}+ chunks.")
                 
                 # Process and upsert
+                point_pipeline_started = time.perf_counter()
                 success, failed = self.point_ops.process_and_upsert_chunks(
-                    chunks, pending_collection_name, workspace, project, branch
+                    chunks,
+                    pending_collection_name,
+                    workspace,
+                    project,
+                    branch,
+                    reuse_collection_name=actual_old_collection,
+                    operation_id=operation_id,
+                    metrics=embedding_metrics,
+                )
+                point_pipeline_duration_ms = round(
+                    (time.perf_counter() - point_pipeline_started) * 1000
                 )
                 successful_chunks += success
                 skipped_chunk_count += failed
@@ -729,8 +814,30 @@ class RepositoryIndexer:
                     )
                 
                 logger.info(
-                    f"Batch {batch_num}/{total_batches}: processed {len(semantic_documents)} semantic files, "
-                    f"{batch_chunk_count} chunks"
+                    "RAG document batch completed operation_id=%s batch=%s/%s "
+                    "semantic_files=%s chunks=%s load_duration_ms=%s "
+                    "split_duration_ms=%s point_pipeline_duration_ms=%s "
+                    "duration_ms=%s",
+                    operation_id,
+                    batch_num,
+                    total_batches,
+                    len(semantic_documents),
+                    batch_chunk_count,
+                    load_duration_ms,
+                    split_duration_ms,
+                    point_pipeline_duration_ms,
+                    round((time.perf_counter() - batch_started) * 1000),
+                )
+                batch_progress = 18 + round(67 * batch_num / max(total_batches, 1))
+                report_progress(
+                    "indexing",
+                    (
+                        f"Indexed batch {batch_num}/{total_batches}: "
+                        f"{document_count}/{total_files} files, "
+                        f"{successful_chunks} chunks"
+                    ),
+                    batch_progress,
+                    total_batches,
                 )
                 
                 del documents
@@ -744,6 +851,11 @@ class RepositoryIndexer:
             context_nodes = []
             snapshot_nodes = []
             if analysis_handle is not None:
+                report_progress(
+                    "architecture",
+                    "Building deterministic architecture context",
+                    88,
+                )
                 repository_analysis, diagnostics = analysis_handle.finish()
                 skipped_file_paths.update(
                     self.accept_recoverable_repository_diagnostics(
@@ -816,6 +928,9 @@ class RepositoryIndexer:
                     workspace,
                     project,
                     branch,
+                    reuse_collection_name=actual_old_collection,
+                    operation_id=operation_id,
+                    metrics=embedding_metrics,
                 )
                 successful_chunks += success
                 skipped_chunk_count += failed
@@ -842,6 +957,7 @@ class RepositoryIndexer:
             )
 
             # Verify and perform atomic swap
+            report_progress("verifying", "Verifying the pending vector collection", 94)
             pending_info = self.point_ops.client.get_collection(pending_collection_name)
             actual_point_count = int(pending_info.points_count or 0)
             expected_point_count = preserved_point_count + successful_chunks
@@ -864,8 +980,29 @@ class RepositoryIndexer:
                     f"actual={target_branch_point_count}"
                 )
 
+            if activation_guard is not None:
+                activation_guard()
+            observed_target = self.collection_manager.resolve_alias(alias_name)
+            if old_alias_exists and observed_target != actual_old_collection:
+                raise RuntimeError(
+                    "Active RAG collection changed before pending activation"
+                )
+            if not old_alias_exists and observed_target is not None:
+                raise RuntimeError(
+                    "RAG alias was created concurrently before pending activation"
+                )
+
+            activation_started = time.perf_counter()
+            report_progress("activating", "Activating the completed vector collection", 97)
             old_target = self._perform_atomic_swap(
                 alias_name, pending_collection_name, old_alias_exists
+            )
+            logger.info(
+                "RAG pending collection activated operation_id=%s collection=%s "
+                "duration_ms=%s",
+                operation_id,
+                pending_collection_name,
+                round((time.perf_counter() - activation_started) * 1000),
             )
 
             try:
@@ -892,6 +1029,26 @@ class RepositoryIndexer:
             gc.collect()
 
         namespace = make_namespace(workspace, project, branch)
+        logger.info(
+            "RAG repository index completed operation_id=%s workspace=%s "
+            "project=%s branch=%s files=%s chunks=%s reused=%s embedded=%s "
+            "duration_ms=%s",
+            operation_id,
+            workspace,
+            project,
+            branch,
+            document_count,
+            successful_chunks,
+            embedding_metrics["reused"],
+            embedding_metrics["embedded"],
+            round((time.perf_counter() - operation_started) * 1000),
+        )
+        report_progress(
+            "complete",
+            f"Indexed {document_count} files into {successful_chunks} chunks",
+            100,
+            document_count,
+        )
         return IndexStats(
             namespace=namespace,
             document_count=document_count,
@@ -1036,6 +1193,7 @@ class FileOperations:
                 self.client.upsert(
                     collection_name=collection_name,
                     points=old_structs[offset:offset + 128],
+                    wait=True,
                 )
             except Exception as exception:
                 rollback_failures.append(exception)
@@ -1056,6 +1214,7 @@ class FileOperations:
         workspace: str,
         project: str,
         branch: str,
+        mutation_guard: Optional[Callable[[], None]] = None,
     ) -> int:
         """Upsert a prepared generation, delete stale IDs, and roll back on error."""
         old_points = {str(record.id): record for record in old_records}
@@ -1065,13 +1224,29 @@ class FileOperations:
             project,
             branch,
         )
-        new_points = self.point_ops.embed_and_create_points(chunk_data)
+        embedding_metrics = {"reused": 0, "embedded": 0}
+        new_points = self.point_ops.embed_and_create_points(
+            chunk_data,
+            reuse_records=old_points.values(),
+            metrics=embedding_metrics,
+        )
+        logger.info(
+            "Prepared incremental RAG generation collection=%s branch=%s "
+            "points=%s reused=%s embedded=%s",
+            collection_name,
+            branch,
+            len(new_points),
+            embedding_metrics["reused"],
+            embedding_metrics["embedded"],
+        )
         new_ids = {str(point.id) for point in new_points}
         old_ids = set(old_points)
         new_only_ids = [
             point.id for point in new_points if str(point.id) not in old_ids
         ]
 
+        if mutation_guard is not None:
+            mutation_guard()
         try:
             write_result = self.point_ops.upsert_points_detailed(
                 collection_name,
@@ -1100,6 +1275,8 @@ class FileOperations:
             if point_id not in accepted_new_ids
         ]
         try:
+            if mutation_guard is not None:
+                mutation_guard()
             self._delete_point_ids(collection_name, stale_ids)
         except Exception:
             self._restore_old_points(
@@ -1120,6 +1297,7 @@ class FileOperations:
         branch: str,
         commit: Optional[str],
         collection_name: str,
+        mutation_guard: Optional[Callable[[], None]] = None,
     ) -> IndexStats:
         from codecrow_plugins import (
             FileArtifact,
@@ -1497,6 +1675,7 @@ class FileOperations:
             workspace,
             project,
             branch,
+            mutation_guard,
         )
         logger.info(
             "Applied incremental branch generation for %s: %s paths, %s points",
@@ -1516,7 +1695,8 @@ class FileOperations:
         project: str,
         branch: str,
         commit: str,
-        collection_name: str
+        collection_name: str,
+        mutation_guard: Optional[Callable[[], None]] = None,
     ) -> IndexStats:
         """Update files and every affected neutral repository-graph group."""
         logger.info(f"Updating {len(file_paths)} files in {workspace}/{project} for branch '{branch}'")
@@ -1529,6 +1709,7 @@ class FileOperations:
             branch,
             commit,
             collection_name,
+            mutation_guard,
         )
 
     def delete_files(
@@ -1539,6 +1720,7 @@ class FileOperations:
         branch: str,
         collection_name: str,
         commit: Optional[str] = None,
+        mutation_guard: Optional[Callable[[], None]] = None,
     ) -> IndexStats:
         """Delete files and refresh every affected repository-graph group."""
         logger.info(f"Deleting {len(file_paths)} files from {workspace}/{project} branch '{branch}'")
@@ -1551,6 +1733,7 @@ class FileOperations:
             branch,
             commit,
             collection_name,
+            mutation_guard,
         )
 
     def apply_changes(
@@ -1563,6 +1746,7 @@ class FileOperations:
         branch: str,
         commit: str,
         collection_name: str,
+        mutation_guard: Optional[Callable[[], None]] = None,
     ) -> IndexStats:
         """Apply one complete commit change set through one rollback boundary."""
         logger.info(
@@ -1583,4 +1767,5 @@ class FileOperations:
             branch,
             commit,
             collection_name,
+            mutation_guard,
         )

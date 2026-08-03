@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -72,6 +73,42 @@ public class CommentOnPullRequestAction {
                 String respBody = resp.body() != null ? resp.body().string() : "";
                 log.warn("Failed to post review comment: {} - {}", resp.code(), respBody);
             }
+        }
+    }
+
+    /**
+     * Reply to an existing top-level review comment.
+     */
+    public String postReviewCommentReply(
+            String owner,
+            String repo,
+            int pullRequestNumber,
+            long topLevelCommentId,
+            String body
+    ) throws IOException {
+        String apiUrl = String.format(
+                "%s/repos/%s/%s/pulls/%d/comments/%d/replies",
+                GitHubConfig.API_BASE, owner, repo, pullRequestNumber, topLevelCommentId);
+        Request request = new Request.Builder()
+                .url(apiUrl)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .post(RequestBody.create(
+                        objectMapper.writeValueAsString(Map.of("body", body)), JSON))
+                .build();
+
+        try (Response response = authorizedOkHttpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                String responseBody = response.body() != null ? response.body().string() : "";
+                throw new IOException(String.format(
+                        "Failed to reply to GitHub review comment %d: %d - %s",
+                        topLevelCommentId, response.code(), responseBody));
+            }
+            String responseBody = response.body() != null ? response.body().string() : "{}";
+            Map<String, Object> responseMap = objectMapper.readValue(
+                    responseBody, new TypeReference<Map<String, Object>>() {});
+            Number id = (Number) responseMap.get("id");
+            return id != null ? String.valueOf(id.longValue()) : null;
         }
     }
 
@@ -198,6 +235,192 @@ public class CommentOnPullRequestAction {
                     deleteComment(owner, repo, id.longValue());
                 }
             }
+        }
+    }
+
+    /**
+     * List all native review comments attached to a pull request.
+     */
+    public List<Map<String, Object>> listReviewComments(
+            String owner,
+            String repo,
+            int pullRequestNumber
+    ) throws IOException {
+        List<Map<String, Object>> comments = new ArrayList<>();
+        int page = 1;
+
+        while (true) {
+            String apiUrl = String.format(
+                    "%s/repos/%s/%s/pulls/%d/comments?per_page=100&page=%d",
+                    GitHubConfig.API_BASE, owner, repo, pullRequestNumber, page);
+            Request request = new Request.Builder()
+                    .url(apiUrl)
+                    .header("Accept", "application/vnd.github+json")
+                    .header("X-GitHub-Api-Version", "2022-11-28")
+                    .get()
+                    .build();
+
+            try (Response response = authorizedOkHttpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    throw new IOException(String.format(
+                            "Failed to list GitHub review comments: %d - %s",
+                            response.code(), responseBody));
+                }
+
+                String responseBody = response.body() != null ? response.body().string() : "[]";
+                List<Map<String, Object>> pageComments = objectMapper.readValue(
+                        responseBody, new TypeReference<List<Map<String, Object>>>() {});
+                comments.addAll(pageComments);
+                if (pageComments.size() < 100) {
+                    return List.copyOf(comments);
+                }
+                page++;
+            }
+        }
+    }
+
+    /**
+     * List all submitted and pending reviews attached to a pull request.
+     */
+    public List<Map<String, Object>> listReviews(
+            String owner,
+            String repo,
+            int pullRequestNumber
+    ) throws IOException {
+        List<Map<String, Object>> reviews = new ArrayList<>();
+        int page = 1;
+
+        while (true) {
+            String apiUrl = String.format(
+                    "%s/repos/%s/%s/pulls/%d/reviews?per_page=100&page=%d",
+                    GitHubConfig.API_BASE, owner, repo, pullRequestNumber, page);
+            Request request = new Request.Builder()
+                    .url(apiUrl)
+                    .header("Accept", "application/vnd.github+json")
+                    .header("X-GitHub-Api-Version", "2022-11-28")
+                    .get()
+                    .build();
+
+            try (Response response = authorizedOkHttpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    throw new IOException(String.format(
+                            "Failed to list GitHub reviews: %d - %s",
+                            response.code(), responseBody));
+                }
+
+                String responseBody = response.body() != null ? response.body().string() : "[]";
+                List<Map<String, Object>> pageReviews = objectMapper.readValue(
+                        responseBody, new TypeReference<List<Map<String, Object>>>() {});
+                reviews.addAll(pageReviews);
+                if (pageReviews.size() < 100) {
+                    return List.copyOf(reviews);
+                }
+                page++;
+            }
+        }
+    }
+
+    /**
+     * Delete native review comments generated by an earlier CodeCrow run.
+     * Submitted review containers remain in GitHub history, but their marked
+     * inline comments no longer appear in the current diff.
+     */
+    public int deletePreviousReviewComments(
+            String owner,
+            String repo,
+            int pullRequestNumber,
+            String markerText
+    ) throws IOException {
+        int deleted = 0;
+        for (Map<String, Object> comment : listReviewComments(
+                owner, repo, pullRequestNumber)) {
+            String body = (String) comment.get("body");
+            Number id = (Number) comment.get("id");
+            if (body != null && body.contains(markerText) && id != null) {
+                deleteReviewComment(owner, repo, id.longValue());
+                deleted++;
+            }
+        }
+        return deleted;
+    }
+
+    /**
+     * Replace earlier generated review summary bodies with non-rendering content.
+     * GitHub does not allow submitted reviews to be deleted, but it does allow
+     * their summary bodies to be updated.
+     */
+    public int clearPreviousReviewBodies(
+            String owner,
+            String repo,
+            int pullRequestNumber,
+            String markerText,
+            String clearedBody
+    ) throws IOException {
+        int cleared = 0;
+        for (Map<String, Object> review : listReviews(owner, repo, pullRequestNumber)) {
+            String body = (String) review.get("body");
+            Number id = (Number) review.get("id");
+            if (body != null && body.contains(markerText) && id != null) {
+                updateReviewBody(
+                        owner,
+                        repo,
+                        pullRequestNumber,
+                        id.longValue(),
+                        clearedBody);
+                cleared++;
+            }
+        }
+        return cleared;
+    }
+
+    public void updateReviewBody(
+            String owner,
+            String repo,
+            int pullRequestNumber,
+            long reviewId,
+            String body
+    ) throws IOException {
+        String apiUrl = String.format("%s/repos/%s/%s/pulls/%d/reviews/%d",
+                GitHubConfig.API_BASE, owner, repo, pullRequestNumber, reviewId);
+        Map<String, Object> payload = Map.of("body", body);
+        Request request = new Request.Builder()
+                .url(apiUrl)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .put(RequestBody.create(objectMapper.writeValueAsString(payload), JSON))
+                .build();
+
+        try (Response response = authorizedOkHttpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                String responseBody = response.body() != null ? response.body().string() : "";
+                throw new IOException(String.format(
+                        "Failed to clear GitHub review body %d: %d - %s",
+                        reviewId, response.code(), responseBody));
+            }
+            log.debug("Cleared GitHub review body {}", reviewId);
+        }
+    }
+
+    public void deleteReviewComment(String owner, String repo, long commentId) throws IOException {
+        String apiUrl = String.format("%s/repos/%s/%s/pulls/comments/%d",
+                GitHubConfig.API_BASE, owner, repo, commentId);
+        Request request = new Request.Builder()
+                .url(apiUrl)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .delete()
+                .build();
+
+        try (Response response = authorizedOkHttpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                String responseBody = response.body() != null ? response.body().string() : "";
+                throw new IOException(String.format(
+                        "Failed to delete GitHub review comment %d: %d - %s",
+                        commentId, response.code(), responseBody));
+            }
+            log.debug("Deleted GitHub review comment {}", commentId);
         }
     }
 

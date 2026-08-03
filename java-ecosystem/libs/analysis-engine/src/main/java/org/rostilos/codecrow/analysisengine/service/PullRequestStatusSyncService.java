@@ -1,16 +1,13 @@
 package org.rostilos.codecrow.analysisengine.service;
 
-import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequestState;
-import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 import org.rostilos.codecrow.events.EventNotificationEmitter;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,15 +30,12 @@ public class PullRequestStatusSyncService {
 
     private final PullRequestRepository pullRequestRepository;
     private final VcsClientProvider vcsClientProvider;
-    private final VcsServiceFactory vcsServiceFactory;
 
     public PullRequestStatusSyncService(
             PullRequestRepository pullRequestRepository,
-            VcsClientProvider vcsClientProvider,
-            VcsServiceFactory vcsServiceFactory) {
+            VcsClientProvider vcsClientProvider) {
         this.pullRequestRepository = pullRequestRepository;
         this.vcsClientProvider = vcsClientProvider;
-        this.vcsServiceFactory = vcsServiceFactory;
     }
 
     public SyncResult syncOpenPullRequestStates(Project project, Consumer<Map<String, Object>> consumer) {
@@ -71,9 +65,7 @@ public class PullRequestStatusSyncService {
         }
 
         VcsRepoInfoImpl vcsInfo = ProjectVcsInfoRetriever.getVcsInfo(project);
-        OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
-        EVcsProvider provider = ProjectVcsInfoRetriever.getVcsProvider(project);
-        VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
+        VcsClient client = vcsClientProvider.getClient(vcsInfo.vcsConnection());
 
         int checked = 0;
         int stillOpen = 0;
@@ -93,8 +85,7 @@ public class PullRequestStatusSyncService {
 
             checked++;
             try {
-                Optional<PullRequestState> remoteState = operationsService.getPullRequestState(
-                        client,
+                Optional<PullRequestState> remoteState = client.getPullRequestState(
                         vcsInfo.workspace(),
                         vcsInfo.repoSlug(),
                         pullRequest.getPrNumber());

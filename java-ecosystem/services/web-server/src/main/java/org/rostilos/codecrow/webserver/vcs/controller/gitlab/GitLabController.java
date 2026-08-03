@@ -68,7 +68,8 @@ public class GitLabController {
         GitLabConfig config = new GitLabConfig(
                 request.getAccessToken(),
                 request.getGroupId(),
-                null
+                null,
+                request.getBaseUrl()
         );
 
         VcsConnection createdConnection = vcsConnectionService.createGitLabConnection(

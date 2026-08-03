@@ -1,24 +1,23 @@
 package org.rostilos.codecrow.analysisengine.service.branch;
 
-import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.VcsFileRetrievalPolicy;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.filecontent.model.BranchFile;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.filecontent.persistence.BranchFileRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,10 +38,10 @@ public class BranchFileOperationsService {
 
     private final BranchFileRepository branchFileRepository;
     private final BranchRepository branchRepository;
+    private final ProjectRepository projectRepository;
     private final BranchIssueRepository branchIssueRepository;
     private final CodeAnalysisIssueRepository codeAnalysisIssueRepository;
     private final CodeAnalysisRepository codeAnalysisRepository;
-    private final VcsServiceFactory vcsServiceFactory;
     private final VcsClientProvider vcsClientProvider;
     private final FileSnapshotService fileSnapshotService;
     private final BranchArchiveService branchArchiveService;
@@ -51,20 +50,20 @@ public class BranchFileOperationsService {
     public BranchFileOperationsService(
             BranchFileRepository branchFileRepository,
             BranchRepository branchRepository,
+            ProjectRepository projectRepository,
             BranchIssueRepository branchIssueRepository,
             CodeAnalysisIssueRepository codeAnalysisIssueRepository,
             CodeAnalysisRepository codeAnalysisRepository,
-            VcsServiceFactory vcsServiceFactory,
             VcsClientProvider vcsClientProvider,
             FileSnapshotService fileSnapshotService,
             BranchArchiveService branchArchiveService,
             VcsFileRetrievalPolicy fileRetrievalPolicy) {
         this.branchFileRepository = branchFileRepository;
         this.branchRepository = branchRepository;
+        this.projectRepository = projectRepository;
         this.branchIssueRepository = branchIssueRepository;
         this.codeAnalysisIssueRepository = codeAnalysisIssueRepository;
         this.codeAnalysisRepository = codeAnalysisRepository;
-        this.vcsServiceFactory = vcsServiceFactory;
         this.vcsClientProvider = vcsClientProvider;
         this.fileSnapshotService = fileSnapshotService;
         this.branchArchiveService = branchArchiveService;
@@ -147,8 +146,7 @@ public class BranchFileOperationsService {
         // Resolve provider clients only when a bounded per-file fallback is
         // actually allowed. An authoritative archive snapshot (including its
         // binary/large-file presence set) must never trigger extra API calls.
-        VcsOperationsService operationsService = null;
-        OkHttpClient client = null;
+        VcsClient client = null;
         String workspace = null;
         String repoSlug = null;
         var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
@@ -156,9 +154,7 @@ public class BranchFileOperationsService {
                 && snapshot.allowPerFileFallback()
                 && vcsRepoInfo != null
                 && vcsRepoInfo.getVcsConnection() != null) {
-            EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
-            operationsService = vcsServiceFactory.getOperationsService(provider);
-            client = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+            client = vcsClientProvider.getClient(vcsRepoInfo.getVcsConnection());
             workspace = vcsRepoInfo.getRepoWorkspace();
             repoSlug = vcsRepoInfo.getRepoSlug();
         }
@@ -166,7 +162,7 @@ public class BranchFileOperationsService {
         for (String filePath : changedFiles) {
             boolean fileExists = resolveFileExistence(
                     filePath, branchName, snapshot,
-                    operationsService, client, workspace, repoSlug);
+                    client, workspace, repoSlug);
 
             if (!fileExists) {
                 log.debug("Skipping file {} - does not exist in branch {}", filePath, branchName);
@@ -196,7 +192,33 @@ public class BranchFileOperationsService {
             branch.setBranchName(request.getTargetBranchName());
         }
         branch.setCommitHash(request.getCommitHash());
-        return branchRepository.save(branch);
+        Branch savedBranch = branchRepository.save(branch);
+
+        ProjectConfig config = project.getConfiguration();
+        String configuredMainBranch = config != null ? config.mainBranch() : null;
+        if ((configuredMainBranch == null || configuredMainBranch.isBlank())
+                && project.getVcsRepoBinding() != null) {
+            configuredMainBranch = project.getVcsRepoBinding().getDefaultBranch();
+        }
+
+        boolean isConfiguredMainBranch = configuredMainBranch != null
+                && configuredMainBranch.equals(savedBranch.getBranchName());
+        boolean shouldSelectBranch = project.getDefaultBranch() == null
+                || (isConfiguredMainBranch
+                    && !Objects.equals(savedBranch.getId(), project.getDefaultBranch().getId()));
+
+        if (shouldSelectBranch) {
+            project.setDefaultBranch(savedBranch);
+            if (config != null && (config.mainBranch() == null || config.mainBranch().isBlank())) {
+                config.setMainBranch(savedBranch.getBranchName());
+                config.ensureMainBranchInPatterns();
+            }
+            projectRepository.save(project);
+            log.info("Selected branch {} as the default analysis branch for project {}",
+                    savedBranch.getBranchName(), project.getId());
+        }
+
+        return savedBranch;
     }
 
     // ──────────────────── File snapshot updates ──────────────────────────────
@@ -271,7 +293,7 @@ public class BranchFileOperationsService {
 
     private boolean resolveFileExistence(String filePath, String branchName,
                                          BranchFileSnapshot snapshot,
-                                         VcsOperationsService operationsService, OkHttpClient client,
+                                         VcsClient client,
                                          String workspace, String repoSlug) {
         if (snapshot.archiveAvailable()) {
             return snapshot.presentFiles().contains(filePath);
@@ -281,14 +303,13 @@ public class BranchFileOperationsService {
                     + "assuming it exists (fail-open)", filePath, branchName);
             return true;
         }
-        if (operationsService == null || client == null) {
+        if (client == null) {
             log.debug("No VCS fallback available for {} — assuming it exists in branch {}",
                     filePath, branchName);
             return true;
         }
         try {
-            return operationsService.checkFileExistsInBranch(
-                    client, workspace, repoSlug, branchName, filePath);
+            return client.fileExists(workspace, repoSlug, branchName, filePath);
         } catch (Exception e) {
             snapshot.stopPerFileFallback();
             log.warn("File-existence fallback stopped after provider failure for {} in branch {}: {}. "
@@ -361,18 +382,16 @@ public class BranchFileOperationsService {
             var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
             if (vcsRepoInfo == null || vcsRepoInfo.getVcsConnection() == null) return fileContents;
 
-            EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
-            VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
-            OkHttpClient client = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+            VcsClient client = vcsClientProvider.getClient(vcsRepoInfo.getVcsConnection());
 
             for (String filePath : existingFiles) {
                 if (!snapshot.allowContentApiFallback()) {
                     break;
                 }
                 try {
-                    String content = operationsService.getFileContent(
-                            client, vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
-                            request.getCommitHash(), filePath);
+                    String content = client.getFileContent(
+                            vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
+                            filePath, request.getCommitHash());
                     if (content != null) {
                         fileContents.put(filePath, content);
                     }

@@ -1,10 +1,8 @@
 package org.rostilos.codecrow.mcp.gitlab;
 
-import okhttp3.OkHttpClient;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.util.concurrent.TimeUnit;
 
 /**
  * Factory for creating GitLab MCP clients.
@@ -19,6 +17,7 @@ public class GitLabClientFactory {
         String namespace = System.getProperty("workspace");  // GitLab uses namespace, but we receive workspace
         String project = System.getProperty("repo.slug");
         String mrIid = System.getProperty("pullRequest.id");  // MR IID in GitLab
+        String baseUrl = System.getProperty("vcs.baseUrl");
 
         if (accessToken == null || accessToken.isEmpty()) {
             throw new IllegalStateException("accessToken system property is required for GitLab");
@@ -31,22 +30,15 @@ public class GitLabClientFactory {
         }
 
         int fileLimit = Integer.parseInt(System.getProperty("file.limit", "0"));
-        GitLabConfiguration configuration = new GitLabConfiguration(accessToken, namespace, project, mrIid);
-        
-        OkHttpClient httpClient = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(60, TimeUnit.SECONDS)
-                .writeTimeout(60, TimeUnit.SECONDS)
-                .addInterceptor(chain -> {
-                    okhttp3.Request originalRequest = chain.request();
-                    okhttp3.Request.Builder builder = originalRequest.newBuilder()
-                            .header("Authorization", "Bearer " + accessToken)
-                            .header("Accept", "application/json");
-                    return chain.proceed(builder.build());
-                })
-                .build();
+        GitLabConfiguration configuration = new GitLabConfiguration(
+                accessToken, namespace, project, mrIid, baseUrl);
 
-        LOGGER.info("Created GitLab MCP client for {}/{}", namespace, project);
-        return new GitLabMcpClientImpl(httpClient, configuration, fileLimit);
+        LOGGER.info("Created GitLab MCP client for {}/{} on {}",
+                namespace, project, configuration.getBaseUrl());
+        GitLabClient gitLabClient =
+                org.rostilos.codecrow.vcsclient.gitlab.GitLabClientFactory
+                        .createWithAccessToken(
+                                accessToken, configuration.getBaseUrl());
+        return new GitLabMcpClientImpl(gitLabClient, configuration, fileLimit);
     }
 }

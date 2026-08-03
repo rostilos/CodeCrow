@@ -14,17 +14,23 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.model.vcs.config.gitlab.GitLabConfig;
 import org.rostilos.codecrow.core.persistence.repository.vcs.BitbucketConnectInstallationRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabClient;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabOAuthProvider;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -181,10 +187,17 @@ class VcsClientProviderTest {
             ));
 
             Method refreshGitLabToken = VcsClientProvider.class
-                    .getDeclaredMethod("refreshGitLabToken", String.class);
+                    .getDeclaredMethod(
+                            "refreshGitLabToken",
+                            String.class,
+                            GitLabOAuthProvider.class);
             refreshGitLabToken.setAccessible(true);
 
-            Object tokenResponse = refreshGitLabToken.invoke(provider, "old-refresh-token");
+            Object tokenResponse = refreshGitLabToken.invoke(
+                    provider,
+                    "old-refresh-token",
+                    GitLabOAuthProvider.from(
+                            siteSettingsProvider.getGitLabSettings()));
 
             assertThat(tokenResponse).isNotNull();
 
@@ -202,6 +215,34 @@ class VcsClientProviderTest {
         }
     }
 
+    @Test
+    void gitLabTokenRefresh_rejectsConnectionFromAnotherIssuer() throws Exception {
+        VcsConnection connection = new VcsConnection();
+        setId(connection, 91L);
+        connection.setProviderType(EVcsProvider.GITLAB);
+        connection.setConnectionType(EVcsConnectionType.APP);
+        connection.setRefreshToken("encrypted-refresh-token");
+        connection.setConfiguration(new GitLabConfig(
+                null,
+                "group",
+                List.of(),
+                "https://attacker.example"));
+        when(siteSettingsProvider.getGitLabSettings()).thenReturn(
+                new GitLabSettingsDTO(
+                        "gitlab-client-id",
+                        "gitlab-client-secret",
+                        "https://gitlab.example"));
+
+        assertThatThrownBy(() -> provider.refreshToken(connection))
+                .isInstanceOf(VcsClientException.class)
+                .hasRootCauseMessage(
+                        "GitLab OAuth connection issuer https://attacker.example "
+                                + "does not match the configured OAuth issuer "
+                                + "https://gitlab.example. Update the token connection or "
+                                + "configure the deployment OAuth application for this GitLab instance.");
+        verify(encryptionService, never()).decrypt("encrypted-refresh-token");
+    }
+
     // ── getClient ────────────────────────────────────────────────────────
 
     @Test
@@ -216,5 +257,60 @@ class VcsClientProviderTest {
 
         assertThatThrownBy(() -> provider.getClient(conn))
                 .isInstanceOf(VcsClientException.class);
+    }
+
+    @Test
+    void getClient_selfManagedGitLab_usesConnectionInstance()
+            throws Exception {
+        try (MockWebServer gitLab = new MockWebServer()) {
+            gitLab.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"id\":1,\"username\":\"tester\"}"));
+            gitLab.start();
+
+            VcsConnection connection = new VcsConnection();
+            setId(connection, 77L);
+            connection.setProviderType(EVcsProvider.GITLAB);
+            connection.setConnectionType(EVcsConnectionType.PERSONAL_TOKEN);
+            connection.setConfiguration(new GitLabConfig(
+                    "token",
+                    "group",
+                    List.of(),
+                    gitLab.url("/gitlab").toString()));
+            when(httpClientFactory.createGitLabClient("token"))
+                    .thenReturn(new okhttp3.OkHttpClient());
+
+            VcsClient client = provider.getClient(connection);
+            boolean valid = client.validateConnection();
+
+            assertThat(valid).isTrue();
+            assertThat(gitLab.takeRequest().getPath()).isEqualTo("/gitlab/api/v4/user");
+        }
+    }
+
+    @Test
+    void getClient_legacyGitLabConnection_keepsCloudDefault()
+            throws Exception {
+        VcsConnection connection = new VcsConnection();
+        setId(connection, 78L);
+        connection.setProviderType(EVcsProvider.GITLAB);
+        connection.setConnectionType(EVcsConnectionType.PERSONAL_TOKEN);
+        connection.setConfiguration(new GitLabConfig(
+                "token", "group", List.of()));
+        when(httpClientFactory.createGitLabClient("token"))
+                .thenReturn(new okhttp3.OkHttpClient());
+
+        VcsClient client = provider.getClient(connection);
+        Field api = GitLabClient.class.getDeclaredField("api");
+        api.setAccessible(true);
+        Object context = api.get(client);
+        var apiBaseUrl = context.getClass().getDeclaredMethod("apiBaseUrl");
+        apiBaseUrl.setAccessible(true);
+
+        assertThat(apiBaseUrl.invoke(context))
+                .isEqualTo(org.rostilos.codecrow.vcsclient.gitlab.GitLabConfig.API_BASE);
+        assertThat(connection.getConfiguration())
+                .isEqualTo(new GitLabConfig("token", "group", List.of()));
     }
 }

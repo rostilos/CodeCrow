@@ -4,6 +4,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
 import org.rostilos.codecrow.vcsclient.VcsClient;
+import org.rostilos.codecrow.vcsclient.github.actions.CheckFileExistsInBranchAction;
+import org.rostilos.codecrow.vcsclient.github.actions.GetCommitDiffAction;
+import org.rostilos.codecrow.vcsclient.github.actions.GetCommitRangeDiffAction;
+import org.rostilos.codecrow.vcsclient.github.actions.CommentOnPullRequestAction;
+import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestAction;
+import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestDiffAction;
 import org.rostilos.codecrow.vcsclient.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +24,7 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * VcsClient implementation for GitHub.
@@ -728,6 +735,150 @@ public class GitHubClient implements VcsClient {
         
         return collaborators;
     }
+
+    @Override
+    public VcsPullRequest getPullRequest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException {
+        JsonNode metadata = new GetPullRequestAction(httpClient).getPullRequest(
+                workspaceId, repoIdOrSlug, Math.toIntExact(pullRequestNumber));
+        String state = getTextOrNull(metadata, "state");
+        boolean merged = metadata.path("merged").asBoolean(false)
+                || (!metadata.path("merged_at").isMissingNode()
+                && !metadata.path("merged_at").isNull());
+        return new VcsPullRequest(
+                pullRequestNumber,
+                getTextOrNull(metadata, "title"),
+                getTextOrNull(metadata, "body"),
+                metadata.path("head").path("ref").asText(null),
+                metadata.path("base").path("ref").asText(null),
+                metadata.path("base").path("sha").asText(null),
+                metadata.path("head").path("sha").asText(null),
+                state,
+                merged,
+                getTextOrNull(metadata, "html_url"));
+    }
+
+    @Override
+    public List<VcsPullRequestComment> getPullRequestCommentThread(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber,
+            String triggeringCommentId,
+            String parentOrThreadId,
+            boolean inlineComment
+    ) throws IOException {
+        if (!inlineComment || triggeringCommentId == null) {
+            return List.of();
+        }
+
+        List<Map<String, Object>> comments = new CommentOnPullRequestAction(httpClient)
+                .listReviewComments(workspaceId, repoIdOrSlug, Math.toIntExact(pullRequestNumber));
+        String rootId = parentOrThreadId;
+        if (rootId == null || rootId.isBlank()) {
+            rootId = comments.stream()
+                    .filter(comment -> triggeringCommentId.equals(valueAsString(comment.get("id"))))
+                    .map(comment -> valueAsString(comment.get("in_reply_to_id")))
+                    .filter(value -> value != null && !value.isBlank())
+                    .findFirst()
+                    .orElse(triggeringCommentId);
+        }
+
+        final String threadRootId = rootId;
+        return comments.stream()
+                .filter(comment -> threadRootId.equals(valueAsString(comment.get("id")))
+                        || threadRootId.equals(valueAsString(comment.get("in_reply_to_id"))))
+                .map(comment -> new VcsPullRequestComment(
+                        valueAsString(comment.get("id")),
+                        valueAsString(comment.get("in_reply_to_id")),
+                        threadRootId,
+                        nestedValueAsString(comment.get("user"), "login"),
+                        valueAsString(comment.get("body")),
+                        valueAsString(comment.get("created_at"))))
+                .toList();
+    }
+
+    @Override
+    public String getPullRequestDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException {
+        return new GetPullRequestDiffAction(httpClient).getPullRequestDiff(
+                workspaceId, repoIdOrSlug, Math.toIntExact(pullRequestNumber));
+    }
+
+    @Override
+    public String getCommitDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commitHash
+    ) throws IOException {
+        return new GetCommitDiffAction(httpClient).getCommitDiff(
+                workspaceId, repoIdOrSlug, commitHash);
+    }
+
+    @Override
+    public String getCommitRangeDiff(
+            String workspaceId,
+            String repoIdOrSlug,
+            String baseCommitHash,
+            String headCommitHash
+    ) throws IOException {
+        return new GetCommitRangeDiffAction(httpClient).getCommitRangeDiff(
+                workspaceId, repoIdOrSlug, baseCommitHash, headCommitHash);
+    }
+
+    @Override
+    public boolean fileExists(
+            String workspaceId,
+            String repoIdOrSlug,
+            String branchOrCommit,
+            String filePath
+    ) throws IOException {
+        return new CheckFileExistsInBranchAction(httpClient).fileExists(
+                workspaceId, repoIdOrSlug, branchOrCommit, filePath);
+    }
+
+    @Override
+    public Long findPullRequestForCommit(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commitHash
+    ) throws IOException {
+        String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug
+                + "/commits/" + commitHash + "/pulls";
+        Request request = new Request.Builder()
+                .url(url)
+                .header(ACCEPT_HEADER, "application/vnd.github+json")
+                .header(GITHUB_API_VERSION_HEADER, GITHUB_API_VERSION)
+                .get()
+                .build();
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                log.warn("Failed to find GitHub PR for commit {}: HTTP {}", commitHash, response.code());
+                return null;
+            }
+            JsonNode pullRequests = objectMapper.readTree(
+                    response.body() != null ? response.body().string() : "[]");
+            if (!pullRequests.isArray() || pullRequests.isEmpty()) {
+                return null;
+            }
+            for (JsonNode pullRequest : pullRequests) {
+                if (!pullRequest.path("merged_at").isMissingNode()
+                        && !pullRequest.path("merged_at").isNull()) {
+                    return pullRequest.path("number").asLong();
+                }
+            }
+            return pullRequests.get(0).path("number").asLong();
+        } catch (Exception error) {
+            log.warn("Error finding GitHub PR for commit {}: {}",
+                    commitHash, error.getMessage());
+            return null;
+        }
+    }
     
     /**
      * Parse a collaborator from GitHub's collaborator response.
@@ -1126,6 +1277,17 @@ public class GitHubClient implements VcsClient {
         return results;
     }
     
+
+    private static String valueAsString(Object value) {
+        return value != null ? String.valueOf(value) : null;
+    }
+
+    private static String nestedValueAsString(Object value, String key) {
+        if (value instanceof Map<?, ?> map) {
+            return valueAsString(map.get(key));
+        }
+        return null;
+    }
 
     private record GitHubWebhookRequest(
             String name,
