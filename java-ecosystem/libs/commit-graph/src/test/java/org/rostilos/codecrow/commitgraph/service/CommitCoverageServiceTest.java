@@ -77,6 +77,25 @@ class CommitCoverageServiceTest {
         verifyNoInteractions(pullRequestRepository); // tier 2 never reached
     }
 
+    @Test
+    void checkCoverage_exactTarget_doesNotReuseDevelopReceiptForMaster() {
+        when(analyzedCommitRepository
+                .findAnalyzedHashesByProjectIdAndTargetBranchAndCommitHashIn(
+                        1L, "master", List.of("shared-commit")))
+                .thenReturn(Set.of());
+        when(pullRequestRepository.findByProjectIdAndTargetBranchNameAndStateIn(
+                eq(1L), eq("master"), anyList())).thenReturn(List.of());
+
+        CommitCoverageService.CoverageResult result = service.checkCoverage(
+                1L, "master", List.of("shared-commit"), true);
+
+        assertThat(result.status())
+                .isEqualTo(CommitCoverageService.CoverageStatus.NOT_COVERED);
+        assertThat(result.uncoveredCommits()).containsExactly("shared-commit");
+        verify(analyzedCommitRepository, never())
+                .findAnalyzedHashesByProjectIdAndCommitHashIn(anyLong(), anyList());
+    }
+
     // ── Tier 2: PR coverage ──────────────────────────────────────────────
 
     @Test

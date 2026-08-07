@@ -319,6 +319,47 @@ class AiAnalysisClientTest {
                 }
 
                 @Test
+                @DisplayName("should bind exact target branch generation to queued review")
+                void shouldBindExactTargetBranchGenerationToQueuedReview() throws Exception {
+                        var repository = mock(org.rostilos.codecrow.core.persistence.repository.rag
+                                        .RagBranchIndexGenerationRepository.class);
+                        var generation = mock(org.rostilos.codecrow.core.model.rag
+                                        .RagBranchIndexGeneration.class);
+                        when(generation.getCollectionName()).thenReturn("opaque-master-generation");
+                        when(generation.getManifestDigest()).thenReturn("master-manifest");
+                        when(repository.findAvailableExactGeneration(
+                                        eq(1L), eq("main"), eq("master-base"), anyList()))
+                                        .thenReturn(List.of(generation));
+                        org.springframework.test.util.ReflectionTestUtils.setField(
+                                        client, "branchGenerationRepository", repository);
+                        AiAnalysisRequest exactRequest = new TestAiAnalysisRequest() {
+                                @Override
+                                public String getBaseCommitHash() {
+                                        return "master-base";
+                                }
+                        };
+                        Map<String, Object> finalEvent = Map.of(
+                                        "type", "final",
+                                        "result", Map.of("comment", "ok", "issues", List.of()));
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        client.performAnalysis(exactRequest);
+
+                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> queued = objectMapper.readValue(
+                                        payloadCaptor.getValue(), Map.class);
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> requestPayload =
+                                        (Map<String, Object>) queued.get("request");
+                        assertThat(requestPayload)
+                                        .containsEntry("ragCollectionTarget", "opaque-master-generation")
+                                        .containsEntry("ragBaseGenerationManifestSha256", "master-manifest");
+                }
+
+                @Test
                 @DisplayName("should include task context in queued request payload")
                 void shouldIncludeTaskContextInQueuedRequestPayload() throws Exception {
                         AiAnalysisRequest requestWithTaskContext = AiAnalysisRequestImpl.builder()

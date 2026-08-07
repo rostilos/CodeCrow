@@ -724,8 +724,12 @@ public class BranchAnalysisProcessor {
 		}
 
 		// Check commit coverage by open/merged PRs
+		boolean exactTargetBranchCoverage = project.getConfiguration() != null
+				&& project.getConfiguration().ragConfig() != null
+				&& project.getConfiguration().ragConfig().isMultiBranchEnabled();
 		CommitCoverageService.CoverageResult coverage = commitCoverageService.checkCoverage(
-				project.getId(), request.getTargetBranchName(), unanalyzedCommits);
+				project.getId(), request.getTargetBranchName(), unanalyzedCommits,
+				exactTargetBranchCoverage);
 
 		switch (coverage.status()) {
 			case FULLY_COVERED:
@@ -858,10 +862,19 @@ public class BranchAnalysisProcessor {
 				return;
 			}
 
-			String targetBranch = request.getTargetBranchName();
-			String baseBranch = ragOperationsService.getBaseBranch(project);
+				String targetBranch = request.getTargetBranchName();
+				String baseBranch = ragOperationsService.getBaseBranch(project);
 
-			// Health check: verify RAG pipeline is reachable before starting
+				if (!targetBranch.equals(baseBranch)
+						&& !ragOperationsService.shouldHaveBranchIndex(project, targetBranch)) {
+					log.info("Skipping RAG update for non-retained branch: project={}, branch={}",
+							project.getId(), targetBranch);
+					EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
+							"Branch is analyzed but is not configured as a retained RAG branch");
+					return;
+				}
+
+				// Health check: verify RAG pipeline is reachable before starting
 			if (!ragOperationsService.isRagPipelineHealthy()) {
 				log.warn("RAG pipeline is not reachable — skipping incremental update for project={}",
 						project.getId());

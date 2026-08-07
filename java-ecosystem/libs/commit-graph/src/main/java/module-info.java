@@ -10,6 +10,7 @@ module org.rostilos.codecrow.commitgraph {
 
     requires org.rostilos.codecrow.core;
     requires org.rostilos.codecrow.vcs;
+    requires org.rostilos.codecrow.scmevidence;
 
     // Model exports
     exports org.rostilos.codecrow.commitgraph.model;

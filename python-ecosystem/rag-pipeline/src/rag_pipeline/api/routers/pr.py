@@ -1,7 +1,7 @@
 """PR file indexing endpoints."""
 import logging
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from llama_index.core import Document as LlamaDocument
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -28,6 +28,10 @@ from ...core.index_representation import (
 from ...core.pr_overlay_representation import (
     PR_OVERLAY_REPRESENTATION_PAYLOAD_KEY,
 )
+from ...core.pr_overlay_manifest import (
+    read_pr_overlay_generation,
+)
+from ...core.revision_binding import require_repository_generation
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["pr"])
@@ -114,8 +118,59 @@ def index_pr_files(request: PRIndexRequest):
     mutation_lease = None
     try:
         mutation_lease = mutation_context.__enter__()
-        collection_name = index_manager._get_project_collection_name(
-            request.workspace, request.project
+        base_receipt = None
+        target_branch = request.base_branch or request.branch
+        requested_collection_target = getattr(
+            request, "collection_target", None
+        )
+        requested_base_manifest = getattr(
+            request, "base_generation_manifest_sha256", None
+        )
+        if not isinstance(requested_collection_target, str):
+            requested_collection_target = None
+        if not isinstance(requested_base_manifest, str):
+            requested_base_manifest = None
+        exact_binding = bool(
+            request.base_revision
+            and (requested_collection_target or requested_base_manifest)
+        )
+        if exact_binding:
+            base_receipt = require_repository_generation(
+                index_manager,
+                workspace=request.workspace,
+                project=request.project,
+                branch=target_branch,
+                revision=request.base_revision,
+                generation_manifest_sha256=(
+                    requested_base_manifest
+                ),
+                collection_target=requested_collection_target,
+            )
+        collection_name = (
+            base_receipt["_collection_target"]
+            if base_receipt
+            else requested_collection_target
+            or index_manager._get_project_collection_name(
+                request.workspace, request.project
+            )
+        )
+        base_generation_receipt = (
+            {
+                "base_generation_manifest_sha256": base_receipt[
+                    "generation_manifest_sha256"
+                ],
+                "plugin_fingerprint": base_receipt["plugin_fingerprint"],
+                "plugin_descriptor_fingerprint": base_receipt[
+                    "plugin_descriptor_fingerprint"
+                ],
+                "plugin_implementation_fingerprint": base_receipt[
+                    "plugin_implementation_fingerprint"
+                ],
+                "index_representation_fingerprint": base_receipt[
+                    "index_representation_fingerprint"
+                ],
+            }
+            if base_receipt else {}
         )
 
         index_manager._ensure_collection_exists(collection_name)
@@ -147,7 +202,6 @@ def index_pr_files(request: PRIndexRequest):
         # Recover the exact plugin-owned repository state from the PR target
         # branch.  The host never interprets the snapshots; it only validates,
         # overlays changed artifacts, and asks the selected plugins to rebuild.
-        target_branch = request.base_branch or request.branch
         representation_fingerprint = (
             index_manager.index_representation_fingerprint
         )
@@ -322,6 +376,10 @@ def index_pr_files(request: PRIndexRequest):
                 base_branch=target_branch,
                 source_revision=request.source_revision,
                 base_revision=request.base_revision,
+                base_generation_manifest_sha256=(
+                    base_receipt["generation_manifest_sha256"]
+                    if base_receipt else ""
+                ),
                 files=request.files,
                 requested_plugin_ids=requested_plugin_ids,
                 repository_plugin_ids=repository_plugins,
@@ -344,9 +402,32 @@ def index_pr_files(request: PRIndexRequest):
                 ),
                 snapshots=snapshots,
             )
-            if is_complete_reusable_generation(
-                old_pr_points,
-                generation_fingerprint,
+            reusable_receipt = (
+                read_pr_overlay_generation(
+                    index_manager.qdrant_client,
+                    collection_name,
+                    workspace=request.workspace,
+                    project=request.project,
+                    pr_number=request.pr_number,
+                    branch=request.branch,
+                    base_branch=target_branch,
+                    source_revision=request.source_revision,
+                    base_revision=request.base_revision,
+                    base_generation_manifest_sha256=base_receipt[
+                        "generation_manifest_sha256"
+                    ],
+                    generation_fingerprint=generation_fingerprint,
+                    overlay_representation_fingerprint=(
+                        overlay_representation_fingerprint
+                    ),
+                )
+                if base_receipt else None
+            )
+            if reusable_receipt is not None or (
+                base_receipt is None
+                and is_complete_reusable_generation(
+                    old_pr_points, generation_fingerprint
+                )
             ):
                 architecture_points = sum(
                     1
@@ -364,12 +445,14 @@ def index_pr_files(request: PRIndexRequest):
                 )
                 return {
                     "status": "reused",
+                    **base_generation_receipt,
                     "pr_number": request.pr_number,
                     "files_processed": len(request.files),
                     "chunks_indexed": len(old_pr_points),
                     "chunks_failed": 0,
                     "architecture_packets_indexed": architecture_points,
                     "generation_fingerprint": generation_fingerprint,
+                    **(reusable_receipt or {}),
                     "overlay_representation_fingerprint": (
                         overlay_representation_fingerprint
                     ),
@@ -497,6 +580,11 @@ def index_pr_files(request: PRIndexRequest):
                 )
                 chunk.metadata["pr_source_revision"] = request.source_revision
                 chunk.metadata["pr_base_revision"] = request.base_revision
+                if base_receipt:
+                    chunk.metadata["pr_base_generation_manifest_sha256"] = (
+                        base_receipt["generation_manifest_sha256"]
+                    )
+                    chunk.metadata["pr_overlay_base_branch"] = target_branch
             chunk.metadata["indexed_at"] = datetime.now(timezone.utc).isoformat()
 
         point_id_branch = f"__pr__/{request.pr_number}/{request.branch}"
@@ -593,16 +681,71 @@ def index_pr_files(request: PRIndexRequest):
                     )
                     node.metadata["pr_source_revision"] = request.source_revision
                     node.metadata["pr_base_revision"] = request.base_revision
+                    if base_receipt:
+                        node.metadata["pr_base_generation_manifest_sha256"] = (
+                            base_receipt["generation_manifest_sha256"]
+                        )
+                        node.metadata["pr_overlay_base_branch"] = target_branch
                 node.metadata["indexed_at"] = datetime.now(timezone.utc).isoformat()
-        successful = index_manager._file_ops._replace_points(
-            [*chunks, *architecture_nodes],
-            old_pr_points,
-            collection_name,
-            request.workspace,
-            request.project,
-            point_id_branch,
-            mutation_lease.assert_owned,
-        )
+        overlay_receipt = {}
+        if generation_fingerprint and base_receipt:
+            identity_metadata = {
+                "plugin_ids": list(
+                    capabilities.repository_plugins
+                    if capabilities is not None else stored_plugin_ids
+                ),
+                "plugin_fingerprint": (
+                    capabilities.fingerprint
+                    if capabilities is not None else stored_fingerprint
+                ) or ZERO_FINGERPRINT,
+                "plugin_descriptor_fingerprint": (
+                    capabilities.descriptor_fingerprint
+                    if capabilities is not None
+                    else _stored_descriptor_fingerprint
+                ) or ZERO_FINGERPRINT,
+                "plugin_implementation_fingerprint": (
+                    implementation_fingerprint or ZERO_FINGERPRINT
+                ),
+                INDEX_REPRESENTATION_PAYLOAD_KEY: representation_fingerprint,
+                PR_OVERLAY_REPRESENTATION_PAYLOAD_KEY: (
+                    overlay_representation_fingerprint
+                ),
+            }
+
+            successful, overlay_receipt = (
+                index_manager._file_ops.replace_pr_overlay_generation(
+                    [*chunks, *architecture_nodes],
+                    old_pr_points,
+                    collection_name,
+                    request.workspace,
+                    request.project,
+                    point_id_branch,
+                    mutation_lease.assert_owned,
+                    pr_number=request.pr_number,
+                    branch=request.branch,
+                    base_branch=target_branch,
+                    source_revision=request.source_revision,
+                    base_revision=request.base_revision,
+                    base_generation_manifest_sha256=base_receipt[
+                        "generation_manifest_sha256"
+                    ],
+                    generation_fingerprint=generation_fingerprint,
+                    overlay_representation_fingerprint=(
+                        overlay_representation_fingerprint
+                    ),
+                    identity_metadata=identity_metadata,
+                )
+            )
+        else:
+            successful = index_manager._file_ops._replace_points(
+                [*chunks, *architecture_nodes],
+                old_pr_points,
+                collection_name,
+                request.workspace,
+                request.project,
+                point_id_branch,
+                mutation_lease.assert_owned,
+            )
         skipped_points = (
             len(chunks) + len(architecture_nodes) - successful
         )
@@ -617,6 +760,7 @@ def index_pr_files(request: PRIndexRequest):
 
         return {
             "status": "indexed",
+            **base_generation_receipt,
             "pr_number": request.pr_number,
             "files_processed": len(request.files),
             "chunks_indexed": successful,
@@ -625,6 +769,7 @@ def index_pr_files(request: PRIndexRequest):
             "skipped_files": list(split_skipped_paths),
             "architecture_packets_indexed": len(architecture_nodes),
             "generation_fingerprint": generation_fingerprint,
+            **overlay_receipt,
             "overlay_representation_fingerprint": (
                 overlay_representation_fingerprint
             ),
@@ -664,7 +809,12 @@ def index_pr_files(request: PRIndexRequest):
 
 
 @router.delete("/index/pr-files/{workspace}/{project}/{pr_number}")
-def delete_pr_files(workspace: str, project: str, pr_number: int):
+def delete_pr_files(
+    workspace: str,
+    project: str,
+    pr_number: int,
+    collection_target: str | None = Query(default=None),
+):
     """Delete all indexed points for a specific PR."""
     index_manager = _get_index_manager()
     try:
@@ -673,7 +823,10 @@ def delete_pr_files(workspace: str, project: str, pr_number: int):
             project,
             "delete-pr-overlay",
         ) as lease:
-            collection_name = index_manager._get_project_collection_name(workspace, project)
+            collection_name = (
+                collection_target
+                or index_manager._get_project_collection_name(workspace, project)
+            )
 
             if not index_manager._collection_manager.collection_exists(collection_name):
                 return {"status": "skipped", "message": "Collection does not exist"}

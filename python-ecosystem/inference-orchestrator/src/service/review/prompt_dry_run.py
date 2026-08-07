@@ -713,6 +713,14 @@ class DeterministicOnlyRagClient:
     async def index_pr_files(self, **_: Any) -> dict[str, Any]:
         # Report the shape expected by the orchestrator so it follows the same
         # post-index prompt path, while keeping the operation entirely local.
+        # When deterministic retrieval is intentionally absent, do not mint
+        # synthetic exact-generation receipts: Stage 1 would correctly require
+        # a complete exact retrieval for receipts that claim such a generation.
+        if not self._enabled:
+            return {
+                "status": "skipped",
+                "reason": "deterministic retrieval disabled for prompt dry run",
+            }
         effective = None
         if self._project_capabilities is not None:
             from service.review.plugin_context import _plugin_host
@@ -733,6 +741,13 @@ class DeterministicOnlyRagClient:
         return {
             "status": "indexed",
             "chunks_indexed": 0,
+            "base_generation_manifest_sha256": "0" * 64,
+            "generation_fingerprint": "sha256:" + "0" * 64,
+            "overlay_generation_manifest_sha256": "0" * 64,
+            "plugin_fingerprint": "sha256:" + "0" * 64,
+            "plugin_descriptor_fingerprint": "sha256:" + "0" * 64,
+            "plugin_implementation_fingerprint": "sha256:" + "0" * 64,
+            "index_representation_fingerprint": "sha256:" + "0" * 64,
             "effective_project_capabilities": effective,
         }
 
@@ -795,6 +810,8 @@ async def capture_review_prompts(
                 include_deterministic_rag,
                 safe_request.projectCapabilities,
             )
+            if include_deterministic_rag
+            else None
         )
         orchestrator = MultiStageReviewOrchestrator(
             llm=llm,
@@ -836,7 +853,11 @@ async def capture_review_prompts(
         provider=request.aiProvider,
         model=request.aiModel,
         deterministic_rag_requests=(
-            None if full_pipeline_context else dry_rag.deterministic_requests
+            None
+            if full_pipeline_context
+            else dry_rag.deterministic_requests
+            if dry_rag is not None
+            else 0
         ),
         deterministic_rag_enabled=(
             full_pipeline_rag_enabled

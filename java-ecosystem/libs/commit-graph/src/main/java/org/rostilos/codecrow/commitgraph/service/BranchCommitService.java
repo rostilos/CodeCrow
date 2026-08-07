@@ -8,12 +8,15 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.model.VcsCommit;
+import org.rostilos.codecrow.scmevidence.service.ScmEvidenceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -34,20 +37,34 @@ import java.util.Optional;
 public class BranchCommitService {
 
     private static final Logger log = LoggerFactory.getLogger(BranchCommitService.class);
-    private static final int DEFAULT_COMMIT_FETCH_LIMIT = 100;
+    // Preserve evidence for long-lived branches instead of collapsing a 400+
+    // commit promotion to a HEAD-only fallback.
+    private static final int DEFAULT_COMMIT_FETCH_LIMIT = 1000;
 
     private final VcsClientProvider vcsClientProvider;
     private final AnalyzedCommitService analyzedCommitService;
     private final BranchRepository branchRepository;
+    private final ScmEvidenceService scmEvidenceService;
 
     public BranchCommitService(
             VcsClientProvider vcsClientProvider,
             AnalyzedCommitService analyzedCommitService,
             BranchRepository branchRepository
     ) {
+        this(vcsClientProvider, analyzedCommitService, branchRepository, null);
+    }
+
+    @Autowired
+    public BranchCommitService(
+            VcsClientProvider vcsClientProvider,
+            AnalyzedCommitService analyzedCommitService,
+            BranchRepository branchRepository,
+            ScmEvidenceService scmEvidenceService
+    ) {
         this.vcsClientProvider = vcsClientProvider;
         this.analyzedCommitService = analyzedCommitService;
         this.branchRepository = branchRepository;
+        this.scmEvidenceService = scmEvidenceService;
     }
 
     /**
@@ -82,7 +99,15 @@ public class BranchCommitService {
         // ── Same commit: nothing to do ───────────────────────────────────
         if (lastKnownHead.equals(commitHash)) {
             // Check if this commit is already analyzed
-            if (analyzedCommitService.isAnalyzed(project.getId(), commitHash)) {
+            boolean multiBranch = project.getConfiguration() != null
+                    && project.getConfiguration().ragConfig() != null
+                    && project.getConfiguration().ragConfig().isMultiBranchEnabled();
+            boolean analyzed = multiBranch
+                    ? analyzedCommitService.isAnalyzed(
+                            project.getId(), targetBranchName, commitHash)
+                    : analyzedCommitService.isAnalyzed(
+                            project.getId(), commitHash);
+            if (analyzed) {
                 log.info("HEAD commit {} is already analyzed — skipping", shortHash(commitHash));
                 return CommitRangeContext.skip();
             }
@@ -130,9 +155,41 @@ public class BranchCommitService {
             // Reverse to chronological order (oldest first)
             Collections.reverse(commitsSinceLastHead);
 
+            if (scmEvidenceService != null) {
+                try {
+                    Map<String, VcsCommit> commitsByHash = commits.stream()
+                            .collect(java.util.stream.Collectors.toMap(
+                                    VcsCommit::hash,
+                                    commit -> commit,
+                                    (first, ignored) -> first));
+                    List<VcsCommit> evidenceCommits = commitsSinceLastHead.stream()
+                            .map(commitsByHash::get)
+                            .filter(java.util.Objects::nonNull)
+                            .toList();
+                    scmEvidenceService.capture(
+                            project.getId(), vcsClient, workspace, slug,
+                            evidenceCommits);
+                    var promotion = scmEvidenceService.planPromotion(
+                            project.getId(), commitsSinceLastHead,
+                            targetBranchName, lastKnownHead);
+                    log.info("SCM promotion evidence for branch {}: reuse={}, targetContextAnalysis={}",
+                            targetBranchName, promotion.reuseKind(),
+                            promotion.requiresTargetContextAnalysis());
+                } catch (Exception evidenceFailure) {
+                    log.warn("SCM evidence enrichment unavailable for branch {}: {}",
+                            targetBranchName, evidenceFailure.getMessage());
+                }
+            }
+
             // Subtract already-analyzed commits
-            List<String> unanalyzed = analyzedCommitService.filterUnanalyzed(
-                    project.getId(), commitsSinceLastHead);
+            boolean multiBranch = project.getConfiguration() != null
+                    && project.getConfiguration().ragConfig() != null
+                    && project.getConfiguration().ragConfig().isMultiBranchEnabled();
+            List<String> unanalyzed = multiBranch
+                    ? analyzedCommitService.filterUnanalyzed(
+                            project.getId(), targetBranchName, commitsSinceLastHead)
+                    : analyzedCommitService.filterUnanalyzed(
+                            project.getId(), commitsSinceLastHead);
 
             if (unanalyzed.isEmpty()) {
                 log.info("All {} commits since lastKnownHead are already analyzed — skipping",

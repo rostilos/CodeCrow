@@ -11,6 +11,8 @@ Covers:
 - get_index_stats, list_indices
 - deprecated branch redirects
 """
+import asyncio
+import json
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi import HTTPException
@@ -191,6 +193,107 @@ class TestIndexRepository:
         with pytest.raises(HTTPException) as exc_info:
             index_repository(req, MagicMock())
         assert exc_info.value.status_code == 500
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_stream_forwards_batch_progress_and_terminal_stats(self, mock_get):
+        _, im = _mock_singletons()
+        stats = IndexStats(
+            namespace="ns", document_count=10, chunk_count=50,
+            last_updated="2024-01-01", workspace="ws", project="proj", branch="main"
+        )
+
+        def index_with_progress(**kwargs):
+            kwargs["progress_callback"]({
+                "stage": "indexing", "message": "Indexed batch 1/2",
+                "indexedChunks": 25, "estimatedChunks": 50,
+                "completedBatches": 1, "totalBatches": 2,
+                "estimatedRemainingMs": 1200,
+            })
+            return stats
+
+        im.index_repository.side_effect = index_with_progress
+        mock_get.return_value = (_, im)
+        from rag_pipeline.api.routers.index import index_repository_stream
+
+        req = MagicMock()
+        req.repo_path = "/tmp/repo"
+        req.workspace = "ws"
+        req.project = "proj"
+        req.branch = "main"
+        req.commit = "abc"
+        req.preserve_other_branches = False
+        req.include_patterns = None
+        req.exclude_patterns = None
+        req.source_tree_sha256 = None
+        req.collection_target = "target"
+
+        response = index_repository_stream(req)
+
+        async def consume():
+            return [item async for item in response.body_iterator]
+
+        events = [json.loads(
+            (item.decode() if isinstance(item, bytes) else item)
+            .removeprefix("data: ").strip()
+        ) for item in asyncio.run(consume())]
+        assert events[0]["indexedChunks"] == 25
+        assert events[0]["estimatedRemainingMs"] == 1200
+        assert events[1]["type"] == "complete"
+        assert events[1]["result"]["chunk_count"] == 50
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_exact_index_forwards_readable_alias_publication(self, mock_get):
+        _, im = _mock_singletons()
+        stats = IndexStats(
+            namespace="ns", document_count=10, chunk_count=50,
+            last_updated="2024-01-01", workspace="ws", project="proj", branch="develop"
+        )
+        im.index_repository.return_value = stats
+        mock_get.return_value = (_, im)
+
+        from rag_pipeline.api.routers.index import index_repository
+        from rag_pipeline.api.models import IndexRequest
+
+        request = IndexRequest(
+            repo_path="/tmp/repo", workspace="ws", project="proj",
+            branch="develop", commit="a" * 40,
+            collection_target="exact-develop-target",
+            publish_branch_alias=True,
+        )
+
+        index_repository(request, MagicMock())
+
+        assert im.index_repository.call_args.kwargs["collection_target"] == (
+            "exact-develop-target"
+        )
+        assert im.index_repository.call_args.kwargs["publish_branch_alias"] is True
+
+
+class TestAdvanceGeneration:
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_forwards_readable_alias_publication(self, mock_get):
+        _, im = _mock_singletons()
+        im.advance_generation.return_value = IndexStats(
+            namespace="ns", document_count=10, chunk_count=50,
+            last_updated="2024-01-01", workspace="ws", project="proj", branch="develop"
+        )
+        mock_get.return_value = (_, im)
+
+        from rag_pipeline.api.routers.index import advance_generation
+        from rag_pipeline.api.models import AdvanceGenerationRequest
+
+        request = AdvanceGenerationRequest(
+            workspace="ws", project="proj", branch="develop",
+            source_commit="a" * 40, commit="b" * 40,
+            source_tree_sha256="c" * 64,
+            source_collection_target="source", collection_target="target",
+            repo_base="/tmp/repo", publish_branch_alias=True,
+        )
+
+        advance_generation(request)
+
+        assert im.advance_generation.call_args.kwargs["publish_branch_alias"] is True
 
 
 # ─────────────────────────────────────────────────────────────

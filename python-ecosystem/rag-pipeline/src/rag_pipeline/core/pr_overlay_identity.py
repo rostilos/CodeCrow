@@ -47,6 +47,7 @@ def pr_overlay_generation_fingerprint(
     index_representation_fingerprint: str,
     pr_overlay_representation_fingerprint: str,
     snapshots: Iterable[object],
+    base_generation_manifest_sha256: str = "",
 ) -> str:
     """Hash every input that can change persisted semantic or plugin context."""
     digest = hashlib.sha256()
@@ -59,6 +60,10 @@ def pr_overlay_generation_fingerprint(
         ("base_branch", base_branch),
         ("source_revision", source_revision),
         ("base_revision", base_revision),
+        (
+            "base_generation_manifest_sha256",
+            base_generation_manifest_sha256,
+        ),
         ("request_plugin_fingerprint", request_plugin_fingerprint),
         ("target_plugin_fingerprint", target_plugin_fingerprint),
         ("capability_fingerprint", capability_fingerprint),

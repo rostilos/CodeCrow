@@ -140,7 +140,14 @@ class MutationLease:
 
 
 class ProjectMutationCoordinator:
-    """Serialize collection mutations for one workspace/project across workers."""
+    """Serialize mutations that share one RAG publication resource.
+
+    Legacy indexes share a project-wide collection. Exact generations have an
+    immutable collection target, while a published branch also has one mutable
+    human-readable head alias. ``publication_scope`` serializes only that
+    branch head, so main and develop can build concurrently without allowing
+    two generations of the same branch to race its current alias.
+    """
 
     def __init__(
         self,
@@ -166,9 +173,23 @@ class ProjectMutationCoordinator:
         )
 
     @staticmethod
-    def _project_key(workspace: str, project: str) -> str:
+    def _resource_key(
+        workspace: str,
+        project: str,
+        collection_target: Optional[str] = None,
+        publication_scope: Optional[str] = None,
+    ) -> str:
+        # Legacy indexing keeps the historical project-wide key because its
+        # branches share one physical alias. Exact branch generations supply
+        # their distinct collection target, so independent branch snapshots
+        # may proceed concurrently without weakening same-collection safety.
+        resource = (
+            publication_scope
+            or collection_target
+            or "project-shared-collection"
+        )
         digest = hashlib.sha256(
-            f"{workspace}\0{project}".encode("utf-8")
+            f"{workspace}\0{project}\0{resource}".encode("utf-8")
         ).hexdigest()
         return f"codecrow:rag:mutation:{digest}"
 
@@ -178,6 +199,9 @@ class ProjectMutationCoordinator:
         workspace: str,
         project: str,
         operation: str,
+        *,
+        collection_target: Optional[str] = None,
+        publication_scope: Optional[str] = None,
     ) -> Iterator[MutationLease]:
         token = uuid.uuid4().hex
         if not self.enabled or self._client is None:
@@ -185,7 +209,12 @@ class ProjectMutationCoordinator:
             yield lease
             return
 
-        key = self._project_key(workspace, project)
+        key = self._resource_key(
+            workspace,
+            project,
+            collection_target,
+            publication_scope,
+        )
         operation_key = f"codecrow:rag:operation:{token}"
         deadline = time.monotonic() + self.acquire_timeout_seconds
         while True:
@@ -221,7 +250,16 @@ class ProjectMutationCoordinator:
                 ) from exception
             if time.monotonic() >= deadline:
                 raise MutationLeaseUnavailable(
-                    f"another RAG mutation is active for {workspace}/{project}"
+                    "another RAG mutation is active for "
+                    f"{workspace}/{project}"
+                    + (
+                        f" publication {publication_scope}"
+                        if publication_scope
+                        else (
+                            f" collection {collection_target}"
+                            if collection_target else ""
+                        )
+                    )
                 )
             time.sleep(0.1)
 
@@ -234,10 +272,11 @@ class ProjectMutationCoordinator:
         )
         lease.start_renewal()
         logger.info(
-            "Acquired RAG mutation lease operation=%s workspace=%s project=%s operation_id=%s",
+            "Acquired RAG mutation lease operation=%s workspace=%s project=%s collection=%s operation_id=%s",
             operation,
             workspace,
             project,
+            publication_scope or collection_target or "project-shared-collection",
             token,
         )
         try:

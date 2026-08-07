@@ -96,7 +96,7 @@ class RAGQueryBase:
             return False
 
     def _get_project_collection_name(self, workspace: str, project: str) -> str:
-        """Generate collection name for a project (single collection for all branches)."""
+        """Generate the legacy shared collection name for a project."""
         namespace = make_project_namespace(workspace, project)
         return f"{self.config.qdrant_collection_prefix}_{namespace}"
 

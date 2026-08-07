@@ -30,6 +30,13 @@ from ..index_representation import (
     index_representation_fingerprint,
     observe_branch_representation,
 )
+from ..generation_manifest import (
+    build_generation_manifest_node,
+    collect_generation_members,
+    compute_generation_members_digest,
+    seal_generation_members,
+)
+from ..source_tree import require_repository_source_tree_unchanged
 from .collection_manager import CollectionManager
 from .branch_manager import BranchManager
 from .point_operations import PointOperations
@@ -48,6 +55,10 @@ def _plugin_identity_metadata(
     representation_fingerprint: Optional[str] = None,
 ):
     metadata = {
+        "plugin_ids": [],
+        "plugin_fingerprint": "sha256:" + "0" * 64,
+        "plugin_descriptor_fingerprint": "sha256:" + "0" * 64,
+        "plugin_implementation_fingerprint": "sha256:" + "0" * 64,
         INDEX_REPRESENTATION_PAYLOAD_KEY: (
             representation_fingerprint
             or index_representation_fingerprint()
@@ -482,6 +493,10 @@ class RepositoryIndexer:
         preserve_other_branches: bool = False,
         include_patterns: Optional[List[str]] = None,
         exclude_patterns: Optional[List[str]] = None,
+        source_tree_sha256: Optional[str] = None,
+        source_tree=None,
+        seal_generation: bool = False,
+        publication_aliases: Optional[List[str]] = None,
         operation_id: Optional[str] = None,
         activation_guard: Optional[Callable[[], None]] = None,
         progress_callback: Optional[Callable[[dict], None]] = None,
@@ -492,6 +507,7 @@ class RepositoryIndexer:
             message: str,
             progress: Optional[int] = None,
             total: Optional[int] = None,
+            **details,
         ) -> None:
             if progress_callback is None:
                 return
@@ -500,6 +516,8 @@ class RepositoryIndexer:
                 event["progress"] = max(0, min(100, progress))
             if total is not None:
                 event["total"] = total
+            event.update({key: value for key, value in details.items()
+                          if value is not None})
             try:
                 progress_callback(event)
             except Exception as exception:
@@ -532,6 +550,13 @@ class RepositoryIndexer:
             operation_id=operation_id,
         )
 
+        activation_aliases = list(dict.fromkeys(
+            [alias_name, *(publication_aliases or [])]
+        ))
+        activation_alias_targets = self.collection_manager.read_alias_targets(
+            activation_aliases
+        )
+
         # Check existing collection and preserve other branch data using streaming
         old_alias_exists = self.collection_manager.alias_exists(alias_name)
         old_collection_exists = old_alias_exists or self.collection_manager.collection_exists(alias_name)
@@ -549,7 +574,14 @@ class RepositoryIndexer:
         
         # Get file list
         repository_file_list = list(
-            self.loader.iter_repository_files(repo_path_obj, include_patterns, exclude_patterns)
+            self.loader.iter_repository_files(
+                repo_path_obj,
+                include_patterns,
+                exclude_patterns,
+                expected_file_sha256=(
+                    source_tree.file_sha256_by_path if source_tree else None
+                ),
+            )
         )
         logger.info(
             "Found %s repository files before plugin file policy for branch '%s'",
@@ -673,6 +705,23 @@ class RepositoryIndexer:
         skipped_file_paths: set[str] = set()
         preserved_point_count = 0
         embedding_metrics = {"reused": 0, "embedded": 0}
+        estimated_chunks = None
+
+        # Chunk totals are an estimate rather than an expensive second exact
+        # indexing pass.  Progress remains useful even when estimation fails.
+        if progress_callback is not None:
+            try:
+                _, estimated_chunks = self.estimate_repository_size(
+                    repo_path, include_patterns, exclude_patterns
+                )
+                report_progress(
+                    "estimating",
+                    f"Estimated approximately {estimated_chunks} chunks",
+                    14,
+                    estimatedChunks=estimated_chunks,
+                )
+            except Exception as exception:
+                logger.warning("Could not estimate RAG progress chunks: %s", exception)
 
         try:
             # A main-only project must not carry stale non-target branches into
@@ -700,6 +749,9 @@ class RepositoryIndexer:
                 f"Starting {total_batches} indexing batches",
                 18,
                 total_batches,
+                totalBatches=total_batches,
+                indexedChunks=0,
+                estimatedChunks=estimated_chunks,
             )
             
             # Architecture-only files still have to reach the repository
@@ -715,6 +767,9 @@ class RepositoryIndexer:
                 documents = self.loader.load_file_batch(
                     file_batch, repo_path_obj, workspace, project, branch, commit,
                     strict=False,
+                    expected_file_sha256=(
+                        source_tree.file_sha256_by_path if source_tree else None
+                    ),
                 )
                 load_duration_ms = round(
                     (time.perf_counter() - load_started) * 1000
@@ -829,6 +884,11 @@ class RepositoryIndexer:
                     round((time.perf_counter() - batch_started) * 1000),
                 )
                 batch_progress = 18 + round(67 * batch_num / max(total_batches, 1))
+                elapsed_ms = round((time.perf_counter() - operation_started) * 1000)
+                average_batch_ms = elapsed_ms / batch_num
+                estimated_remaining_ms = round(
+                    average_batch_ms * max(total_batches - batch_num, 0)
+                )
                 report_progress(
                     "indexing",
                     (
@@ -838,6 +898,14 @@ class RepositoryIndexer:
                     ),
                     batch_progress,
                     total_batches,
+                    indexedChunks=successful_chunks,
+                    estimatedChunks=estimated_chunks,
+                    completedBatches=batch_num,
+                    totalBatches=total_batches,
+                    batchDurationMs=round(
+                        (time.perf_counter() - batch_started) * 1000
+                    ),
+                    estimatedRemainingMs=estimated_remaining_ms,
                 )
                 
                 del documents
@@ -949,6 +1017,73 @@ class RepositoryIndexer:
                     len(facts_nodes),
                 )
 
+            generation_manifest_sha256 = None
+            generation_manifest_points = 0
+            if seal_generation:
+                report_progress(
+                    "sealing",
+                    "Sealing persisted vectors for generation integrity",
+                    91,
+                    indexedChunks=successful_chunks,
+                    estimatedChunks=estimated_chunks,
+                )
+                seal_generation_members(
+                    self.point_ops.client,
+                    pending_collection_name,
+                    branch,
+                    commit,
+                )
+                identity_metadata = _plugin_identity_metadata(
+                    capabilities,
+                    implementation_fingerprint,
+                    self.representation_fingerprint,
+                )
+                members = collect_generation_members(
+                    self.point_ops.client,
+                    pending_collection_name,
+                    branch,
+                    commit,
+                )
+                if source_tree is not None:
+                    require_repository_source_tree_unchanged(
+                        repo_path_obj,
+                        source_tree,
+                    )
+                if not source_tree_sha256:
+                    raise RuntimeError(
+                        "repository source-tree identity is required to seal an index generation"
+                    )
+                manifest = build_generation_manifest_node(
+                    workspace=workspace,
+                    project=project,
+                    branch=branch,
+                    commit=commit,
+                    member_count=len(members),
+                    members_sha256=compute_generation_members_digest(members),
+                    source_tree_sha256=source_tree_sha256,
+                    index_include_patterns=include_patterns or (),
+                    index_exclude_patterns=exclude_patterns or (),
+                    identity_metadata=identity_metadata,
+                )
+                manifest_success, manifest_failed = (
+                    self.point_ops.process_and_upsert_chunks(
+                        [manifest],
+                        pending_collection_name,
+                        workspace,
+                        project,
+                        branch,
+                        operation_id=operation_id,
+                    )
+                )
+                if manifest_success != 1 or manifest_failed:
+                    raise RuntimeError(
+                        "repository generation manifest could not be persisted"
+                    )
+                generation_manifest_points = 1
+                generation_manifest_sha256 = manifest.metadata[
+                    "generation_manifest_sha256"
+                ]
+
             logger.info(
                 f"Streaming indexing complete: {document_count} files, "
                 f"{successful_chunks}/{chunk_count} chunks indexed "
@@ -960,7 +1095,11 @@ class RepositoryIndexer:
             report_progress("verifying", "Verifying the pending vector collection", 94)
             pending_info = self.point_ops.client.get_collection(pending_collection_name)
             actual_point_count = int(pending_info.points_count or 0)
-            expected_point_count = preserved_point_count + successful_chunks
+            expected_point_count = (
+                preserved_point_count
+                + successful_chunks
+                + generation_manifest_points
+            )
             if actual_point_count != expected_point_count:
                 raise RuntimeError(
                     "Pending collection point count is incomplete: "
@@ -973,29 +1112,32 @@ class RepositoryIndexer:
                     branch,
                 )
             )
-            if target_branch_point_count != successful_chunks:
+            expected_target_branch_points = (
+                successful_chunks + generation_manifest_points
+            )
+            if target_branch_point_count != expected_target_branch_points:
                 raise RuntimeError(
                     "Pending target-branch point count is incomplete: "
-                    f"branch={branch}, expected={successful_chunks}, "
+                    f"branch={branch}, expected={expected_target_branch_points}, "
                     f"actual={target_branch_point_count}"
                 )
 
             if activation_guard is not None:
                 activation_guard()
-            observed_target = self.collection_manager.resolve_alias(alias_name)
-            if old_alias_exists and observed_target != actual_old_collection:
+            observed_targets = self.collection_manager.read_alias_targets(
+                activation_aliases
+            )
+            if observed_targets != activation_alias_targets:
                 raise RuntimeError(
-                    "Active RAG collection changed before pending activation"
-                )
-            if not old_alias_exists and observed_target is not None:
-                raise RuntimeError(
-                    "RAG alias was created concurrently before pending activation"
+                    "Active RAG alias changed before pending activation"
                 )
 
             activation_started = time.perf_counter()
             report_progress("activating", "Activating the completed vector collection", 97)
-            old_target = self._perform_atomic_swap(
-                alias_name, pending_collection_name, old_alias_exists
+            old_targets = self._perform_atomic_swap(
+                alias_name,
+                pending_collection_name,
+                activation_aliases,
             )
             logger.info(
                 "RAG pending collection activated operation_id=%s collection=%s "
@@ -1015,10 +1157,18 @@ class RepositoryIndexer:
                     successful_chunks,
                 )
             except Exception:
-                self._rollback_atomic_swap(alias_name, old_target)
+                self._rollback_atomic_swap(old_targets)
                 raise
 
-            if old_target and old_target != pending_collection_name:
+            old_target = old_targets.get(alias_name)
+            # Exact aliases identify prior sealed revisions that can still be
+            # selected by PR analysis. Their registry retention owns physical
+            # cleanup; a replacement build must not delete them here.
+            if (
+                not seal_generation
+                and old_target
+                and old_target != pending_collection_name
+            ):
                 self.collection_manager.delete_collection(old_target)
 
         except Exception as e:
@@ -1048,6 +1198,11 @@ class RepositoryIndexer:
             f"Indexed {document_count} files into {successful_chunks} chunks",
             100,
             document_count,
+            indexedChunks=successful_chunks,
+            estimatedChunks=successful_chunks,
+            completedBatches=total_batches,
+            totalBatches=total_batches,
+            estimatedRemainingMs=0,
         )
         return IndexStats(
             namespace=namespace,
@@ -1058,33 +1213,29 @@ class RepositoryIndexer:
             last_updated=datetime.now(timezone.utc).isoformat(),
             workspace=workspace,
             project=project,
-            branch=branch
+            branch=branch,
+            generation_manifest_sha256=generation_manifest_sha256,
+            source_tree_sha256=source_tree_sha256,
+            collection_target=alias_name,
         )
     
     def _perform_atomic_swap(
-        self,
-        alias_name: str,
-        pending_collection_name: str,
-        old_alias_exists: bool
-    ) -> Optional[str]:
-        """Activate a complete pending collection and retain its rollback target."""
+            self,
+            alias_name: str,
+            pending_collection_name: str,
+            activation_aliases: List[str],
+    ) -> dict[str, Optional[str]]:
+        """Activate a complete generation and its readable aliases together."""
         logger.info("Performing atomic alias swap...")
-
-        old_target = self.collection_manager.resolve_alias(alias_name) if old_alias_exists else None
-        self.collection_manager.atomic_alias_swap(
-            alias_name,
-            pending_collection_name,
-            old_alias_exists,
+        old_targets = self.collection_manager.read_alias_targets(activation_aliases)
+        self.collection_manager.atomic_assign_aliases(
+            {alias: pending_collection_name for alias in activation_aliases}
         )
-        return old_target
+        return old_targets
 
-    def _rollback_atomic_swap(self, alias_name: str, old_target: Optional[str]) -> None:
-        """Restore the previously active collection after metadata publication fails."""
-        if old_target:
-            self.collection_manager.atomic_alias_swap(alias_name, old_target, True)
-            return
-        if not self.collection_manager.delete_alias(alias_name):
-            logger.critical("Failed to remove newly activated alias %s during rollback", alias_name)
+    def _rollback_atomic_swap(self, old_targets: dict[str, Optional[str]]) -> None:
+        """Restore every alias changed during a failed metadata publication."""
+        self.collection_manager.atomic_assign_aliases(old_targets)
 
 
 class FileOperations:
@@ -1217,6 +1368,7 @@ class FileOperations:
         mutation_guard: Optional[Callable[[], None]] = None,
     ) -> int:
         """Upsert a prepared generation, delete stale IDs, and roll back on error."""
+        old_records = list(old_records)
         old_points = {str(record.id): record for record in old_records}
         chunk_data = self.point_ops.prepare_chunks_for_embedding(
             nodes,
@@ -1239,6 +1391,25 @@ class FileOperations:
             embedding_metrics["reused"],
             embedding_metrics["embedded"],
         )
+        return self._replace_prepared_points(
+            new_points,
+            old_records,
+            collection_name,
+            mutation_guard,
+            allow_skipped=True,
+        )
+
+    def _replace_prepared_points(
+        self,
+        new_points,
+        old_records,
+        collection_name: str,
+        mutation_guard: Optional[Callable[[], None]] = None,
+        *,
+        allow_skipped: bool,
+    ) -> int:
+        """Publish prepared points with rollback and explicit skip semantics."""
+        old_points = {str(record.id): record for record in old_records}
         new_ids = {str(point.id) for point in new_points}
         old_ids = set(old_points)
         new_only_ids = [
@@ -1264,6 +1435,15 @@ class FileOperations:
             str(point.id) for point in write_result.skipped_points
         }
         if skipped_ids:
+            if not allow_skipped:
+                self._restore_old_points(
+                    collection_name,
+                    old_points,
+                    new_only_ids,
+                )
+                raise RuntimeError(
+                    "an exact index generation contains rejected points"
+                )
             logger.warning(
                 "Quarantining %s rejected points during incremental replacement",
                 len(skipped_ids),
@@ -1286,6 +1466,105 @@ class FileOperations:
             )
             raise
         return write_result.successful
+
+    def replace_pr_overlay_generation(
+        self,
+        nodes,
+        old_records,
+        collection_name: str,
+        workspace: str,
+        project: str,
+        point_id_branch: str,
+        mutation_guard: Optional[Callable[[], None]] = None,
+        *,
+        pr_number: int,
+        branch: str,
+        base_branch: str,
+        source_revision: str,
+        base_revision: str,
+        base_generation_manifest_sha256: str,
+        generation_fingerprint: str,
+        overlay_representation_fingerprint: str,
+        identity_metadata,
+    ) -> tuple[int, dict]:
+        """Embed all PR members, seal them, and publish one complete set."""
+        from ..pr_overlay_manifest import build_pr_overlay_manifest_node
+
+        old_records = list(old_records)
+        old_points = {str(record.id): record for record in old_records}
+        chunk_data = self.point_ops.prepare_chunks_for_embedding(
+            nodes, workspace, project, point_id_branch
+        )
+        new_points = self.point_ops.embed_and_create_points(
+            chunk_data,
+            reuse_records=old_points.values(),
+        )
+        new_ids = [point.id for point in new_points]
+        if mutation_guard is not None:
+            mutation_guard()
+        successful, failed = self.point_ops.upsert_points(
+            collection_name, new_points
+        )
+        if failed or successful != len(new_points):
+            self._delete_point_ids(collection_name, new_ids)
+            raise RuntimeError("PR overlay member write was incomplete")
+        try:
+            members = self.point_ops._seal_persisted_point_digests(
+                collection_name, new_points
+            )
+            manifest_node, receipt = build_pr_overlay_manifest_node(
+                workspace=workspace,
+                project=project,
+                pr_number=pr_number,
+                branch=branch,
+                base_branch=base_branch,
+                source_revision=source_revision,
+                base_revision=base_revision,
+                base_generation_manifest_sha256=(
+                    base_generation_manifest_sha256
+                ),
+                generation_fingerprint=generation_fingerprint,
+                overlay_representation_fingerprint=(
+                    overlay_representation_fingerprint
+                ),
+                members=members,
+                identity_metadata=identity_metadata,
+            )
+            manifest_data = self.point_ops.prepare_chunks_for_embedding(
+                [manifest_node], workspace, project, point_id_branch
+            )
+            manifest_points = self.point_ops.embed_and_create_points(
+                manifest_data
+            )
+            manifest_success, manifest_failed = self.point_ops.upsert_points(
+                collection_name, manifest_points
+            )
+            if manifest_success != 1 or manifest_failed:
+                raise RuntimeError("PR overlay manifest write was incomplete")
+        except Exception:
+            self._delete_point_ids(
+                collection_name,
+                [*new_ids, *(point.id for point in locals().get("manifest_points", []))],
+            )
+            raise
+
+        active_ids = {str(point.id) for point in (*new_points, *manifest_points)}
+        stale_ids = [
+            record.id for point_id, record in old_points.items()
+            if point_id not in active_ids
+        ]
+        try:
+            if mutation_guard is not None:
+                mutation_guard()
+            self._delete_point_ids(collection_name, stale_ids)
+        except Exception:
+            self._restore_old_points(
+                collection_name,
+                old_points,
+                [*new_ids, *(point.id for point in manifest_points)],
+            )
+            raise
+        return successful, receipt
 
     def _apply_change_set(
         self,
