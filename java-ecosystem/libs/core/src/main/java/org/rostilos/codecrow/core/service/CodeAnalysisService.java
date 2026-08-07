@@ -519,6 +519,10 @@ public class CodeAnalysisService {
             issueClone.setResolvedDescription(srcIssue.getResolvedDescription());
             issueClone.setVcsAuthorId(srcIssue.getVcsAuthorId());
             issueClone.setVcsAuthorUsername(srcIssue.getVcsAuthorUsername());
+            issueClone.setIntroducingCommitHash(srcIssue.getIntroducingCommitHash());
+            issueClone.setIntroducingAuthorName(srcIssue.getIntroducingAuthorName());
+            issueClone.setIntroducingAuthorEmail(srcIssue.getIntroducingAuthorEmail());
+            issueClone.setAuthorProvenanceConfidence(srcIssue.getAuthorProvenanceConfidence());
             // Copy content-based tracking hashes
             issueClone.setLineHash(srcIssue.getLineHash());
             issueClone.setLineHashContext(srcIssue.getLineHashContext());

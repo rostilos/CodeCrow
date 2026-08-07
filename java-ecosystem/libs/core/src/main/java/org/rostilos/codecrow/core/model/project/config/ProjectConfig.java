@@ -278,7 +278,9 @@ public class ProjectConfig {
                     this.ragConfig.includePatterns(),
                     this.ragConfig.excludePatterns(),
                     this.ragConfig.multiBranchEnabled(),
-                    this.ragConfig.branchRetentionDays());
+                    this.ragConfig.branchRetentionDays(),
+                    this.ragConfig.indexedBranches(),
+                    this.ragConfig.transientBranchIndexesEnabled());
         }
     }
 

@@ -34,6 +34,9 @@ PAYLOAD_FIELDS = [
     "repository_facts_state", "facts_part", "facts_parts",
     "facts_content_sha256", "plugin_ids", "plugin_fingerprint",
     "plugin_descriptor_fingerprint", "plugin_implementation_fingerprint",
+    "repository_generation_manifest", "generation_schema",
+    "generation_member_count", "generation_members_sha256",
+    "generation_manifest_sha256", "generation_member_sha256",
     "indexed_at", "fragment_of", "text", "_node_content",
 ]
 GRAPH_TEXT_LIMIT = 280
@@ -191,6 +194,8 @@ def _node_title(payload: Dict[str, Any]) -> str:
         return f"{plugin}: {kind}" + (f" — {source}" if source else "")
     if payload.get("repository_facts_state"):
         return "Repository detection facts"
+    if payload.get("repository_generation_manifest"):
+        return "Repository generation manifest"
     if payload.get("repository_snapshot"):
         return (
             f"{payload.get('snapshot_plugin') or 'plugin'}: "
@@ -218,6 +223,8 @@ def _node_kind(payload: Dict[str, Any]) -> str:
         return "repository_snapshot"
     if payload.get("repository_facts_state"):
         return "repository_facts"
+    if payload.get("repository_generation_manifest"):
+        return "repository_generation_manifest"
     if payload.get("node_type"):
         return str(payload["node_type"])
     if payload.get("content_type"):

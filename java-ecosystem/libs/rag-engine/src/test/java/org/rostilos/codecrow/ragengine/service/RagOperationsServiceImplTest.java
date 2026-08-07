@@ -19,6 +19,7 @@ import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepository;
 import org.rostilos.codecrow.core.service.AnalysisJobService;
 import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
+import org.rostilos.codecrow.ragengine.branch.BranchIndexGenerationBuildService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -83,6 +84,62 @@ class RagOperationsServiceImplTest {
         boolean result = service.isRagEnabled(testProject);
 
         assertThat(result).isFalse();
+    }
+
+    @Test
+    void exactFirstUseBuildsTargetSnapshotWithoutPrimaryToDevelopDiff() throws Exception {
+        RagBranchIndexRegistryService registry = mock(RagBranchIndexRegistryService.class);
+        BranchIndexGenerationBuildService builder = mock(BranchIndexGenerationBuildService.class);
+        service = new RagOperationsServiceImpl(
+                ragIndexTrackingService, incrementalRagUpdateService,
+                analysisLockService, analysisJobService,
+                ragBranchIndexRepository, vcsClientProvider,
+                ragPipelineClient, registry, builder);
+        setupRagEnabled();
+        setupVcsBinding();
+        ReflectionTestUtils.setField(service, "ragApiEnabled", true);
+        when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
+                .thenReturn(true);
+        when(incrementalRagUpdateService.parseDiffForRag(""))
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(
+                        Set.of(), Set.of(), Set.of()));
+        Job job = mock(Job.class);
+        when(job.getId()).thenReturn(77L);
+        when(analysisJobService.createRagIndexJob(any(), eq(false), any()))
+                .thenReturn(job);
+        when(analysisLockService.acquireLock(
+                eq(testProject), eq("feature"), any(), eq("develop-400"), isNull()))
+                .thenReturn(Optional.of("exact-feature-lock"));
+        VcsClient vcs = mock(VcsClient.class);
+        when(vcsClientProvider.getClient(any())).thenReturn(vcs);
+        when(vcs.getLatestCommitHash("my-workspace", "my-repo", "feature"))
+                .thenReturn("develop-400");
+        when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "feature"))
+                .thenReturn(Optional.empty());
+        when(builder.build(
+                eq(testProject), any(), eq("my-workspace"), eq("my-repo"),
+                eq("feature"), eq("develop-400"),
+                eq(org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.DURABLE),
+                any(), any(), eq(77L)))
+                .thenReturn(Map.of(
+                        "generation_manifest_sha256", "manifest-400",
+                        "document_count", 231,
+                        "chunk_count", 400,
+                        "updatedFiles", 231,
+                        "deletedFiles", 0,
+                        "skippedFiles", 0));
+
+        boolean ready = service.ensureBranchIndexForPrTarget(
+                testProject, "feature", ignored -> { });
+
+        assertThat(ready).isTrue();
+        verify(vcs, never()).getBranchDiff(anyString(), anyString(), anyString(), anyString());
+        verify(builder).build(
+                eq(testProject), any(), eq("my-workspace"), eq("my-repo"),
+                eq("feature"), eq("develop-400"),
+                eq(org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.DURABLE),
+                any(), any(), eq(77L));
     }
 
     @Test
@@ -750,6 +807,56 @@ class RagOperationsServiceImplTest {
     }
 
     @Test
+    void updateBranchIndexUsesCompletedBranchCheckpointWithoutComparingMain() throws Exception {
+        setupRagEnabled();
+        setupVcsBinding();
+        setupProjectWithWorkspaceAndNamespace();
+        when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(true);
+        when(incrementalRagUpdateService.parseDiffForRag("checkpoint diff"))
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(
+                        Set.of(), Set.of("src/Changed.java"), Set.of()));
+        when(analysisJobService.createRagIndexJob(eq(testProject), eq(false), any())).thenReturn(mock(Job.class));
+        when(analysisLockService.acquireLock(any(), anyString(), any(), anyString(), isNull()))
+                .thenReturn(Optional.of("lock"));
+        when(incrementalRagUpdateService.performIncrementalUpdate(
+                any(), any(), anyString(), anyString(), anyString(), anyString(), anySet(), anySet(), anySet()))
+                .thenReturn(Map.of("updatedFiles", 1, "deletedFiles", 0, "skippedFiles", 0));
+
+        VcsClient mockVcs = mock(VcsClient.class);
+        when(vcsClientProvider.getClient(any(VcsConnection.class))).thenReturn(mockVcs);
+        when(mockVcs.getLatestCommitHash("my-workspace", "my-repo", "feature")).thenReturn("develop-401");
+        when(mockVcs.getBranchDiff("my-workspace", "my-repo", "develop-400", "develop-401"))
+                .thenReturn("checkpoint diff");
+        RagBranchIndex checkpoint = new RagBranchIndex(testProject, "feature");
+        checkpoint.setCommitHash("develop-400");
+        when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "feature"))
+                .thenReturn(Optional.of(checkpoint));
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+
+        boolean result = service.updateBranchIndex(testProject, "feature", eventConsumer);
+
+        assertThat(result).isTrue();
+        verify(mockVcs).getBranchDiff("my-workspace", "my-repo", "develop-400", "develop-401");
+        verify(mockVcs, never()).getBranchDiff("my-workspace", "my-repo", "main", "feature");
+    }
+
+    @Test
+    void updateBranchIndexRejectsBranchOutsideRetainedConfiguration() {
+        setupRagEnabled();
+        when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+
+        boolean result = service.updateBranchIndex(testProject, "release/preview", eventConsumer);
+
+        assertThat(result).isFalse();
+        verifyNoInteractions(vcsClientProvider);
+        verify(eventConsumer).accept(argThat(event -> "rag_skipped".equals(event.get("state"))));
+    }
+
+    @Test
     void testUpdateBranchIndex_EmptyDiff() throws Exception {
         setupRagEnabled();
         setupVcsBinding();
@@ -1123,7 +1230,8 @@ class RagOperationsServiceImplTest {
 
     private void setupRagEnabled() {
         ReflectionTestUtils.setField(service, "ragApiEnabled", true);
-        RagConfig ragConfig = new RagConfig(true, "main");
+        RagConfig ragConfig = new RagConfig(
+                true, "main", null, null, true, 30, List.of("feature"), true);
         ProjectConfig config = new ProjectConfig(false, "main", null, ragConfig);
         testProject.setConfiguration(config);
     }

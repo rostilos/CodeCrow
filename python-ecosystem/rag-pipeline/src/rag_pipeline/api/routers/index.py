@@ -1,11 +1,17 @@
 """Index and branch management endpoints."""
+import json
 import logging
+from queue import Queue
+from threading import Thread
 from typing import List
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+from fastapi.responses import StreamingResponse
 
 from ...models.config import IndexStats
 from ..models import (
     IndexRequest, UpdateFilesRequest, DeleteFilesRequest, ApplyChangesRequest,
+    AdvanceGenerationRequest,
+    GenerationAliasPublicationRequest,
     DeleteBranchRequest, CleanupStaleBranchesRequest,
     EstimateRequest, EstimateResponse,
 )
@@ -46,7 +52,7 @@ def estimate_repository(request: EstimateRequest):
         file_count, estimated_chunks = index_manager.estimate_repository_size(
             repo_path=request.repo_path,
             include_patterns=request.include_patterns,
-            exclude_patterns=request.exclude_patterns
+            exclude_patterns=request.exclude_patterns,
         )
 
         within_limits = True
@@ -87,6 +93,17 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
     """Index entire repository."""
     _, index_manager = _get_singletons()
     try:
+        optional_generation_args = {}
+        source_tree_sha256 = getattr(request, "source_tree_sha256", None)
+        collection_target = getattr(request, "collection_target", None)
+        if isinstance(source_tree_sha256, str) and source_tree_sha256:
+            optional_generation_args["source_tree_sha256"] = source_tree_sha256
+        if isinstance(collection_target, str) and collection_target:
+            optional_generation_args["collection_target"] = collection_target
+        if getattr(request, "publish_branch_alias", False) is True:
+            optional_generation_args["publish_branch_alias"] = True
+        if getattr(request, "publish_legacy_project_alias", False) is True:
+            optional_generation_args["publish_legacy_project_alias"] = True
         stats = index_manager.index_repository(
             repo_path=request.repo_path,
             workspace=request.workspace,
@@ -95,7 +112,8 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
             commit=request.commit,
             preserve_other_branches=request.preserve_other_branches,
             include_patterns=request.include_patterns,
-            exclude_patterns=request.exclude_patterns
+            exclude_patterns=request.exclude_patterns,
+            **optional_generation_args,
         )
         return stats
     except ValueError as e:
@@ -108,6 +126,71 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
     except Exception as e:
         logger.error(f"Error indexing repository: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/index/repository/stream")
+def index_repository_stream(request: IndexRequest):
+    """Index one repository and stream observable batch progress as SSE.
+
+    The ordinary endpoint remains the stable JSON contract.  This endpoint is
+    intentionally only an observability transport: it runs the same index
+    operation and forwards optional progress events without making progress
+    delivery a prerequisite for a successful snapshot.
+    """
+    _, index_manager = _get_singletons()
+
+    def event_stream():
+        events: Queue[tuple[str, object]] = Queue()
+
+        def progress(event: dict) -> None:
+            events.put(("progress", event))
+
+        def run_index() -> None:
+            try:
+                optional_generation_args = {}
+                if request.source_tree_sha256:
+                    optional_generation_args["source_tree_sha256"] = (
+                        request.source_tree_sha256
+                    )
+                if request.collection_target:
+                    optional_generation_args["collection_target"] = (
+                        request.collection_target
+                    )
+                if getattr(request, "publish_branch_alias", False) is True:
+                    optional_generation_args["publish_branch_alias"] = True
+                if getattr(request, "publish_legacy_project_alias", False) is True:
+                    optional_generation_args["publish_legacy_project_alias"] = True
+                stats = index_manager.index_repository(
+                    repo_path=request.repo_path,
+                    workspace=request.workspace,
+                    project=request.project,
+                    branch=request.branch,
+                    commit=request.commit,
+                    preserve_other_branches=request.preserve_other_branches,
+                    include_patterns=request.include_patterns,
+                    exclude_patterns=request.exclude_patterns,
+                    progress_callback=progress,
+                    **optional_generation_args,
+                )
+                events.put(("complete", stats.model_dump(mode="json")))
+            except Exception as exception:
+                logger.error("Error indexing repository with progress: %s", exception)
+                events.put(("error", {"message": str(exception)}))
+
+        Thread(target=run_index, name="rag-index-progress", daemon=True).start()
+        while True:
+            event_type, payload = events.get()
+            if event_type == "progress":
+                event = {"type": "progress", **payload}
+            elif event_type == "complete":
+                event = {"type": "complete", "result": payload}
+            else:
+                event = {"type": "error", **payload}
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            if event_type in {"complete", "error"}:
+                break
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.post("/index/update-files", response_model=IndexStats)
@@ -195,6 +278,75 @@ def apply_changes(request: ApplyChangesRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/index/advance-generation", response_model=IndexStats)
+def advance_generation(request: AdvanceGenerationRequest):
+    """Build one immutable target generation from an exact sealed source."""
+    _, index_manager = _get_singletons()
+    if request.repo_base is None:
+        raise HTTPException(
+            status_code=422,
+            detail="repo_base is required to attest the target source tree",
+        )
+    try:
+        return index_manager.advance_generation(
+            source_collection_target=request.source_collection_target,
+            target_collection_target=request.collection_target,
+            source_commit=request.source_commit,
+            source_tree_sha256=request.source_tree_sha256,
+            updated_file_paths=request.updated_file_paths,
+            deleted_file_paths=request.deleted_file_paths,
+            repo_base=request.repo_base,
+            workspace=request.workspace,
+            project=request.project,
+            branch=request.branch,
+            commit=request.commit,
+            publish_branch_alias=request.publish_branch_alias,
+            publish_legacy_project_alias=request.publish_legacy_project_alias,
+        )
+    except IncrementalIndexPreconditionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error advancing repository generation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/index/generation-aliases")
+def publish_generation_aliases(request: GenerationAliasPublicationRequest):
+    """Repair readable aliases for a completed immutable generation.
+
+    This is deliberately separate from indexing. Indexing publishes all aliases
+    atomically; this endpoint makes deployments backward-compatible by repairing
+    active generations that predate readable branch aliases.
+    """
+    _, index_manager = _get_singletons()
+    try:
+        aliases = index_manager.publish_generation_aliases(
+            workspace=request.workspace,
+            project=request.project,
+            branch=request.branch,
+            commit=request.commit,
+            collection_target=request.collection_target,
+            publish_branch_alias=request.publish_branch_alias,
+            publish_legacy_project_alias=request.publish_legacy_project_alias,
+        )
+        return {"status": "published", "aliases": aliases}
+    except IncrementalIndexPreconditionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationLeaseUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except MutationCoordinationUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("Error publishing readable generation aliases: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/index/{workspace}/{project}/{branch}")
 def delete_index(workspace: str, project: str, branch: str):
     """Delete entire index."""
@@ -214,11 +366,18 @@ def delete_index(workspace: str, project: str, branch: str):
 # ── Branch management ──
 
 @router.delete("/index/{workspace}/{project}/branch/{branch}")
-def delete_branch(workspace: str, project: str, branch: str):
+def delete_branch(
+    workspace: str,
+    project: str,
+    branch: str,
+    collection_target: str | None = Query(default=None),
+):
     """Delete all points for a specific branch from the project collection."""
     _, index_manager = _get_singletons()
     try:
-        success = index_manager.delete_branch(workspace, project, branch)
+        success = index_manager.delete_branch(
+            workspace, project, branch, collection_target=collection_target
+        )
         if success:
             return {
                 "status": "success",
@@ -229,6 +388,8 @@ def delete_branch(workspace: str, project: str, branch: str):
                 "status": "not_found",
                 "message": f"Branch '{branch}' not found or collection doesn't exist"
             }
+    except IncrementalIndexPreconditionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except MutationLeaseUnavailable as e:
         raise HTTPException(status_code=409, detail=str(e))
     except MutationCoordinationUnavailable as e:

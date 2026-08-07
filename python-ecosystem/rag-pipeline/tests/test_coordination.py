@@ -46,6 +46,33 @@ def test_project_mutation_lease_rejects_an_overlapping_job():
             pass
 
 
+def test_exact_generation_targets_have_independent_mutation_resources():
+    coordinator = _coordinator()
+
+    main = coordinator._resource_key("workspace", "project", "main-target")
+    develop = coordinator._resource_key("workspace", "project", "develop-target")
+
+    assert main != develop
+    assert main == coordinator._resource_key("workspace", "project", "main-target")
+
+
+def test_branch_publication_scope_serializes_only_the_same_branch_head():
+    coordinator = _coordinator()
+
+    main = coordinator._resource_key(
+        "workspace", "project", "main-target", "branch-head:main"
+    )
+    main_next = coordinator._resource_key(
+        "workspace", "project", "next-main-target", "branch-head:main"
+    )
+    develop = coordinator._resource_key(
+        "workspace", "project", "develop-target", "branch-head:develop"
+    )
+
+    assert main == main_next
+    assert main != develop
+
+
 def test_project_mutation_coordination_fails_closed_when_redis_is_unavailable():
     coordinator = _coordinator()
     coordinator._client.set.side_effect = RuntimeError("redis unavailable")

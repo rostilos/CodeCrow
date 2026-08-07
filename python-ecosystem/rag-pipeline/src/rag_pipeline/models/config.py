@@ -254,3 +254,6 @@ class IndexStats(BaseModel):
     workspace: str
     project: str
     branch: str
+    generation_manifest_sha256: Optional[str] = None
+    source_tree_sha256: Optional[str] = None
+    collection_target: Optional[str] = None

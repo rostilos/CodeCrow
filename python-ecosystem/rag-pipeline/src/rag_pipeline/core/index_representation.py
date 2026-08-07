@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 INDEX_REPRESENTATION_PAYLOAD_KEY = "index_representation_fingerprint"
 
+
+class IndexCompatibilityError(RuntimeError):
+    """Deprecated compatibility name retained for older internal callers."""
+
 # These inputs can change persistent target-branch point text, metadata, or
 # vectors. PR-only request/overlay code is intentionally excluded so a PR
 # orchestration fix cannot force every repository embedding to be rebuilt.

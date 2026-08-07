@@ -48,6 +48,27 @@ public class RagBranchIndex {
     @Column(name = "commit_hash", length = 64)
     private String commitHash;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "index_kind", nullable = false, length = 24)
+    private RagBranchIndexKind indexKind = RagBranchIndexKind.LEGACY;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "lifecycle_status", nullable = false, length = 24)
+    private RagBranchIndexLifecycleStatus lifecycleStatus = RagBranchIndexLifecycleStatus.READY;
+
+    @Column(name = "desired_commit_hash", length = 64)
+    private String desiredCommitHash;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "active_generation_id")
+    private RagBranchIndexGeneration activeGeneration;
+
+    @Column(name = "last_accessed_at")
+    private OffsetDateTime lastAccessedAt;
+
+    @Column(name = "error_message", columnDefinition = "TEXT")
+    private String errorMessage;
+
     /**
      * Files that were deleted in this branch (for query-time filtering).
      * These files should be excluded when querying the branch's context.
@@ -82,6 +103,39 @@ public class RagBranchIndex {
         this.branchName = branchName;
     }
 
+    public RagBranchIndex(Project project, String branchName, RagBranchIndexKind indexKind) {
+        this(project, branchName);
+        this.indexKind = indexKind;
+        this.lifecycleStatus = RagBranchIndexLifecycleStatus.PENDING;
+    }
+
+    public void requestRevision(String desiredCommitHash) {
+        this.desiredCommitHash = desiredCommitHash;
+        this.lifecycleStatus = RagBranchIndexLifecycleStatus.BUILDING;
+        this.errorMessage = null;
+    }
+
+    public void activate(RagBranchIndexGeneration generation) {
+        this.activeGeneration = generation;
+        this.commitHash = generation.getRevision();
+        this.desiredCommitHash = generation.getRevision();
+        this.chunkCount = generation.getChunkCount();
+        this.lifecycleStatus = RagBranchIndexLifecycleStatus.READY;
+        this.errorMessage = null;
+        this.lastAccessedAt = OffsetDateTime.now();
+    }
+
+    public void failUpdate(String errorMessage) {
+        this.lifecycleStatus = activeGeneration == null
+                ? RagBranchIndexLifecycleStatus.FAILED
+                : RagBranchIndexLifecycleStatus.READY;
+        this.errorMessage = errorMessage;
+    }
+
+    public void markAccessed() {
+        this.lastAccessedAt = OffsetDateTime.now();
+    }
+
     public Long getId() {
         return id;
     }
@@ -112,6 +166,54 @@ public class RagBranchIndex {
 
     public void setCommitHash(String commitHash) {
         this.commitHash = commitHash;
+    }
+
+    public RagBranchIndexKind getIndexKind() {
+        return indexKind;
+    }
+
+    public void setIndexKind(RagBranchIndexKind indexKind) {
+        this.indexKind = indexKind;
+    }
+
+    public RagBranchIndexLifecycleStatus getLifecycleStatus() {
+        return lifecycleStatus;
+    }
+
+    public void setLifecycleStatus(RagBranchIndexLifecycleStatus lifecycleStatus) {
+        this.lifecycleStatus = lifecycleStatus;
+    }
+
+    public String getDesiredCommitHash() {
+        return desiredCommitHash;
+    }
+
+    public void setDesiredCommitHash(String desiredCommitHash) {
+        this.desiredCommitHash = desiredCommitHash;
+    }
+
+    public RagBranchIndexGeneration getActiveGeneration() {
+        return activeGeneration;
+    }
+
+    public void setActiveGeneration(RagBranchIndexGeneration activeGeneration) {
+        this.activeGeneration = activeGeneration;
+    }
+
+    public OffsetDateTime getLastAccessedAt() {
+        return lastAccessedAt;
+    }
+
+    public void setLastAccessedAt(OffsetDateTime lastAccessedAt) {
+        this.lastAccessedAt = lastAccessedAt;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
     }
 
     public Set<String> getDeletedFiles() {

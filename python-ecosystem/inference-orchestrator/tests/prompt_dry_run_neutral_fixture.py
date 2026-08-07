@@ -9,6 +9,13 @@ from model.enrichment import FileContentDto, PrEnrichmentDataDto
 SECRET_API_KEY = "dry-run-provider-key-must-never-be-used-or-returned"
 HEAD_REVISION = "1" * 40
 BASE_REVISION = "2" * 40
+BASE_GENERATION_MANIFEST = "3" * 64
+PR_GENERATION_FINGERPRINT = "sha256:" + "4" * 64
+PR_OVERLAY_GENERATION_MANIFEST = "5" * 64
+BASE_PLUGIN_FINGERPRINT = "sha256:" + "6" * 64
+BASE_PLUGIN_DESCRIPTOR_FINGERPRINT = "sha256:" + "7" * 64
+BASE_PLUGIN_IMPLEMENTATION_FINGERPRINT = "sha256:" + "8" * 64
+BASE_INDEX_REPRESENTATION_FINGERPRINT = "sha256:" + "9" * 64
 
 
 class DeterministicRagSpy:
@@ -42,7 +49,25 @@ class DeterministicRagSpy:
 
     async def index_pr_files(self, **kwargs):
         self.index_requests.append(kwargs)
-        return {"status": "indexed", "chunks_indexed": 0}
+        return {
+            "status": "indexed",
+            "chunks_indexed": 0,
+            "base_generation_manifest_sha256": BASE_GENERATION_MANIFEST,
+            "generation_fingerprint": PR_GENERATION_FINGERPRINT,
+            "overlay_generation_manifest_sha256": (
+                PR_OVERLAY_GENERATION_MANIFEST
+            ),
+            "plugin_fingerprint": BASE_PLUGIN_FINGERPRINT,
+            "plugin_descriptor_fingerprint": (
+                BASE_PLUGIN_DESCRIPTOR_FINGERPRINT
+            ),
+            "plugin_implementation_fingerprint": (
+                BASE_PLUGIN_IMPLEMENTATION_FINGERPRINT
+            ),
+            "index_representation_fingerprint": (
+                BASE_INDEX_REPRESENTATION_FINGERPRINT
+            ),
+        }
 
     async def delete_pr_files(self, **kwargs):
         self.delete_requests.append(kwargs)

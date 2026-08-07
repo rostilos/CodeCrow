@@ -686,6 +686,37 @@ async def _fetch_cross_module_context(
     if not rag_client:
         return ""
 
+    base_revision_value = getattr(request, "baseCommitHash", None)
+    base_generation_receipt_value = getattr(
+        request,
+        "ragBaseGenerationManifestSha256",
+        None,
+    )
+    base_revision = (
+        base_revision_value
+        if isinstance(base_revision_value, str) and base_revision_value
+        else None
+    )
+    base_generation_receipt = (
+        base_generation_receipt_value
+        if (
+            isinstance(base_generation_receipt_value, str)
+            and base_generation_receipt_value
+        )
+        else None
+    )
+    if not base_revision and not base_generation_receipt:
+        logger.info(
+            "Stage 2 cross-module RAG skipped: no exact target-generation lease"
+        )
+        return ""
+    if not base_revision or not base_generation_receipt:
+        logger.warning(
+            "Stage 2 cross-module RAG requires both immutable target revision "
+            "and generation receipt"
+        )
+        return ""
+
     try:
         rag_branch = request.get_rag_branch()
         base_branch = request.get_rag_base_branch()
@@ -733,6 +764,11 @@ async def _fetch_cross_module_context(
             queries=unique_queries,
             top_k=6,
             base_branch=base_branch,
+            repository_revision=base_revision,
+            repository_generation_manifest_sha256=(
+                base_generation_receipt
+            ),
+            collection_target=getattr(request, "ragCollectionTarget", None),
         )
 
         if not dup_results:
@@ -752,5 +788,9 @@ async def _fetch_cross_module_context(
         return formatted
 
     except Exception as e:
-        logger.warning(f"Failed to fetch cross-module context for Stage 2: {e}")
+        logger.warning(
+            "Revision-bound cross-module context unavailable for Stage 2: %s: %s",
+            type(e).__name__,
+            e,
+        )
         return ""
