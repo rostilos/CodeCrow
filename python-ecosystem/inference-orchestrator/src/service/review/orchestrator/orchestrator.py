@@ -182,6 +182,9 @@ def _emit_review_evidence_completed(
     review_units: Optional[Stage1ReviewUnitState] = None,
     rag_state: Optional[Stage1RagState] = None,
     candidate_ledger: Optional[CandidateEvidenceLedger] = None,
+    *,
+    request: ReviewRequestDto,
+    pr_indexed: bool,
 ) -> None:
     """Expose compact host-owned completion evidence without prompt/source data."""
     if callback is None:
@@ -225,6 +228,43 @@ def _emit_review_evidence_completed(
             ),
             "exactEvidenceIds": len(
                 rag_state.exact_evidence_by_id if rag_state is not None else {}
+            ),
+        },
+        "revisionBinding": {
+            "prIndexed": pr_indexed,
+            "pullRequestId": request.pullRequestId,
+            "targetBranch": request.targetBranchName,
+            "sourceRevision": (
+                request.currentCommitHash or request.commitHash
+            ),
+            "baseRevision": request.baseCommitHash,
+            "baseGenerationManifestSha256": (
+                request.ragBaseGenerationManifestSha256
+                if pr_indexed else None
+            ),
+            "prGenerationFingerprint": (
+                request.ragPrGenerationFingerprint
+                if pr_indexed else None
+            ),
+            "prOverlayGenerationManifestSha256": (
+                request.ragPrOverlayGenerationManifestSha256
+                if pr_indexed else None
+            ),
+            "basePluginFingerprint": (
+                request.ragBasePluginFingerprint
+                if pr_indexed else None
+            ),
+            "basePluginDescriptorFingerprint": (
+                request.ragBasePluginDescriptorFingerprint
+                if pr_indexed else None
+            ),
+            "basePluginImplementationFingerprint": (
+                request.ragBasePluginImplementationFingerprint
+                if pr_indexed else None
+            ),
+            "baseIndexRepresentationFingerprint": (
+                request.ragBaseIndexRepresentationFingerprint
+                if pr_indexed else None
             ),
         },
     })
@@ -386,6 +426,10 @@ class MultiStageReviewOrchestrator:
                 base_branch=identity.target_branch,
                 source_revision=identity.head_revision,
                 base_revision=identity.base_revision,
+                collection_target=request.ragCollectionTarget,
+                base_generation_manifest_sha256=(
+                    request.ragBaseGenerationManifestSha256
+                ),
                 repository_plugins=(
                     list(capabilities.repositoryPlugins) if capabilities else []
                 ),
@@ -408,6 +452,32 @@ class MultiStageReviewOrchestrator:
                 apply_effective_project_capabilities(
                     request,
                     result.get("effective_project_capabilities"),
+                )
+                request.ragBaseGenerationManifestSha256 = (
+                    result.get("base_generation_manifest_sha256")
+                    or request.ragBaseGenerationManifestSha256
+                )
+                request.ragPrGenerationFingerprint = result.get(
+                    "generation_fingerprint"
+                )
+                request.ragPrOverlayGenerationManifestSha256 = result.get(
+                    "overlay_generation_manifest_sha256"
+                )
+                request.ragBasePluginFingerprint = (
+                    result.get("plugin_fingerprint")
+                    or request.ragBasePluginFingerprint
+                )
+                request.ragBasePluginDescriptorFingerprint = (
+                    result.get("plugin_descriptor_fingerprint")
+                    or request.ragBasePluginDescriptorFingerprint
+                )
+                request.ragBasePluginImplementationFingerprint = (
+                    result.get("plugin_implementation_fingerprint")
+                    or request.ragBasePluginImplementationFingerprint
+                )
+                request.ragBaseIndexRepresentationFingerprint = (
+                    result.get("index_representation_fingerprint")
+                    or request.ragBaseIndexRepresentationFingerprint
                 )
                 self._pr_indexed = True
                 self._repository_review_groups = tuple(
@@ -462,7 +532,8 @@ class MultiStageReviewOrchestrator:
             await self.rag_client.delete_pr_files(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
-                pr_number=self._pr_number
+                pr_number=self._pr_number,
+                collection_target=request.ragCollectionTarget,
             )
             logger.info(f"Cleaned up PR #{self._pr_number} indexed data")
         except Exception as e:
@@ -921,6 +992,8 @@ class MultiStageReviewOrchestrator:
                     self.event_callback,
                     hunk_coverage,
                     candidate_ledger=candidate_ledger,
+                    request=request,
+                    pr_indexed=self._pr_indexed,
                 )
                 logger.info(
                     "Review completed locally: every acquired hunk has a "
@@ -1379,6 +1452,8 @@ class MultiStageReviewOrchestrator:
                 stage_1_review_unit_state,
                 stage_1_rag_state,
                 candidate_ledger,
+                request=request,
+                pr_indexed=self._pr_indexed,
             )
             logger.info("Review hunk coverage complete: %s", hunk_coverage.summary())
 

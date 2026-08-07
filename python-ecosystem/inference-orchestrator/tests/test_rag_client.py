@@ -169,6 +169,22 @@ class TestRagClientSuccess:
         assert await c.delete_pr_files("ws", "proj", 1) is True
         await c.close()
 
+    @pytest.mark.asyncio(loop_scope="function")
+    @respx.mock
+    async def test_delete_pr_files_uses_exact_generation_target(self):
+        route = respx.delete("http://rag:8001/index/pr-files/ws/proj/1").mock(
+            return_value=httpx.Response(200, json={"status": "deleted"})
+        )
+        c = RagClient(base_url="http://rag:8001", enabled=True)
+
+        assert await c.delete_pr_files(
+            "ws", "proj", 1, collection_target="cc_w1_p2_branch_generation"
+        ) is True
+        assert route.calls.last.request.url.params[
+            "collection_target"
+        ] == "cc_w1_p2_branch_generation"
+        await c.close()
+
 
 # ── Error handling ───────────────────────────────────────────
 

@@ -4,6 +4,7 @@ import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
@@ -52,6 +53,9 @@ import org.rostilos.codecrow.analysisengine.util.DiffFingerprintUtil;
 import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.rostilos.codecrow.vcsclient.model.VcsCommit;
+import org.rostilos.codecrow.scmevidence.service.ScmEvidenceService;
+import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 
 /**
  * Generic service that handles pull request analysis.
@@ -61,6 +65,7 @@ import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 @Service
 public class PullRequestAnalysisProcessor {
     private static final Logger log = LoggerFactory.getLogger(PullRequestAnalysisProcessor.class);
+    private static final int SCM_EVIDENCE_COMMIT_LIMIT = 1000;
 
     private final CodeAnalysisService codeAnalysisService;
     private final TaskImplementationEvidenceService taskImplementationEvidenceService;
@@ -75,6 +80,12 @@ public class PullRequestAnalysisProcessor {
     private final FileSnapshotService fileSnapshotService;
     private final PrIssueTrackingService prIssueTrackingService;
     private final AstScopeEnricher astScopeEnricher;
+
+    @Autowired(required = false)
+    private ScmEvidenceService scmEvidenceService;
+
+    @Autowired(required = false)
+    private CodeAnalysisIssueRepository codeAnalysisIssueRepository;
 
     public PullRequestAnalysisProcessor(
             PullRequestService pullRequestService,
@@ -357,7 +368,7 @@ public class PullRequestAnalysisProcessor {
             }
 
             // === DAG: Mark PR commits as ANALYZED ===
-            markPrCommitsAnalyzed(project, request.getSourceBranchName(), request.getCommitHash(), newAnalysis);
+            markPrCommitsAnalyzed(project, request, newAnalysis);
 
             // Publish successful completion event
             publishAnalysisCompletedEvent(project, request, correlationId, startTime,
@@ -741,13 +752,95 @@ public class PullRequestAnalysisProcessor {
      * @param commitHash   the HEAD commit of the source branch
      * @param analysis     the CodeAnalysis to link, or null for cache-hit scenarios
      */
-    private void markPrCommitsAnalyzed(Project project, String sourceBranch, String commitHash, CodeAnalysis analysis) {
+    private void markPrCommitsAnalyzed(
+            Project project,
+            PrProcessRequest request,
+            CodeAnalysis analysis) {
         try {
+            String sourceBranch = request.getSourceBranchName();
+            String targetBranch = request.getTargetBranchName();
+            String commitHash = request.getCommitHash();
             if (commitHash == null) return;
 
+            String targetBaseRevision = null;
+            List<String> analyzedHashes = List.of(commitHash);
+            if (scmEvidenceService != null) {
+                try {
+                    VcsClient client = vcsClientProvider.getClient(
+                            project.getEffectiveVcsRepoInfo().getVcsConnection());
+                    String workspace = project.getEffectiveVcsRepoInfo().getRepoWorkspace();
+                    String repository = project.getEffectiveVcsRepoInfo().getRepoSlug();
+                    var pullRequest = client.getPullRequest(
+                            workspace, repository, request.getPullRequestId());
+                    targetBaseRevision = pullRequest != null
+                            ? pullRequest.baseCommit() : null;
+                    List<VcsCommit> newestFirst = client.getCommitHistory(
+                            workspace, repository, sourceBranch,
+                            SCM_EVIDENCE_COMMIT_LIMIT);
+                    List<VcsCommit> prCommits = new java.util.ArrayList<>();
+                    for (VcsCommit commit : newestFirst == null
+                            ? List.<VcsCommit>of() : newestFirst) {
+                        if (targetBaseRevision != null
+                                && targetBaseRevision.equals(commit.hash())) {
+                            break;
+                        }
+                        prCommits.add(commit);
+                        if (commitHash.equals(commit.hash())
+                                && targetBaseRevision == null) {
+                            break;
+                        }
+                    }
+                    Collections.reverse(prCommits);
+                    if (!prCommits.isEmpty()) {
+                        scmEvidenceService.capture(
+                                project.getId(), client, workspace, repository,
+                                prCommits);
+                        analyzedHashes = prCommits.stream()
+                                .map(VcsCommit::hash)
+                                .toList();
+                    }
+                    scmEvidenceService.recordAnalysisReceipts(
+                            project.getId(), analyzedHashes,
+                            sourceBranch, targetBranch, targetBaseRevision,
+                            analysis != null ? analysis.getId() : null,
+                            AnalysisType.PR_REVIEW.name());
+                    if (analysis != null && codeAnalysisIssueRepository != null) {
+                        for (CodeAnalysisIssue issue : analysis.getIssues()) {
+                            scmEvidenceService.resolveIssueProvenance(
+                                            project.getId(), analyzedHashes,
+                                            issue.getFilePath(), issue.getLineNumber(),
+                                            issue.getCodeSnippet())
+                                    .ifPresent(provenance -> {
+                                        issue.setIntroducingCommitHash(
+                                                provenance.commitHash());
+                                        issue.setIntroducingAuthorName(
+                                                provenance.authorName());
+                                        issue.setIntroducingAuthorEmail(
+                                                provenance.authorEmail());
+                                        issue.setAuthorProvenanceConfidence(
+                                                provenance.confidence());
+                                    });
+                        }
+                        codeAnalysisIssueRepository.saveAll(analysis.getIssues());
+                    }
+                } catch (Exception evidenceFailure) {
+                    log.warn("SCM promotion/provenance evidence unavailable for PR #{}: {}",
+                            request.getPullRequestId(), evidenceFailure.getMessage());
+                }
+            }
+
             // Record the PR's HEAD commit as analyzed
-            analyzedCommitService.recordPrCommitsAnalyzed(
-                    project, List.of(commitHash), analysis);
+            boolean multiBranch = project.getConfiguration() != null
+                    && project.getConfiguration().ragConfig() != null
+                    && project.getConfiguration().ragConfig().isMultiBranchEnabled();
+            if (multiBranch) {
+                analyzedCommitService.recordPrCommitsAnalyzed(
+                        project, analyzedHashes, analysis,
+                        sourceBranch, targetBranch, targetBaseRevision);
+            } else {
+                analyzedCommitService.recordPrCommitsAnalyzed(
+                        project, List.of(commitHash), analysis);
+            }
 
             log.info("Recorded PR commit {} as analyzed (branch={}, analysis={})",
                     commitHash.substring(0, Math.min(7, commitHash.length())),
@@ -755,7 +848,7 @@ public class PullRequestAnalysisProcessor {
                     analysis != null ? analysis.getId() : "none");
         } catch (Exception e) {
             log.warn("Failed to record PR commit as analyzed (non-critical): branch={}, error={}",
-                    sourceBranch, e.getMessage());
+                    request.getSourceBranchName(), e.getMessage());
         }
     }
 

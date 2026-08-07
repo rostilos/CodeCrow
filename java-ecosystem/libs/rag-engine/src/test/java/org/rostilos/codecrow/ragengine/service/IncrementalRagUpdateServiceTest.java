@@ -647,6 +647,46 @@ class IncrementalRagUpdateServiceTest {
                 anyString(), eq("test-ws"), eq("test-proj"), eq("main"), eq("abc123"));
     }
 
+    @Test
+    void exactEmptyDeltaStillAdvancesImmutableRevision() throws Exception {
+        setupProjectWithWorkspace();
+        when(branchArchiveService.downloadAndExtractSnapshotToDirectory(
+                any(), eq("ws-slug"), eq("repo-slug"), eq("develop-401"),
+                isNull(), any()))
+                .thenReturn(archiveSnapshot(Set.of(), Set.of()));
+        when(ragPipelineClient.advanceGeneration(
+                eq(List.of()), eq(List.of()), anyString(),
+                eq("test-ws"), eq("test-proj"), eq("develop"),
+                eq("develop-400"), eq("develop-401"),
+                anyString(),
+                eq("generation-400"), eq("generation-401"),
+                eq(true), eq(false)))
+                .thenReturn(Map.of(
+                        "generation_manifest_sha256", "manifest-401",
+                        "document_count", 231,
+                        "chunk_count", 400));
+
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, new VcsConnection(), "ws-slug", "repo-slug",
+                "develop", "develop-401", Set.of(), Set.of(), Set.of(),
+                "develop-400", "generation-400", "generation-401",
+                true, false);
+
+        assertThat(result)
+                .containsEntry("status", "completed")
+                .containsEntry("generation_manifest_sha256", "manifest-401");
+        verify(ragPipelineClient).advanceGeneration(
+                eq(List.of()), eq(List.of()), anyString(),
+                eq("test-ws"), eq("test-proj"), eq("develop"),
+                eq("develop-400"), eq("develop-401"),
+                anyString(),
+                eq("generation-400"), eq("generation-401"),
+                eq(true), eq(false));
+        verify(ragPipelineClient, never()).applyChanges(
+                anyList(), anyList(), nullable(String.class),
+                anyString(), anyString(), anyString(), anyString());
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private void setupProjectWithWorkspace() {

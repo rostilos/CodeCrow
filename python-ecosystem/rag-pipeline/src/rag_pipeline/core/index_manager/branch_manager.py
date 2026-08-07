@@ -114,10 +114,10 @@ class BranchManager:
         
         offset = None
         total_yielded = 0
-        
+
         try:
             while True:
-                results = self.client.scroll(
+                points, next_offset = self.client.scroll(
                     collection_name=collection_name,
                     limit=batch_size,
                     offset=offset,
@@ -132,16 +132,15 @@ class BranchManager:
                     with_payload=True,
                     with_vectors=True
                 )
-                points, next_offset = results
-                
+
                 if points:
                     total_yielded += len(points)
                     yield points
-                
-                if next_offset is None or len(points) < batch_size:
+
+                if next_offset is None:
                     break
                 offset = next_offset
-            
+
             logger.info(f"Streamed {total_yielded} points from other branches")
         except Exception as e:
             logger.warning(f"Could not read existing points: {e}")
@@ -189,10 +188,10 @@ class BranchManager:
                     f"Re-embedding required for all branches."
                 )
                 return 0
-                
         except Exception as e:
             logger.warning(f"Could not verify collection dimensions: {e}")
-            # Continue anyway - will fail at upsert if dimensions don't match
+            # Optional preservation remains best effort. The target branch can
+            # still be published without copying unrelated legacy branches.
         total_copied = 0
         
         for batch in self.preserve_other_branch_points(source_collection, exclude_branch, batch_size):

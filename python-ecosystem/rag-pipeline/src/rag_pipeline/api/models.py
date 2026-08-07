@@ -39,6 +39,13 @@ class IndexRequest(BaseModel):
     project: str
     branch: str
     commit: str
+    source_tree_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    collection_target: Optional[str] = Field(default=None, min_length=1)
+    publish_branch_alias: bool = False
+    publish_legacy_project_alias: bool = False
     preserve_other_branches: bool = False
     cleanup_repo_path: bool = False
     include_patterns: Optional[List[str]] = None
@@ -102,6 +109,43 @@ class ApplyChangesRequest(BaseModel):
         return _validate_file_paths(v)
 
 
+class AdvanceGenerationRequest(BaseModel):
+    updated_file_paths: List[str] = Field(default_factory=list)
+    deleted_file_paths: List[str] = Field(default_factory=list)
+    repo_base: Optional[str] = None
+    workspace: str
+    project: str
+    branch: str
+    source_commit: str
+    commit: str
+    source_tree_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_collection_target: str = Field(min_length=1)
+    collection_target: str = Field(min_length=1)
+    publish_branch_alias: bool = False
+    publish_legacy_project_alias: bool = False
+
+    @field_validator("repo_base")
+    @classmethod
+    def validate_repo_base(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_repo_path(v) if v is not None else None
+
+    @field_validator("updated_file_paths", "deleted_file_paths")
+    @classmethod
+    def validate_file_paths(cls, v: List[str]) -> List[str]:
+        return _validate_file_paths(v)
+
+
+class GenerationAliasPublicationRequest(BaseModel):
+    """Repair the readable aliases of one already sealed generation."""
+    workspace: str
+    project: str
+    branch: str
+    commit: str
+    collection_target: str = Field(min_length=1)
+    publish_branch_alias: bool = True
+    publish_legacy_project_alias: bool = False
+
+
 class DeleteBranchRequest(BaseModel):
     workspace: str
     project: str
@@ -124,6 +168,29 @@ class CleanupStaleBranchesRequest(BaseModel):
         if len(set(value)) != len(value):
             raise ValueError("Branch names must be unique")
         return value
+
+
+class RevisionPreflightResponse(BaseModel):
+    workspace: str
+    project: str
+    branch: str
+    commit: str
+    point_count: int = Field(gt=0)
+    repository_revision: str
+    repository_facts_sha256: str
+    plugin_ids: List[str]
+    plugin_fingerprint: str
+    plugin_descriptor_fingerprint: str
+    plugin_implementation_fingerprint: str
+    index_representation_fingerprint: str
+    generation_schema: str
+    generation_member_count: int = Field(gt=0)
+    generation_members_sha256: str
+    generation_manifest_sha256: str
+    source_tree_sha256: str
+    index_include_patterns: List[str]
+    index_exclude_patterns: List[str]
+    index_selection_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class EstimateRequest(BaseModel):
@@ -155,6 +222,16 @@ class QueryRequest(BaseModel):
     branch: str
     top_k: Optional[int] = 10
     filter_language: Optional[str] = None
+    repository_revision: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+    repository_generation_manifest_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    collection_target: Optional[str] = Field(default=None, min_length=1)
 
 
 class PRContextRequest(BaseModel):
@@ -172,6 +249,29 @@ class PRContextRequest(BaseModel):
     deleted_files: Optional[List[str]] = Field(default_factory=list)
     pr_number: Optional[int] = None
     all_pr_changed_files: Optional[List[str]] = Field(default_factory=list)
+    source_revision: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+    base_revision: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+    base_generation_manifest_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    pr_generation_fingerprint: Optional[str] = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    pr_overlay_generation_manifest_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    collection_target: Optional[str] = Field(default=None, min_length=1)
 
     @field_validator('changed_files')
     @classmethod
@@ -205,6 +305,29 @@ class DeterministicContextRequest(BaseModel):
         description="Extra type/function names to look up (from AST enrichment: extends, implements, calls). "
                     "Injected directly into Step 2 definition lookup alongside Qdrant-extracted identifiers."
     )
+    source_revision: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+    base_revision: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+    base_generation_manifest_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    pr_generation_fingerprint: Optional[str] = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    pr_overlay_generation_manifest_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    collection_target: Optional[str] = Field(default=None, min_length=1)
 
 
 # ── Parse models ──
@@ -278,6 +401,11 @@ class PRIndexRequest(BaseModel):
     plugin_fingerprint: str = "sha256:" + "0" * 64
     plugin_descriptor_fingerprint: str = "sha256:" + "0" * 64
     files: List[PRFileInfo]
+    base_generation_manifest_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    collection_target: Optional[str] = Field(default=None, min_length=1)
 
 
 # ── Vector storage inspection models ──

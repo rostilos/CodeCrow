@@ -4,13 +4,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.rostilos.codecrow.ragengine.source.RepositorySourceTreeIdentity;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 @Service
 public class RagPipelineClient {
@@ -71,6 +75,42 @@ public class RagPipelineClient {
             List<String> includePatterns,
             List<String> excludePatterns
     ) throws IOException {
+        return indexRepository(
+                repoPath, projectWorkspace, projectNamespace, branch, commit,
+                includePatterns, excludePatterns, null);
+    }
+
+    public Map<String, Object> indexRepository(
+            String repoPath,
+            String projectWorkspace,
+            String projectNamespace,
+            String branch,
+            String commit,
+            List<String> includePatterns,
+            List<String> excludePatterns,
+            String collectionTarget
+    ) throws IOException {
+        return indexRepository(
+                repoPath, projectWorkspace, projectNamespace, branch, commit,
+                includePatterns, excludePatterns, collectionTarget, false, false);
+    }
+
+    /**
+     * Index an immutable generation and optionally publish its readable branch
+     * and legacy-project aliases in the same Qdrant transaction.
+     */
+    public Map<String, Object> indexRepository(
+            String repoPath,
+            String projectWorkspace,
+            String projectNamespace,
+            String branch,
+            String commit,
+            List<String> includePatterns,
+            List<String> excludePatterns,
+            String collectionTarget,
+            boolean publishBranchAlias,
+            boolean publishLegacyProjectAlias
+    ) throws IOException {
         if (!ragEnabled) {
             log.debug("RAG indexing disabled, skipping repository indexing");
             return Map.of("status", "skipped", "reason", "RAG disabled");
@@ -82,6 +122,19 @@ public class RagPipelineClient {
         payload.put("project", projectNamespace);
         payload.put("branch", branch);
         payload.put("commit", commit);
+        if (collectionTarget != null && !collectionTarget.isBlank()) {
+            payload.put("collection_target", collectionTarget);
+        }
+        if (publishBranchAlias) {
+            payload.put("publish_branch_alias", true);
+        }
+        if (publishLegacyProjectAlias) {
+            payload.put("publish_legacy_project_alias", true);
+        }
+        payload.put(
+                "source_tree_sha256",
+                RepositorySourceTreeIdentity.sha256(Path.of(repoPath))
+        );
         if (includePatterns != null && !includePatterns.isEmpty()) {
             payload.put("include_patterns", includePatterns);
         }
@@ -91,6 +144,74 @@ public class RagPipelineClient {
 
         String url = ragApiUrl + "/index/repository";
         return postLongRunning(url, payload);
+    }
+
+    /**
+     * Build an index through the progress-streaming transport.  The regular
+     * JSON method above remains available for legacy callers; this overload is
+     * used by explicit branch maintenance so detailed batch events can reach
+     * the operator without affecting index correctness.
+     */
+    public Map<String, Object> indexRepository(
+            String repoPath,
+            String projectWorkspace,
+            String projectNamespace,
+            String branch,
+            String commit,
+            List<String> includePatterns,
+            List<String> excludePatterns,
+            String collectionTarget,
+            Consumer<Map<String, Object>> progressConsumer
+    ) throws IOException {
+        return indexRepository(
+                repoPath, projectWorkspace, projectNamespace, branch, commit,
+                includePatterns, excludePatterns, collectionTarget, false, false,
+                progressConsumer);
+    }
+
+    /** Streaming variant of exact generation indexing with alias publication. */
+    public Map<String, Object> indexRepository(
+            String repoPath,
+            String projectWorkspace,
+            String projectNamespace,
+            String branch,
+            String commit,
+            List<String> includePatterns,
+            List<String> excludePatterns,
+            String collectionTarget,
+            boolean publishBranchAlias,
+            boolean publishLegacyProjectAlias,
+            Consumer<Map<String, Object>> progressConsumer
+    ) throws IOException {
+        if (!ragEnabled) {
+            log.debug("RAG indexing disabled, skipping repository indexing");
+            return Map.of("status", "skipped", "reason", "RAG disabled");
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("repo_path", repoPath);
+        payload.put("workspace", projectWorkspace);
+        payload.put("project", projectNamespace);
+        payload.put("branch", branch);
+        payload.put("commit", commit);
+        if (collectionTarget != null && !collectionTarget.isBlank()) {
+            payload.put("collection_target", collectionTarget);
+        }
+        if (publishBranchAlias) {
+            payload.put("publish_branch_alias", true);
+        }
+        if (publishLegacyProjectAlias) {
+            payload.put("publish_legacy_project_alias", true);
+        }
+        payload.put("source_tree_sha256", RepositorySourceTreeIdentity.sha256(Path.of(repoPath)));
+        if (includePatterns != null && !includePatterns.isEmpty()) {
+            payload.put("include_patterns", includePatterns);
+        }
+        if (excludePatterns != null && !excludePatterns.isEmpty()) {
+            payload.put("exclude_patterns", excludePatterns);
+        }
+        return postLongRunningSse(
+                ragApiUrl + "/index/repository/stream", payload, progressConsumer);
     }
 
     public Map<String, Object> updateFiles(
@@ -177,6 +298,98 @@ public class RagPipelineClient {
         payload.put("commit", commit);
 
         return postLongRunning(ragApiUrl + "/index/apply-changes", payload);
+    }
+
+    public Map<String, Object> advanceGeneration(
+            List<String> updatedFilePaths,
+            List<String> deletedFilePaths,
+            String repoBase,
+            String workspace,
+            String project,
+            String branch,
+            String sourceCommit,
+            String commit,
+            String sourceTreeSha256,
+            String sourceCollectionTarget,
+            String collectionTarget
+    ) throws IOException {
+        return advanceGeneration(
+                updatedFilePaths, deletedFilePaths, repoBase, workspace, project,
+                branch, sourceCommit, commit, sourceTreeSha256,
+                sourceCollectionTarget, collectionTarget, false, false);
+    }
+
+    /** Advance an exact generation and atomically update its readable aliases. */
+    public Map<String, Object> advanceGeneration(
+            List<String> updatedFilePaths,
+            List<String> deletedFilePaths,
+            String repoBase,
+            String workspace,
+            String project,
+            String branch,
+            String sourceCommit,
+            String commit,
+            String sourceTreeSha256,
+            String sourceCollectionTarget,
+            String collectionTarget,
+            boolean publishBranchAlias,
+            boolean publishLegacyProjectAlias
+    ) throws IOException {
+        if (!ragEnabled) {
+            log.debug("RAG indexing disabled, skipping generation advance");
+            return Map.of("status", "skipped", "reason", "RAG disabled");
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("updated_file_paths", updatedFilePaths);
+        payload.put("deleted_file_paths", deletedFilePaths);
+        if (repoBase != null && !repoBase.isBlank()) {
+            payload.put("repo_base", repoBase);
+        }
+        payload.put("workspace", workspace);
+        payload.put("project", project);
+        payload.put("branch", branch);
+        payload.put("source_commit", sourceCommit);
+        payload.put("commit", commit);
+        payload.put("source_tree_sha256", sourceTreeSha256);
+        payload.put("source_collection_target", sourceCollectionTarget);
+        payload.put("collection_target", collectionTarget);
+        if (publishBranchAlias) {
+            payload.put("publish_branch_alias", true);
+        }
+        if (publishLegacyProjectAlias) {
+            payload.put("publish_legacy_project_alias", true);
+        }
+
+        return postLongRunning(ragApiUrl + "/index/advance-generation", payload);
+    }
+
+    /**
+     * Idempotently repair human-readable aliases of one completed generation.
+     * Exact analysis never depends on this convenience mapping.
+     */
+    public void publishGenerationAliases(
+            String workspace,
+            String project,
+            String branch,
+            String commit,
+            String collectionTarget,
+            boolean publishBranchAlias,
+            boolean publishLegacyProjectAlias) throws IOException {
+        if (!ragEnabled || !publishBranchAlias) {
+            return;
+        }
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("workspace", workspace);
+        payload.put("project", project);
+        payload.put("branch", branch);
+        payload.put("commit", commit);
+        payload.put("collection_target", collectionTarget);
+        payload.put("publish_branch_alias", true);
+        if (publishLegacyProjectAlias) {
+            payload.put("publish_legacy_project_alias", true);
+        }
+        post(ragApiUrl + "/index/generation-aliases", payload);
     }
 
     public Map<String, Object> getPRContext(
@@ -341,16 +554,29 @@ public class RagPipelineClient {
      * Python endpoint: DELETE /index/{workspace}/{project}/branch/{branch}
      */
     public boolean deleteBranch(String workspace, String project, String branch) throws IOException {
+        return deleteBranch(workspace, project, branch, null);
+    }
+
+    public boolean deleteBranch(
+            String workspace,
+            String project,
+            String branch,
+            String collectionTarget
+    ) throws IOException {
         if (!ragEnabled) {
             return false;
         }
         
         // URL-encode branch name to handle slashes (e.g., feature/xyz -> feature%2Fxyz)
         String encodedBranch = java.net.URLEncoder.encode(branch, java.nio.charset.StandardCharsets.UTF_8);
-        String url = String.format("%s/index/%s/%s/branch/%s", ragApiUrl, workspace, project, encodedBranch);
+        HttpUrl.Builder urlBuilder = HttpUrl.get(String.format(
+                "%s/index/%s/%s/branch/%s", ragApiUrl, workspace, project, encodedBranch)).newBuilder();
+        if (collectionTarget != null && !collectionTarget.isBlank()) {
+            urlBuilder.addQueryParameter("collection_target", collectionTarget);
+        }
         
         Request.Builder builder = new Request.Builder()
-                .url(url)
+                .url(urlBuilder.build())
                 .delete();
         addAuthHeader(builder);
         Request request = builder.build();
@@ -529,6 +755,59 @@ public class RagPipelineClient {
 
     private Map<String, Object> postLongRunning(String url, Map<String, Object> payload) throws IOException {
         return doRequest(url, payload, longRunningHttpClient);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> postLongRunningSse(
+            String url,
+            Map<String, Object> payload,
+            Consumer<Map<String, Object>> progressConsumer
+    ) throws IOException {
+        RequestBody body = RequestBody.create(objectMapper.writeValueAsString(payload), JSON);
+        Request.Builder builder = new Request.Builder()
+                .url(url)
+                .header("Accept", "text/event-stream")
+                .post(body);
+        addAuthHeader(builder);
+
+        try (Response response = longRunningHttpClient.newCall(builder.build()).execute()) {
+            if (!response.isSuccessful()) {
+                String detail = response.body() != null ? response.body().string() : "{}";
+                throw new IOException("RAG API error: " + response.code() + " — " + detail);
+            }
+            if (response.body() == null) {
+                throw new IOException("RAG progress stream returned no body");
+            }
+            String line;
+            while ((line = response.body().source().readUtf8Line()) != null) {
+                if (!line.startsWith("data:")) {
+                    continue;
+                }
+                String json = line.substring(5).trim();
+                if (json.isEmpty()) {
+                    continue;
+                }
+                Map<String, Object> event = objectMapper.readValue(json, Map.class);
+                String type = String.valueOf(event.get("type"));
+                if ("progress".equals(type)) {
+                    if (progressConsumer != null) {
+                        progressConsumer.accept(new LinkedHashMap<>(event));
+                    }
+                    continue;
+                }
+                if ("complete".equals(type)) {
+                    Object result = event.get("result");
+                    if (result instanceof Map<?, ?> resultMap) {
+                        return new LinkedHashMap<>((Map<String, Object>) resultMap);
+                    }
+                    throw new IOException("RAG progress stream completed without index result");
+                }
+                if ("error".equals(type)) {
+                    throw new IOException("RAG API error: " + event.getOrDefault("message", "unknown error"));
+                }
+            }
+        }
+        throw new IOException("RAG progress stream ended without a terminal result");
     }
 
     /**

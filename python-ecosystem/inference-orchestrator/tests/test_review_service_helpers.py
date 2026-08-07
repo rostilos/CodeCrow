@@ -7,7 +7,10 @@ Covers: _build_jvm_props, _build_pr_metadata, _emit_event, _create_llm,
 import pytest
 from unittest.mock import MagicMock, patch
 
-from service.review.review_service import ReviewService
+from service.review.review_service import (
+    ReviewService,
+    allow_unbound_global_rag_fallback,
+)
 
 
 @pytest.fixture
@@ -142,6 +145,26 @@ class TestReviewServiceRequestRag:
         request = MagicMock(ragEnabled=True, projectId=1, pullRequestId=42)
 
         assert service._rag_client_for_request(request) is service.rag_client
+
+    def test_exact_pr_review_disables_unbound_global_fallback(self):
+        request = MagicMock(
+            pullRequestId=42,
+            baseCommitHash="a" * 40,
+            currentCommitHash="b" * 40,
+            commitHash=None,
+        )
+
+        assert allow_unbound_global_rag_fallback(request) is False
+
+    def test_non_pr_request_can_use_global_fallback(self):
+        request = MagicMock(
+            pullRequestId=None,
+            baseCommitHash=None,
+            currentCommitHash="b" * 40,
+            commitHash=None,
+        )
+
+        assert allow_unbound_global_rag_fallback(request) is True
 
 
 # ── _create_llm ──────────────────────────────────────────────────

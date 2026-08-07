@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.core.model.project.config;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -18,6 +19,10 @@ import java.util.List;
  *   be retained. PR retrieval still selects only the immutable VCS target branch;
  *   source changes come from the exact PR overlay rather than a second branch.
  * - branchRetentionDays: how long to keep branch index metadata before auto-cleanup (default: 90 days)
+ * - indexedBranches: explicit non-primary branches whose complete snapshots are retained.
+ *   A null/empty value preserves the legacy branchPushPatterns interpretation.
+ * - transientBranchIndexesEnabled: whether an analyzed PR target that is not retained
+ *   may receive a revision-pinned temporary snapshot.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record RagConfig(
@@ -26,33 +31,51 @@ public record RagConfig(
     @JsonProperty("includePatterns") List<String> includePatterns,
     @JsonProperty("excludePatterns") List<String> excludePatterns,
     @JsonProperty("multiBranchEnabled") Boolean multiBranchEnabled,
-    @JsonProperty("branchRetentionDays") Integer branchRetentionDays
+    @JsonProperty("branchRetentionDays") Integer branchRetentionDays,
+    @JsonProperty("indexedBranches") List<String> indexedBranches,
+    @JsonProperty("transientBranchIndexesEnabled") Boolean transientBranchIndexesEnabled
 ) {
     public static final int DEFAULT_BRANCH_RETENTION_DAYS = 90;
     
     public RagConfig() {
-        this(false, null, null, null, false, DEFAULT_BRANCH_RETENTION_DAYS);
+        this(false, null, null, null, false, DEFAULT_BRANCH_RETENTION_DAYS, null, false);
     }
     
     public RagConfig(boolean enabled) {
-        this(enabled, null, null, null, false, DEFAULT_BRANCH_RETENTION_DAYS);
+        this(enabled, null, null, null, false, DEFAULT_BRANCH_RETENTION_DAYS, null, false);
     }
     
     public RagConfig(boolean enabled, String branch) {
-        this(enabled, branch, null, null, false, DEFAULT_BRANCH_RETENTION_DAYS);
+        this(enabled, branch, null, null, false, DEFAULT_BRANCH_RETENTION_DAYS, null, false);
     }
     
     public RagConfig(boolean enabled, String branch, List<String> excludePatterns) {
-        this(enabled, branch, null, excludePatterns, false, DEFAULT_BRANCH_RETENTION_DAYS);
+        this(enabled, branch, null, excludePatterns, false, DEFAULT_BRANCH_RETENTION_DAYS, null, false);
     }
     
     public RagConfig(boolean enabled, String branch, List<String> includePatterns, List<String> excludePatterns) {
-        this(enabled, branch, includePatterns, excludePatterns, false, DEFAULT_BRANCH_RETENTION_DAYS);
+        this(enabled, branch, includePatterns, excludePatterns, false, DEFAULT_BRANCH_RETENTION_DAYS, null, false);
+    }
+
+    /**
+     * Backward-compatible constructor for configurations written before explicit
+     * retained and transient branch ownership was introduced.
+     */
+    public RagConfig(
+            boolean enabled,
+            String branch,
+            List<String> includePatterns,
+            List<String> excludePatterns,
+            Boolean multiBranchEnabled,
+            Integer branchRetentionDays) {
+        this(enabled, branch, includePatterns, excludePatterns, multiBranchEnabled,
+                branchRetentionDays, null, false);
     }
     
     /**
      * Check if multi-branch context is enabled for PR analysis.
      */
+    @JsonIgnore
     public boolean isMultiBranchEnabled() {
         return multiBranchEnabled != null && multiBranchEnabled;
     }
@@ -60,8 +83,31 @@ public record RagConfig(
     /**
      * Get effective branch retention days.
      */
+    @JsonIgnore
     public int getEffectiveBranchRetentionDays() {
         return branchRetentionDays != null ? branchRetentionDays : DEFAULT_BRANCH_RETENTION_DAYS;
+    }
+
+    public boolean hasExplicitIndexedBranches() {
+        return indexedBranches != null && indexedBranches.stream()
+                .anyMatch(value -> value != null && !value.isBlank());
+    }
+
+    @JsonIgnore
+    public List<String> getEffectiveIndexedBranches() {
+        if (indexedBranches == null) {
+            return List.of();
+        }
+        return indexedBranches.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+    }
+
+    @JsonIgnore
+    public boolean isTransientBranchIndexesEnabled() {
+        return isMultiBranchEnabled() && Boolean.TRUE.equals(transientBranchIndexesEnabled);
     }
     
     /**
@@ -71,7 +117,13 @@ public record RagConfig(
      * @return true if branch matches any pattern and multi-branch is enabled
      */
     public boolean shouldHaveBranchIndex(String branchName, List<String> branchPushPatterns) {
-        if (!isMultiBranchEnabled() || branchPushPatterns == null || branchPushPatterns.isEmpty()) {
+        if (!isMultiBranchEnabled() || branchName == null || branchName.isBlank()) {
+            return false;
+        }
+        if (hasExplicitIndexedBranches()) {
+            return getEffectiveIndexedBranches().contains(branchName.trim());
+        }
+        if (branchPushPatterns == null || branchPushPatterns.isEmpty()) {
             return false;
         }
         return branchPushPatterns.stream()

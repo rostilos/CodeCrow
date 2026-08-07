@@ -30,8 +30,9 @@ public class BranchArchiveService {
     private static final Logger log = LoggerFactory.getLogger(BranchArchiveService.class);
 
     /**
-     * Maximum single-file size to extract from archive (10 MB).
-     * Files larger than this are skipped to avoid memory pressure.
+     * Maximum single-file size retained by the in-memory extraction API.
+     * Directory extraction, used by RAG indexing, streams entries directly to
+     * disk and does not impose this limit on an archive or its members.
      */
     private static final long MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
@@ -164,12 +165,11 @@ public class BranchArchiveService {
                 repoSlug,
                 branchOrCommit,
                 archiveFile -> {
-                    Set<String> extractedFiles = extractFilesFromArchive(
+                    Set<String> extractedFiles = extractFilesToDirectory(
                             archiveFile,
                             neededFiles,
                             presentFiles,
-                            (relativePath, bytes) ->
-                                    writeFile(normalizedTarget, relativePath, bytes));
+                            normalizedTarget);
                     return new ArchiveDirectorySnapshot(extractedFiles, presentFiles);
                 });
     }
@@ -244,16 +244,19 @@ public class BranchArchiveService {
 
                 presentFiles.add(relativePath);
 
-                // Read the entry content
-                byte[] bytes = readZipEntry(zis);
+                // The in-memory API must not retain an unbounded archive
+                // member. RAG uses extractFilesToDirectory below instead,
+                // which streams every accepted entry to disk.
+                ZipEntryContent content = readZipEntryBounded(zis);
 
-                // Skip very large files
-                if (bytes.length > MAX_FILE_SIZE_BYTES) {
-                    log.debug("Skipping large file {} ({} bytes)", relativePath, bytes.length);
+                if (content.tooLarge()) {
+                    log.debug("Skipping large file {} (more than {} bytes)",
+                            relativePath, MAX_FILE_SIZE_BYTES);
                     skippedLarge++;
                     zis.closeEntry();
                     continue;
                 }
+                byte[] bytes = content.bytes();
 
                 // Skip binary files (null bytes in first 1 KB)
                 if (isBinary(bytes)) {
@@ -285,17 +288,91 @@ public class BranchArchiveService {
         return extractedFiles;
     }
 
-    private boolean writeFile(Path targetDirectory, String relativePath, byte[] bytes) throws IOException {
+    /**
+     * Streams archive entries directly into an isolated repository directory.
+     * This is the RAG path: it intentionally has no archive-size or entry-size
+     * ceiling, so large repositories do not require correspondingly large JVM
+     * heaps. Only a small prefix and a fixed copy buffer are held in memory.
+     */
+    private Set<String> extractFilesToDirectory(
+            Path archiveFile,
+            Set<String> neededFiles,
+            Set<String> presentFiles,
+            Path targetDirectory
+    ) throws IOException {
+        Set<String> extractedFiles = new LinkedHashSet<>();
+        int skippedBinary = 0;
+        int skippedNotNeeded = 0;
+        int skippedUnsafe = 0;
+
+        try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(archiveFile))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                if (entry.isDirectory()) {
+                    zis.closeEntry();
+                    continue;
+                }
+
+                String relativePath = stripArchiveRoot(entry.getName());
+                if (neededFiles != null && !neededFiles.isEmpty()
+                        && !neededFiles.contains(relativePath)) {
+                    skippedNotNeeded++;
+                    zis.closeEntry();
+                    continue;
+                }
+
+                presentFiles.add(relativePath);
+                Path targetFile = resolveTargetFile(targetDirectory, relativePath);
+                if (targetFile == null) {
+                    skippedUnsafe++;
+                    zis.closeEntry();
+                    continue;
+                }
+
+                byte[] prefix = zis.readNBytes(1024);
+                if (isBinary(prefix, prefix.length)) {
+                    skippedBinary++;
+                    zis.closeEntry();
+                    continue;
+                }
+
+                try (OutputStream output = Files.newOutputStream(targetFile)) {
+                    output.write(prefix);
+                    byte[] buffer = new byte[8192];
+                    int length;
+                    while ((length = zis.read(buffer)) > 0) {
+                        output.write(buffer, 0, length);
+                    }
+                }
+                setWorldReadable(targetFile, false);
+                extractedFiles.add(relativePath);
+                zis.closeEntry();
+
+                if (neededFiles != null && !neededFiles.isEmpty()
+                        && extractedFiles.size() >= neededFiles.size()) {
+                    break;
+                }
+            }
+        }
+
+        log.info("Archive extraction: {} files streamed to disk, {} skipped (not needed), "
+                        + "{} binary, {} unsafe. Requested: {}",
+                extractedFiles.size(), skippedNotNeeded, skippedBinary, skippedUnsafe,
+                neededFiles != null ? neededFiles.size() : "all");
+        return extractedFiles;
+    }
+
+    private Path resolveTargetFile(Path targetDirectory, String relativePath) throws IOException {
         Path targetFile;
         try {
             targetFile = targetDirectory.resolve(relativePath).normalize();
         } catch (RuntimeException e) {
             log.warn("Skipping invalid archive entry path: {}", relativePath);
-            return false;
+            return null;
         }
         if (!targetFile.startsWith(targetDirectory) || targetFile.equals(targetDirectory)) {
             log.warn("Skipping archive entry outside target directory: {}", relativePath);
-            return false;
+            return null;
         }
 
         Path parent = targetFile.getParent();
@@ -305,9 +382,7 @@ public class BranchArchiveService {
              directory = directory.getParent()) {
             setWorldReadable(directory, true);
         }
-        Files.write(targetFile, bytes);
-        setWorldReadable(targetFile, false);
-        return true;
+        return targetFile;
     }
 
     private void setWorldReadable(Path path, boolean directory) {
@@ -338,14 +413,23 @@ public class BranchArchiveService {
         return entryPath;
     }
 
-    private byte[] readZipEntry(ZipInputStream zis) throws IOException {
+    private ZipEntryContent readZipEntryBounded(ZipInputStream zis) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream(8192);
         byte[] buffer = new byte[8192];
+        long totalBytes = 0;
+        boolean tooLarge = false;
         int len;
         while ((len = zis.read(buffer)) > 0) {
+            totalBytes += len;
+            if (totalBytes > MAX_FILE_SIZE_BYTES) {
+                tooLarge = true;
+                continue;
+            }
             baos.write(buffer, 0, len);
         }
-        return baos.toByteArray();
+        return tooLarge
+                ? ZipEntryContent.TOO_LARGE
+                : new ZipEntryContent(baos.toByteArray(), false);
     }
 
     /**
@@ -353,7 +437,11 @@ public class BranchArchiveService {
      * in the first 1024 bytes.
      */
     private boolean isBinary(byte[] data) {
-        int checkLimit = Math.min(data.length, 1024);
+        return isBinary(data, data.length);
+    }
+
+    private boolean isBinary(byte[] data, int length) {
+        int checkLimit = Math.min(length, 1024);
         for (int i = 0; i < checkLimit; i++) {
             if (data[i] == 0) return true;
         }
@@ -374,6 +462,10 @@ public class BranchArchiveService {
     @FunctionalInterface
     private interface ExtractedFileConsumer {
         boolean accept(String relativePath, byte[] bytes) throws IOException;
+    }
+
+    private record ZipEntryContent(byte[] bytes, boolean tooLarge) {
+        private static final ZipEntryContent TOO_LARGE = new ZipEntryContent(null, true);
     }
 
     public record ArchiveSnapshot(

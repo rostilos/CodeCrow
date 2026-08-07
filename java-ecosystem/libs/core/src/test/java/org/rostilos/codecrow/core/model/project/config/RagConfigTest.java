@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.core.model.project.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -103,5 +104,67 @@ class RagConfigTest {
     @Test
     void shouldHaveDefaultBranchRetentionDaysConstant() {
         assertThat(RagConfig.DEFAULT_BRANCH_RETENTION_DAYS).isEqualTo(90);
+    }
+
+    @Test
+    void explicitIndexedBranchesShouldOverrideLegacyPushPatterns() {
+        RagConfig config = new RagConfig(
+                true,
+                "master",
+                null,
+                null,
+                true,
+                30,
+                List.of(" develop ", "support/1.x", "develop", " "),
+                true);
+
+        assertThat(config.getEffectiveIndexedBranches()).containsExactly("develop", "support/1.x");
+        assertThat(config.shouldHaveBranchIndex("develop", List.of("feature/**"))).isTrue();
+        assertThat(config.shouldHaveBranchIndex("feature/one", List.of("feature/**"))).isFalse();
+        assertThat(config.isTransientBranchIndexesEnabled()).isTrue();
+    }
+
+    @Test
+    void legacyConfigurationShouldContinueUsingPushPatterns() {
+        RagConfig config = new RagConfig(true, "master", null, null, true, 30);
+
+        assertThat(config.hasExplicitIndexedBranches()).isFalse();
+        assertThat(config.shouldHaveBranchIndex("develop", List.of("develop", "support/**"))).isTrue();
+        assertThat(config.shouldHaveBranchIndex("support/1.x", List.of("develop", "support/**"))).isTrue();
+        assertThat(config.shouldHaveBranchIndex("feature/one", List.of("develop", "support/**"))).isFalse();
+        assertThat(config.isTransientBranchIndexesEnabled()).isFalse();
+    }
+
+    @Test
+    void transientIndexesRequireMultiBranchOwnership() {
+        RagConfig config = new RagConfig(
+                true, "master", null, null, false, 30, List.of("develop"), true);
+
+        assertThat(config.isTransientBranchIndexesEnabled()).isFalse();
+        assertThat(config.shouldHaveBranchIndex("develop", List.of("develop"))).isFalse();
+    }
+
+    @Test
+    void serializesOnlyPersistedFieldsAndRoundTripsRetainedBranches() throws Exception {
+        ProjectConfig projectConfig = new ProjectConfig();
+        projectConfig.setRagConfig(new RagConfig(
+                true, "master", null, null, true, 30,
+                List.of("develop", "release/1.x"), true));
+
+        ObjectMapper mapper = new ObjectMapper();
+        String json = mapper.writeValueAsString(projectConfig);
+
+        assertThat(json)
+                .doesNotContain("effectiveIndexedBranches")
+                .doesNotContain("effectiveBranchRetentionDays")
+                .doesNotContain("isMultiBranchEnabled")
+                .doesNotContain("isTransientBranchIndexesEnabled");
+
+        ProjectConfig restored = mapper.readValue(json, ProjectConfig.class);
+        assertThat(restored.ragConfig().indexedBranches())
+                .containsExactly("develop", "release/1.x");
+        assertThat(restored.ragConfig().getEffectiveIndexedBranches())
+                .containsExactly("develop", "release/1.x");
+        assertThat(restored.ragConfig().isTransientBranchIndexesEnabled()).isTrue();
     }
 }

@@ -181,6 +181,11 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 #codecrow.rag.api.timeout.read=120
 # RAG indexing timeout - 4 hours for large repositories
 #codecrow.rag.api.timeout.indexing=14400
+# Number of configured branch snapshots that an explicit Refresh all may build in parallel.
+#codecrow.rag.branch-build.parallelism=4
+# Repair interval for readable Qdrant current-branch aliases of active generations.
+#codecrow.rag.operator-alias.reconcile-interval-ms=300000
+#codecrow.rag.operator-alias.reconcile-initial-delay-ms=15000
 # Shared VCS acquisition threshold for incremental RAG and reconciliation
 # fallback. The legacy codecrow.rag.incremental.archive-file-threshold property
 # remains a fallback when this property is not set.

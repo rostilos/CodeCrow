@@ -475,7 +475,7 @@ class TestIndexRepository:
 
         assert result.chunk_count == 1
         assert result.skipped_chunk_count == 1
-        coll_mgr.atomic_alias_swap.assert_called_once()
+        coll_mgr.atomic_assign_aliases.assert_called_once_with({"alias1": "pending"})
         stats_mgr.store_metadata.assert_called_once()
 
     def test_repository_architecture_is_streamed_and_indexed_as_context(self, tmp_path):
@@ -691,28 +691,30 @@ class TestPerformAtomicSwap:
         config = _mock_config()
         coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader = _mock_components()
 
-        coll_mgr.collection_exists.return_value = False
-        coll_mgr.alias_exists.return_value = True
-        coll_mgr.resolve_alias.return_value = "active"
+        coll_mgr.read_alias_targets.return_value = {"alias1": "active"}
 
         indexer = RepositoryIndexer(config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader)
-        old_target = indexer._perform_atomic_swap("alias1", "pending", old_alias_exists=True)
+        old_targets = indexer._perform_atomic_swap(
+            "alias1", "pending", ["alias1"]
+        )
 
-        coll_mgr.atomic_alias_swap.assert_called_once()
-        assert old_target == "active"
+        coll_mgr.atomic_assign_aliases.assert_called_once_with({"alias1": "pending"})
+        assert old_targets == {"alias1": "active"}
         coll_mgr.delete_collection.assert_not_called()
 
     def test_first_activation_has_no_rollback_target(self):
         config = _mock_config()
         coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader = _mock_components()
 
-        coll_mgr.resolve_alias.return_value = None
+        coll_mgr.read_alias_targets.return_value = {"alias1": None}
 
         indexer = RepositoryIndexer(config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader)
-        old_target = indexer._perform_atomic_swap("alias1", "pending", old_alias_exists=False)
+        old_targets = indexer._perform_atomic_swap(
+            "alias1", "pending", ["alias1"]
+        )
 
-        assert old_target is None
-        coll_mgr.atomic_alias_swap.assert_called_once_with("alias1", "pending", False)
+        assert old_targets == {"alias1": None}
+        coll_mgr.atomic_assign_aliases.assert_called_once_with({"alias1": "pending"})
 
     def test_metadata_failure_rolls_back_before_pending_collection_is_deleted(self):
         config = _mock_config()
@@ -725,6 +727,7 @@ class TestPerformAtomicSwap:
         coll_mgr.create_pending_collection.return_value = "pending"
         coll_mgr.alias_exists.return_value = True
         coll_mgr.resolve_alias.return_value = "active"
+        coll_mgr.read_alias_targets.return_value = {"alias1": "active"}
         point_ops.client.get_collection.return_value = SimpleNamespace(points_count=1)
         stats_mgr.store_metadata.side_effect = RuntimeError("metadata unavailable")
 
@@ -732,9 +735,9 @@ class TestPerformAtomicSwap:
         with pytest.raises(RuntimeError, match="metadata unavailable"):
             indexer.index_repository("/repo", "ws", "proj", "main", "abc123", "alias1")
 
-        assert coll_mgr.atomic_alias_swap.call_args_list == [
-            call("alias1", "pending", True),
-            call("alias1", "active", True),
+        assert coll_mgr.atomic_assign_aliases.call_args_list == [
+            call({"alias1": "pending"}),
+            call({"alias1": "active"}),
         ]
         coll_mgr.delete_collection.assert_called_with("pending")
 

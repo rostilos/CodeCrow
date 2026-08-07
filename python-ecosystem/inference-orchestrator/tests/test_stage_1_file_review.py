@@ -1146,6 +1146,21 @@ class TestFetchBatchRagContext:
         request.enrichmentData = None
         return request
 
+    def _exact_request(self):
+        request = self._request()
+        request.currentCommitHash = "a" * 40
+        request.commitHash = "a" * 40
+        request.baseCommitHash = "b" * 40
+        request.ragBaseGenerationManifestSha256 = "c" * 64
+        request.ragPrGenerationFingerprint = "d" * 64
+        request.ragPrOverlayGenerationManifestSha256 = "e" * 64
+        request.rawDiff = ""
+        request.deltaDiff = None
+        request.taskContext = None
+        request.projectRules = []
+        request.previousCodeAnalysisIssues = []
+        return request
+
     @pytest.mark.asyncio(loop_scope="function")
     async def test_missing_target_branch_does_not_query_an_invented_branch(self):
         request = self._request()
@@ -1397,6 +1412,185 @@ class TestFetchBatchRagContext:
             "class Client {}"
         ]
         assert state.deterministic_retrieval_states == ["failed"]
+        assert state.semantic_disabled is False
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_exact_deterministic_failure_prevents_review_model_call(self):
+        class Rag:
+            async def get_deterministic_context(self, **kwargs):
+                return {
+                    "status": "error",
+                    "status_code": 500,
+                    "error": "exact retrieval failed",
+                }
+
+            async def get_pr_context(self, **kwargs):
+                raise AssertionError("semantic retrieval must not run")
+
+            async def search_for_duplicates(self, **kwargs):
+                return []
+
+        batch = [{
+            "file": ReviewFile(
+                path="src/a.py",
+                focus_areas=["general"],
+                risk_level="MEDIUM",
+            ),
+            "priority": "MEDIUM",
+        }]
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review."
+            "_invoke_stage_1_batch_llm",
+            new_callable=AsyncMock,
+        ) as invoke:
+            with pytest.raises(
+                RuntimeError,
+                match="revision-bound deterministic RAG retrieval failed",
+            ):
+                await review_file_batch(
+                    MagicMock(),
+                    self._exact_request(),
+                    batch,
+                    rag_client=Rag(),
+                    prepared_context=Stage1PreparedContext(),
+                    pr_indexed=True,
+                    rag_state=Stage1RagState(),
+                )
+
+        invoke.assert_not_awaited()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_exact_missing_rag_client_prevents_review_model_call(self):
+        batch = [{
+            "file": ReviewFile(
+                path="src/a.py",
+                focus_areas=["general"],
+                risk_level="MEDIUM",
+            ),
+            "priority": "MEDIUM",
+        }]
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review."
+            "_invoke_stage_1_batch_llm",
+            new_callable=AsyncMock,
+        ) as invoke:
+            with pytest.raises(
+                RuntimeError,
+                match="requires a RAG client",
+            ):
+                await review_file_batch(
+                    MagicMock(),
+                    self._exact_request(),
+                    batch,
+                    rag_client=None,
+                    prepared_context=Stage1PreparedContext(),
+                    pr_indexed=True,
+                    rag_state=Stage1RagState(),
+                )
+
+        invoke.assert_not_awaited()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_exact_partial_deterministic_state_fails_closed(self):
+        class Rag:
+            async def get_deterministic_context(self, **kwargs):
+                return {
+                    "context": {
+                        "chunks": [{"text": "partial context"}],
+                        "_metadata": {"retrieval_state": "partial"},
+                    }
+                }
+
+            async def search_for_duplicates(self, **kwargs):
+                return []
+
+        with pytest.raises(
+            RuntimeError,
+            match="deterministic RAG retrieval is not complete: partial",
+        ):
+            await fetch_batch_rag_context(
+                Rag(),
+                self._exact_request(),
+                ["src/a.py"],
+                ["changed line"],
+                pr_indexed=True,
+                rag_state=Stage1RagState(),
+            )
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_exact_semantic_transport_failure_fails_closed(self):
+        class Rag:
+            async def get_deterministic_context(self, **kwargs):
+                return {
+                    "context": {
+                        "chunks": [],
+                        "_metadata": {"retrieval_state": "complete"},
+                    }
+                }
+
+            async def get_pr_context(self, **kwargs):
+                return {
+                    "status": "error",
+                    "status_code": 503,
+                    "error": "semantic backend unavailable",
+                }
+
+            async def search_for_duplicates(self, **kwargs):
+                return []
+
+        with pytest.raises(RuntimeError, match="semantic backend unavailable"):
+            await fetch_batch_rag_context(
+                Rag(),
+                self._exact_request(),
+                ["src/a.py"],
+                ["changed line"],
+                pr_indexed=True,
+                rag_state=Stage1RagState(),
+            )
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_exact_bound_success_allows_intentional_semantic_disable(
+        self,
+        monkeypatch,
+    ):
+        import service.review.orchestrator.stage_1_file_review as stage1
+
+        monkeypatch.setattr(stage1, "SEMANTIC_RAG_FILLER_ENABLED", False)
+
+        class Rag:
+            async def get_deterministic_context(self, **kwargs):
+                return {
+                    "context": {
+                        "chunks": [{
+                            "text": "exact context",
+                            "metadata": {"path": "src/dependency.py"},
+                        }],
+                        "_metadata": {"retrieval_state": "complete"},
+                    }
+                }
+
+            async def get_pr_context(self, **kwargs):
+                raise AssertionError("semantic retrieval is intentionally disabled")
+
+            async def search_for_duplicates(self, **kwargs):
+                return []
+
+        state = Stage1RagState()
+        result = await fetch_batch_rag_context(
+            Rag(),
+            self._exact_request(),
+            ["src/a.py"],
+            ["changed line"],
+            pr_indexed=True,
+            rag_state=state,
+        )
+
+        assert [chunk["text"] for chunk in result["relevant_code"]] == [
+            "exact context"
+        ]
+        assert state.deterministic_retrieval_states == ["complete"]
         assert state.semantic_disabled is False
 
 
@@ -1858,6 +2052,36 @@ class TestCreateSmartBatchesWrapper:
 
         assert result == mock_smart.return_value
         assert mock_smart.call_args.kwargs["branches"] == []
+        assert mock_smart.call_args.kwargs["rag_client"] is None
+
+    @patch("service.review.orchestrator.stage_1_file_review.create_smart_batches_async")
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_exact_receipts_disable_unbound_batching_rag(self, mock_smart):
+        groups = self._make_plan(["a.py"])
+        mock_smart.return_value = [[{
+            "file": groups[0].files[0],
+            "priority": "MEDIUM",
+        }]]
+        request = MagicMock(
+            enrichmentData=None,
+            maxAllowedTokens=200000,
+            projectWorkspace="ws",
+            projectNamespace="proj",
+            ragBaseGenerationManifestSha256="a" * 64,
+            ragPrGenerationFingerprint="sha256:" + "b" * 64,
+            ragPrOverlayGenerationManifestSha256="c" * 64,
+        )
+        request.get_rag_branch.return_value = "main"
+        request.get_rag_base_branch.return_value = "main"
+
+        result = await create_smart_batches_wrapper(
+            file_groups=groups,
+            processed_diff=MagicMock(),
+            request=request,
+            rag_client=MagicMock(),
+        )
+
+        assert result == mock_smart.return_value
         assert mock_smart.call_args.kwargs["rag_client"] is None
 
 

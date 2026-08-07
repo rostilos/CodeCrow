@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.core.persistence.repository.rag;
 
 import org.rostilos.codecrow.core.model.rag.RagBranchIndex;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -19,6 +20,8 @@ public interface RagBranchIndexRepository extends JpaRepository<RagBranchIndex, 
     Optional<RagBranchIndex> findByProjectIdAndBranchName(Long projectId, String branchName);
 
     List<RagBranchIndex> findByProjectId(Long projectId);
+
+    List<RagBranchIndex> findByIndexKind(RagBranchIndexKind indexKind);
 
     @Query("SELECT CASE WHEN COUNT(b) > 0 THEN true ELSE false END FROM RagBranchIndex b " +
            "WHERE b.project.id = :projectId AND b.branchName = :branchName")

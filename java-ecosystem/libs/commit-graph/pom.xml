@@ -33,6 +33,11 @@
             <artifactId>codecrow-vcs-client</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-scm-evidence</artifactId>
+        </dependency>
+
         <!-- Spring Data JPA for repositories -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
