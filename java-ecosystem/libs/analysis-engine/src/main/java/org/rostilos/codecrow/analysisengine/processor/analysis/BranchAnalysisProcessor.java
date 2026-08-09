@@ -153,13 +153,33 @@ public class BranchAnalysisProcessor {
 	public Map<String, Object> process(
 			BranchProcessRequest request,
 			Consumer<Map<String, Object>> consumer) throws IOException {
+		return process(request, consumer, false);
+	}
+
+	/**
+	 * Execute a branch job whose persisted cross-analysis dependencies were
+	 * already resolved by the dispatcher.
+	 */
+	public Map<String, Object> processAfterDependencyGate(
+			BranchProcessRequest request,
+			Consumer<Map<String, Object>> consumer) throws IOException {
+		return process(request, consumer, true);
+	}
+
+	private Map<String, Object> process(
+			BranchProcessRequest request,
+			Consumer<Map<String, Object>> consumer,
+			boolean dependencyGateSatisfied) throws IOException {
 		Project project = projectService.getProjectWithConnections(request.getProjectId());
 
-		// PR jobs are registered before async processing starts and remain active
-		// until their source-branch lock is released and analysis is persisted.
-		branchAnalysisGateService.awaitPrAnalysis(
-				project.getId(), request.getTargetBranchName(),
-				request.getSourcePrNumber(), consumer);
+		if (!dependencyGateSatisfied) {
+			// Scheduled/direct callers without a durable dispatch job retain the
+			// broad compatibility barrier. Webhook and pipeline dispatchers use the
+			// job-id snapshot barrier before calling processAfterDependencyGate().
+			branchAnalysisGateService.awaitPrAnalysis(
+					project.getId(), request.getTargetBranchName(),
+					request.getSourcePrNumber(), consumer);
+		}
 		refreshMergedBranchHead(project, request);
 
 		Optional<String> lockKey = analysisLockService.acquireLockWithWait(

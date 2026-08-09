@@ -10,6 +10,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -57,6 +59,51 @@ public class GetPullRequestDiffAction {
      */
     private String getPullRequestDiffFromFiles(String owner, String repo, int pullRequestNumber) throws IOException {
         StringBuilder combinedDiff = new StringBuilder();
+        for (PullRequestFilePatch file : getPullRequestFilePatches(
+                owner, repo, pullRequestNumber)) {
+            if (file.patch().isEmpty()) {
+                continue;
+            }
+
+            // Build a unified diff header
+            String fromFile = "renamed".equals(file.status())
+                    && !file.previousFilename().isEmpty()
+                    ? file.previousFilename()
+                    : file.filename();
+            combinedDiff.append("diff --git a/").append(fromFile)
+                    .append(" b/").append(file.filename()).append("\n");
+
+            if ("added".equals(file.status())) {
+                combinedDiff.append("new file mode 100644\n");
+            } else if ("removed".equals(file.status())) {
+                combinedDiff.append("deleted file mode 100644\n");
+            } else if ("renamed".equals(file.status())) {
+                combinedDiff.append("rename from ").append(file.previousFilename()).append("\n");
+                combinedDiff.append("rename to ").append(file.filename()).append("\n");
+            }
+
+            combinedDiff.append("--- a/").append(fromFile).append("\n");
+            combinedDiff.append("+++ b/").append(file.filename()).append("\n");
+            combinedDiff.append(file.patch()).append("\n");
+        }
+        return combinedDiff.toString();
+    }
+
+    /**
+     * Return GitHub's structured per-file patches for a pull request.
+     *
+     * <p>The file endpoint is used directly for inline-review planning because
+     * its destination path is authoritative and does not require parsing quoted
+     * {@code diff --git} headers. A missing patch (for example, a binary or very
+     * large file) is preserved as an empty value so callers can treat its lines
+     * as unavailable for inline comments.</p>
+     */
+    public List<PullRequestFilePatch> getPullRequestFilePatches(
+            String owner,
+            String repo,
+            int pullRequestNumber
+    ) throws IOException {
+        List<PullRequestFilePatch> patches = new ArrayList<>();
         String nextUrl = String.format("%s/repos/%s/%s/pulls/%d/files?per_page=100",
                 GitHubConfig.API_BASE, owner, repo, pullRequestNumber);
 
@@ -84,25 +131,8 @@ public class GetPullRequestDiffAction {
                     String patch = file.has("patch") ? file.get("patch").asText() : "";
                     String status = file.has("status") ? file.get("status").asText() : "";
                     String previousFilename = file.has("previous_filename") ? file.get("previous_filename").asText() : "";
-
-                    if (!patch.isEmpty()) {
-                        // Build a unified diff header
-                        String fromFile = "renamed".equals(status) && !previousFilename.isEmpty() ? previousFilename : filename;
-                        combinedDiff.append("diff --git a/").append(fromFile).append(" b/").append(filename).append("\n");
-
-                        if ("added".equals(status)) {
-                            combinedDiff.append("new file mode 100644\n");
-                        } else if ("removed".equals(status)) {
-                            combinedDiff.append("deleted file mode 100644\n");
-                        } else if ("renamed".equals(status)) {
-                            combinedDiff.append("rename from ").append(previousFilename).append("\n");
-                            combinedDiff.append("rename to ").append(filename).append("\n");
-                        }
-
-                        combinedDiff.append("--- a/").append(fromFile).append("\n");
-                        combinedDiff.append("+++ b/").append(filename).append("\n");
-                        combinedDiff.append(patch).append("\n");
-                    }
+                    patches.add(new PullRequestFilePatch(
+                            filename, previousFilename, status, patch));
                 }
 
                 // Check for next page in Link header
@@ -117,6 +147,20 @@ public class GetPullRequestDiffAction {
             }
         }
 
-        return combinedDiff.toString();
+        return List.copyOf(patches);
+    }
+
+    public record PullRequestFilePatch(
+            String filename,
+            String previousFilename,
+            String status,
+            String patch
+    ) {
+        public PullRequestFilePatch {
+            filename = filename != null ? filename : "";
+            previousFilename = previousFilename != null ? previousFilename : "";
+            status = status != null ? status : "";
+            patch = patch != null ? patch : "";
+        }
     }
 }

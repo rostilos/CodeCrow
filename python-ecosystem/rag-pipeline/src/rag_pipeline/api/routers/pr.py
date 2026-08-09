@@ -110,9 +110,10 @@ def index_pr_files(request: PRIndexRequest):
     completely and then replaces the previous points with rollback protection.
     """
     index_manager = _get_index_manager()
-    mutation_context = index_manager.project_mutation(
+    mutation_context = index_manager.pr_overlay_mutation(
         request.workspace,
         request.project,
+        request.pr_number,
         "index-pr-overlay",
     )
     mutation_lease = None
@@ -826,9 +827,10 @@ def delete_pr_files(
     """Delete all indexed points for a specific PR."""
     index_manager = _get_index_manager()
     try:
-        with index_manager.project_mutation(
+        with index_manager.pr_overlay_mutation(
             workspace,
             project,
+            pr_number,
             "delete-pr-overlay",
         ) as lease:
             collection_name = (

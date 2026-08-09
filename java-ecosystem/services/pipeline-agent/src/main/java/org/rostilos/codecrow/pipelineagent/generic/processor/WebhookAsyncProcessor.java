@@ -144,13 +144,13 @@ public class WebhookAsyncProcessor {
             jobService.startJob(job);
             log.info("jobService.startJob completed for job {}", job.getExternalId());
 
-            if (job.getJobType() == JobType.BRANCH_ANALYSIS) {
-                BranchAnalysisGateService.GateResult gateResult = branchAnalysisGateService.awaitTurn(
-                        projectId,
-                        job.getBranchName(),
-                        job.getId(),
-                        job.getPrNumber(),
-                        event -> logHandlerEvent(job, event));
+            if (job.getJobType() == JobType.BRANCH_ANALYSIS
+                    || job.getJobType() == JobType.PR_ANALYSIS) {
+                BranchAnalysisGateService.GateResult gateResult =
+                        branchAnalysisGateService.awaitDependencies(
+                                projectId,
+                                job,
+                                event -> logHandlerEvent(job, event));
                 if (gateResult == BranchAnalysisGateService.GateResult.SUPERSEDED) {
                     String reason = "Superseded by a newer branch analysis job for " + job.getBranchName();
                     log.info("Skipping branch job {}: {}", job.getExternalId(), reason);

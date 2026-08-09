@@ -1040,6 +1040,26 @@ class RAGIndexManager:
         """Return the shared mutation boundary for auxiliary index endpoints."""
         return self._mutation_coordinator.acquire(workspace, project, operation)
 
+    def pr_overlay_mutation(
+        self,
+        workspace: str,
+        project: str,
+        pr_number: int,
+        operation: str,
+    ):
+        """Serialize one PR overlay without blocking unrelated PRs.
+
+        Index replacement and deletion for the same PR must not overlap, even
+        when the target generation changes between attempts. Different PR
+        numbers have disjoint point identities and can mutate concurrently.
+        """
+        return self._mutation_coordinator.acquire(
+            workspace,
+            project,
+            operation,
+            publication_scope=f"pr-overlay:{pr_number}",
+        )
+
     def close(self) -> None:
         self._mutation_coordinator.close()
 

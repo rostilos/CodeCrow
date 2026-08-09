@@ -209,6 +209,42 @@ class CommentOnPullRequestActionTest {
     }
 
     @Test
+    void deletePreviousReviewComments_preservesTheReplacementReview() throws IOException {
+        List<Request> requests = new ArrayList<>();
+        when(okHttpClient.newCall(any(Request.class))).thenAnswer(invocation -> {
+            Request request = invocation.getArgument(0);
+            requests.add(request);
+
+            String responseJson = request.method().equals("GET")
+                    ? "[{\"id\":41,\"pull_request_review_id\":51,"
+                            + "\"body\":\"old <!-- codecrow-analysis-review -->\"},"
+                            + "{\"id\":42,\"pull_request_review_id\":99,"
+                            + "\"body\":\"new <!-- codecrow-analysis-review -->\"}]"
+                    : "{}";
+            Response requestResponse = new Response.Builder()
+                    .request(request)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(ResponseBody.create(responseJson, MediaType.parse("application/json")))
+                    .build();
+            Call requestCall = mock(Call.class);
+            when(requestCall.execute()).thenReturn(requestResponse);
+            return requestCall;
+        });
+
+        int deleted = action.deletePreviousReviewComments(
+                "owner", "repo", 123, "<!-- codecrow-analysis-review -->", 99L);
+
+        assertThat(deleted).isEqualTo(1);
+        assertThat(requests).extracting(request -> request.method() + " " + request.url().encodedPath())
+                .containsExactly(
+                        "GET /repos/owner/repo/pulls/123/comments",
+                        "DELETE /repos/owner/repo/pulls/comments/41"
+                );
+    }
+
+    @Test
     void clearPreviousReviewBodies_clearsOnlyMarkedReviewSummaries() throws IOException {
         List<Request> requests = new ArrayList<>();
         when(okHttpClient.newCall(any(Request.class))).thenAnswer(invocation -> {
@@ -252,5 +288,44 @@ class CommentOnPullRequestActionTest {
         requests.get(1).body().writeTo(body);
         assertThat(new ObjectMapper().readTree(body.readUtf8()).path("body").asText())
                 .isEqualTo("<!-- codecrow-analysis-review-cleared -->");
+    }
+
+    @Test
+    void clearPreviousReviewBodies_preservesTheReplacementReview() throws IOException {
+        List<Request> requests = new ArrayList<>();
+        when(okHttpClient.newCall(any(Request.class))).thenAnswer(invocation -> {
+            Request request = invocation.getArgument(0);
+            requests.add(request);
+
+            String responseJson = request.method().equals("GET")
+                    ? "[{\"id\":51,\"body\":\"old <!-- codecrow-analysis-review -->\"},"
+                            + "{\"id\":99,\"body\":\"new <!-- codecrow-analysis-review -->\"}]"
+                    : "{}";
+            Response requestResponse = new Response.Builder()
+                    .request(request)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(ResponseBody.create(responseJson, MediaType.parse("application/json")))
+                    .build();
+            Call requestCall = mock(Call.class);
+            when(requestCall.execute()).thenReturn(requestResponse);
+            return requestCall;
+        });
+
+        int cleared = action.clearPreviousReviewBodies(
+                "owner",
+                "repo",
+                123,
+                "<!-- codecrow-analysis-review -->",
+                "<!-- codecrow-analysis-review-cleared -->",
+                99L);
+
+        assertThat(cleared).isEqualTo(1);
+        assertThat(requests).extracting(request -> request.method() + " " + request.url().encodedPath())
+                .containsExactly(
+                        "GET /repos/owner/repo/pulls/123/reviews",
+                        "PUT /repos/owner/repo/pulls/123/reviews/51"
+                );
     }
 }

@@ -147,6 +147,28 @@ class BranchAnalysisGateServiceTest {
         verify(jobRepository, times(0)).existsActivePrAnalysisJob(1L, "main");
     }
 
+    @Test
+    void prWaitsOnlyForOlderBranchJobsOnItsTargetBranch() {
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> consumer = mock(Consumer.class);
+        Job prJob = job(JobStatus.RUNNING);
+        ReflectionTestUtils.setField(prJob, "id", 104L);
+        prJob.setBranchName("main");
+
+        when(jobRepository.existsActiveBranchAnalysisJobBefore(1L, "main", 104L))
+                .thenReturn(true, true, false);
+
+        BranchAnalysisGateService.GateResult result = service.awaitDependencies(
+                1L, prJob, consumer);
+
+        assertThat(result).isEqualTo(BranchAnalysisGateService.GateResult.READY);
+        verify(jobRepository, times(3))
+                .existsActiveBranchAnalysisJobBefore(1L, "main", 104L);
+        verify(consumer, times(2)).accept(org.mockito.ArgumentMatchers.argThat(
+                event -> "branch_analysis_wait".equals(event.get("type"))
+                        && "main".equals(event.get("branchName"))));
+    }
+
     private static Job job(JobStatus status) {
         Job job = new Job();
         job.setJobType(JobType.PR_ANALYSIS);

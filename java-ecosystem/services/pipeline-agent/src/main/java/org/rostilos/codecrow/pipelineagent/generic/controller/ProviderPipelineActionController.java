@@ -76,7 +76,8 @@ public class ProviderPipelineActionController {
                     PipelineActionProcessor.EventConsumer dualConsumer =
                             pipelineJobService.createDualConsumer(jobRef, consumer);
                     try {
-                        return pipelineActionProcessor.processPipelineActionWithConsumer(payload, dualConsumer);
+                        return pipelineActionProcessor.processPipelineActionWithConsumer(
+                                payload, dualConsumer, jobRef);
                     } catch (org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException e) {
                         log.warn("Analysis locked: {}", e.getMessage());
                         dualConsumer.accept(Map.of(
@@ -131,7 +132,8 @@ public class ProviderPipelineActionController {
                         PipelineActionProcessor.EventConsumer dualConsumer =
                                 pipelineJobService.createDualConsumer(jobRef, consumer);
                         try {
-                            return pipelineActionProcessor.processPipelineActionWithConsumer(payload, dualConsumer);
+                            return pipelineActionProcessor.processPipelineActionWithConsumer(
+                                    payload, dualConsumer, jobRef);
                         } catch (org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException e) {
                             log.warn("Analysis locked: {}", e.getMessage());
                             dualConsumer.accept(Map.of(

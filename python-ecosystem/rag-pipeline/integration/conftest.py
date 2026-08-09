@@ -91,6 +91,7 @@ def rag_app(_mock_qdrant, _mock_embedding):
             assert_owned=MagicMock()
         )
         mock_im.project_mutation.return_value = mutation_context
+        mock_im.pr_overlay_mutation.return_value = mutation_context
         mock_im.embed_model = _mock_embedding
         mock_im.qdrant_client = _mock_qdrant
         mock_im.splitter.split_documents_resilient.side_effect = (

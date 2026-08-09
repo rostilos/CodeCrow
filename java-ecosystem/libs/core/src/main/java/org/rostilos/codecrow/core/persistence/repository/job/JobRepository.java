@@ -126,6 +126,26 @@ public interface JobRepository extends JpaRepository<Job, Long> {
     );
 
     /**
+     * A PR accepted after a target-branch update must wait until that older
+     * branch job has reconciled repository state and published its RAG update.
+     * Later branch jobs wait for the PR instead, so the persisted job id gives
+     * both directions one deadlock-free ordering rule.
+     */
+    @Query("SELECT CASE WHEN COUNT(j) > 0 THEN true ELSE false END FROM Job j " +
+            "WHERE j.project.id = :projectId AND j.branchName = :branchName " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.BRANCH_ANALYSIS " +
+            "AND j.id < :beforeJobId " +
+            "AND j.status IN (org.rostilos.codecrow.core.model.job.JobStatus.PENDING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.RUNNING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.WAITING)")
+    boolean existsActiveBranchAnalysisJobBefore(
+            @Param("projectId") Long projectId,
+            @Param("branchName") String branchName,
+            @Param("beforeJobId") Long beforeJobId
+    );
+
+    /**
      * Return only the newest analysis attempt for a PR. An abandoned older
      * attempt must not poison branch reconciliation after a newer attempt has
      * already reached a terminal state.

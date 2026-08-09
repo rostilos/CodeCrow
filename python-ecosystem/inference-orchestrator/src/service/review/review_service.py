@@ -50,7 +50,7 @@ class ReviewService:
     MAX_FIX_RETRIES = 2
 
     # Maximum concurrent reviews (each spawns a JVM subprocess + LLM calls)
-    MAX_CONCURRENT_REVIEWS = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4"))
+    MAX_CONCURRENT_REVIEWS = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "20"))
 
     # Hard timeout ceiling per review (seconds). Configurable via .env
     REVIEW_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "1500"))

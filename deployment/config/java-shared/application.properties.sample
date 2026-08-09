@@ -213,6 +213,11 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 # Lock cleanup interval - how often to clean up expired locks (in milliseconds)
 #analysis.lock.cleanup.interval.ms=300000
 
+# Durable webhook execution. The executor has no in-memory queue: accepted work
+# beyond max capacity stays QUEUED in PostgreSQL and is recovered later.
+#webhook.executor.core-pool-size=8
+#webhook.executor.max-pool-size=20
+
 # Hard PR-wide spending limits are supplied to pipeline-agent through deployment/.env:
 # ANALYSIS_MAX_FILES=150
 # ANALYSIS_MAX_FILE_SIZE_BYTES=5242880
