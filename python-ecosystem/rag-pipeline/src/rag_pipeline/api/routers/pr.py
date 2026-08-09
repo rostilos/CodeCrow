@@ -130,6 +130,14 @@ def index_pr_files(request: PRIndexRequest):
             requested_collection_target = None
         if not isinstance(requested_base_manifest, str):
             requested_base_manifest = None
+        if requested_collection_target and not request.base_revision:
+            raise IncrementalIndexPreconditionError(
+                "PR overlay collection target requires an exact base revision"
+            )
+        if requested_base_manifest and not request.base_revision:
+            raise IncrementalIndexPreconditionError(
+                "PR overlay base generation receipt requires an exact base revision"
+            )
         exact_binding = bool(
             request.base_revision
             and (requested_collection_target or requested_base_manifest)
@@ -836,7 +844,10 @@ def delete_pr_files(
                 collection_name=collection_name,
                 points_selector=Filter(
                     must=[
-                        FieldCondition(key="pr_number", match=MatchValue(value=pr_number))
+                        FieldCondition(key="workspace", match=MatchValue(value=workspace)),
+                        FieldCondition(key="project", match=MatchValue(value=project)),
+                        FieldCondition(key="pr", match=MatchValue(value=True)),
+                        FieldCondition(key="pr_number", match=MatchValue(value=pr_number)),
                     ]
                 )
             )

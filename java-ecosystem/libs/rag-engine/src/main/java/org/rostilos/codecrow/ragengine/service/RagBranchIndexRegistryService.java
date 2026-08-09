@@ -71,7 +71,7 @@ public class RagBranchIndexRegistryService {
         }
 
         RagBranchIndex branchIndex = branchIndexRepository
-                .findByProjectIdAndBranchName(project.getId(), branch)
+                .findByProjectIdAndBranchNameForUpdate(project.getId(), branch)
                 .orElseGet(() -> new RagBranchIndex(project, branch, kind));
         if (branchIndex.getIndexKind() == RagBranchIndexKind.LEGACY
                 || kind == RagBranchIndexKind.PRIMARY
@@ -110,10 +110,6 @@ public class RagBranchIndexRegistryService {
         if (operation.getStatus() == RagIndexOperationStatus.FAILED) {
             operation.getGeneration().retry();
             generationRepository.save(operation.getGeneration());
-            operation.getGeneration().getBranchIndex().requestRevision(
-                    operation.getToRevision());
-            branchIndexRepository.save(
-                    operation.getGeneration().getBranchIndex());
         }
         operation.setJobId(jobId);
         operation.start();
@@ -135,9 +131,28 @@ public class RagBranchIndexRegistryService {
             throw new IllegalStateException("Only a building generation can be published");
         }
 
-        RagBranchIndex branchIndex = generation.getBranchIndex();
+        Long branchIndexId = generation.getBranchIndex().getId();
+        RagBranchIndex branchIndex = branchIndexRepository
+                .findByIdForPublication(branchIndexId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "RAG branch index not found: " + branchIndexId));
+        generation.setBranchIndex(branchIndex);
+
+        String digest = requireText(manifestDigest, "manifestDigest");
+        if (!generation.getRevision().equals(branchIndex.getDesiredCommitHash())) {
+            // The physical generation is complete and remains useful for exact
+            // revision reads, but a newer request owns the branch head. Record
+            // this operation as successful without regressing the active head.
+            generation.activate(digest, fileCount, chunkCount);
+            generation.supersede();
+            generationRepository.save(generation);
+            operation.succeed(generation);
+            operationRepository.save(operation);
+            return generation;
+        }
+
         RagBranchIndexGeneration previous = branchIndex.getActiveGeneration();
-        generation.activate(requireText(manifestDigest, "manifestDigest"), fileCount, chunkCount);
+        generation.activate(digest, fileCount, chunkCount);
         generationRepository.save(generation);
         if (previous != null && previous.getId() != null && !previous.getId().equals(generation.getId())) {
             previous.supersede();
@@ -157,10 +172,19 @@ public class RagBranchIndexRegistryService {
             return;
         }
         String failure = requireText(errorMessage, "errorMessage");
-        operation.getGeneration().fail(failure);
-        generationRepository.save(operation.getGeneration());
-        operation.getGeneration().getBranchIndex().failUpdate(failure);
-        branchIndexRepository.save(operation.getGeneration().getBranchIndex());
+        RagBranchIndexGeneration generation = operation.getGeneration();
+        Long branchIndexId = generation.getBranchIndex().getId();
+        RagBranchIndex branchIndex = branchIndexRepository
+                .findByIdForPublication(branchIndexId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "RAG branch index not found: " + branchIndexId));
+        generation.setBranchIndex(branchIndex);
+        generation.fail(failure);
+        generationRepository.save(generation);
+        if (generation.getRevision().equals(branchIndex.getDesiredCommitHash())) {
+            branchIndex.failUpdate(failure);
+            branchIndexRepository.save(branchIndex);
+        }
         operation.fail(failure);
         operationRepository.save(operation);
     }

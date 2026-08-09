@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from types import SimpleNamespace
 
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
@@ -371,7 +372,8 @@ def read_repository_revision_preflight(
     point_count = 0
     identity = None
     manifest_points = []
-    member_points = []
+    members = []
+    member_validation_error = None
     offset = None
 
     while True:
@@ -404,9 +406,26 @@ def read_repository_revision_preflight(
                     "fully reindex the revision"
                 )
             if payload.get(GENERATION_MANIFEST_PAYLOAD_KEY) is True:
-                manifest_points.append(point)
+                # Retain only the small manifest payload. Keeping its 4096-d
+                # vector would otherwise pin one full Qdrant point until the
+                # complete generation scan finishes.
+                manifest_points.append(SimpleNamespace(payload=dict(payload)))
             else:
-                member_points.append(point)
+                try:
+                    # Verify while this page is live and retain only the
+                    # compact (point id, digest) receipt. Never accumulate
+                    # complete payloads and vectors for the whole repository.
+                    members.append(verified_generation_member(point))
+                except GenerationManifestError as exception:
+                    # Preserve validation priority from the original preflight:
+                    # mixed identity/revision and missing-manifest diagnostics
+                    # are established before member-content failure. Keep only
+                    # the error text so its traceback cannot pin this page.
+                    if member_validation_error is None:
+                        member_validation_error = str(exception)
+        point = None
+        payload = None
+        del points
         if offset is None:
             break
 
@@ -426,16 +445,11 @@ def read_repository_revision_preflight(
             branch,
             commit,
         )
-    try:
-        members = [
-            verified_generation_member(point)
-            for point in member_points
-        ]
-    except GenerationManifestError as exception:
+    if member_validation_error is not None:
         raise IncrementalIndexPreconditionError(
             "exact revision repository generation member content failed "
             "integrity validation; fully reindex the revision"
-        ) from exception
+        )
     generation_identity = _validate_generation_manifest(
         manifest_points,
         members,

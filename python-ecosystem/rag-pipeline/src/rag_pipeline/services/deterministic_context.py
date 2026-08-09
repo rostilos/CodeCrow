@@ -279,6 +279,24 @@ class DeterministicContextMixin:
         Returns:
             Dict with chunks grouped by retrieval type and rich metadata
         """
+        if pr_generation_fingerprint and not all((
+            pr_number,
+            pr_source_revision,
+            pr_base_revision,
+            pr_base_generation_manifest_sha256,
+        )):
+            raise IncrementalIndexPreconditionError(
+                "PR generation fingerprint requires PR number and complete "
+                "source/base generation identity"
+            )
+        if pr_generation_fingerprint and len([
+            branch for branch in branches if branch
+        ]) != 1:
+            raise IncrementalIndexPreconditionError(
+                "revision-bound deterministic context requires exactly one "
+                "authoritative branch"
+            )
+
         collection_name = (
             collection_target
             or self._get_project_collection_name(workspace, project)

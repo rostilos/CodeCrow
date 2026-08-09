@@ -37,7 +37,7 @@ class RagBranchIndexRegistryServiceTest {
                 branchIndexRepository, generationRepository, operationRepository);
         project = new Project();
         ReflectionTestUtils.setField(project, "id", 42L);
-        when(branchIndexRepository.save(any())).thenAnswer(invocation -> {
+        lenient().when(branchIndexRepository.save(any())).thenAnswer(invocation -> {
             RagBranchIndex value = invocation.getArgument(0);
             if (value.getId() == null) {
                 value.setId(10L);
@@ -64,7 +64,7 @@ class RagBranchIndexRegistryServiceTest {
     void registersIdempotentTenantScopedBuildWithoutLeakingBranchName() {
         when(operationRepository.findByProjectIdAndOperationKey(eq(42L), anyString()))
                 .thenReturn(Optional.empty());
-        when(branchIndexRepository.findByProjectIdAndBranchName(42L, "client/private-develop"))
+        when(branchIndexRepository.findByProjectIdAndBranchNameForUpdate(42L, "client/private-develop"))
                 .thenReturn(Optional.empty());
 
         var registration = service.registerBuild(
@@ -95,7 +95,7 @@ class RagBranchIndexRegistryServiceTest {
         previous.setId(19L);
         previous.activate("manifest-400", 500, 1500);
         branchIndex.activate(previous);
-        when(branchIndexRepository.findByProjectIdAndBranchName(42L, "develop"))
+        when(branchIndexRepository.findByProjectIdAndBranchNameForUpdate(42L, "develop"))
                 .thenReturn(Optional.of(branchIndex));
         when(operationRepository.findByProjectIdAndOperationKey(eq(42L), anyString()))
                 .thenReturn(Optional.empty());
@@ -104,6 +104,8 @@ class RagBranchIndexRegistryServiceTest {
                 project, "develop", RagBranchIndexKind.DURABLE,
                 "develop-400", "develop-401", "representation");
         when(operationRepository.findById(30L)).thenReturn(Optional.of(registration.operation()));
+        when(branchIndexRepository.findByIdForPublication(10L))
+                .thenReturn(Optional.of(branchIndex));
 
         service.startBuild(30L, 99L);
         RagBranchIndexGeneration published = service.publish(30L, "manifest-401", 501, 1504);
@@ -118,6 +120,45 @@ class RagBranchIndexRegistryServiceTest {
     }
 
     @Test
+    void completedOlderGenerationDoesNotRegressNewerDesiredRevision() {
+        RagBranchIndex branchIndex = new RagBranchIndex(
+                project, "develop", RagBranchIndexKind.DURABLE);
+        branchIndex.setId(10L);
+        RagBranchIndexGeneration active = new RagBranchIndexGeneration(
+                branchIndex, "develop-400", "generation-400", null,
+                "develop-399", "representation");
+        active.setId(19L);
+        active.activate("manifest-400", 500, 1500);
+        branchIndex.activate(active);
+        branchIndex.requestRevision("develop-402");
+
+        RagBranchIndexGeneration late = new RagBranchIndexGeneration(
+                branchIndex, "develop-401", "generation-401", active,
+                "develop-400", "representation");
+        late.setId(20L);
+        RagIndexOperation operation = new RagIndexOperation(
+                project, "develop", "develop-400", "develop-401", "late-key");
+        operation.setId(30L);
+        operation.setGeneration(late);
+        operation.start();
+        when(operationRepository.findById(30L)).thenReturn(Optional.of(operation));
+        when(branchIndexRepository.findByIdForPublication(10L))
+                .thenReturn(Optional.of(branchIndex));
+
+        RagBranchIndexGeneration published = service.publish(
+                30L, "manifest-401", 501, 1504);
+
+        assertThat(published.getStatus())
+                .isEqualTo(RagBranchIndexGenerationStatus.SUPERSEDED);
+        assertThat(published.getManifestDigest()).isEqualTo("manifest-401");
+        assertThat(branchIndex.getActiveGeneration()).isSameAs(active);
+        assertThat(branchIndex.getCommitHash()).isEqualTo("develop-400");
+        assertThat(branchIndex.getDesiredCommitHash()).isEqualTo("develop-402");
+        assertThat(operation.getStatus()).isEqualTo(RagIndexOperationStatus.SUCCEEDED);
+        verify(branchIndexRepository, never()).save(branchIndex);
+    }
+
+    @Test
     void failedReplacementKeepsLastVerifiedGenerationAvailable() {
         RagBranchIndex branchIndex = new RagBranchIndex(project, "master", RagBranchIndexKind.PRIMARY);
         branchIndex.setId(10L);
@@ -127,7 +168,7 @@ class RagBranchIndexRegistryServiceTest {
         active.setId(19L);
         active.activate("manifest-100", 500, 1500);
         branchIndex.activate(active);
-        when(branchIndexRepository.findByProjectIdAndBranchName(42L, "master"))
+        when(branchIndexRepository.findByProjectIdAndBranchNameForUpdate(42L, "master"))
                 .thenReturn(Optional.of(branchIndex));
         when(operationRepository.findByProjectIdAndOperationKey(eq(42L), anyString()))
                 .thenReturn(Optional.empty());
@@ -136,6 +177,8 @@ class RagBranchIndexRegistryServiceTest {
                 project, "master", RagBranchIndexKind.PRIMARY,
                 "master-100", "master-101", "representation");
         when(operationRepository.findById(30L)).thenReturn(Optional.of(registration.operation()));
+        when(branchIndexRepository.findByIdForPublication(10L))
+                .thenReturn(Optional.of(branchIndex));
 
         service.fail(30L, "vector publication failed");
 
@@ -152,6 +195,7 @@ class RagBranchIndexRegistryServiceTest {
         RagBranchIndex branchIndex = new RagBranchIndex(
                 project, "develop", RagBranchIndexKind.DURABLE);
         branchIndex.setId(10L);
+        branchIndex.requestRevision("develop-401");
         RagBranchIndexGeneration generation = new RagBranchIndexGeneration(
                 branchIndex, "develop-401", "generation-401", null,
                 "develop-400", "representation");
@@ -173,7 +217,37 @@ class RagBranchIndexRegistryServiceTest {
                 .isEqualTo(RagBranchIndexGenerationStatus.BUILDING);
         assertThat(branchIndex.getDesiredCommitHash()).isEqualTo("develop-401");
         verify(generationRepository).save(generation);
-        verify(branchIndexRepository).save(branchIndex);
+        verify(branchIndexRepository, never()).save(branchIndex);
         verify(operationRepository).save(operation);
+    }
+
+    @Test
+    void lateFailureDoesNotOverwriteNewerDesiredRevisionState() {
+        RagBranchIndex branchIndex = new RagBranchIndex(
+                project, "develop", RagBranchIndexKind.DURABLE);
+        branchIndex.setId(10L);
+        branchIndex.requestRevision("develop-402");
+        RagBranchIndexGeneration late = new RagBranchIndexGeneration(
+                branchIndex, "develop-401", "generation-401", null,
+                "develop-400", "representation");
+        late.setId(20L);
+        RagIndexOperation operation = new RagIndexOperation(
+                project, "develop", "develop-400", "develop-401", "late-key");
+        operation.setId(30L);
+        operation.setGeneration(late);
+        operation.start();
+        when(operationRepository.findById(30L)).thenReturn(Optional.of(operation));
+        when(branchIndexRepository.findByIdForPublication(10L))
+                .thenReturn(Optional.of(branchIndex));
+
+        service.fail(30L, "late worker failed");
+
+        assertThat(late.getStatus()).isEqualTo(RagBranchIndexGenerationStatus.FAILED);
+        assertThat(operation.getStatus()).isEqualTo(RagIndexOperationStatus.FAILED);
+        assertThat(branchIndex.getDesiredCommitHash()).isEqualTo("develop-402");
+        assertThat(branchIndex.getLifecycleStatus())
+                .isEqualTo(RagBranchIndexLifecycleStatus.BUILDING);
+        assertThat(branchIndex.getErrorMessage()).isNull();
+        verify(branchIndexRepository, never()).save(branchIndex);
     }
 }

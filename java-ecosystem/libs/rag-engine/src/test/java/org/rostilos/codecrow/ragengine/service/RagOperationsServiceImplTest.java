@@ -857,13 +857,26 @@ class RagOperationsServiceImplTest {
     }
 
     @Test
-    void testUpdateBranchIndex_EmptyDiff() throws Exception {
+    void updateBranchIndexEmptyDiffSeedsExactSnapshot() throws Exception {
+        RagBranchIndexRegistryService registry = mock(RagBranchIndexRegistryService.class);
+        BranchIndexGenerationBuildService builder = mock(BranchIndexGenerationBuildService.class);
+        service = new RagOperationsServiceImpl(
+                ragIndexTrackingService, incrementalRagUpdateService,
+                analysisLockService, analysisJobService,
+                ragBranchIndexRepository, vcsClientProvider,
+                ragPipelineClient, registry, builder);
         setupRagEnabled();
         setupVcsBinding();
+        service = spy(service);
+        doReturn(true).when(service).shouldHaveBranchIndex(testProject, "feature");
         when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
         VcsClient mockVcs = mock(VcsClient.class);
         when(vcsClientProvider.getClient(any(VcsConnection.class))).thenReturn(mockVcs);
         when(mockVcs.getBranchDiff("my-workspace", "my-repo", "main", "feature")).thenReturn("");
+        when(mockVcs.getLatestCommitHash("my-workspace", "my-repo", "feature"))
+                .thenReturn("feature-head");
+        doReturn(true).when(service).triggerIncrementalUpdate(
+                eq(testProject), eq("feature"), eq("feature-head"), eq(""), any());
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
@@ -871,6 +884,8 @@ class RagOperationsServiceImplTest {
 
         assertThat(result).isTrue();
         verify(eventConsumer).accept(argThat(m -> "info".equals(m.get("type"))));
+        verify(service).triggerIncrementalUpdate(
+                testProject, "feature", "feature-head", "", eventConsumer);
     }
 
     @Test

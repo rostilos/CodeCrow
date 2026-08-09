@@ -278,7 +278,7 @@ services:
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
       REDIS_URL: redis://redis:6379/1
-      #UVICORN_WORKERS: 1
+      UVICORN_WORKERS: ${RAG_UVICORN_WORKERS:-1}
     ports:
       - "127.0.0.1:${RAG_PIPELINE_HOST_PORT:-8004}:8001"
       #- "127.0.0.1:5678:5678"

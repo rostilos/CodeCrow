@@ -8,6 +8,7 @@ import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndex;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndexGeneration;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
@@ -307,8 +308,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                                     sourceGeneration.getRevision(),
                                     sourceGeneration.getCollectionName(),
                                     branchBuild.generation().getCollectionName(),
-                                    publishBranchAlias,
-                                    publishLegacyProjectAlias);
+                                    false,
+                                    false);
                     } else {
                         result = incrementalRagUpdateService.performIncrementalUpdate(
                                     project,
@@ -328,11 +329,16 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                             throw new IllegalStateException(
                                     "Advanced RAG generation has no manifest digest");
                         }
-                        branchIndexRegistryService.publish(
+                        RagBranchIndexGeneration published = branchIndexRegistryService.publish(
                                 branchBuild.operation().getId(),
                                 manifestDigest,
                                 ((Number) result.getOrDefault("document_count", 0)).intValue(),
                                 ((Number) result.getOrDefault("chunk_count", 0)).intValue());
+                        publishReadableAliasesIfActive(
+                                project, branchName, commitHash,
+                                branchBuild.generation().getCollectionName(),
+                                published, publishBranchAlias,
+                                publishLegacyProjectAlias);
                     }
                 } catch (Exception generationFailure) {
                     if (branchBuild != null) {
@@ -416,6 +422,30 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                     "state", "rag_error",
                     "message", "RAG incremental update failed: " + e.getMessage()));
             return false;
+        }
+    }
+
+    private void publishReadableAliasesIfActive(
+            Project project,
+            String branch,
+            String revision,
+            String collectionTarget,
+            RagBranchIndexGeneration published,
+            boolean publishBranchAlias,
+            boolean publishLegacyProjectAlias) {
+        if (published == null
+                || published.getStatus() != RagBranchIndexGenerationStatus.ACTIVE
+                || !publishBranchAlias) {
+            return;
+        }
+        try {
+            ragPipelineClient.publishGenerationAliases(
+                    project.getWorkspace().getName(), project.getNamespace(),
+                    branch, revision, collectionTarget,
+                    true, publishLegacyProjectAlias);
+        } catch (IOException aliasFailure) {
+            log.warn("Readable alias publication failed for active RAG generation {}: {}",
+                    published.getId(), aliasFailure.getMessage());
         }
     }
 
@@ -626,6 +656,13 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 eventConsumer.accept(Map.of(
                         "type", "info",
                         "message", String.format("Branch '%s' has same content as '%s'", targetBranch, baseBranch)));
+                if (usesExactGenerations(project)) {
+                    // No completed checkpoint means there is still no exact
+                    // target-branch generation. An empty tree delta must seed
+                    // the complete revision rather than report a false success.
+                    return triggerIncrementalUpdate(
+                            project, targetBranch, targetCommit, "", eventConsumer);
+                }
                 return true;
             }
 

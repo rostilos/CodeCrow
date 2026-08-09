@@ -484,6 +484,39 @@ def test_exact_revision_preflight_rejects_legacy_unsealed_revision():
         )
 
 
+def test_exact_revision_preflight_verifies_members_while_scrolling_pages():
+    payload = _identity_payload(path="Example.php", text="<?php")
+    point = SimpleNamespace(id=1, payload=payload, vector=[0.0, 0.0])
+    client = MagicMock()
+    verified = []
+
+    def scroll(**kwargs):
+        if kwargs.get("with_vectors") is True and kwargs.get("offset") is None:
+            return [point], "next-page"
+        if kwargs.get("with_vectors") is True:
+            assert verified == [1]
+            raise RuntimeError("stop after proving streamed verification")
+        raise AssertionError("unexpected scan before the revision pages finish")
+
+    client.scroll.side_effect = scroll
+    with patch(
+        "rag_pipeline.core.revision_preflight.verified_generation_member",
+        side_effect=lambda observed: verified.append(observed.id) or (observed.id, "d" * 64),
+    ):
+        with pytest.raises(
+            RuntimeError,
+            match="stop after proving streamed verification",
+        ):
+            read_repository_revision_preflight(
+                client,
+                "repository",
+                "main",
+                COMMIT,
+            )
+
+    assert verified == [1]
+
+
 @patch(
     "rag_pipeline.core.revision_preflight.read_repository_revision_preflight"
 )
@@ -531,10 +564,18 @@ def test_index_manager_publishes_coordinates_after_build_compatibility_check(
         "main",
         COMMIT,
     )
+    result["plugin_ids"].append("caller-mutation")
+    cached_result = manager.get_revision_preflight(
+        "workspace",
+        "project",
+        "main",
+        COMMIT,
+    )
 
     assert result["workspace"] == "workspace"
     assert result["project"] == "project"
     assert result["point_count"] == 2
+    assert cached_result["plugin_ids"] == ["php", "magento"]
     mock_read.assert_called_once_with(
         manager.qdrant_client,
         "code_workspace__project_active",

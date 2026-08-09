@@ -21,6 +21,7 @@ from rag_pipeline.core.repository_overlay import (
 from rag_pipeline.services.base import RAGQueryBase
 from rag_pipeline.services.pr_context import PRContextMixin
 from rag_pipeline.services.semantic_search import SemanticSearchMixin
+from rag_pipeline.services.deterministic_context import DeterministicContextMixin
 
 
 BASE_REVISION = "a" * 40
@@ -526,3 +527,71 @@ def test_revision_bound_deterministic_context_rejects_extra_branch():
     assert exception.value.status_code == 409
     assert "exactly one authoritative" in exception.value.detail
     service.get_deterministic_context.assert_not_called()
+
+
+def test_deterministic_context_rejects_partial_overlay_identity():
+    manager = _manager()
+    service = MagicMock()
+    request = DeterministicContextRequest(
+        workspace="ws",
+        project="project",
+        branches=["main"],
+        file_paths=["src/Foo.php"],
+        pr_number=42,
+        pr_generation_fingerprint=PR_GENERATION,
+    )
+
+    with patch(
+        "rag_pipeline.api.routers.query._get_singletons",
+        return_value=(manager, service),
+    ):
+        with pytest.raises(HTTPException) as exception:
+            get_deterministic_context(request)
+
+    assert exception.value.status_code == 409
+    assert "requires PR number" in exception.value.detail
+    service.get_deterministic_context.assert_not_called()
+
+
+def test_exact_overlay_rejects_empty_authoritative_branch_list():
+    manager = _manager()
+    service = MagicMock()
+    request = DeterministicContextRequest(
+        workspace="ws",
+        project="project",
+        branches=[],
+        file_paths=["src/Foo.php"],
+        pr_number=42,
+        source_revision=SOURCE_REVISION,
+        base_revision=BASE_REVISION,
+        base_generation_manifest_sha256=BASE_GENERATION,
+        pr_generation_fingerprint=PR_GENERATION,
+        pr_overlay_generation_manifest_sha256=PR_OVERLAY_MANIFEST,
+    )
+
+    with patch(
+        "rag_pipeline.api.routers.query._get_singletons",
+        return_value=(manager, service),
+    ):
+        with pytest.raises(HTTPException) as exception:
+            get_deterministic_context(request)
+
+    assert exception.value.status_code == 409
+    assert "one authoritative branch" in exception.value.detail
+    service.get_deterministic_context.assert_not_called()
+
+
+def test_deterministic_service_rejects_fingerprint_without_revisions():
+    with pytest.raises(
+        IncrementalIndexPreconditionError,
+        match="complete source/base generation identity",
+    ):
+        DeterministicContextMixin.get_deterministic_context(
+            MagicMock(),
+            workspace="ws",
+            project="project",
+            branches=["main"],
+            file_paths=["src/Foo.php"],
+            pr_number=42,
+            pr_generation_fingerprint=PR_GENERATION,
+        )

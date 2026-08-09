@@ -42,6 +42,38 @@ def _authoritative_pr_branch(request: PRContextRequest) -> Optional[str]:
     return request.branch
 
 
+def _require_complete_pr_overlay_binding(
+    *,
+    pr_number: Optional[int],
+    target_branch: Optional[str],
+    source_revision: Optional[str],
+    base_revision: Optional[str],
+    base_generation_manifest: Optional[str],
+    pr_generation_fingerprint: Optional[str],
+    pr_overlay_manifest: Optional[str],
+) -> bool:
+    """Reject a claimed exact overlay whose identity is incomplete."""
+    overlay_binding_requested = bool(
+        pr_generation_fingerprint or pr_overlay_manifest
+    )
+    if not overlay_binding_requested:
+        return False
+    if not all((
+        pr_number,
+        target_branch,
+        source_revision,
+        base_revision,
+        base_generation_manifest,
+        pr_generation_fingerprint,
+        pr_overlay_manifest,
+    )):
+        raise IncrementalIndexPreconditionError(
+            "revision-bound PR overlay requires PR number, one authoritative "
+            "branch, source/base revisions, and both generation receipts"
+        )
+    return True
+
+
 @router.post("/query/search")
 def semantic_search(request: QueryRequest):
     """Perform semantic search."""
@@ -134,6 +166,15 @@ def get_pr_context(request: PRContextRequest):
             request.pr_overlay_generation_manifest_sha256
         )
         collection_target = _optional_string(request.collection_target)
+        exact_overlay_binding = _require_complete_pr_overlay_binding(
+            pr_number=request.pr_number,
+            target_branch=authoritative_branch,
+            source_revision=source_revision,
+            base_revision=base_revision,
+            base_generation_manifest=base_generation_manifest,
+            pr_generation_fingerprint=pr_generation_fingerprint,
+            pr_overlay_manifest=pr_overlay_manifest,
+        )
         receipt = None
         overlay_receipt = None
         if base_revision:
@@ -165,13 +206,7 @@ def get_pr_context(request: PRContextRequest):
 
         # HYBRID MODE: Query PR-indexed data first if pr_number is provided
         if request.pr_number:
-            if all((
-                source_revision,
-                base_revision,
-                base_generation_manifest,
-                pr_generation_fingerprint,
-                pr_overlay_manifest,
-            )):
+            if exact_overlay_binding:
                 overlay_receipt = read_pr_overlay_generation(
                     index_manager.qdrant_client,
                     collection_name,
@@ -564,6 +599,15 @@ def get_deterministic_context(request: DeterministicContextRequest):
         collection_target = _optional_string(request.collection_target)
         receipt = None
         overlay_receipt = None
+        exact_overlay_binding = _require_complete_pr_overlay_binding(
+            pr_number=request.pr_number,
+            target_branch=target_branch,
+            source_revision=source_revision,
+            base_revision=base_revision,
+            base_generation_manifest=base_generation_manifest,
+            pr_generation_fingerprint=pr_generation_fingerprint,
+            pr_overlay_manifest=pr_overlay_manifest,
+        )
         if base_revision and target_branch:
             if len(request.branches) != 1:
                 raise IncrementalIndexPreconditionError(
@@ -578,14 +622,6 @@ def get_deterministic_context(request: DeterministicContextRequest):
                 generation_manifest_sha256=base_generation_manifest,
                 collection_target=collection_target,
             )
-        exact_overlay_binding = all((
-            request.pr_number,
-            source_revision,
-            base_revision,
-            base_generation_manifest,
-            pr_generation_fingerprint,
-            pr_overlay_manifest,
-        ))
         if exact_overlay_binding:
             overlay_receipt = read_pr_overlay_generation(
                 index_manager.qdrant_client,

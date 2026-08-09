@@ -38,6 +38,10 @@ from ..generation_manifest import (
 )
 from .. import revision_preflight
 from ..repository_overlay import IncrementalIndexPreconditionError
+from ..revision_preflight_cache import (
+    RevisionPreflightCache,
+    RevisionPreflightKey,
+)
 from ..source_tree import (
     compute_repository_source_tree_sha256,
     verify_repository_source_tree,
@@ -65,6 +69,16 @@ def _config_int(config, name: str, default: int) -> int:
         return default
     try:
         return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _config_nonnegative_int(config, name: str, default: int) -> int:
+    value = getattr(config, name, default)
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return default
+    try:
+        return max(0, int(value))
     except (TypeError, ValueError):
         return default
 
@@ -98,6 +112,23 @@ class RAGIndexManager:
                 config,
                 "rag_mutation_acquire_timeout_seconds",
                 5.0,
+            ),
+        )
+        self._revision_preflight_cache = RevisionPreflightCache(
+            max_entries=_config_int(
+                config,
+                "revision_preflight_cache_entries",
+                512,
+            ),
+            ttl_seconds=_config_nonnegative_int(
+                config,
+                "revision_preflight_cache_ttl_seconds",
+                0,
+            ),
+            max_concurrent_loads=_config_int(
+                config,
+                "revision_preflight_max_concurrency",
+                2,
             ),
         )
         self.index_representation_fingerprint = (
@@ -296,6 +327,12 @@ class RAGIndexManager:
         progress_callback: Optional[Callable[[dict], None]] = None,
     ) -> IndexStats:
         """Index entire repository for a branch using atomic swap strategy."""
+        if collection_target is None and (
+            publish_branch_alias or publish_legacy_project_alias
+        ):
+            raise ValueError(
+                "readable generation aliases require an immutable collection target"
+            )
         alias_name = collection_target or self._get_project_collection_name(
             workspace, project
         )
@@ -357,22 +394,56 @@ class RAGIndexManager:
         physical = self._collection_manager.resolve_collection_target(target)
         if physical is None:
             return None
-        result = read_repository_revision_preflight(
-            self.qdrant_client,
-            physical,
-            branch,
-            commit,
-        )
-        if result is None:
-            return None
-        if (
-            result.get("workspace") != workspace
-            or result.get("project") != project
-        ):
-            raise IncrementalIndexPreconditionError(
-                "repository generation coordinates do not match the requested tenant"
+        cache = getattr(self, "_revision_preflight_cache", None)
+        if cache is None:
+            # Preserve lightweight construction used by tooling and tests.
+            cache = RevisionPreflightCache(
+                max_entries=_config_int(
+                    self.config,
+                    "revision_preflight_cache_entries",
+                    512,
+                ),
+                ttl_seconds=_config_nonnegative_int(
+                    self.config,
+                    "revision_preflight_cache_ttl_seconds",
+                    0,
+                ),
+                max_concurrent_loads=_config_int(
+                    self.config,
+                    "revision_preflight_max_concurrency",
+                    2,
+                ),
             )
-        return result
+            self._revision_preflight_cache = cache
+
+        def verify():
+            result = read_repository_revision_preflight(
+                self.qdrant_client,
+                physical,
+                branch,
+                commit,
+            )
+            if result is None:
+                return None
+            if (
+                result.get("workspace") != workspace
+                or result.get("project") != project
+            ):
+                raise IncrementalIndexPreconditionError(
+                    "repository generation coordinates do not match the requested tenant"
+                )
+            return result
+
+        return cache.get_or_load(
+            RevisionPreflightKey(
+                collection=physical,
+                workspace=workspace,
+                project=project,
+                branch=branch,
+                commit=commit,
+            ),
+            verify,
+        )
 
     def publish_generation_aliases(
         self,
@@ -384,11 +455,10 @@ class RAGIndexManager:
         publish_branch_alias: bool = True,
         publish_legacy_project_alias: bool = False,
     ) -> List[str]:
-        """Repair operator aliases after proving one sealed generation identity.
+        """Publish operator aliases after proving one sealed generation identity.
 
-        Normal indexing publishes these pointers atomically with its immutable
-        target alias. This idempotent path exists only for generations created
-        before that contract was introduced or when Qdrant has been restored.
+        The Java registry calls this only after accepting the generation as the
+        active branch head. It is also an idempotent repair path after restore.
         """
         aliases = self._publication_aliases(
             workspace,
@@ -635,11 +705,12 @@ class RAGIndexManager:
                 raise IncrementalIndexPreconditionError(
                     "source repository generation is unavailable"
                 )
-            source_receipt = read_repository_revision_preflight(
-                self.qdrant_client,
-                source_physical,
+            source_receipt = self.get_revision_preflight(
+                workspace,
+                project,
                 branch,
                 source_commit,
+                collection_target=source_physical,
             )
             if source_receipt is None:
                 raise IncrementalIndexPreconditionError(
@@ -650,11 +721,12 @@ class RAGIndexManager:
                 target_collection_target
             )
             if target_physical is not None:
-                existing = read_repository_revision_preflight(
-                    self.qdrant_client,
-                    target_physical,
+                existing = self.get_revision_preflight(
+                    workspace,
+                    project,
                     branch,
                     commit,
+                    collection_target=target_physical,
                 )
                 if existing is None:
                     raise IncrementalIndexPreconditionError(

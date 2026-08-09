@@ -7,13 +7,13 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
 
-/** Dedicated bounded concurrency for independent configured branch snapshots. */
+/** Dedicated service capacity for independent configured branch snapshots. */
 @Configuration
 public class BranchIndexBuildExecutorConfiguration {
 
     @Bean(name = "branchIndexBuildExecutor")
     public Executor branchIndexBuildExecutor(
-            @Value("${codecrow.rag.branch-build.parallelism:4}") int parallelism) {
+            @Value("${codecrow.rag.branch-build.global-parallelism:4}") int parallelism) {
         int workers = Math.max(1, parallelism);
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(workers);

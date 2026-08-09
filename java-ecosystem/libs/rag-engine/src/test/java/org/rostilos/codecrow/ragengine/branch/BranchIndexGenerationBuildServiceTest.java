@@ -70,11 +70,16 @@ class BranchIndexGenerationBuildServiceTest {
                 anyString(), eq("workspace"), eq("namespace"),
                 eq("develop"), eq("develop-400"), eq(List.of("src/**")),
                 eq(List.of("vendor/**")), eq("opaque-generation-target"),
-                eq(true), eq(false)))
+                eq(false), eq(false)))
                 .thenReturn(Map.of(
                         "generation_manifest_sha256", "manifest-400",
                         "document_count", 231,
                         "chunk_count", 400));
+        when(registryService.publish(30L, "manifest-400", 231, 400))
+                .thenAnswer(invocation -> {
+                    generation.activate("manifest-400", 231, 400);
+                    return generation;
+                });
         ReflectionTestUtils.setField(project, "namespace", "namespace");
         var workspace = new org.rostilos.codecrow.core.model.workspace.Workspace();
         ReflectionTestUtils.setField(workspace, "name", "workspace");
@@ -89,6 +94,9 @@ class BranchIndexGenerationBuildServiceTest {
                 "generation_manifest_sha256", "manifest-400");
         verify(registryService).startBuild(30L, 77L);
         verify(registryService).publish(30L, "manifest-400", 231, 400);
+        verify(pipelineClient).publishGenerationAliases(
+                "workspace", "namespace", "develop", "develop-400",
+                "opaque-generation-target", true, false);
         ArgumentCaptor<Path> snapshot = ArgumentCaptor.forClass(Path.class);
         verify(archiveService).downloadAndExtractSnapshotToDirectory(
                 any(), eq("provider-workspace"), eq("repo"),
@@ -153,11 +161,16 @@ class BranchIndexGenerationBuildServiceTest {
         when(pipelineClient.indexRepository(
                 anyString(), anyString(), anyString(), eq("develop"), eq("develop-400"),
                 anyList(), anyList(), eq("opaque-generation-target"),
-                eq(true), eq(false), any()))
+                eq(false), eq(false), any()))
                 .thenReturn(Map.of(
                         "generation_manifest_sha256", "fresh-manifest",
                         "document_count", 231,
                         "chunk_count", 400));
+        when(registryService.publish(30L, "fresh-manifest", 231, 400))
+                .thenAnswer(invocation -> {
+                    generation.activate("fresh-manifest", 231, 400);
+                    return generation;
+                });
         var workspace = new org.rostilos.codecrow.core.model.workspace.Workspace();
         ReflectionTestUtils.setField(workspace, "name", "workspace");
         project.setWorkspace(workspace);
@@ -170,5 +183,39 @@ class BranchIndexGenerationBuildServiceTest {
         verify(archiveService).downloadAndExtractSnapshotToDirectory(
                 any(), eq("provider-workspace"), eq("repo"), eq("develop-400"), isNull(), any());
         verify(registryService).publish(30L, "fresh-manifest", 231, 400);
+        verify(pipelineClient).publishGenerationAliases(
+                "workspace", "namespace", "develop", "develop-400",
+                "opaque-generation-target", true, false);
+    }
+
+    @Test
+    void staleCompletedGenerationDoesNotPublishReadableAliases() throws Exception {
+        when(registryService.registerBuild(any(), anyString(), any(), isNull(),
+                anyString(), isNull()))
+                .thenReturn(new RagBranchIndexRegistryService.BuildRegistration(
+                        generation.getBranchIndex(), generation, operation, false));
+        when(pipelineClient.indexRepository(
+                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyList(), anyList(), anyString(), eq(false), eq(false)))
+                .thenReturn(Map.of(
+                        "generation_manifest_sha256", "manifest-400",
+                        "document_count", 231,
+                        "chunk_count", 400));
+        generation.activate("manifest-400", 231, 400);
+        generation.supersede();
+        when(registryService.publish(30L, "manifest-400", 231, 400))
+                .thenReturn(generation);
+        var workspace = new org.rostilos.codecrow.core.model.workspace.Workspace();
+        ReflectionTestUtils.setField(workspace, "name", "workspace");
+        project.setWorkspace(workspace);
+        project.setNamespace("namespace");
+
+        service.build(project, new VcsConnection(), "provider-workspace", "repo",
+                "develop", "develop-400", RagBranchIndexKind.DURABLE,
+                List.of(), List.of());
+
+        verify(pipelineClient, never()).publishGenerationAliases(
+                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyBoolean(), anyBoolean());
     }
 }

@@ -4,6 +4,7 @@ import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.job.Job;
+import org.rostilos.codecrow.core.model.job.JobLogLevel;
 import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
@@ -13,6 +14,7 @@ import org.rostilos.codecrow.ragengine.service.RagIndexTrackingService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -44,6 +46,7 @@ public class BranchIndexMaintenanceService {
     private final AnalysisLockService lockService;
     private final AnalysisJobService jobService;
     private final Executor branchIndexBuildExecutor;
+    private final int perProjectParallelism;
 
     public BranchIndexMaintenanceService(
             RagOperationsService ragOperationsService,
@@ -52,7 +55,8 @@ public class BranchIndexMaintenanceService {
             RagIndexTrackingService trackingService,
             AnalysisLockService lockService,
             AnalysisJobService jobService,
-            @Qualifier("branchIndexBuildExecutor") Executor branchIndexBuildExecutor) {
+            @Qualifier("branchIndexBuildExecutor") Executor branchIndexBuildExecutor,
+            @Value("${codecrow.rag.branch-build.parallelism:2}") int perProjectParallelism) {
         this.ragOperationsService = ragOperationsService;
         this.vcsClientProvider = vcsClientProvider;
         this.generationBuildService = generationBuildService;
@@ -60,6 +64,7 @@ public class BranchIndexMaintenanceService {
         this.lockService = lockService;
         this.jobService = jobService;
         this.branchIndexBuildExecutor = branchIndexBuildExecutor;
+        this.perProjectParallelism = Math.max(1, perProjectParallelism);
     }
 
     public Map<String, Object> rebuild(Project project, String requestedBranch, boolean allConfiguredBranches,
@@ -67,7 +72,6 @@ public class BranchIndexMaintenanceService {
         List<String> branches = resolveBranches(project, requestedBranch, allConfiguredBranches);
         List<String> completed = new ArrayList<>();
         Map<String, String> failures = new LinkedHashMap<>();
-        Map<String, CompletableFuture<Void>> builds = new LinkedHashMap<>();
 
         // Obtaining a provider client can refresh a shared installation token. Do
         // that small VCS preparation phase once at a time, then let the expensive
@@ -87,28 +91,36 @@ public class BranchIndexMaintenanceService {
                         "message", "RAG snapshot failed for branch '" + branch + "': " + message));
             }
         }
-        for (BranchBuildPlan plan : plans) {
-            String branch = plan.branch();
-            builds.put(branch, CompletableFuture.runAsync(() -> {
-                events.accept(Map.of("type", "progress", "stage", "branch",
-                        "branch", branch,
-                        "message", "Building exact RAG snapshot for branch '" + branch + "'"));
-                rebuildOne(project, plan, events);
-            }, branchIndexBuildExecutor));
-        }
-        for (Map.Entry<String, CompletableFuture<Void>> build : builds.entrySet()) {
-            try {
-                build.getValue().join();
-                completed.add(build.getKey());
-            } catch (CompletionException failure) {
-                Throwable cause = failure.getCause() != null ? failure.getCause() : failure;
-                String message = cause.getMessage() != null
-                        ? cause.getMessage() : cause.getClass().getSimpleName();
-                failures.put(build.getKey(), message);
-                events.accept(Map.of("type", "progress", "stage", "branch_failed",
-                        "branch", build.getKey(),
-                        "message", "RAG snapshot failed for branch '" + build.getKey()
-                                + "': " + message));
+        // Limit one project's fan-out independently from the service capacity.
+        // A project with many retained branches can therefore use at most its
+        // configured share while builds for other tenants still occupy the
+        // remaining dedicated RAG slots. Each wave is fully parallel.
+        for (int from = 0; from < plans.size(); from += perProjectParallelism) {
+            int to = Math.min(plans.size(), from + perProjectParallelism);
+            Map<String, CompletableFuture<Void>> wave = new LinkedHashMap<>();
+            for (BranchBuildPlan plan : plans.subList(from, to)) {
+                String branch = plan.branch();
+                wave.put(branch, CompletableFuture.runAsync(() -> {
+                    events.accept(Map.of("type", "progress", "stage", "branch",
+                            "branch", branch,
+                            "message", "Building exact RAG snapshot for branch '" + branch + "'"));
+                    rebuildOne(project, plan, events);
+                }, branchIndexBuildExecutor));
+            }
+            for (Map.Entry<String, CompletableFuture<Void>> build : wave.entrySet()) {
+                try {
+                    build.getValue().join();
+                    completed.add(build.getKey());
+                } catch (CompletionException failure) {
+                    Throwable cause = failure.getCause() != null ? failure.getCause() : failure;
+                    String message = cause.getMessage() != null
+                            ? cause.getMessage() : cause.getClass().getSimpleName();
+                    failures.put(build.getKey(), message);
+                    events.accept(Map.of("type", "progress", "stage", "branch_failed",
+                            "branch", build.getKey(),
+                            "message", "RAG snapshot failed for branch '" + build.getKey()
+                                    + "': " + message));
+                }
             }
         }
         if (completed.isEmpty()) {
@@ -161,9 +173,19 @@ public class BranchIndexMaintenanceService {
 
         boolean primary = branch.equals(ragOperationsService.getBaseBranch(project));
         boolean primaryPreviouslyIndexed = primary && trackingService.isProjectIndexed(project);
-        Job job = jobService.createRagIndexJob(project, !primaryPreviouslyIndexed, JobTriggerSource.UI);
+        Job job = jobService.createRagIndexJob(
+                project,
+                !primaryPreviouslyIndexed,
+                JobTriggerSource.UI,
+                branch,
+                revision);
         jobService.startJob(job);
-        jobService.info(job, "branch_snapshot", "Building exact RAG snapshot for branch: " + branch);
+        jobService.logToJob(
+                job,
+                JobLogLevel.INFO,
+                "branch_snapshot",
+                "Building exact RAG snapshot for branch: " + branch,
+                Map.of("branch", branch, "commit", revision));
         try {
             if (primary) {
                 trackingService.markIndexingStarted(project, branch, revision);
@@ -183,6 +205,16 @@ public class BranchIndexMaintenanceService {
                         Map<String, Object> forwarded = new LinkedHashMap<>(event);
                         forwarded.put("type", "progress");
                         forwarded.put("branch", branch);
+                        String stage = String.valueOf(
+                                forwarded.getOrDefault("stage", "indexing"));
+                        String message = String.valueOf(
+                                forwarded.getOrDefault("message", "Indexing branch '" + branch + "'"));
+                        jobService.logToJob(
+                                job,
+                                JobLogLevel.INFO,
+                                stage,
+                                message,
+                                forwarded);
                         events.accept(forwarded);
                     });
             if (primary) {

@@ -205,22 +205,48 @@ def test_advance_is_idempotent_when_exact_target_already_exists():
     manager._stats_manager = MagicMock()
     expected = SimpleNamespace(generation_manifest_sha256="e" * 64)
     manager._stats_manager.get_branch_stats.return_value = expected
+    manager.get_revision_preflight = MagicMock(return_value={
+        "generation_manifest_sha256": "e" * 64,
+        "source_tree_sha256": SOURCE_TREE,
+    })
 
-    import rag_pipeline.core.index_manager.manager as manager_module
-    original = manager_module.read_repository_revision_preflight
-    manager_module.read_repository_revision_preflight = (
-        lambda *_args, **_kwargs: {"generation_manifest_sha256": "e" * 64}
+    result = manager.advance_generation(
+        "source", "target", SOURCE_COMMIT, SOURCE_TREE, [], [], None,
+        "ws", "project", "develop", TARGET_COMMIT,
     )
-    try:
-        result = manager.advance_generation(
-            "source", "target", SOURCE_COMMIT, SOURCE_TREE, [], [], None,
-            "ws", "project", "develop", TARGET_COMMIT,
-        )
-    finally:
-        manager_module.read_repository_revision_preflight = original
 
     assert result is expected
     manager._collection_manager.create_pending_collection.assert_not_called()
+
+
+def test_existing_target_is_not_published_when_tenant_preflight_rejects_it():
+    manager = object.__new__(RAGIndexManager)
+    manager._mutation_coordinator = _Coordinator()
+    manager._collection_manager = MagicMock()
+    manager._collection_manager.resolve_collection_target.side_effect = [
+        "source-physical", "foreign-target-physical"
+    ]
+    manager.qdrant_client = MagicMock()
+    manager._stats_manager = MagicMock()
+    manager.config = SimpleNamespace(qdrant_collection_prefix="rag")
+    manager.get_revision_preflight = MagicMock(side_effect=[
+        {"generation_manifest_sha256": "1" * 64},
+        IncrementalIndexPreconditionError(
+            "repository generation coordinates do not match the requested tenant"
+        ),
+    ])
+
+    with pytest.raises(
+        IncrementalIndexPreconditionError,
+        match="coordinates do not match",
+    ):
+        manager.advance_generation(
+            "source", "foreign-target", SOURCE_COMMIT, SOURCE_TREE,
+            [], [], None, "ws", "project", "develop", TARGET_COMMIT,
+            publish_branch_alias=True,
+        )
+
+    manager._collection_manager.atomic_assign_aliases.assert_not_called()
 
 
 def test_exact_generation_delete_verifies_tenant_coordinates():

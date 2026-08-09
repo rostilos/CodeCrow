@@ -777,19 +777,8 @@ public class PullRequestAnalysisProcessor {
                     List<VcsCommit> newestFirst = client.getCommitHistory(
                             workspace, repository, sourceBranch,
                             SCM_EVIDENCE_COMMIT_LIMIT);
-                    List<VcsCommit> prCommits = new java.util.ArrayList<>();
-                    for (VcsCommit commit : newestFirst == null
-                            ? List.<VcsCommit>of() : newestFirst) {
-                        if (targetBaseRevision != null
-                                && targetBaseRevision.equals(commit.hash())) {
-                            break;
-                        }
-                        prCommits.add(commit);
-                        if (commitHash.equals(commit.hash())
-                                && targetBaseRevision == null) {
-                            break;
-                        }
-                    }
+                    List<VcsCommit> prCommits = selectPrEvidenceCommits(
+                            newestFirst, commitHash, targetBaseRevision);
                     Collections.reverse(prCommits);
                     if (!prCommits.isEmpty()) {
                         scmEvidenceService.capture(
@@ -850,6 +839,49 @@ public class PullRequestAnalysisProcessor {
             log.warn("Failed to record PR commit as analyzed (non-critical): branch={}, error={}",
                     request.getSourceBranchName(), e.getMessage());
         }
+    }
+
+    /**
+     * Select only the ancestry that belongs to the revision actually reviewed.
+     * Provider history is newest-first and may already contain commits pushed
+     * after the webhook event, so collection cannot begin until the requested
+     * PR head is reached.
+     */
+    static List<VcsCommit> selectPrEvidenceCommits(
+            List<VcsCommit> newestFirst,
+            String requestedRevision,
+            String targetBaseRevision) {
+        if (newestFirst == null || newestFirst.isEmpty()
+                || requestedRevision == null || requestedRevision.isBlank()) {
+            return new java.util.ArrayList<>();
+        }
+        List<VcsCommit> selected = new java.util.ArrayList<>();
+        boolean requestedRevisionReached = false;
+        boolean baseRevisionReached = targetBaseRevision == null;
+        for (VcsCommit commit : newestFirst) {
+            if (!requestedRevisionReached) {
+                if (!requestedRevision.equals(commit.hash())) {
+                    continue;
+                }
+                requestedRevisionReached = true;
+            }
+            if (targetBaseRevision != null
+                    && targetBaseRevision.equals(commit.hash())) {
+                baseRevisionReached = true;
+                break;
+            }
+            selected.add(commit);
+            if (targetBaseRevision == null) {
+                break;
+            }
+        }
+        if (!baseRevisionReached && selected.size() > 1) {
+            // The bounded provider window did not prove where PR ancestry ends.
+            // Retain the reviewed head receipt, but do not claim older commits
+            // that may predate the PR base.
+            return new java.util.ArrayList<>(selected.subList(0, 1));
+        }
+        return selected;
     }
 
     /**

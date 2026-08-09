@@ -1,7 +1,8 @@
 """Index and branch management endpoints."""
+import asyncio
 import json
 import logging
-from queue import Queue
+from queue import Empty, Queue
 from threading import Thread
 from typing import List
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
@@ -139,7 +140,7 @@ def index_repository_stream(request: IndexRequest):
     """
     _, index_manager = _get_singletons()
 
-    def event_stream():
+    async def event_stream():
         events: Queue[tuple[str, object]] = Queue()
 
         def progress(event: dict) -> None:
@@ -177,9 +178,21 @@ def index_repository_stream(request: IndexRequest):
                 logger.error("Error indexing repository with progress: %s", exception)
                 events.put(("error", {"message": str(exception)}))
 
-        Thread(target=run_index, name="rag-index-progress", daemon=True).start()
+        worker = Thread(
+            target=run_index,
+            name="rag-index-progress",
+            daemon=True,
+        )
+        worker.start()
         while True:
-            event_type, payload = events.get()
+            try:
+                event_type, payload = events.get_nowait()
+            except Empty:
+                # Polling a thread-safe queue avoids nesting a blocking queue
+                # consumer inside Starlette's thread pool. The short wait keeps
+                # the event loop responsive and progress delivery prompt.
+                await asyncio.sleep(0.05)
+                continue
             if event_type == "progress":
                 event = {"type": "progress", **payload}
             elif event_type == "complete":
@@ -188,6 +201,10 @@ def index_repository_stream(request: IndexRequest):
                 event = {"type": "error", **payload}
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             if event_type in {"complete", "error"}:
+                # The terminal event is scheduled just before the producer
+                # returns. Join that final unwind so a short-lived consumer
+                # cannot finish while its producer thread is still active.
+                worker.join(timeout=1.0)
                 break
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -318,11 +335,10 @@ def advance_generation(request: AdvanceGenerationRequest):
 
 @router.post("/index/generation-aliases")
 def publish_generation_aliases(request: GenerationAliasPublicationRequest):
-    """Repair readable aliases for a completed immutable generation.
+    """Publish or repair readable aliases for an accepted immutable generation.
 
-    This is deliberately separate from indexing. Indexing publishes all aliases
-    atomically; this endpoint makes deployments backward-compatible by repairing
-    active generations that predate readable branch aliases.
+    This is deliberately separate from indexing so the Java registry can reject
+    a stale completed build before any mutable branch-head alias is moved.
     """
     _, index_manager = _get_singletons()
     try:

@@ -3,10 +3,13 @@ package org.rostilos.codecrow.ragengine.branch;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus;
 import org.rostilos.codecrow.core.model.rag.RagIndexOperationStatus;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
 import org.rostilos.codecrow.ragengine.service.RagBranchIndexRegistryService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -29,6 +32,8 @@ import java.util.function.Consumer;
  */
 @Service
 public class BranchIndexGenerationBuildService {
+    private static final Logger log = LoggerFactory.getLogger(
+            BranchIndexGenerationBuildService.class);
     private static final long HEARTBEAT_INTERVAL_SECONDS = 15;
 
     private final BranchArchiveService archiveService;
@@ -161,22 +166,25 @@ public class BranchIndexGenerationBuildService {
                             snapshot.toString(), project.getWorkspace().getName(),
                             project.getNamespace(), branch, revision, includePatterns,
                             excludePatterns, registration.generation().getCollectionName(),
-                            publishBranchAlias, publishLegacyProjectAlias)
+                            false, false)
                     : pipelineClient.indexRepository(
                             snapshot.toString(), project.getWorkspace().getName(),
                             project.getNamespace(), branch, revision, includePatterns,
                             excludePatterns, registration.generation().getCollectionName(),
-                            publishBranchAlias, publishLegacyProjectAlias,
+                            false, false,
                             progressEvents);
             Object manifest = result.get("generation_manifest_sha256");
             if (!(manifest instanceof String digest) || digest.isBlank()) {
                 throw new IOException("RAG full branch generation has no manifest digest");
             }
-            registryService.publish(
+            var published = registryService.publish(
                     registration.operation().getId(),
                     digest,
                     number(result.get("document_count")),
                     number(result.get("chunk_count")));
+            publishReadableAliasesIfActive(
+                    project, branch, revision, registration.generation().getCollectionName(),
+                    published, publishBranchAlias, publishLegacyProjectAlias);
             return result;
         } catch (Throwable failure) {
             registryService.fail(
@@ -196,6 +204,32 @@ public class BranchIndexGenerationBuildService {
             if (snapshot != null) {
                 deleteTree(snapshot);
             }
+        }
+    }
+
+    private void publishReadableAliasesIfActive(
+            Project project,
+            String branch,
+            String revision,
+            String collectionTarget,
+            org.rostilos.codecrow.core.model.rag.RagBranchIndexGeneration published,
+            boolean publishBranchAlias,
+            boolean publishLegacyProjectAlias) {
+        if (published == null
+                || published.getStatus() != RagBranchIndexGenerationStatus.ACTIVE
+                || !publishBranchAlias) {
+            return;
+        }
+        try {
+            pipelineClient.publishGenerationAliases(
+                    project.getWorkspace().getName(), project.getNamespace(),
+                    branch, revision, collectionTarget,
+                    true, publishLegacyProjectAlias);
+        } catch (IOException aliasFailure) {
+            // Readable aliases are operator convenience. Exact retrieval uses
+            // the registry target, and reconciliation repairs this alias later.
+            log.warn("Could not publish readable aliases for RAG generation {}: {}",
+                    published.getId(), aliasFailure.getMessage());
         }
     }
 

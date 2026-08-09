@@ -30,6 +30,7 @@ import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.TaskImplementationEvidenceService;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
+import org.rostilos.codecrow.vcsclient.model.VcsCommit;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.pr.PrIssueTrackingService;
 import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
@@ -150,6 +151,54 @@ class PullRequestAnalysisProcessorTest {
                 request.sourceBranchName = "feature-branch";
                 request.targetBranchName = "main";
                 return request;
+        }
+
+        @Test
+        @DisplayName("SCM evidence starts at the reviewed PR revision")
+        void scmEvidenceExcludesCommitsPushedAfterReviewedHead() {
+                List<VcsCommit> selected = PullRequestAnalysisProcessor.selectPrEvidenceCommits(
+                                List.of(
+                                                commit("newer-2"),
+                                                commit("newer-1"),
+                                                commit("reviewed-head"),
+                                                commit("pr-parent"),
+                                                commit("target-base"),
+                                                commit("older")),
+                                "reviewed-head",
+                                "target-base");
+
+                assertThat(selected).extracting(VcsCommit::hash)
+                                .containsExactly("reviewed-head", "pr-parent");
+        }
+
+        @Test
+        @DisplayName("SCM evidence stays empty when reviewed head is outside provider history")
+        void scmEvidenceDoesNotClaimUnknownHistoryWindow() {
+                List<VcsCommit> selected = PullRequestAnalysisProcessor.selectPrEvidenceCommits(
+                                List.of(commit("newer"), commit("target-base")),
+                                "reviewed-head",
+                                "target-base");
+
+                assertThat(selected).isEmpty();
+        }
+
+        @Test
+        @DisplayName("SCM evidence keeps only reviewed head when PR base is outside provider history")
+        void scmEvidenceDoesNotClaimCommitsPastUnknownBase() {
+                List<VcsCommit> selected = PullRequestAnalysisProcessor.selectPrEvidenceCommits(
+                                List.of(
+                                                commit("reviewed-head"),
+                                                commit("unknown-parent"),
+                                                commit("older")),
+                                "reviewed-head",
+                                "target-base");
+
+                assertThat(selected).extracting(VcsCommit::hash)
+                                .containsExactly("reviewed-head");
+        }
+
+        private static VcsCommit commit(String hash) {
+                return new VcsCommit(hash, hash, "author", "author@example.test", null, List.of());
         }
 
         @Nested

@@ -428,6 +428,24 @@ class TestRAGIndexManager:
             "Workspace", "Project", "release/1.2"
         ).startswith("rag_workspace__project__release_1_2_")
 
+    def test_readable_alias_publication_requires_immutable_generation_target(self):
+        from rag_pipeline.core.index_manager.manager import RAGIndexManager
+
+        manager = object.__new__(RAGIndexManager)
+
+        with pytest.raises(
+            ValueError,
+            match="require an immutable collection target",
+        ):
+            manager.index_repository(
+                repo_path="/tmp/repository",
+                workspace="workspace",
+                project="project",
+                branch="main",
+                commit="abc123",
+                publish_branch_alias=True,
+            )
+
     @patch("rag_pipeline.core.index_manager.manager.create_embedding_model")
     @patch("rag_pipeline.core.index_manager.manager.get_embedding_model_info")
     @patch("rag_pipeline.core.index_manager.manager.QdrantClient")

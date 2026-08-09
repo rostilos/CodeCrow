@@ -190,6 +190,31 @@ class JobServiceTest {
             assertThat(job.getJobType()).isEqualTo(JobType.RAG_INCREMENTAL_INDEX);
             assertThat(job.getTitle()).contains("Incremental");
         }
+
+        @Test
+        @DisplayName("should persist branch and revision for a branch RAG job")
+        void shouldCreateBranchBoundRagIndexJob() {
+            Project project = createProject(1L, "Test");
+
+            when(jobRepository.save(any(Job.class))).thenAnswer(inv -> {
+                Job j = inv.getArgument(0);
+                setField(j, "id", 104L);
+                return j;
+            });
+            when(jobLogRepository.save(any(JobLog.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            Job job = jobService.createRagIndexJob(
+                    project,
+                    false,
+                    JobTriggerSource.UI,
+                    null,
+                    "develop",
+                    "abc123");
+
+            assertThat(job.getBranchName()).isEqualTo("develop");
+            assertThat(job.getCommitHash()).isEqualTo("abc123");
+            assertThat(job.getTitle()).isEqualTo("Incremental RAG Update: develop");
+        }
     }
 
     @Nested

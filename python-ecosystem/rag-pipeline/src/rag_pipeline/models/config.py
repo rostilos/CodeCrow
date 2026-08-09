@@ -113,6 +113,24 @@ class RAGConfig(BaseModel):
         ),
         ge=0,
     )
+    revision_preflight_cache_entries: int = Field(
+        default_factory=lambda: int(
+            os.getenv("RAG_REVISION_PREFLIGHT_CACHE_ENTRIES", "512")
+        ),
+        ge=1,
+    )
+    revision_preflight_cache_ttl_seconds: int = Field(
+        default_factory=lambda: int(
+            os.getenv("RAG_REVISION_PREFLIGHT_CACHE_TTL_SECONDS", "0")
+        ),
+        ge=0,
+    )
+    revision_preflight_max_concurrency: int = Field(
+        default_factory=lambda: int(
+            os.getenv("RAG_REVISION_PREFLIGHT_MAX_CONCURRENCY", "2")
+        ),
+        ge=1,
+    )
 
     # Embedding dimensions - auto-detected from model or set via env var
     embedding_dim: int = Field(default_factory=lambda: int(os.getenv("EMBEDDING_DIM", "0")))

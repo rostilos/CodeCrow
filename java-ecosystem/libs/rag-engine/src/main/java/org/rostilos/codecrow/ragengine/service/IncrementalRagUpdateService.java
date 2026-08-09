@@ -123,8 +123,8 @@ public class IncrementalRagUpdateService {
     }
 
     /**
-     * Advances an immutable generation and, for retained branches, publishes
-     * operator aliases in the same RAG-side activation transaction.
+     * Advances an immutable generation. The registry owner publishes readable
+     * aliases only after it has accepted this generation as the current head.
      */
     public Map<String, Object> performIncrementalUpdate(
             Project project,
