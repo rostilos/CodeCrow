@@ -19,12 +19,6 @@ import java.time.OffsetDateTime;
 @Entity
 @Table(
         name = "analyzed_commit",
-        uniqueConstraints = {
-                @UniqueConstraint(
-                        name = "uq_analyzed_commit_project_hash",
-                        columnNames = {"project_id", "commit_hash"}
-                )
-        },
         indexes = {
                 @Index(name = "idx_analyzed_commit_project", columnList = "project_id"),
                 @Index(name = "idx_analyzed_commit_hash", columnList = "commit_hash")
@@ -60,6 +54,15 @@ public class AnalyzedCommit {
     @Enumerated(EnumType.STRING)
     @Column(name = "analysis_type", length = 30)
     private AnalysisType analysisType;
+
+    @Column(name = "source_branch", length = 256)
+    private String sourceBranch;
+
+    @Column(name = "target_branch", length = 256)
+    private String targetBranch;
+
+    @Column(name = "target_base_revision", length = 64)
+    private String targetBaseRevision;
 
     // ── Constructors ───────────────────────────────────────────────────
 
@@ -97,4 +100,10 @@ public class AnalyzedCommit {
 
     public AnalysisType getAnalysisType() { return analysisType; }
     public void setAnalysisType(AnalysisType analysisType) { this.analysisType = analysisType; }
+    public String getSourceBranch() { return sourceBranch; }
+    public void setSourceBranch(String sourceBranch) { this.sourceBranch = sourceBranch; }
+    public String getTargetBranch() { return targetBranch; }
+    public void setTargetBranch(String targetBranch) { this.targetBranch = targetBranch; }
+    public String getTargetBaseRevision() { return targetBaseRevision; }
+    public void setTargetBaseRevision(String targetBaseRevision) { this.targetBaseRevision = targetBaseRevision; }
 }

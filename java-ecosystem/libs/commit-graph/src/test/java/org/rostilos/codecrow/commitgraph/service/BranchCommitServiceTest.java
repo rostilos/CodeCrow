@@ -148,7 +148,7 @@ class BranchCommitServiceTest {
         VcsConnection conn = new VcsConnection();
         when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);
 
-        when(vcsClient.getCommitHistory("ws", "repo", "main", 100))
+        when(vcsClient.getCommitHistory("ws", "repo", "main", 1000))
                 .thenReturn(List.of(
                         commit("new3"), commit("new2"), commit("new1"), commit("old-head")
                 ));
@@ -175,7 +175,7 @@ class BranchCommitServiceTest {
         VcsConnection conn = new VcsConnection();
         when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);
 
-        when(vcsClient.getCommitHistory("ws", "repo", "main", 100))
+        when(vcsClient.getCommitHistory("ws", "repo", "main", 1000))
                 .thenReturn(List.of(commit("new1"), commit("old-head")));
 
         when(analyzedCommitService.filterUnanalyzed(eq(1L), anyList()))
@@ -199,7 +199,7 @@ class BranchCommitServiceTest {
 
         VcsConnection conn = new VcsConnection();
         when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);
-        when(vcsClient.getCommitHistory("ws", "repo", "main", 100))
+        when(vcsClient.getCommitHistory("ws", "repo", "main", 1000))
                 .thenReturn(null);
 
         CommitRangeContext ctx = service.resolveCommitRange(project, conn, "main", "new-head");
@@ -220,7 +220,7 @@ class BranchCommitServiceTest {
 
         VcsConnection conn = new VcsConnection();
         when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);
-        when(vcsClient.getCommitHistory("ws", "repo", "main", 100))
+        when(vcsClient.getCommitHistory("ws", "repo", "main", 1000))
                 .thenReturn(List.of());
 
         CommitRangeContext ctx = service.resolveCommitRange(project, conn, "main", "new-head");
@@ -240,7 +240,7 @@ class BranchCommitServiceTest {
         VcsConnection conn = new VcsConnection();
         when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);
 
-        when(vcsClient.getCommitHistory("ws", "repo", "main", 100))
+        when(vcsClient.getCommitHistory("ws", "repo", "main", 1000))
                 .thenReturn(List.of(commit("c3"), commit("c2"), commit("c1")));
 
         CommitRangeContext ctx = service.resolveCommitRange(project, conn, "main", "c3");

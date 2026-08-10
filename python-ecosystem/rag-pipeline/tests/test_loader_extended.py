@@ -301,7 +301,10 @@ class TestLoadSpecificFiles:
 
     def test_read_error_skipped(self, loader, tmp_path):
         (tmp_path / "a.py").write_text("code")
-        with patch("pathlib.Path.read_text", side_effect=PermissionError("no")):
+        with patch(
+            "rag_pipeline.core.loader.read_repository_file_bytes",
+            side_effect=PermissionError("no"),
+        ):
             docs = loader.load_specific_files(
                 [Path("a.py")], tmp_path, "ws", "proj", "main", "abc"
             )

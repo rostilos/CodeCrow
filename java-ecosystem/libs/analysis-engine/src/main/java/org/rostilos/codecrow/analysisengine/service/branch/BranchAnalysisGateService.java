@@ -43,6 +43,36 @@ public class BranchAnalysisGateService {
     }
 
     /**
+     * Apply the dependency barrier for a durably accepted analysis job.
+     * Jobs only wait for older work on the same target branch, which preserves
+     * repository/RAG ordering without serializing independent PR reviews.
+     */
+    public GateResult awaitDependencies(
+            Long projectId,
+            Job job,
+            Consumer<Map<String, Object>> consumer) {
+        if (job == null || job.getId() == null) {
+            return GateResult.READY;
+        }
+        if (job.getJobType() == JobType.BRANCH_ANALYSIS) {
+            return awaitTurn(
+                    projectId,
+                    job.getBranchName(),
+                    job.getId(),
+                    job.getPrNumber(),
+                    consumer);
+        }
+        if (job.getJobType() == JobType.PR_ANALYSIS) {
+            awaitOlderBranchAnalyses(
+                    projectId,
+                    job.getBranchName(),
+                    job.getId(),
+                    consumer);
+        }
+        return GateResult.READY;
+    }
+
+    /**
      * Wait for the relevant target-branch PR job. When the merge PR number is
      * known, only its newest analysis attempt can block reconciliation. When it
      * is unknown (for example, a provider push webhook won the merge-event
@@ -117,6 +147,36 @@ public class BranchAnalysisGateService {
         awaitTurn(projectId, branchName, null, sourcePrNumber, consumer);
     }
 
+    public void awaitOlderBranchAnalyses(
+            Long projectId,
+            String branchName,
+            Long currentPrJobId,
+            Consumer<Map<String, Object>> consumer) {
+        if (branchName == null || branchName.isBlank() || currentPrJobId == null) {
+            return;
+        }
+
+        long timeoutNanos = TimeUnit.MINUTES.toNanos(Math.max(1, waitTimeoutMinutes));
+        long startedAt = System.nanoTime();
+        while (jobRepository.existsActiveBranchAnalysisJobBefore(
+                projectId, branchName, currentPrJobId)) {
+            long waitedNanos = System.nanoTime() - startedAt;
+            if (waitedNanos >= timeoutNanos) {
+                log.warn("Timed out waiting for target branch update: project={}, branch={}, prJob={}, waited={}m",
+                        projectId, branchName, currentPrJobId,
+                        TimeUnit.NANOSECONDS.toMinutes(waitedNanos));
+                throw new AnalysisLockedException(
+                        AnalysisLockType.BRANCH_ANALYSIS.name(), branchName, projectId);
+            }
+
+            emitBranchWait(consumer, branchName, waitedNanos);
+            if (!pause()) {
+                throw new AnalysisLockedException(
+                        AnalysisLockType.BRANCH_ANALYSIS.name(), branchName, projectId);
+            }
+        }
+    }
+
     private boolean hasBlockingPrAnalysis(
             Long projectId,
             String branchName,
@@ -163,6 +223,26 @@ public class BranchAnalysisGateService {
             consumer.accept(event);
         } catch (Exception e) {
             log.debug("Could not emit PR barrier status: {}", e.getMessage());
+        }
+    }
+
+    private void emitBranchWait(
+            Consumer<Map<String, Object>> consumer,
+            String branchName,
+            long waitedNanos) {
+        if (consumer == null) {
+            return;
+        }
+        try {
+            consumer.accept(Map.of(
+                    "type", "branch_analysis_wait",
+                    "state", "waiting_for_target_branch",
+                    "message", "Waiting for the earlier " + branchName
+                            + " update and its RAG publication to finish",
+                    "branchName", branchName,
+                    "waitedSeconds", TimeUnit.NANOSECONDS.toSeconds(waitedNanos)));
+        } catch (Exception e) {
+            log.debug("Could not emit branch barrier status: {}", e.getMessage());
         }
     }
 

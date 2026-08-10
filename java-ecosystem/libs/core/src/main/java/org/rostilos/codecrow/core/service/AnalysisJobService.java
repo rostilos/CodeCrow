@@ -33,6 +33,26 @@ public interface AnalysisJobService {
     Job createRagIndexJob(Project project, boolean isInitial, JobTriggerSource triggerSource);
 
     /**
+     * Create a branch-bound RAG indexing job. Hosts that persist jobs should
+     * override this method so the branch and revision are durable before the
+     * worker starts; the default keeps non-persistent host implementations
+     * source-compatible.
+     */
+    default Job createRagIndexJob(
+            Project project,
+            boolean isInitial,
+            JobTriggerSource triggerSource,
+            String branchName,
+            String commitHash) {
+        Job job = createRagIndexJob(project, isInitial, triggerSource);
+        if (job != null) {
+            job.setBranchName(branchName);
+            job.setCommitHash(commitHash);
+        }
+        return job;
+    }
+
+    /**
      * Start a job.
      * @param job The job to start
      */

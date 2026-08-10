@@ -104,6 +104,46 @@ class ReviewRequestDto(BaseModel):
     previousCommitHash: Optional[str] = Field(default=None, description="Previously analyzed commit hash")
     currentCommitHash: Optional[str] = Field(default=None, description="Current commit hash being analyzed")
     baseCommitHash: Optional[str] = Field(default=None, description="Immutable pull-request base commit hash")
+    ragCollectionTarget: Optional[str] = Field(
+        default=None,
+        exclude=True,
+        description="Internal opaque collection target for the selected branch generation",
+    )
+    ragBaseGenerationManifestSha256: Optional[str] = Field(
+        default=None,
+        exclude=True,
+        description="Internal sealed target-generation receipt returned by RAG indexing",
+    )
+    ragPrGenerationFingerprint: Optional[str] = Field(
+        default=None,
+        exclude=True,
+        description="Internal exact PR-overlay generation receipt returned by RAG indexing",
+    )
+    ragPrOverlayGenerationManifestSha256: Optional[str] = Field(
+        default=None,
+        exclude=True,
+        description="Internal content-addressed PR-overlay membership seal returned by RAG indexing",
+    )
+    ragBasePluginFingerprint: Optional[str] = Field(
+        default=None,
+        exclude=True,
+        description="Internal plugin selection identity of the sealed target generation",
+    )
+    ragBasePluginDescriptorFingerprint: Optional[str] = Field(
+        default=None,
+        exclude=True,
+        description="Internal plugin descriptor identity of the sealed target generation",
+    )
+    ragBasePluginImplementationFingerprint: Optional[str] = Field(
+        default=None,
+        exclude=True,
+        description="Internal plugin implementation identity of the sealed target generation",
+    )
+    ragBaseIndexRepresentationFingerprint: Optional[str] = Field(
+        default=None,
+        exclude=True,
+        description="Internal index representation identity of the sealed target generation",
+    )
     # File enrichment data (full file contents + pre-computed dependency graph)
     enrichmentData: Optional[PrEnrichmentDataDto] = Field(default=None, description="Pre-computed file contents and dependency relationships from Java")
     projectCapabilities: Optional[ProjectCapabilitiesDto] = Field(

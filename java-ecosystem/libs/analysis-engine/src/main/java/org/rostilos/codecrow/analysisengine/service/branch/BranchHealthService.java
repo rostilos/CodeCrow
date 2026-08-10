@@ -2,10 +2,13 @@ package org.rostilos.codecrow.analysisengine.service.branch;
 
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
+import org.rostilos.codecrow.scmevidence.service.ScmEvidenceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -16,6 +19,9 @@ public class BranchHealthService {
 
     private final BranchRepository branchRepository;
     private final AnalyzedCommitService analyzedCommitService;
+
+    @Autowired(required = false)
+    private ScmEvidenceService scmEvidenceService;
 
     public BranchHealthService(
             BranchRepository branchRepository,
@@ -37,7 +43,22 @@ public class BranchHealthService {
                                        String branchName) {
         if (unanalyzedCommits.isEmpty()) return;
         try {
-            analyzedCommitService.recordBranchCommitsAnalyzed(project, unanalyzedCommits);
+            boolean multiBranch = project.getConfiguration() != null
+                    && project.getConfiguration().ragConfig() != null
+                    && project.getConfiguration().ragConfig().isMultiBranchEnabled();
+            if (multiBranch) {
+                analyzedCommitService.recordBranchCommitsAnalyzed(
+                        project, unanalyzedCommits, branchName);
+            } else {
+                analyzedCommitService.recordBranchCommitsAnalyzed(
+                        project, unanalyzedCommits);
+            }
+            if (scmEvidenceService != null) {
+                scmEvidenceService.recordAnalysisReceipts(
+                        project.getId(), unanalyzedCommits, branchName, branchName,
+                        unanalyzedCommits.get(unanalyzedCommits.size() - 1),
+                        null, AnalysisType.BRANCH_ANALYSIS.name());
+            }
             log.info("Recorded {} commits as analyzed after successful branch analysis (branch={})",
                     unanalyzedCommits.size(), branchName);
         } catch (Exception e) {

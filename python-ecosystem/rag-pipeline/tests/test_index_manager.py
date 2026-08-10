@@ -108,6 +108,24 @@ class TestCollectionManager:
 
         assert first != second
 
+    def test_atomic_assign_aliases_replaces_all_requested_aliases_in_one_call(self):
+        cm = self._make()
+        old = MagicMock()
+        old.alias_name = "codecrow_ws__project"
+        old.collection_name = "old-primary"
+        cm.client.get_aliases.return_value.aliases = [old]
+
+        cm.atomic_assign_aliases({
+            "codecrow_ws__project": "new-generation",
+            "codecrow_ws__project__develop": "new-generation",
+        })
+
+        cm.client.update_collection_aliases.assert_called_once()
+        operations = cm.client.update_collection_aliases.call_args.kwargs[
+            "change_aliases_operations"
+        ]
+        assert len(operations) == 3
+
     def test_payload_index_failure_does_not_skip_remaining_indexes(self):
         cm = self._make()
         cm.client.create_payload_index.side_effect = [
@@ -274,7 +292,7 @@ class TestPointOperations:
         points = po.embed_and_create_points([("point-id-1", mock_chunk)])
         assert len(points) == 1
         assert points[0].id == "point-id-1"
-        assert points[0].vector == [0.1, 0.2, 0.3]
+        assert points[0].vector == pytest.approx([0.1, 0.2, 0.3])
 
 
 # ─────────────────────────────────────────────────────────────
@@ -342,6 +360,16 @@ class TestStatsManager:
 # ─────────────────────────────────────────────────────────────
 class TestRAGIndexManager:
 
+    @pytest.fixture(autouse=True)
+    def avoid_network_tokenizer_download(self, monkeypatch):
+        # Constructing LlamaIndex's default SentenceSplitter may lazily fetch
+        # the tiktoken vocabulary. These manager unit tests mock embeddings and
+        # Qdrant, so they must remain hermetic as well.
+        from rag_pipeline.core.index_manager.manager import Settings
+
+        monkeypatch.setattr(Settings, "_node_parser", MagicMock(), raising=False)
+
+
     def _mock_config(self):
         mock_config = MagicMock()
         mock_config.qdrant_url = "http://localhost:6333"
@@ -385,6 +413,56 @@ class TestRAGIndexManager:
         name = mgr._get_project_collection_name("workspace", "project")
         assert name.startswith("rag_")
         assert "workspace" in name
+
+    def test_branch_operator_alias_is_readable_and_branch_specific(self):
+        from rag_pipeline.core.index_manager.manager import RAGIndexManager
+
+        manager = object.__new__(RAGIndexManager)
+        manager.config = MagicMock(qdrant_collection_prefix="rag")
+        manager.config.qdrant_collection_prefix = "rag"
+
+        assert manager._get_branch_operator_alias(
+            "Workspace", "Project", "develop"
+        ) == "rag_workspace__project__develop"
+        assert manager._get_branch_operator_alias(
+            "Workspace", "Project", "release/1.2"
+        ).startswith("rag_workspace__project__release_1_2_")
+
+    def test_branch_operator_alias_preserves_case_sensitive_identity(self):
+        from rag_pipeline.core.index_manager.manager import RAGIndexManager
+
+        manager = object.__new__(RAGIndexManager)
+        manager.config = MagicMock(qdrant_collection_prefix="rag")
+        manager.config.qdrant_collection_prefix = "rag"
+
+        lowercase = manager._get_branch_operator_alias(
+            "Workspace", "Project", "feature"
+        )
+        uppercase = manager._get_branch_operator_alias(
+            "Workspace", "Project", "Feature"
+        )
+
+        assert lowercase != uppercase
+        assert lowercase == "rag_workspace__project__feature"
+        assert uppercase.startswith("rag_workspace__project__feature_")
+
+    def test_readable_alias_publication_requires_immutable_generation_target(self):
+        from rag_pipeline.core.index_manager.manager import RAGIndexManager
+
+        manager = object.__new__(RAGIndexManager)
+
+        with pytest.raises(
+            ValueError,
+            match="require an immutable collection target",
+        ):
+            manager.index_repository(
+                repo_path="/tmp/repository",
+                workspace="workspace",
+                project="project",
+                branch="main",
+                commit="abc123",
+                publish_branch_alias=True,
+            )
 
     @patch("rag_pipeline.core.index_manager.manager.create_embedding_model")
     @patch("rag_pipeline.core.index_manager.manager.get_embedding_model_info")

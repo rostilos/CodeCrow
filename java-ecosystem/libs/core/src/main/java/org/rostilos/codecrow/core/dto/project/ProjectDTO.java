@@ -118,7 +118,9 @@ public record ProjectDTO(
                         rc.includePatterns(),
                         rc.excludePatterns(),
                         rc.multiBranchEnabled(),
-                        rc.branchRetentionDays());
+                        rc.branchRetentionDays(),
+                        rc.indexedBranches(),
+                        rc.transientBranchIndexesEnabled());
             }
             if (config.prAnalysisEnabled() != null) {
                 prAnalysisEnabled = config.prAnalysisEnabled();
@@ -212,13 +214,26 @@ public record ProjectDTO(
             java.util.List<String> includePatterns,
             java.util.List<String> excludePatterns,
             Boolean multiBranchEnabled,
-            Integer branchRetentionDays) {
+            Integer branchRetentionDays,
+            java.util.List<String> indexedBranches,
+            Boolean transientBranchIndexesEnabled) {
+        public RagConfigDTO(
+                boolean enabled,
+                String branch,
+                java.util.List<String> includePatterns,
+                java.util.List<String> excludePatterns,
+                Boolean multiBranchEnabled,
+                Integer branchRetentionDays) {
+            this(enabled, branch, includePatterns, excludePatterns, multiBranchEnabled,
+                    branchRetentionDays, null, null);
+        }
+
         /**
          * Backward-compatible constructor without include patterns and multi-branch
          * fields.
          */
         public RagConfigDTO(boolean enabled, String branch, java.util.List<String> excludePatterns) {
-            this(enabled, branch, null, excludePatterns, null, null);
+            this(enabled, branch, null, excludePatterns, null, null, null, null);
         }
     }
 

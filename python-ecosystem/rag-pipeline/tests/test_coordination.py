@@ -11,6 +11,7 @@ from rag_pipeline.core.coordination import (
     RedisPermitPool,
 )
 from rag_pipeline.core.index_manager.collection_manager import CollectionManager
+from rag_pipeline.core.index_manager.manager import RAGIndexManager
 
 
 def _coordinator(timeout=0):
@@ -44,6 +45,69 @@ def test_project_mutation_lease_rejects_an_overlapping_job():
     with pytest.raises(MutationLeaseUnavailable, match="another RAG mutation"):
         with coordinator.acquire("workspace", "project", "full-index"):
             pass
+
+
+def test_exact_generation_targets_have_independent_mutation_resources():
+    coordinator = _coordinator()
+
+    main = coordinator._resource_key("workspace", "project", "main-target")
+    develop = coordinator._resource_key("workspace", "project", "develop-target")
+
+    assert main != develop
+    assert main == coordinator._resource_key("workspace", "project", "main-target")
+
+
+def test_branch_publication_scope_serializes_only_the_same_branch_head():
+    coordinator = _coordinator()
+
+    main = coordinator._resource_key(
+        "workspace", "project", "main-target", "branch-head:main"
+    )
+    main_next = coordinator._resource_key(
+        "workspace", "project", "next-main-target", "branch-head:main"
+    )
+    develop = coordinator._resource_key(
+        "workspace", "project", "develop-target", "branch-head:develop"
+    )
+
+    assert main == main_next
+    assert main != develop
+
+
+def test_pr_overlay_scope_serializes_only_the_same_pr():
+    coordinator = _coordinator()
+
+    pr_41_index = coordinator._resource_key(
+        "workspace", "project", publication_scope="pr-overlay:41"
+    )
+    pr_41_delete = coordinator._resource_key(
+        "workspace", "project", publication_scope="pr-overlay:41"
+    )
+    pr_42_index = coordinator._resource_key(
+        "workspace", "project", publication_scope="pr-overlay:42"
+    )
+
+    assert pr_41_index == pr_41_delete
+    assert pr_41_index != pr_42_index
+
+
+def test_index_manager_binds_overlay_mutations_to_pr_scope():
+    coordinator = MagicMock()
+    manager = SimpleNamespace(_mutation_coordinator=coordinator)
+    lease = object()
+    coordinator.acquire.return_value = lease
+
+    result = RAGIndexManager.pr_overlay_mutation(
+        manager, "workspace", "project", 42, "index-pr-overlay"
+    )
+
+    assert result is lease
+    coordinator.acquire.assert_called_once_with(
+        "workspace",
+        "project",
+        "index-pr-overlay",
+        publication_scope="pr-overlay:42",
+    )
 
 
 def test_project_mutation_coordination_fails_closed_when_redis_is_unavailable():

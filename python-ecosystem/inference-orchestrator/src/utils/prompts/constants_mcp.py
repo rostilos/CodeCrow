@@ -21,20 +21,29 @@ TARGET BRANCH: {target_branch}
 STAGE_3_MCP_VERIFICATION_SECTION = """
 ## Issue Re-verification (Optional)
 Before producing the final report, you may verify HIGH/CRITICAL issues that seem uncertain
-by reading actual file content from the repository.
+by reading actual file content from the exact reviewed PR revision.
 
 Available tools:
-- **getBranchFileContent(branch, filePath)** — Read a file to verify an issue's existence
+- **getBranchFileContent(filePath, verificationId)** — Read an anchor-centred
+  source window; the host supplies the exact reviewed commit
 - **getPullRequestComments(pullRequestId)** — Read PR comments for additional context
 
 RULES:
 1. You have a MAXIMUM of {max_calls} verification calls total.
 2. Only verify issues you are UNCERTAIN about — do not verify every issue.
-3. Focus on HIGH and CRITICAL severity issues.
-4. If verification reveals a false positive, note its ID for dismissal.
-5. After verification, produce the final executive summary.
+3. Prioritize HIGH and CRITICAL severity, but you may verify a lower-severity
+   finding when its correctness materially affects the final report.
+4. Use the Verification ID from the complete verification-record list, including
+   records whose persisted Original ID is empty.
+5. Pass that same Verification ID in every file-content call. The host binds the
+   returned source window to the finding and verifies that it covers its line.
+6. If a finding has related_locations, every affected location must be read with
+   the same Verification ID before dismissing the consolidated root finding.
+7. If verification reveals a false positive, note its Verification ID for dismissal.
+8. Missing, failed, partial, or ambiguous evidence means KEEP the finding.
+9. After verification, produce the final executive summary.
 
-TARGET BRANCH: {target_branch}
+REVIEWED REVISION: {review_revision}
 PR ID: {pr_id}
 
 ## False Positive Dismissal
@@ -42,11 +51,13 @@ After producing the executive summary markdown, if your verification revealed an
 positives, append an HTML comment at the very end of your response with the IDs of issues
 that should be removed from the issue list:
 
-<!-- DISMISSED_ISSUES: ["ISSUE_ID_1", "ISSUE_ID_2"] -->
+<!-- DISMISSED_ISSUES: ["issue_0", "issue_3"] -->
 
 RULES for dismissal:
-- Only dismiss issues you VERIFIED as false positives via tool calls (read the actual code).
+- Only dismiss issues you VERIFIED as false positives via successful file-content
+  tool calls against the reviewed revision.
 - Do NOT dismiss issues based on guessing — you must have read the relevant file.
-- Architecture observations reported as HIGH severity bugs can be dismissed if they have no runtime impact.
+- Do not dismiss a concrete architecture/maintainability defect merely because it
+  has no immediate runtime crash; verify the claim as written.
 - If no issues should be dismissed, omit the DISMISSED_ISSUES comment entirely.
 """

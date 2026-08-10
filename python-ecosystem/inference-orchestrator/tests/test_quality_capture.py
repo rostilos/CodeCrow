@@ -48,6 +48,23 @@ def _request(**updates):
     return ReviewRequestDto(**values)
 
 
+def _revision_binding():
+    return {
+        "prIndexed": True,
+        "pullRequestId": 12,
+        "targetBranch": "main",
+        "sourceRevision": "b" * 40,
+        "baseRevision": "a" * 40,
+        "baseGenerationManifestSha256": "c" * 64,
+        "prGenerationFingerprint": "sha256:" + "d" * 64,
+        "prOverlayGenerationManifestSha256": "e" * 64,
+        "basePluginFingerprint": "sha256:" + "1" * 64,
+        "basePluginDescriptorFingerprint": "sha256:" + "2" * 64,
+        "basePluginImplementationFingerprint": "sha256:" + "3" * 64,
+        "baseIndexRepresentationFingerprint": "sha256:" + "4" * 64,
+    }
+
+
 class _FakeDelegate:
     def __init__(self):
         self.calls = []
@@ -82,6 +99,9 @@ class _FakeDelegate:
                         "output_tokens": 2,
                     },
                 }]],
+                "llm_output": {
+                    "model_name": "provider-resolved-review-model",
+                },
             })
         return {
             "answer": "captured",
@@ -114,6 +134,26 @@ def test_non_allowlisted_project_is_not_captured(capture_environment):
     assert list(capture_environment.iterdir()) == []
 
 
+def test_provider_model_identity_uses_metadata_not_tool_arguments():
+    response = {
+        "llm_output": {"model_name": "provider/resolved"},
+        "generations": [[{
+            "message": {
+                "tool_calls": [{
+                    "args": {"model": "domain-object-name"},
+                }],
+                "response_metadata": {
+                    "model": "provider/resolved",
+                },
+            },
+        }]],
+    }
+
+    assert quality_capture._provider_reported_models(response) == [
+        "provider/resolved"
+    ]
+
+
 @pytest.mark.asyncio
 async def test_capture_records_exact_model_boundary_and_redacts_credentials(
     capture_environment,
@@ -125,7 +165,12 @@ async def test_capture_records_exact_model_boundary_and_redacts_credentials(
     event_callback = session.wrap_event_callback(forwarded_events.append)
 
     capped = llm.model_copy(update={"max_tokens": 321})
-    structured = capped.with_structured_output(dict, include_raw=True)
+    structured = capped.with_structured_output(
+        dict,
+        include_raw=True,
+        method="json_schema",
+        strict=True,
+    )
     result = await structured.ainvoke("Review proprietary_source safely")
     event_callback({
         "type": "status",
@@ -161,6 +206,7 @@ async def test_capture_records_exact_model_boundary_and_redacts_credentials(
             "semanticDisabled": False,
             "exactEvidenceIds": 2,
         },
+        "revisionBinding": _revision_binding(),
     })
     response = {"result": {"issues": [{"file": "private.py", "title": "Example"}]}}
     await session.complete(response)
@@ -179,6 +225,9 @@ async def test_capture_records_exact_model_boundary_and_redacts_credentials(
         "registered": 1,
         "completed": 1,
     }
+    assert artifact["pipelineEvidence"]["revisionBinding"] == (
+        _revision_binding()
+    )
     assert artifact["pipelineEvidenceDigest"]
     assert forwarded_events[0]["state"] == "review_evidence_completed"
     assert artifact["calls"][0]["status"] == "completed"
@@ -186,9 +235,19 @@ async def test_capture_records_exact_model_boundary_and_redacts_credentials(
         "Review proprietary_source safely"
     )
     assert artifact["calls"][0]["modelBindings"]["max_tokens"] == 321
+    assert artifact["calls"][0]["modelBindings"]["structured_output"] == {
+        "include_raw": True,
+        "options": {
+            "method": "json_schema",
+            "strict": True,
+        },
+    }
     assert artifact["calls"][0]["response"]["answer"] == "captured"
     assert artifact["calls"][0]["providerCallCountSource"] == "callback"
     assert artifact["calls"][0]["providerEvents"][0]["response"]["generations"]
+    assert artifact["calls"][0]["providerEvents"][0][
+        "providerReportedModels"
+    ] == ["provider-resolved-review-model"]
     assert artifact["request"]["rawDiff"].endswith("proprietary_source = True")
     assert artifact["request"]["aiCustomParameters"]["temperature"] == 0.2
     assert artifact["request"]["aiCustomParameters"]["default_headers"]["X-Trace"] == (
@@ -209,11 +268,48 @@ async def test_capture_records_exact_model_boundary_and_redacts_credentials(
     assert len(artifact["modeIdentity"]) == 64
     assert artifact["captureDigest"]
     assert artifact["resultDigest"]
+    receipt = session.receipt()
+    assert receipt["requestedModel"] == "review-model"
+    assert receipt["providerReportedModels"] == [
+        "provider-resolved-review-model"
+    ]
+    assert receipt["providerModelEvidenceComplete"] is True
+    assert receipt["calls"][0]["stage"]
+    assert receipt["receiptDigest"]
     assert "provider-secret" not in serialized
     assert "header-secret" not in serialized
     assert "oauth-secret" not in serialized
     assert "vcs-secret" not in serialized
     assert (os.stat(session.path).st_mode & 0o777) == 0o600
+
+
+@pytest.mark.asyncio
+async def test_capture_records_tool_binding_options(capture_environment):
+    session = create_quality_capture_session(_request())
+    delegate = _FakeDelegate()
+    llm = ReviewQualityCaptureLLM(delegate, session)
+
+    bound = llm.bind_tools(
+        [{"name": "lookup", "description": "Read source evidence"}],
+        tool_choice="required",
+        strict=True,
+    )
+    await bound.ainvoke("Use the declared evidence tool")
+    await session.complete({"result": {"issues": []}})
+
+    artifact = json.loads(session.path.read_text(encoding="utf-8"))
+    assert artifact["calls"][0]["modelBindings"]["tool_binding"] == {
+        "options": {
+            "strict": True,
+            "tool_choice": "required",
+        },
+    }
+    assert artifact["calls"][0]["tools"] == [
+        {
+            "description": "Read source evidence",
+            "name": "lookup",
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -324,6 +420,12 @@ async def test_review_service_routes_pipeline_events_through_capture_session(
         async def complete(self, response, error=None, *, failed=False):
             completed.append((response, error, failed))
 
+        def receipt(self):
+            return {
+                "kind": "review-quality-capture-receipt",
+                "receiptDigest": "a" * 64,
+            }
+
     capture = CaptureSpy()
 
     async def fake_review(
@@ -352,8 +454,21 @@ async def test_review_service_routes_pipeline_events_through_capture_session(
     )
 
     assert response == {"result": {"issues": []}}
-    assert observed == [{"state": "review_evidence_completed"}]
-    assert forwarded == observed
+    assert observed[0] == {"state": "review_evidence_completed"}
+    assert observed[1]["state"] == "review_quality_capture_completed"
+    assert observed[1]["qualityCapture"]["receiptDigest"] == "a" * 64
+    assert forwarded == [
+        {"state": "review_evidence_completed"},
+        {
+            "type": "status",
+            "state": "review_quality_capture_completed",
+            "message": "Review quality capture completed",
+            "qualityCapture": {
+                "kind": "review-quality-capture-receipt",
+                "receiptDigest": "a" * 64,
+            },
+        },
+    ]
     assert completed == [(response, None, False)]
 
 

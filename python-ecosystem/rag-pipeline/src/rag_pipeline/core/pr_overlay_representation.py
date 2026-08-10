@@ -18,10 +18,19 @@ PR_OVERLAY_REPRESENTATION_PAYLOAD_KEY = (
 _PR_OVERLAY_SOURCE_PATHS = (
     "api/models.py",
     "api/routers/pr.py",
+    "api/routers/query.py",
     "core/index_manager/manager.py",
     "core/pr_overlay_identity.py",
+    "core/pr_overlay_manifest.py",
     "core/pr_overlay_representation.py",
+    "core/revision_binding.py",
+    "core/revision_preflight.py",
     "core/review_grouping.py",
+    "services/base.py",
+    "services/deterministic_context.py",
+    "services/pr_context.py",
+    "services/query_service.py",
+    "services/semantic_search.py",
 )
 
 _PR_OVERLAY_DEPENDENCIES = (

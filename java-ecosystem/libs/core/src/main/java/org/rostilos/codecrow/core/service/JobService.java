@@ -199,16 +199,38 @@ public class JobService {
             JobTriggerSource triggerSource,
             User triggeredBy
     ) {
+        return createRagIndexJob(
+                project, isInitial, triggerSource, triggeredBy, null, null);
+    }
+
+    /** Create a durable RAG job bound to the branch revision it builds. */
+    @Transactional
+    public Job createRagIndexJob(
+            Project project,
+            boolean isInitial,
+            JobTriggerSource triggerSource,
+            User triggeredBy,
+            String branchName,
+            String commitHash
+    ) {
         Job job = new Job();
         job.setProject(project);
         job.setJobType(isInitial ? JobType.RAG_INITIAL_INDEX : JobType.RAG_INCREMENTAL_INDEX);
         job.setTriggerSource(triggerSource);
         job.setTriggeredBy(triggeredBy);
-        job.setTitle(isInitial ? "Initial RAG Indexing" : "Incremental RAG Update");
+        job.setBranchName(branchName);
+        job.setCommitHash(commitHash);
+        String operation = isInitial ? "Initial RAG Indexing" : "Incremental RAG Update";
+        job.setTitle(branchName == null || branchName.isBlank()
+                ? operation
+                : operation + ": " + branchName);
         job.setStatus(JobStatus.PENDING);
 
         job = jobRepository.save(job);
-        addLog(job, JobLogLevel.INFO, "init", "RAG indexing job created");
+        addLog(job, JobLogLevel.INFO, "init",
+                branchName == null || branchName.isBlank()
+                        ? "RAG indexing job created"
+                        : "RAG indexing job created for branch: " + branchName);
 
         return job;
     }

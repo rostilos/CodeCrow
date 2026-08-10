@@ -109,7 +109,8 @@ public class GitLabBranchWebhookHandler extends AbstractWebhookHandler implement
             };
             
             // Delegate to branch analysis processor
-            Map<String, Object> result = branchAnalysisProcessor.process(request, processorConsumer);
+            Map<String, Object> result = branchAnalysisProcessor.processAfterDependencyGate(
+                    request, processorConsumer);
             
             // Check if analysis failed
             if ("error".equals(result.get("status"))) {

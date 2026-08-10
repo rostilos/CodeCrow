@@ -586,6 +586,7 @@ class BranchAnalysisProcessorTest {
             when(ragOperationsService.isRagEnabled(project)).thenReturn(true);
             when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
             when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
+            when(ragOperationsService.shouldHaveBranchIndex(project, "feature-x")).thenReturn(true);
             when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
             Map<String, Object> result = processor.process(request, events::add);
 
@@ -807,6 +808,7 @@ class BranchAnalysisProcessorTest {
             when(ragOperationsService.isRagEnabled(project)).thenReturn(true);
             when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
             when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
+            when(ragOperationsService.shouldHaveBranchIndex(project, "feature-x")).thenReturn(true);
             when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
 
             when(branchRepository.findByProjectIdAndBranchName(1L, "feature-x"))
@@ -817,6 +819,36 @@ class BranchAnalysisProcessorTest {
 
             verify(ragOperationsService).updateBranchIndex(eq(project), eq("feature-x"), any());
             verify(ragOperationsService, never()).triggerIncrementalUpdate(any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should not mutate RAG for an analyzed branch that is not retained")
+        void shouldSkipRagForNonRetainedBranch() {
+            BranchProcessRequest request = createRequest();
+            request.targetBranchName = "release/preview";
+            request.commitHash = "release-commit";
+            List<Map<String, Object>> events = new ArrayList<>();
+
+            when(project.getId()).thenReturn(1L);
+            when(ragOperationsService.isRagEnabled(project)).thenReturn(true);
+            when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
+            when(ragOperationsService.getBaseBranch(project)).thenReturn("master");
+            when(ragOperationsService.shouldHaveBranchIndex(project, "release/preview")).thenReturn(false);
+
+            ReflectionTestUtils.invokeMethod(
+                    processor,
+                    "performIncrementalRagUpdate",
+                    request,
+                    project,
+                    "diff --git a/f.java b/f.java\n+x\n",
+                    (Consumer<Map<String, Object>>) events::add,
+                    false);
+
+            verify(ragOperationsService, never()).isRagPipelineHealthy();
+            verify(ragOperationsService, never()).updateBranchIndex(any(), any(), any());
+            verify(ragOperationsService, never()).triggerIncrementalUpdate(any(), any(), any(), any(), any());
+            assertThat(events).anySatisfy(event ->
+                    assertThat(event).containsEntry("state", "rag_skipped"));
         }
 
         @Test

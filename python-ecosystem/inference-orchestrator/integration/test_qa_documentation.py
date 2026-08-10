@@ -33,6 +33,30 @@ async def test_qa_doc_success(client, auth_headers):
 
 
 @pytest.mark.asyncio(loop_scope="function")
+async def test_qa_doc_accepts_empty_jira_description(client, auth_headers):
+    """A Jira task without a description must not block diff-based QA generation."""
+    mock_svc = AsyncMock()
+    mock_svc.generate = AsyncMock(return_value={
+        "documentation": "## QA Documentation\nTest changes",
+        "documentation_needed": True,
+    })
+    payload = _minimal_qa_payload()
+    payload["task_context"] = {
+        "task_key": "PROJ-123",
+        "task_summary": "Implement feature",
+        "description": None,
+    }
+
+    with patch("api.routers.qa_documentation.QaDocumentationService", return_value=mock_svc):
+        resp = await client.post("/qa-documentation", json=payload, headers=auth_headers)
+
+    assert resp.status_code == 200
+    generation_args = mock_svc.generate.await_args.kwargs
+    assert generation_args["task_context"]["description"] == ""
+    assert generation_args["diff"] == payload["diff"]
+
+
+@pytest.mark.asyncio(loop_scope="function")
 async def test_qa_doc_validation_error(client, auth_headers):
     """Missing required fields → 422."""
     resp = await client.post("/qa-documentation", json={}, headers=auth_headers)

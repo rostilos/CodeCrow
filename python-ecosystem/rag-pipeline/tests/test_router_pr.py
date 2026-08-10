@@ -31,7 +31,7 @@ def _make_index_manager():
     mutation_context.__enter__.return_value = SimpleNamespace(
         assert_owned=MagicMock()
     )
-    im.project_mutation.return_value = mutation_context
+    im.pr_overlay_mutation.return_value = mutation_context
     im.index_representation_fingerprint = REPRESENTATION_FINGERPRINT
     im.pr_overlay_representation_fingerprint = (
         OVERLAY_REPRESENTATION_FINGERPRINT
@@ -102,6 +102,36 @@ def _capabilities(*plugin_ids, fingerprint="sha256:capabilities"):
 # index_pr_files
 # ─────────────────────────────────────────────────────────────
 class TestIndexPRFiles:
+
+    @patch("rag_pipeline.api.routers.pr._get_index_manager")
+    def test_uses_pr_scoped_mutation_boundary(self, mock_get):
+        im = _make_index_manager()
+        mock_get.return_value = im
+
+        from rag_pipeline.api.routers.pr import index_pr_files
+
+        index_pr_files(_request([]))
+
+        im.pr_overlay_mutation.assert_called_once_with(
+            "ws", "proj", 42, "index-pr-overlay"
+        )
+
+    @patch("rag_pipeline.api.routers.pr._get_index_manager")
+    def test_collection_target_without_base_revision_is_rejected(self, mock_get):
+        im = _make_index_manager()
+        mock_get.return_value = im
+        req = _request([])
+        req.base_revision = None
+        req.collection_target = "foreign-or-unbound-target"
+
+        from rag_pipeline.api.routers.pr import index_pr_files
+
+        with pytest.raises(HTTPException) as exception:
+            index_pr_files(req)
+
+        assert exception.value.status_code == 409
+        assert "requires an exact base revision" in exception.value.detail
+        im.qdrant_client.scroll.assert_not_called()
 
     @patch("rag_pipeline.api.routers.pr.load_repository_snapshots")
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
@@ -784,6 +814,40 @@ class TestDeletePRFiles:
         result = delete_pr_files("ws", "proj", 42)
         assert result["status"] == "deleted"
         assert result["pr_number"] == 42
+        im.pr_overlay_mutation.assert_called_once_with(
+            "ws", "proj", 42, "delete-pr-overlay"
+        )
+
+        selector = im.qdrant_client.delete.call_args.kwargs["points_selector"]
+        coordinates = {
+            condition.key: condition.match.value
+            for condition in selector.must
+        }
+        assert coordinates == {
+            "workspace": "ws",
+            "project": "proj",
+            "pr": True,
+            "pr_number": 42,
+        }
+
+    @patch("rag_pipeline.api.routers.pr._get_index_manager")
+    def test_explicit_collection_target_still_uses_tenant_filter(self, mock_get):
+        im = _make_index_manager()
+        mock_get.return_value = im
+
+        from rag_pipeline.api.routers.pr import delete_pr_files
+        delete_pr_files("ws", "proj", 42, collection_target="selected-target")
+
+        assert im.qdrant_client.delete.call_args.kwargs[
+            "collection_name"
+        ] == "selected-target"
+        selector = im.qdrant_client.delete.call_args.kwargs["points_selector"]
+        assert [(condition.key, condition.match.value) for condition in selector.must] == [
+            ("workspace", "ws"),
+            ("project", "proj"),
+            ("pr", True),
+            ("pr_number", 42),
+        ]
 
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
     def test_collection_not_found(self, mock_get):

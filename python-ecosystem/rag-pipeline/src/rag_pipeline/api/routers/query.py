@@ -5,6 +5,15 @@ from fastapi import APIRouter, HTTPException
 from qdrant_client.models import Filter, FieldCondition, MatchAny, MatchValue
 
 from ..models import QueryRequest, PRContextRequest, DeterministicContextRequest
+from ...core.revision_binding import (
+    require_repository_generation,
+    require_same_repository_generation,
+)
+from ...core.repository_overlay import IncrementalIndexPreconditionError
+from ...core.pr_overlay_manifest import (
+    PR_OVERLAY_MANIFEST_PAYLOAD_KEY,
+    read_pr_overlay_generation,
+)
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["query"])
 
@@ -13,6 +22,11 @@ def _get_singletons():
     """Get lifecycle-managed singletons from the api module."""
     from ..api import index_manager, query_service
     return index_manager, query_service
+
+
+def _optional_string(value) -> Optional[str]:
+    """Ignore absent/loose legacy DTO attributes instead of binding them."""
+    return value if isinstance(value, str) and value else None
 
 
 def _authoritative_pr_branch(request: PRContextRequest) -> Optional[str]:
@@ -28,20 +42,85 @@ def _authoritative_pr_branch(request: PRContextRequest) -> Optional[str]:
     return request.branch
 
 
+def _require_complete_pr_overlay_binding(
+    *,
+    pr_number: Optional[int],
+    target_branch: Optional[str],
+    source_revision: Optional[str],
+    base_revision: Optional[str],
+    base_generation_manifest: Optional[str],
+    pr_generation_fingerprint: Optional[str],
+    pr_overlay_manifest: Optional[str],
+) -> bool:
+    """Reject a claimed exact overlay whose identity is incomplete."""
+    overlay_binding_requested = bool(
+        pr_generation_fingerprint or pr_overlay_manifest
+    )
+    if not overlay_binding_requested:
+        return False
+    if not all((
+        pr_number,
+        target_branch,
+        source_revision,
+        base_revision,
+        base_generation_manifest,
+        pr_generation_fingerprint,
+        pr_overlay_manifest,
+    )):
+        raise IncrementalIndexPreconditionError(
+            "revision-bound PR overlay requires PR number, one authoritative "
+            "branch, source/base revisions, and both generation receipts"
+        )
+    return True
+
+
 @router.post("/query/search")
 def semantic_search(request: QueryRequest):
     """Perform semantic search."""
-    _, query_service = _get_singletons()
+    index_manager, query_service = _get_singletons()
     try:
+        repository_revision = _optional_string(
+            request.repository_revision
+        )
+        generation_manifest = _optional_string(
+            request.repository_generation_manifest_sha256
+        )
+        collection_target = _optional_string(request.collection_target)
+        receipt = None
+        if repository_revision:
+            receipt = require_repository_generation(
+                index_manager=index_manager,
+                workspace=request.workspace,
+                project=request.project,
+                branch=request.branch,
+                revision=repository_revision,
+                generation_manifest_sha256=generation_manifest,
+                collection_target=collection_target,
+            )
         results = query_service.semantic_search(
             query=request.query,
             workspace=request.workspace,
             project=request.project,
             branch=request.branch,
             top_k=request.top_k,
-            filter_language=request.filter_language
+            filter_language=request.filter_language,
+            expected_revision=repository_revision,
+            collection_target=(
+                receipt["_collection_target"] if receipt else collection_target
+            ),
         )
+        if receipt:
+            require_same_repository_generation(
+                index_manager,
+                workspace=request.workspace,
+                project=request.project,
+                branch=request.branch,
+                revision=repository_revision,
+                receipt=receipt,
+            )
         return {"results": results}
+    except IncrementalIndexPreconditionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"Error performing search: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -75,10 +154,48 @@ def get_pr_context(request: PRContextRequest):
                 }
             }
 
+        source_revision = _optional_string(request.source_revision)
+        base_revision = _optional_string(request.base_revision)
+        base_generation_manifest = _optional_string(
+            request.base_generation_manifest_sha256
+        )
+        pr_generation_fingerprint = _optional_string(
+            request.pr_generation_fingerprint
+        )
+        pr_overlay_manifest = _optional_string(
+            request.pr_overlay_generation_manifest_sha256
+        )
+        collection_target = _optional_string(request.collection_target)
+        exact_overlay_binding = _require_complete_pr_overlay_binding(
+            pr_number=request.pr_number,
+            target_branch=authoritative_branch,
+            source_revision=source_revision,
+            base_revision=base_revision,
+            base_generation_manifest=base_generation_manifest,
+            pr_generation_fingerprint=pr_generation_fingerprint,
+            pr_overlay_manifest=pr_overlay_manifest,
+        )
+        receipt = None
+        overlay_receipt = None
+        if base_revision:
+            receipt = require_repository_generation(
+                index_manager,
+                workspace=request.workspace,
+                project=request.project,
+                branch=authoritative_branch,
+                revision=base_revision,
+                generation_manifest_sha256=base_generation_manifest,
+                collection_target=collection_target,
+            )
         pr_results = []
-        collection_name = index_manager._get_project_collection_name(
-            request.workspace,
-            request.project,
+        collection_name = (
+            receipt["_collection_target"]
+            if receipt
+            else collection_target
+            or index_manager._get_project_collection_name(
+                request.workspace,
+                request.project,
+            )
         )
         preflight_branches = [authoritative_branch]
         if query_service._collection_or_alias_exists(collection_name):
@@ -89,6 +206,30 @@ def get_pr_context(request: PRContextRequest):
 
         # HYBRID MODE: Query PR-indexed data first if pr_number is provided
         if request.pr_number:
+            if exact_overlay_binding:
+                overlay_receipt = read_pr_overlay_generation(
+                    index_manager.qdrant_client,
+                    collection_name,
+                    workspace=request.workspace,
+                    project=request.project,
+                    pr_number=request.pr_number,
+                    branch=request.branch or authoritative_branch,
+                    base_branch=authoritative_branch,
+                    source_revision=source_revision,
+                    base_revision=base_revision,
+                    base_generation_manifest_sha256=base_generation_manifest,
+                    generation_fingerprint=pr_generation_fingerprint,
+                    overlay_representation_fingerprint=(
+                        index_manager.pr_overlay_representation_fingerprint
+                    ),
+                    expected_manifest_sha256=(
+                        pr_overlay_manifest
+                    ),
+                )
+                if overlay_receipt is None:
+                    raise IncrementalIndexPreconditionError(
+                        "requested PR overlay generation is unavailable"
+                    )
             pr_results = _query_pr_indexed_data(
                 index_manager=index_manager,
                 query_service=query_service,
@@ -98,7 +239,12 @@ def get_pr_context(request: PRContextRequest):
                 changed_files=request.changed_files,
                 query_texts=request.diff_snippets or [],
                 pr_title=request.pr_title,
-                top_k=request.top_k or 15
+                top_k=request.top_k or 15,
+                collection_target=collection_name,
+                source_revision=source_revision,
+                base_revision=base_revision,
+                base_generation_manifest_sha256=base_generation_manifest,
+                pr_generation_fingerprint=pr_generation_fingerprint,
             )
             logger.info(f"Hybrid mode: Found {len(pr_results)} PR-specific chunks for PR #{request.pr_number}")
 
@@ -118,7 +264,12 @@ def get_pr_context(request: PRContextRequest):
             # branch must not enter the repository branch query a second time.
             base_branch=None if request.pr_number else request.base_branch,
             deleted_files=request.deleted_files or [],
-            exclude_pr_files=(request.all_pr_changed_files or []) if request.pr_number else []
+            exclude_pr_files=(request.all_pr_changed_files or []) if request.pr_number else [],
+            expected_revisions=(
+                {authoritative_branch: base_revision}
+                if base_revision else None
+            ),
+            collection_target=collection_name,
         )
 
         # Merge PR results with branch results (PR first, then branch)
@@ -155,7 +306,41 @@ def get_pr_context(request: PRContextRequest):
             "pr_number": request.pr_number
         }
 
+        if receipt:
+            require_same_repository_generation(
+                index_manager,
+                workspace=request.workspace,
+                project=request.project,
+                branch=authoritative_branch,
+                revision=base_revision,
+                receipt=receipt,
+            )
+        if request.pr_number and overlay_receipt:
+            current_overlay = read_pr_overlay_generation(
+                index_manager.qdrant_client,
+                collection_name,
+                workspace=request.workspace,
+                project=request.project,
+                pr_number=request.pr_number,
+                branch=request.branch or authoritative_branch,
+                base_branch=authoritative_branch,
+                source_revision=source_revision,
+                base_revision=base_revision,
+                base_generation_manifest_sha256=base_generation_manifest,
+                generation_fingerprint=pr_generation_fingerprint,
+                overlay_representation_fingerprint=(
+                    index_manager.pr_overlay_representation_fingerprint
+                ),
+                expected_manifest_sha256=None,
+            )
+            if current_overlay != overlay_receipt:
+                raise IncrementalIndexPreconditionError(
+                    "PR overlay generation changed while context was retrieved"
+                )
+
         return {"context": context}
+    except IncrementalIndexPreconditionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting PR context: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -170,7 +355,12 @@ def _query_pr_indexed_data(
     changed_files: List[str],
     query_texts: List[str],
     pr_title: Optional[str],
-    top_k: int = 15
+    top_k: int = 15,
+    collection_target: Optional[str] = None,
+    source_revision: Optional[str] = None,
+    base_revision: Optional[str] = None,
+    base_generation_manifest_sha256: Optional[str] = None,
+    pr_generation_fingerprint: Optional[str] = None,
 ) -> List[Dict]:
     """
     Query PR-indexed chunks from the main collection.
@@ -180,9 +370,22 @@ def _query_pr_indexed_data(
     wasting an embedding call on a fabricated query.
     """
     try:
-        collection_name = index_manager._get_project_collection_name(workspace, project)
+        collection_name = (
+            collection_target
+            or index_manager._get_project_collection_name(workspace, project)
+        )
 
+        exact_binding = all((
+            source_revision,
+            base_revision,
+            base_generation_manifest_sha256,
+            pr_generation_fingerprint,
+        ))
         if not index_manager._collection_manager.collection_exists(collection_name):
+            if exact_binding:
+                raise IncrementalIndexPreconditionError(
+                    "revision-bound PR overlay collection is unavailable"
+                )
             return []
 
         query_parts = []
@@ -194,8 +397,21 @@ def _query_pr_indexed_data(
         pr_filter = Filter(
             must=[
                 FieldCondition(key="pr", match=MatchValue(value=True)),
-                FieldCondition(key="pr_number", match=MatchValue(value=pr_number))
-            ]
+                FieldCondition(key="pr_number", match=MatchValue(value=pr_number)),
+                *(
+                    [
+                        FieldCondition(key="pr_source_revision", match=MatchValue(value=source_revision)),
+                        FieldCondition(key="pr_base_revision", match=MatchValue(value=base_revision)),
+                        FieldCondition(key="pr_base_generation_manifest_sha256", match=MatchValue(value=base_generation_manifest_sha256)),
+                        FieldCondition(key="pr_generation_fingerprint", match=MatchValue(value=pr_generation_fingerprint)),
+                    ]
+                    if exact_binding else []
+                ),
+            ],
+            must_not=[FieldCondition(
+                key=PR_OVERLAY_MANIFEST_PAYLOAD_KEY,
+                match=MatchValue(value=True),
+            )],
         )
 
         direct_file_results = _fetch_direct_pr_file_chunks(
@@ -214,7 +430,21 @@ def _query_pr_indexed_data(
                 with_payload=True,
                 with_vectors=False
             )
+            if exact_binding:
+                for point in results:
+                    payload = point.payload or {}
+                    if any(payload.get(key) != value for key, value in (
+                        ("pr_source_revision", source_revision),
+                        ("pr_base_revision", base_revision),
+                        ("pr_base_generation_manifest_sha256", base_generation_manifest_sha256),
+                        ("pr_generation_fingerprint", pr_generation_fingerprint),
+                    )):
+                        raise IncrementalIndexPreconditionError(
+                            "PR point is outside the requested overlay generation"
+                        )
             accepted = query_service._accept_stored_points(results)
+            if not isinstance(accepted, list):
+                accepted = results
             formatted = _format_pr_results(accepted[:top_k])
             return _merge_pr_results(direct_file_results, formatted)
 
@@ -238,6 +468,8 @@ def _query_pr_indexed_data(
         return _merge_pr_results(direct_file_results, formatted)
 
     except Exception as e:
+        if exact_binding:
+            raise
         logger.warning(f"Error querying PR-indexed data: {e}")
         return []
 
@@ -350,8 +582,70 @@ def get_deterministic_context(request: DeterministicContextRequest):
     No language-specific parsing needed - tree-sitter already did it during indexing.
     Predictable: same input = same output.
     """
-    _, query_service = _get_singletons()
+    index_manager, query_service = _get_singletons()
     try:
+        target_branch = request.branches[0] if request.branches else None
+        source_revision = _optional_string(request.source_revision)
+        base_revision = _optional_string(request.base_revision)
+        base_generation_manifest = _optional_string(
+            request.base_generation_manifest_sha256
+        )
+        pr_generation_fingerprint = _optional_string(
+            request.pr_generation_fingerprint
+        )
+        pr_overlay_manifest = _optional_string(
+            request.pr_overlay_generation_manifest_sha256
+        )
+        collection_target = _optional_string(request.collection_target)
+        receipt = None
+        overlay_receipt = None
+        exact_overlay_binding = _require_complete_pr_overlay_binding(
+            pr_number=request.pr_number,
+            target_branch=target_branch,
+            source_revision=source_revision,
+            base_revision=base_revision,
+            base_generation_manifest=base_generation_manifest,
+            pr_generation_fingerprint=pr_generation_fingerprint,
+            pr_overlay_manifest=pr_overlay_manifest,
+        )
+        if base_revision and target_branch:
+            if len(request.branches) != 1:
+                raise IncrementalIndexPreconditionError(
+                    "revision-bound deterministic context requires exactly one authoritative branch"
+                )
+            receipt = require_repository_generation(
+                index_manager,
+                workspace=request.workspace,
+                project=request.project,
+                branch=target_branch,
+                revision=base_revision,
+                generation_manifest_sha256=base_generation_manifest,
+                collection_target=collection_target,
+            )
+        if exact_overlay_binding:
+            overlay_receipt = read_pr_overlay_generation(
+                index_manager.qdrant_client,
+                receipt["_collection_target"],
+                workspace=request.workspace,
+                project=request.project,
+                pr_number=request.pr_number,
+                branch=target_branch,
+                base_branch=target_branch,
+                source_revision=source_revision,
+                base_revision=base_revision,
+                base_generation_manifest_sha256=base_generation_manifest,
+                generation_fingerprint=pr_generation_fingerprint,
+                overlay_representation_fingerprint=(
+                    index_manager.pr_overlay_representation_fingerprint
+                ),
+                expected_manifest_sha256=(
+                    pr_overlay_manifest
+                ),
+            )
+            if overlay_receipt is None:
+                raise IncrementalIndexPreconditionError(
+                    "requested PR overlay generation is unavailable"
+                )
         context = query_service.get_deterministic_context(
             workspace=request.workspace,
             project=request.project,
@@ -360,9 +654,52 @@ def get_deterministic_context(request: DeterministicContextRequest):
             limit_per_file=request.limit_per_file or 10,
             pr_number=request.pr_number,
             pr_changed_files=request.pr_changed_files,
-            additional_identifiers=request.additional_identifiers
+            additional_identifiers=request.additional_identifiers,
+            expected_revisions=(
+                {target_branch: base_revision}
+                if base_revision and target_branch else None
+            ),
+            pr_source_revision=source_revision,
+            pr_base_revision=base_revision,
+            pr_base_generation_manifest_sha256=base_generation_manifest,
+            pr_generation_fingerprint=pr_generation_fingerprint,
+            collection_target=(
+                receipt["_collection_target"] if receipt else collection_target
+            ),
         )
+        if receipt:
+            require_same_repository_generation(
+                index_manager,
+                workspace=request.workspace,
+                project=request.project,
+                branch=target_branch,
+                revision=base_revision,
+                receipt=receipt,
+            )
+        if overlay_receipt:
+            second_overlay = read_pr_overlay_generation(
+                index_manager.qdrant_client,
+                receipt["_collection_target"],
+                workspace=request.workspace,
+                project=request.project,
+                pr_number=request.pr_number,
+                branch=target_branch,
+                base_branch=target_branch,
+                source_revision=source_revision,
+                base_revision=base_revision,
+                base_generation_manifest_sha256=base_generation_manifest,
+                generation_fingerprint=pr_generation_fingerprint,
+                overlay_representation_fingerprint=(
+                    index_manager.pr_overlay_representation_fingerprint
+                ),
+            )
+            if second_overlay != overlay_receipt:
+                raise IncrementalIndexPreconditionError(
+                    "PR overlay generation changed while context was retrieved"
+                )
         return {"context": context}
+    except IncrementalIndexPreconditionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting deterministic context: {e}")
         raise HTTPException(status_code=500, detail=str(e))

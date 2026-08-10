@@ -15,6 +15,7 @@ from service.review.orchestrator.reconciliation import (
     format_previous_issues_for_batch,
     deduplicate_final_issues,
     deduplicate_cross_batch_issues,
+    issues_are_semantic_dedup_candidates,
     _build_batches,
     reconcile_previous_issues,
 )
@@ -302,7 +303,54 @@ class TestDeduplicateFinalIssues:
 
         assert len(deduplicate_final_issues(issues)) == 1
 
-    def test_exact_plugin_proof_deduplicates_across_prose_and_anchors(self):
+    def test_exact_history_recreation_keeps_identity_and_refreshes_anchor(self):
+        historical = _make_issue(
+            id="3989",
+            file="src/service.py",
+            line=1,
+            title="Unbounded retry loop can exhaust workers",
+            category="CODE_QUALITY",
+            severity="MEDIUM",
+            reason="The retry loop has no terminal attempt limit.",
+            codeSnippet="class RetryService:",
+        )
+        recreated = _make_issue(
+            file="src/service.py",
+            line=1233,
+            title="Unbounded retry loop can exhaust workers",
+            category="BUG_RISK",
+            severity="HIGH",
+            reason="The retry loop has no terminal attempt limit.",
+            codeSnippet="while should_retry(response):",
+        )
+
+        result = deduplicate_final_issues([historical, recreated])
+
+        assert len(result) == 1
+        assert result[0].id == "3989"
+        assert result[0].line == 1233
+        assert result[0].codeSnippet == "while should_retry(response):"
+        assert result[0].severity == "HIGH"
+
+    def test_distinct_historical_duplicates_keep_both_concrete_locations(self):
+        first = _make_issue(
+            id="3989", file="src/service.py", line=10,
+            title="Unbounded retry loop can exhaust workers",
+            reason="The retry loop has no terminal attempt limit.",
+        )
+        second = _make_issue(
+            id="3990", file="src/service.py", line=20,
+            title="Unbounded retry loop can exhaust workers",
+            reason="The retry loop has no terminal attempt limit.",
+        )
+
+        result = deduplicate_final_issues([second, first])
+
+        assert len(result) == 1
+        assert result[0].id == "3989"
+        assert result[0].relatedLocations == ["src/service.py:20"]
+
+    def test_exact_plugin_proof_is_a_semantic_candidate_not_a_delete_key(self):
         issues = [
             _make_issue(
                 file="app/code/Vendor/Module/etc/di.xml",
@@ -324,7 +372,8 @@ class TestDeduplicateFinalIssues:
             ),
         ]
 
-        assert deduplicate_final_issues(issues) == [issues[0]]
+        assert deduplicate_final_issues(issues) == issues
+        assert issues_are_semantic_dedup_candidates(issues[0], issues[1])
 
     def test_distinct_plugin_proofs_remain_distinct(self):
         issues = [

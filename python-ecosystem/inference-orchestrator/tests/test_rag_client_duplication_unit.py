@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from service.rag.rag_client import RagClient
+from service.rag.rag_client import RagClient, RagRetrievalError
 
 
 class _FakeResponse:
@@ -57,6 +57,27 @@ async def test_duplication_search_times_out_slow_queries(monkeypatch):
 
     assert result == []
     assert time.perf_counter() - started < 0.5
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_revision_bound_duplication_timeout_is_propagated(monkeypatch):
+    monkeypatch.setenv("REVIEW_DUPLICATION_RAG_QUERY_TIMEOUT_SECONDS", "0.1")
+    client = RagClient(base_url="http://rag", enabled=True)
+
+    async def get_client():
+        return _SlowSearchClient()
+
+    client._get_client = get_client
+
+    with pytest.raises(RagRetrievalError, match="timed out"):
+        await client.search_for_duplicates(
+            workspace="ws",
+            project="proj",
+            branch="main",
+            queries=["find duplicate implementation"],
+            repository_revision="a" * 40,
+            repository_generation_manifest_sha256="b" * 64,
+        )
 
 
 @pytest.mark.asyncio(loop_scope="function")

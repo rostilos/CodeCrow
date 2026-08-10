@@ -88,6 +88,15 @@ class CodeReviewIssue(BaseModel):
             "Leave empty for a generic defect proved directly by changed source."
         ),
     )
+    relatedLocations: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Additional repository-relative file:line locations consolidated "
+            "under the same root-cause finding. The primary file and line remain "
+            "in file/line; this list prevents semantic deduplication from losing "
+            "other affected locations."
+        ),
+    )
 
     @field_validator('codeSnippet', mode='before')
     @classmethod
@@ -125,6 +134,41 @@ class DeduplicatedIssueList(BaseModel):
             "kept issue."
         )
     )
+
+
+class SemanticDuplicateGroup(BaseModel):
+    """One explicit, high-confidence semantic duplicate decision."""
+
+    keeper_index: int = Field(
+        description="Batch-local index of the best representative to keep."
+    )
+    duplicate_indices: List[int] = Field(
+        default_factory=list,
+        description=(
+            "Batch-local indices describing the same root cause as keeper_index."
+        ),
+    )
+    confidence: str = Field(
+        description=(
+            "HIGH, MEDIUM, or LOW confidence. Only HIGH decisions are eligible "
+            "for host-side merging."
+        ),
+    )
+    rationale: str = Field(
+        default="",
+        description="Short root-cause identity explanation, not chain-of-thought.",
+    )
+
+
+class SemanticDeduplicationDecision(BaseModel):
+    """Recall-safe semantic dedup output.
+
+    Findings omitted from duplicate_groups are retained. This is intentionally
+    safer than a kept-index allowlist, where a malformed or incomplete response
+    can accidentally delete unrelated findings.
+    """
+
+    duplicate_groups: List[SemanticDuplicateGroup] = Field(default_factory=list)
 
 
 class AskOutput(BaseModel):

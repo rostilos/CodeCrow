@@ -18,6 +18,9 @@ public interface AnalyzedCommitRepository extends JpaRepository<AnalyzedCommit, 
      */
     boolean existsByProjectIdAndCommitHash(Long projectId, String commitHash);
 
+    boolean existsByProjectIdAndTargetBranchAndCommitHash(
+            Long projectId, String targetBranch, String commitHash);
+
     /**
      * Find all analyzed commit hashes for a project from a given set of hashes.
      * Used for set subtraction: {@code push_commits - already_analyzed = to_analyze}.
@@ -25,6 +28,17 @@ public interface AnalyzedCommitRepository extends JpaRepository<AnalyzedCommit, 
     @Query("SELECT ac.commitHash FROM AnalyzedCommit ac WHERE ac.project.id = :projectId AND ac.commitHash IN :hashes")
     Set<String> findAnalyzedHashesByProjectIdAndCommitHashIn(
             @Param("projectId") Long projectId,
+            @Param("hashes") List<String> hashes);
+
+    @Query("""
+            SELECT ac.commitHash FROM AnalyzedCommit ac
+            WHERE ac.project.id = :projectId
+              AND ac.targetBranch = :targetBranch
+              AND ac.commitHash IN :hashes
+            """)
+    Set<String> findAnalyzedHashesByProjectIdAndTargetBranchAndCommitHashIn(
+            @Param("projectId") Long projectId,
+            @Param("targetBranch") String targetBranch,
             @Param("hashes") List<String> hashes);
 
     /**

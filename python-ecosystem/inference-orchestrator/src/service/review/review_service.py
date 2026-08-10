@@ -33,6 +33,16 @@ from service.review.snapshot_identity import validate_review_snapshot_identity
 
 logger = logging.getLogger(__name__)
 
+
+def allow_unbound_global_rag_fallback(request: ReviewRequestDto) -> bool:
+    """Legacy fallback is unsafe when the review carries an exact PR lease."""
+    is_exact_pr = bool(
+        request.pullRequestId
+        and request.baseCommitHash
+        and (request.currentCommitHash or request.commitHash)
+    )
+    return not is_exact_pr
+
 class ReviewService:
     """Service class for handling code review requests with streaming support."""
     
@@ -40,7 +50,7 @@ class ReviewService:
     MAX_FIX_RETRIES = 2
 
     # Maximum concurrent reviews (each spawns a JVM subprocess + LLM calls)
-    MAX_CONCURRENT_REVIEWS = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4"))
+    MAX_CONCURRENT_REVIEWS = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "20"))
 
     # Hard timeout ceiling per review (seconds). Configurable via .env
     REVIEW_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "1500"))
@@ -103,6 +113,12 @@ class ReviewService:
                     response,
                     failed=review_response_indicates_failure(response),
                 )
+                self._emit_event(review_event_callback, {
+                    "type": "status",
+                    "state": "review_quality_capture_completed",
+                    "message": "Review quality capture completed",
+                    "qualityCapture": quality_capture.receipt(),
+                })
             return response
 
     async def _process_prompt_dry_run(
@@ -383,7 +399,11 @@ class ReviewService:
                 # task is only awaited if a batch cannot obtain per-batch
                 # context. Branch reconciliation does not need it.
                 request_rag_client = self._rag_client_for_request(request)
-                if needs_multistage_review and request_rag_client is not None:
+                if (
+                    needs_multistage_review
+                    and request_rag_client is not None
+                    and allow_unbound_global_rag_fallback(request)
+                ):
                     rag_context_task = asyncio.create_task(
                         self._fetch_rag_context(
                             request,

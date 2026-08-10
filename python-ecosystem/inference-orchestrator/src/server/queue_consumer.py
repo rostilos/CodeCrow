@@ -44,7 +44,7 @@ class RedisQueueConsumer:
             int(self.consumer_heartbeat_seconds * 3),
         )
         # Bound concurrent job processing to prevent memory pressure
-        max_concurrent = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4"))
+        max_concurrent = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "20"))
         self._job_semaphore = asyncio.Semaphore(max_concurrent)
         self.heartbeat_seconds = max(
             1.0,

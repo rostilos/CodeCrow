@@ -333,7 +333,7 @@ These rules refine evidence collection only. Report a finding only when supplied
         incremental_context: str = "",
         task_context: str = "No task context available.",
         use_mcp_tools: bool = False,
-        target_branch: str = "",
+        review_revision: str = "",
     ) -> str:
         """
         Build prompt for Stage 3: Aggregation & Final Report.
@@ -356,12 +356,12 @@ These rules refine evidence collection only. Report a finding only when supplied
         )
 
         # Conditionally append MCP verification instructions
-        if use_mcp_tools and target_branch:
+        if use_mcp_tools and review_revision:
             from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
             max_calls = McpToolExecutor.STAGE_CONFIG["stage_3"]["max_calls"]
             prompt += STAGE_3_MCP_VERIFICATION_SECTION.format(
                 max_calls=max_calls,
-                target_branch=target_branch,
+                review_revision=review_revision,
                 pr_id=pr_id
             )
 

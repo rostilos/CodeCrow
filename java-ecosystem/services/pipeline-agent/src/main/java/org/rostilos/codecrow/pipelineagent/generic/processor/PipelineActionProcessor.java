@@ -9,6 +9,8 @@ import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessReque
 import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
+import org.rostilos.codecrow.analysisengine.service.branch.BranchAnalysisGateService;
+import org.rostilos.codecrow.core.model.job.Job;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -30,15 +32,18 @@ public class PipelineActionProcessor {
     private final ProjectValidationService projectService;
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
     private final BranchAnalysisProcessor branchAnalysisProcessor;
+    private final BranchAnalysisGateService branchAnalysisGateService;
 
     public PipelineActionProcessor(
             ProjectValidationService projectService,
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
-            BranchAnalysisProcessor branchAnalysisProcessor
+            BranchAnalysisProcessor branchAnalysisProcessor,
+            BranchAnalysisGateService branchAnalysisGateService
     ) {
         this.projectService = projectService;
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.branchAnalysisProcessor = branchAnalysisProcessor;
+        this.branchAnalysisGateService = branchAnalysisGateService;
     }
 
     public interface EventConsumer {
@@ -56,12 +61,36 @@ public class PipelineActionProcessor {
             @Valid @RequestBody AnalysisProcessRequest request,
             EventConsumer consumer
     ) throws GeneralSecurityException {
+        return processPipelineActionWithConsumer(request, consumer, null);
+    }
+
+    public Map<String, Object> processPipelineActionWithConsumer(
+            AnalysisProcessRequest request,
+            EventConsumer consumer,
+            Job job
+    ) throws GeneralSecurityException {
 
         try {
             Project project = projectService.getProjectWithConnections(request.getProjectId());
+            boolean dependenciesGated = job != null;
+            if (dependenciesGated) {
+                BranchAnalysisGateService.GateResult gateResult =
+                        branchAnalysisGateService.awaitDependencies(
+                                project.getId(), job, consumer::accept);
+                if (gateResult == BranchAnalysisGateService.GateResult.SUPERSEDED) {
+                    return Map.of(
+                            "status", "ignored",
+                            "message", "Superseded by a newer branch analysis job");
+                }
+            }
 
             if(request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS) {
-                return branchAnalysisProcessor.process((BranchProcessRequest) request, consumer::accept);
+                if (dependenciesGated) {
+                    return branchAnalysisProcessor.processAfterDependencyGate(
+                            (BranchProcessRequest) request, consumer::accept);
+                }
+                return branchAnalysisProcessor.process(
+                        (BranchProcessRequest) request, consumer::accept);
             } else {
                 return pullRequestAnalysisProcessor.process(
                         (PrProcessRequest) request,

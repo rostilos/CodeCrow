@@ -264,6 +264,20 @@ def test_terminal_capture_accepts_deterministic_candidate_ledger():
             "semanticDisabled": False,
             "exactEvidenceIds": 0,
         },
+        "revisionBinding": {
+            "prIndexed": True,
+            "pullRequestId": 12,
+            "targetBranch": "main",
+            "sourceRevision": "a" * 40,
+            "baseRevision": "b" * 40,
+            "baseGenerationManifestSha256": "c" * 64,
+            "prGenerationFingerprint": "sha256:" + "d" * 64,
+            "prOverlayGenerationManifestSha256": "e" * 64,
+            "basePluginFingerprint": "sha256:" + "1" * 64,
+            "basePluginDescriptorFingerprint": "sha256:" + "2" * 64,
+            "basePluginImplementationFingerprint": "sha256:" + "3" * 64,
+            "baseIndexRepresentationFingerprint": "sha256:" + "4" * 64,
+        },
     })
 
     assert evidence["candidates"]["generated"] == 1

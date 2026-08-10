@@ -21,6 +21,9 @@ import java.util.*;
  * <p>
  * <h3>De-duplication identities</h3>
  * <ol>
+ *   <li><b>Exact narrative identity</b> — same normalized title and complete
+ *       root-cause reason in the same file. Category, severity, and a stale line
+ *       anchor do not make the same finding independent.</li>
  *   <li><b>Issue fingerprint</b> — exact match on
  *       {@link org.rostilos.codecrow.core.util.tracking.IssueFingerprint}
  *       (category + anchored line-content hash + normalized title).</li>
@@ -38,7 +41,8 @@ import java.util.*;
  * <ul>
  *   <li>The highest severity among the group</li>
  *   <li>The best (longest valid) suggested fix diff</li>
- *   <li>The lowest line number (most specific location)</li>
+ *   <li>The strongest concrete source anchor</li>
+ *   <li>Additional concrete locations for exact narrative occurrences</li>
  * </ul>
  *
  * <h3>Thread safety</h3>
@@ -105,6 +109,10 @@ public class IssueDeduplicationService {
 
             int before = active.size();
 
+            // Exact root narrative catches duplicated history/current output even
+            // when line anchors and classifications drifted before ingestion.
+            active = exactNarrativeDedup(active, filePath);
+
             // Exact category-aware identity.
             active = fingerprintDedup(active, filePath);
 
@@ -130,7 +138,127 @@ public class IssueDeduplicationService {
         return result;
     }
 
-    // ── Tier 1: category-aware fingerprint ───────────────────────────────
+    // ── Tier 1: complete root-narrative identity ─────────────────────────
+
+    private List<CodeAnalysisIssue> exactNarrativeDedup(
+            List<CodeAnalysisIssue> issues,
+            String filePath
+    ) {
+        if (issues.size() < 2) {
+            return issues;
+        }
+
+        Map<String, CodeAnalysisIssue> byNarrative = new LinkedHashMap<>();
+        int noIdentityOrdinal = 0;
+        int duplicateCount = 0;
+        for (CodeAnalysisIssue issue : issues) {
+            String title = normalizeNarrative(issue.getTitle());
+            String reason = normalizeNarrative(rootReason(issue.getReason()));
+            // Short boilerplate (for example "same issue" / "test reason") is
+            // not a safe root identity. The inference tier handles ambiguous
+            // prose; this ingestion fallback requires a complete explanation.
+            if (title.isBlank() || reason.length() < 40) {
+                byNarrative.put("__no_narrative_" + noIdentityOrdinal++, issue);
+                continue;
+            }
+
+            String identity = title + "\u0000" + reason;
+            CodeAnalysisIssue existing = byNarrative.get(identity);
+            if (existing == null) {
+                byNarrative.put(identity, issue);
+                continue;
+            }
+
+            CodeAnalysisIssue winner = pickBest(existing, issue);
+            preserveAdditionalNarrativeLocation(winner, existing, issue);
+            byNarrative.put(identity, winner);
+            duplicateCount++;
+        }
+
+        if (duplicateCount > 0) {
+            log.debug("Exact-narrative dedup: removed {} in {}", duplicateCount, filePath);
+        }
+        return new ArrayList<>(byNarrative.values());
+    }
+
+    private String normalizeNarrative(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.strip().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+    }
+
+    private String rootReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return "";
+        }
+        return Arrays.stream(reason.split("\\R"))
+                .filter(line -> !line.strip().toLowerCase(Locale.ROOT).startsWith("also affects:"))
+                .reduce((left, right) -> left + "\n" + right)
+                .orElse("")
+                .strip();
+    }
+
+    private void preserveAdditionalNarrativeLocation(
+            CodeAnalysisIssue winner,
+            CodeAnalysisIssue first,
+            CodeAnalysisIssue second
+    ) {
+        Set<String> locations = new TreeSet<>();
+        collectGeneratedLocations(first.getReason(), locations);
+        collectGeneratedLocations(second.getReason(), locations);
+        addConcreteSecondaryLocation(winner, first, locations);
+        addConcreteSecondaryLocation(winner, second, locations);
+
+        String primary = issueLocation(winner);
+        locations.remove(primary);
+        String baseReason = rootReason(winner.getReason());
+        winner.setReason(locations.isEmpty()
+                ? baseReason
+                : baseReason + "\n\nAlso affects: " + String.join(", ", locations));
+    }
+
+    private void collectGeneratedLocations(String reason, Set<String> locations) {
+        if (reason == null) {
+            return;
+        }
+        for (String line : reason.split("\\R")) {
+            String stripped = line.strip();
+            if (!stripped.toLowerCase(Locale.ROOT).startsWith("also affects:")) {
+                continue;
+            }
+            String value = stripped.substring(stripped.indexOf(':') + 1);
+            Arrays.stream(value.split(","))
+                    .map(String::strip)
+                    .filter(item -> !item.isBlank())
+                    .forEach(locations::add);
+        }
+    }
+
+    private void addConcreteSecondaryLocation(
+            CodeAnalysisIssue winner,
+            CodeAnalysisIssue candidate,
+            Set<String> locations
+    ) {
+        if (candidate == winner || candidate.getLineNumber() == null
+                || candidate.getLineNumber() <= 1) {
+            // Line 1 is the legacy FILE-scope/stale-anchor fallback and is not
+            // safe to publish as an additional concrete occurrence.
+            return;
+        }
+        String location = issueLocation(candidate);
+        if (!location.isBlank()) {
+            locations.add(location);
+        }
+    }
+
+    private String issueLocation(CodeAnalysisIssue issue) {
+        String file = issue.getFilePath() != null ? issue.getFilePath() : "";
+        Integer line = issue.getLineNumber();
+        return line != null && line > 0 ? file + ":" + line : file;
+    }
+
+    // ── Tier 2: category-aware fingerprint ───────────────────────────────
 
     /**
      * De-duplicate by issue fingerprint — catches issues at different lines
@@ -214,38 +342,44 @@ public class IssueDeduplicationService {
 
     /**
      * Pick the best representation of two issues that already have the same exact
-     * identity. Higher severity wins, then the longer valid diff, then the lower
-     * anchored line number. This method never decides whether two issues are equal.
+     * identity, then promote useful metadata from the other representation. This
+     * method never decides whether two issues are equal.
      */
     private CodeAnalysisIssue pickBest(CodeAnalysisIssue a, CodeAnalysisIssue b) {
-        int sevA = severityRank(a.getSeverity());
-        int sevB = severityRank(b.getSeverity());
-        if (sevA != sevB) {
-            return sevA >= sevB ? promoteSeverity(a, b) : promoteSeverity(b, a);
-        }
-
-        int diffLenA = validDiffLength(a.getSuggestedFixDiff());
-        int diffLenB = validDiffLength(b.getSuggestedFixDiff());
-        if (diffLenA != diffLenB) {
-            return diffLenA >= diffLenB ? a : b;
-        }
-
-        int lineA = a.getLineNumber() != null ? a.getLineNumber() : Integer.MAX_VALUE;
-        int lineB = b.getLineNumber() != null ? b.getLineNumber() : Integer.MAX_VALUE;
-        return lineA <= lineB ? a : b;
+        CodeAnalysisIssue winner = representationRank(a) >= representationRank(b) ? a : b;
+        CodeAnalysisIssue loser = winner == a ? b : a;
+        promoteMergedMetadata(winner, loser);
+        return winner;
     }
 
-    /**
-     * Return the winner but ensure it carries the highest severity from either issue.
-     */
-    private CodeAnalysisIssue promoteSeverity(CodeAnalysisIssue winner, CodeAnalysisIssue loser) {
-        // Winner already has higher severity, but adopt loser's diff if winner lacks one
-        if (validDiffLength(winner.getSuggestedFixDiff()) == 0
-                && validDiffLength(loser.getSuggestedFixDiff()) > 0) {
+    private long representationRank(CodeAnalysisIssue issue) {
+        long rank = 0;
+        if (issue.getCodeSnippet() != null && !issue.getCodeSnippet().isBlank()) {
+            rank += 1_000_000_000L;
+        }
+        if (issue.getLineNumber() != null && issue.getLineNumber() > 1) {
+            rank += 100_000_000L;
+        } else if (issue.getLineNumber() != null && issue.getLineNumber() > 0) {
+            rank += 10_000_000L;
+        }
+        rank += Math.min(validDiffLength(issue.getSuggestedFixDiff()), 1_000_000);
+        rank += Math.min(issue.getReason() != null ? issue.getReason().length() : 0, 100_000);
+        return rank;
+    }
+
+    private void promoteMergedMetadata(CodeAnalysisIssue winner, CodeAnalysisIssue loser) {
+        if (severityRank(loser.getSeverity()) > severityRank(winner.getSeverity())) {
+            winner.setSeverity(loser.getSeverity());
+        }
+        if (validDiffLength(loser.getSuggestedFixDiff())
+                > validDiffLength(winner.getSuggestedFixDiff())) {
             winner.setSuggestedFixDiff(loser.getSuggestedFixDiff());
             winner.setSuggestedFixDescription(loser.getSuggestedFixDescription());
+        } else if ((winner.getSuggestedFixDescription() == null
+                || winner.getSuggestedFixDescription().isBlank())
+                && loser.getSuggestedFixDescription() != null) {
+            winner.setSuggestedFixDescription(loser.getSuggestedFixDescription());
         }
-        return winner;
     }
 
     private int severityRank(IssueSeverity severity) {

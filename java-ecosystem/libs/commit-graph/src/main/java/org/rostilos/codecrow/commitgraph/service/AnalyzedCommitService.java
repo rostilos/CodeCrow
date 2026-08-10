@@ -41,15 +41,29 @@ public class AnalyzedCommitService {
      */
     @Transactional
     public void recordBranchCommitsAnalyzed(Project project, List<String> hashes) {
+        recordBranchCommitsAnalyzed(project, hashes, null);
+    }
+
+    @Transactional
+    public void recordBranchCommitsAnalyzed(
+            Project project, List<String> hashes, String targetBranch) {
         if (hashes == null || hashes.isEmpty()) return;
 
-        Set<String> alreadyAnalyzed = analyzedCommitRepository
-                .findAnalyzedHashesByProjectIdAndCommitHashIn(project.getId(), hashes);
+        Set<String> alreadyAnalyzed = targetBranch == null
+                ? analyzedCommitRepository
+                        .findAnalyzedHashesByProjectIdAndCommitHashIn(
+                                project.getId(), hashes)
+                : analyzedCommitRepository
+                        .findAnalyzedHashesByProjectIdAndTargetBranchAndCommitHashIn(
+                                project.getId(), targetBranch, hashes);
 
         List<AnalyzedCommit> toSave = new ArrayList<>();
         for (String hash : hashes) {
             if (!alreadyAnalyzed.contains(hash)) {
-                toSave.add(new AnalyzedCommit(project, hash, AnalysisType.BRANCH_ANALYSIS));
+                AnalyzedCommit analyzed = new AnalyzedCommit(
+                        project, hash, AnalysisType.BRANCH_ANALYSIS);
+                analyzed.setTargetBranch(targetBranch);
+                toSave.add(analyzed);
             }
         }
 
@@ -69,16 +83,37 @@ public class AnalyzedCommitService {
      */
     @Transactional
     public void recordPrCommitsAnalyzed(Project project, List<String> hashes, CodeAnalysis analysis) {
+        recordPrCommitsAnalyzed(project, hashes, analysis, null, null, null);
+    }
+
+    @Transactional
+    public void recordPrCommitsAnalyzed(
+            Project project,
+            List<String> hashes,
+            CodeAnalysis analysis,
+            String sourceBranch,
+            String targetBranch,
+            String targetBaseRevision) {
         if (hashes == null || hashes.isEmpty()) return;
 
-        Set<String> alreadyAnalyzed = analyzedCommitRepository
-                .findAnalyzedHashesByProjectIdAndCommitHashIn(project.getId(), hashes);
+        Set<String> alreadyAnalyzed = targetBranch == null
+                ? analyzedCommitRepository
+                        .findAnalyzedHashesByProjectIdAndCommitHashIn(
+                                project.getId(), hashes)
+                : analyzedCommitRepository
+                        .findAnalyzedHashesByProjectIdAndTargetBranchAndCommitHashIn(
+                                project.getId(), targetBranch, hashes);
 
         Long analysisId = analysis != null ? analysis.getId() : null;
         List<AnalyzedCommit> toSave = new ArrayList<>();
         for (String hash : hashes) {
             if (!alreadyAnalyzed.contains(hash)) {
-                toSave.add(new AnalyzedCommit(project, hash, analysisId, AnalysisType.PR_REVIEW));
+                AnalyzedCommit analyzed = new AnalyzedCommit(
+                        project, hash, analysisId, AnalysisType.PR_REVIEW);
+                analyzed.setSourceBranch(sourceBranch);
+                analyzed.setTargetBranch(targetBranch);
+                analyzed.setTargetBaseRevision(targetBaseRevision);
+                toSave.add(analyzed);
             }
         }
 
@@ -107,10 +142,26 @@ public class AnalyzedCommitService {
                 .toList();
     }
 
+    public List<String> filterUnanalyzed(
+            Long projectId, String targetBranch, List<String> allHashes) {
+        if (allHashes == null || allHashes.isEmpty()) return List.of();
+        Set<String> analyzed = analyzedCommitRepository
+                .findAnalyzedHashesByProjectIdAndTargetBranchAndCommitHashIn(
+                        projectId, targetBranch, allHashes);
+        return allHashes.stream().filter(hash -> !analyzed.contains(hash)).toList();
+    }
+
     /**
      * Check if a specific commit has been analyzed.
      */
     public boolean isAnalyzed(Long projectId, String commitHash) {
         return analyzedCommitRepository.existsByProjectIdAndCommitHash(projectId, commitHash);
+    }
+
+    public boolean isAnalyzed(
+            Long projectId, String targetBranch, String commitHash) {
+        return analyzedCommitRepository
+                .existsByProjectIdAndTargetBranchAndCommitHash(
+                        projectId, targetBranch, commitHash);
     }
 }

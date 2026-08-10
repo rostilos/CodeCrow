@@ -7,8 +7,10 @@ import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -21,6 +23,9 @@ class RagPipelineClientTest {
     private MockWebServer mockWebServer;
     private RagPipelineClient client;
     private ObjectMapper objectMapper;
+
+    @TempDir
+    Path repositoryPath;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -147,6 +152,57 @@ class RagPipelineClientTest {
                 request.getBody().readUtf8(),
                 Map.class);
         assertThat(payload).doesNotContainKey("repo_base");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void advanceGenerationBindsSourceAndTargetCollectionsAndRevisions() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setBody("{\"generation_manifest_sha256\":\"digest\"}")
+                .addHeader("Content-Type", "application/json"));
+
+        client.advanceGeneration(
+                List.of("src/Changed.java"), List.of("src/Deleted.java"),
+                "/tmp/repository", "workspace", "project", "develop",
+                "develop-400", "develop-401",
+                "a".repeat(64),
+                "opaque-generation-400", "opaque-generation-401");
+
+        RecordedRequest request = mockWebServer.takeRequest();
+        assertThat(request.getPath()).isEqualTo("/index/advance-generation");
+        Map<String, Object> payload = objectMapper.readValue(
+                request.getBody().readUtf8(), Map.class);
+        assertThat(payload)
+                .containsEntry("source_commit", "develop-400")
+                .containsEntry("commit", "develop-401")
+                .containsEntry("source_tree_sha256", "a".repeat(64))
+                .containsEntry("source_collection_target", "opaque-generation-400")
+                .containsEntry("collection_target", "opaque-generation-401")
+                .containsEntry("branch", "develop");
+        assertThat((List<String>) payload.get("updated_file_paths"))
+                .containsExactly("src/Changed.java");
+        assertThat((List<String>) payload.get("deleted_file_paths"))
+                .containsExactly("src/Deleted.java");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void exactGenerationPublicationRequestsReadableAliases() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setBody("{\"generation_manifest_sha256\":\"digest\"}")
+                .addHeader("Content-Type", "application/json"));
+
+        client.advanceGeneration(
+                List.of(), List.of(), "/tmp/repository", "workspace", "project", "main",
+                "main-400", "main-401", "a".repeat(64),
+                "opaque-generation-400", "opaque-generation-401", true, true);
+
+        RecordedRequest request = mockWebServer.takeRequest();
+        Map<String, Object> payload = objectMapper.readValue(
+                request.getBody().readUtf8(), Map.class);
+        assertThat(payload)
+                .containsEntry("publish_branch_alias", true)
+                .containsEntry("publish_legacy_project_alias", true);
     }
 
     @Test
@@ -365,7 +421,7 @@ class RagPipelineClientTest {
                 .addHeader("Content-Type", "application/json"));
 
         Map<String, Object> result = client.indexRepository(
-                "/tmp/repo", "ws", "proj", "main", "abc123", null, null);
+                repositoryPath.toString(), "ws", "proj", "main", "abc123", null, null);
 
         assertThat(result).containsEntry("document_count", 42);
         RecordedRequest request = mockWebServer.takeRequest();
@@ -382,7 +438,7 @@ class RagPipelineClientTest {
 
         List<String> patterns = List.of("*.log", "vendor/**");
         Map<String, Object> result = client.indexRepository(
-                "/tmp/repo", "ws", "proj", "main", "abc123", null, patterns);
+                repositoryPath.toString(), "ws", "proj", "main", "abc123", null, patterns);
 
         assertThat(result).containsEntry("document_count", 30);
         RecordedRequest request = mockWebServer.takeRequest();
@@ -400,6 +456,30 @@ class RagPipelineClientTest {
 
         assertThat(result).containsEntry("status", "skipped");
         assertThat(mockWebServer.getRequestCount()).isEqualTo(0);
+    }
+
+    @Test
+    void testIndexRepository_StreamForwardsProgressAndReturnsTerminalResult() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setBody("data: {\"type\":\"progress\",\"stage\":\"indexing\",\"indexedChunks\":5,\"estimatedChunks\":150,\"estimatedRemainingMs\":9000}\n\n"
+                        + "data: {\"type\":\"complete\",\"result\":{\"document_count\":2,\"chunk_count\":5,\"generation_manifest_sha256\":\"digest\"}}\n\n")
+                .addHeader("Content-Type", "text/event-stream"));
+        List<Map<String, Object>> progress = new ArrayList<>();
+
+        Map<String, Object> result = client.indexRepository(
+                repositoryPath.toString(), "ws", "proj", "develop", "abc123",
+                List.of("src/**"), List.of("vendor/**"), "generation-target",
+                progress::add);
+
+        assertThat(progress).hasSize(1);
+        assertThat(progress.get(0)).containsEntry("indexedChunks", 5)
+                .containsEntry("estimatedChunks", 150)
+                .containsEntry("estimatedRemainingMs", 9000);
+        assertThat(result).containsEntry("chunk_count", 5)
+                .containsEntry("generation_manifest_sha256", "digest");
+        RecordedRequest request = mockWebServer.takeRequest();
+        assertThat(request.getPath()).endsWith("/index/repository/stream");
+        assertThat(request.getHeader("Accept")).isEqualTo("text/event-stream");
     }
 
     // ── deleteBranch tests ───────────────────────────────────────────────────

@@ -100,7 +100,8 @@ public class GitHubBranchWebhookHandler extends AbstractWebhookHandler implement
                 }
             };
             
-            Map<String, Object> result = branchAnalysisProcessor.process(request, processorConsumer);
+            Map<String, Object> result = branchAnalysisProcessor.processAfterDependencyGate(
+                    request, processorConsumer);
             
             return WebhookResult.success("Branch analysis completed", result);
             

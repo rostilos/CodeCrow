@@ -50,6 +50,7 @@ class GitHubReportingServiceTest {
     private CodeAnalysis analysis;
     private Project project;
     private AnalysisSummary summary;
+    private AnalysisSummary.IssueSummary inlineIssue;
 
     @BeforeEach
     void setUp() {
@@ -68,7 +69,7 @@ class GitHubReportingServiceTest {
         when(repoInfo.getVcsConnection()).thenReturn(connection);
         org.mockito.Mockito.lenient().when(analysis.getCommitHash()).thenReturn("head-sha");
 
-        AnalysisSummary.IssueSummary issue = new AnalysisSummary.IssueSummary(
+        inlineIssue = new AnalysisSummary.IssueSummary(
                 IssueSeverity.HIGH,
                 "SECURITY",
                 "src/App.java",
@@ -81,7 +82,7 @@ class GitHubReportingServiceTest {
                 7L,
                 "return repository.findById(id);"
         );
-        org.mockito.Mockito.lenient().when(summary.getIssues()).thenReturn(List.of(issue));
+        org.mockito.Mockito.lenient().when(summary.getIssues()).thenReturn(List.of(inlineIssue));
         org.mockito.Mockito.lenient().when(summary.getTotalUnresolvedIssues()).thenReturn(1);
         org.mockito.Mockito.lenient().when(summary.getFileIssueCount()).thenReturn(Map.of());
         org.mockito.Mockito.lenient().when(reportGenerator.createAnalysisSummary(analysis, 77L)).thenReturn(summary);
@@ -125,7 +126,82 @@ class GitHubReportingServiceTest {
     }
 
     @Test
-    void removesPreviousGeneratedReviewArtifactsBeforePostingReplacement() throws IOException {
+    void postsValidCommentsAndAddsOutOfDiffFindingsToTheAggregateSpoiler()
+            throws IOException {
+        AnalysisSummary.IssueSummary outsideDiff = new AnalysisSummary.IssueSummary(
+                IssueSeverity.MEDIUM,
+                "TESTING",
+                "src/App.java",
+                1,
+                "File-wide constructor mismatch",
+                "The reported location is not part of the pull-request patch.",
+                null,
+                null,
+                "https://codecrow.example/issues/8",
+                8L,
+                "service = new AppService();"
+        );
+        when(summary.getIssues()).thenReturn(List.of(inlineIssue, outsideDiff));
+
+        List<CapturedRequest> requests = new ArrayList<>();
+        when(vcsClientProvider.getHttpClient(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(capturingClient(requests, false, false));
+
+        service.postAnalysisResults(analysis, project, 42L, 77L, "99");
+
+        CapturedRequest aggregate = requestAt(requests, "/repos/owner/repo/issues/comments/99");
+        String aggregateBody = OBJECT_MAPPER.readTree(aggregate.body()).path("body").asText();
+        assertThat(aggregateBody)
+                .contains("<summary><b>📍 Findings not posted inline (1)</b></summary>")
+                .contains("[File-wide constructor mismatch](https://codecrow.example/issues/8)")
+                .contains("outside the current pull-request diff");
+
+        CapturedRequest review = requestAt(
+                requests, "POST", "/repos/owner/repo/pulls/42/reviews");
+        JsonNode reviewPayload = OBJECT_MAPPER.readTree(review.body());
+        assertThat(reviewPayload.path("comments")).hasSize(1);
+        assertThat(reviewPayload.path("comments").get(0).path("line").asInt()).isEqualTo(12);
+    }
+
+    @Test
+    void allOutOfDiffFindingsStayInTheAggregateAndRemoveStaleInlineArtifacts()
+            throws IOException {
+        AnalysisSummary.IssueSummary outsideDiff = new AnalysisSummary.IssueSummary(
+                IssueSeverity.MEDIUM,
+                "TESTING",
+                "src/App.java",
+                1,
+                "File-wide constructor mismatch",
+                "The reported location is not part of the pull-request patch.",
+                null,
+                null,
+                "https://codecrow.example/issues/8",
+                8L,
+                "service = new AppService();"
+        );
+        when(summary.getIssues()).thenReturn(List.of(outsideDiff));
+
+        List<CapturedRequest> requests = new ArrayList<>();
+        when(vcsClientProvider.getHttpClient(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(capturingClient(requests, false, true));
+
+        service.postAnalysisResults(analysis, project, 42L, 77L, "99");
+
+        assertThat(requests).noneMatch(request -> request.method().equals("POST")
+                && request.path().equals("/repos/owner/repo/pulls/42/reviews"));
+        assertThat(indexOf(requests, "DELETE", "/repos/owner/repo/pulls/comments/321"))
+                .isGreaterThanOrEqualTo(0);
+        assertThat(indexOf(requests, "PUT", "/repos/owner/repo/pulls/42/reviews/654"))
+                .isGreaterThanOrEqualTo(0);
+
+        CapturedRequest aggregate = requestAt(requests, "/repos/owner/repo/issues/comments/99");
+        assertThat(OBJECT_MAPPER.readTree(aggregate.body()).path("body").asText())
+                .contains("Findings not posted inline (1)")
+                .contains("File-wide constructor mismatch");
+    }
+
+    @Test
+    void removesPreviousGeneratedReviewArtifactsAfterPostingReplacement() throws IOException {
         List<CapturedRequest> requests = new ArrayList<>();
         when(vcsClientProvider.getHttpClient(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(capturingClient(requests, false, true));
@@ -137,17 +213,17 @@ class GitHubReportingServiceTest {
         int reviewIndex = indexOf(requests, "POST", "/repos/owner/repo/pulls/42/reviews");
         assertThat(deleteIndex).isGreaterThanOrEqualTo(0);
         assertThat(clearIndex).isGreaterThan(deleteIndex);
-        assertThat(reviewIndex).isGreaterThan(deleteIndex);
-        assertThat(reviewIndex).isGreaterThan(clearIndex);
+        assertThat(reviewIndex).isLessThan(deleteIndex);
+        assertThat(reviewIndex).isLessThan(clearIndex);
         assertThat(OBJECT_MAPPER.readTree(requests.get(clearIndex).body()).path("body").asText())
                 .isEqualTo("<!-- codecrow-analysis-review-cleared -->");
     }
 
     @Test
-    void reviewRejectionDoesNotBlockTheSummaryOrCheckRun() {
+    void reviewRejectionDoesNotBlockTheSummaryOrCheckRunOrDeletePreviousComments() {
         List<CapturedRequest> requests = new ArrayList<>();
         when(vcsClientProvider.getHttpClient(org.mockito.ArgumentMatchers.any()))
-                .thenReturn(capturingClient(requests, true, false));
+                .thenReturn(capturingClient(requests, true, true));
 
         assertThatCode(() -> service.postAnalysisResults(analysis, project, 42L, 77L, "99"))
                 .doesNotThrowAnyException();
@@ -158,6 +234,9 @@ class GitHubReportingServiceTest {
                         "/repos/owner/repo/pulls/42/reviews",
                         "/repos/owner/repo/check-runs"
                 );
+        assertThat(requests).noneMatch(request -> request.method().equals("DELETE"));
+        assertThat(requests).noneMatch(request -> request.method().equals("PUT")
+                && request.path().equals("/repos/owner/repo/pulls/42/reviews/654"));
     }
 
     @Test
@@ -206,15 +285,22 @@ class GitHubReportingServiceTest {
             requests.add(new CapturedRequest(request.method(), path, buffer.readUtf8()));
 
             boolean reviewPost = request.method().equals("POST") && path.endsWith("/reviews");
+            boolean pullRequestFiles = request.method().equals("GET")
+                    && path.endsWith("/pulls/42/files");
             boolean reviewCommentList = request.method().equals("GET")
                     && path.endsWith("/pulls/42/comments");
             boolean reviewList = request.method().equals("GET")
                     && path.endsWith("/pulls/42/reviews");
             boolean rejected = rejectReviews && reviewPost;
             String responseJson;
-            if (reviewCommentList) {
+            if (pullRequestFiles) {
+                responseJson = "[{\"filename\":\"src/App.java\","
+                        + "\"status\":\"modified\","
+                        + "\"patch\":\"@@ -12 +12 @@\\n-old\\n+new\"}]";
+            } else if (reviewCommentList) {
                 responseJson = includePreviousReviewComment
-                        ? "[{\"id\":321,\"body\":\"old <!-- codecrow-analysis-review -->\"}]"
+                        ? "[{\"id\":321,\"pull_request_review_id\":654,"
+                                + "\"body\":\"old <!-- codecrow-analysis-review -->\"}]"
                         : "[]";
             } else if (reviewList) {
                 responseJson = includePreviousReviewComment

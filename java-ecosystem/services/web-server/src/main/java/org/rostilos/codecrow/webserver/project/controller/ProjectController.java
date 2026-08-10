@@ -29,11 +29,13 @@ import org.rostilos.codecrow.webserver.project.dto.request.UpdateProjectRulesReq
 import org.rostilos.codecrow.webserver.project.dto.request.ChangeVcsConnectionRequest;
 import org.rostilos.codecrow.webserver.project.dto.ProjectTokenDTO;
 import org.rostilos.codecrow.webserver.project.dto.response.RagIndexStatusDTO;
+import org.rostilos.codecrow.webserver.project.dto.response.RagBranchIndexStatusDTO;
 import org.rostilos.codecrow.webserver.auth.service.TwoFactorAuthService;
 import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.rostilos.codecrow.webserver.project.service.ProjectTokenService;
 import org.rostilos.codecrow.webserver.project.service.RagIndexStatusService;
 import org.rostilos.codecrow.webserver.project.service.RagIndexingTriggerService;
+import org.rostilos.codecrow.webserver.project.service.RagBranchIndexStatusService;
 import org.rostilos.codecrow.webserver.project.service.VectorStorageService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.springframework.http.HttpStatus;
@@ -66,6 +68,7 @@ public class ProjectController {
         private final WorkspaceService workspaceService;
         private final RagIndexStatusService ragIndexStatusService;
         private final RagIndexingTriggerService ragIndexingTriggerService;
+        private final RagBranchIndexStatusService ragBranchIndexStatusService;
         private final VectorStorageService vectorStorageService;
         private final TwoFactorAuthService twoFactorAuthService;
 
@@ -75,6 +78,7 @@ public class ProjectController {
                         WorkspaceService workspaceService,
                         RagIndexStatusService ragIndexStatusService,
                         RagIndexingTriggerService ragIndexingTriggerService,
+                        RagBranchIndexStatusService ragBranchIndexStatusService,
                         VectorStorageService vectorStorageService,
                         TwoFactorAuthService twoFactorAuthService) {
                 this.projectService = projectService;
@@ -82,6 +86,7 @@ public class ProjectController {
                 this.workspaceService = workspaceService;
                 this.ragIndexStatusService = ragIndexStatusService;
                 this.ragIndexingTriggerService = ragIndexingTriggerService;
+                this.ragBranchIndexStatusService = ragBranchIndexStatusService;
                 this.vectorStorageService = vectorStorageService;
                 this.twoFactorAuthService = twoFactorAuthService;
         }
@@ -417,6 +422,20 @@ public class ProjectController {
         }
 
         /**
+         * Returns a stable, tenant-scoped operational view of the configured
+         * primary and retained RAG branches. It never exposes PR-only transient
+         * snapshots or physical vector collection names.
+         */
+        @GetMapping("/{projectNamespace}/rag/branches")
+        public ResponseEntity<List<RagBranchIndexStatusDTO>> getRagBranchIndexes(
+                        @PathVariable String workspaceSlug,
+                        @PathVariable String projectNamespace) {
+                Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+                Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+                return ResponseEntity.ok(ragBranchIndexStatusService.getConfiguredBranches(project));
+        }
+
+        /**
          * PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/rag/config
          * Updates the RAG configuration for the project (enable/disable, set branch,
          * exclude patterns, delta config)
@@ -437,7 +456,9 @@ public class ProjectController {
                                 request.getIncludePatterns(),
                                 request.getExcludePatterns(),
                                 request.getMultiBranchEnabled(),
-                                request.getBranchRetentionDays());
+                                request.getBranchRetentionDays(),
+                                request.getIndexedBranches(),
+                                request.getTransientBranchIndexesEnabled());
                 return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
         }
 
@@ -457,6 +478,7 @@ public class ProjectController {
                         @PathVariable String workspaceSlug,
                         @PathVariable String projectNamespace,
                         @RequestParam(required = false) String branch,
+                        @RequestParam(required = false, defaultValue = "false") boolean allConfiguredBranches,
                         @AuthenticationPrincipal UserDetailsImpl userDetails) {
                 Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
                 Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
@@ -494,6 +516,7 @@ public class ProjectController {
                                 project.getId(),
                                 userDetails.getId(),
                                 branch,
+                                allConfiguredBranches,
                                 emitter);
 
                 return emitter;

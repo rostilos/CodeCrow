@@ -2,9 +2,9 @@ package org.rostilos.codecrow.pipelineagent.generic.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
-import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
-import org.rostilos.codecrow.ragengine.service.RagIndexTrackingService;
 import org.rostilos.codecrow.ragengine.service.VcsRagIndexingService;
+import org.rostilos.codecrow.ragengine.branch.BranchIndexMaintenanceService;
+import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -32,19 +32,19 @@ public class RagIndexingController {
     private static final String EOF_MARKER = "__EOF__";
 
     private final VcsRagIndexingService vcsRagIndexingService;
-    private final RagIndexTrackingService ragIndexTrackingService;
-    private final AnalysisLockService analysisLockService;
+    private final BranchIndexMaintenanceService branchIndexMaintenanceService;
+    private final ProjectRepository projectRepository;
     private final ObjectMapper objectMapper;
 
     public RagIndexingController(
             VcsRagIndexingService vcsRagIndexingService,
-            RagIndexTrackingService ragIndexTrackingService,
-            AnalysisLockService analysisLockService,
+            BranchIndexMaintenanceService branchIndexMaintenanceService,
+            ProjectRepository projectRepository,
             ObjectMapper objectMapper
     ) {
         this.vcsRagIndexingService = vcsRagIndexingService;
-        this.ragIndexTrackingService = ragIndexTrackingService;
-        this.analysisLockService = analysisLockService;
+        this.branchIndexMaintenanceService = branchIndexMaintenanceService;
+        this.projectRepository = projectRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -73,11 +73,14 @@ public class RagIndexingController {
 
             CompletableFuture<Map<String, Object>> indexingFuture = CompletableFuture.supplyAsync(() -> {
                 try {
-                    return vcsRagIndexingService.indexProjectFromVcs(
-                            authProject,
-                            request.branch(),
-                            messageConsumer
-                    );
+                    if (request.allConfiguredBranches()
+                            || (request.branch() != null && !request.branch().isBlank())) {
+                        var project = projectRepository.findByIdWithFullDetails(authProject.id())
+                                .orElseThrow(() -> new IllegalStateException("Project not found"));
+                        return branchIndexMaintenanceService.rebuild(
+                                project, request.branch(), request.allConfiguredBranches(), messageConsumer);
+                    }
+                    return vcsRagIndexingService.indexProjectFromVcs(authProject, null, messageConsumer);
                 } catch (Exception e) {
                     log.error("RAG indexing failed", e);
                     return Map.of(
@@ -144,6 +147,7 @@ public class RagIndexingController {
     }
 
     public record RagIndexRequest(
-            String branch  // Optional: branch to index. If null, uses project's configured RAG branch or default
+            String branch,
+            boolean allConfiguredBranches
     ) {}
 }

@@ -87,6 +87,18 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
     @Column(name = "vcs_author_username", length = 100)
     private String vcsAuthorUsername;
 
+    @Column(name = "introducing_commit_hash", length = 64)
+    private String introducingCommitHash;
+
+    @Column(name = "introducing_author_name", length = 200)
+    private String introducingAuthorName;
+
+    @Column(name = "introducing_author_email", length = 320)
+    private String introducingAuthorEmail;
+
+    @Column(name = "author_provenance_confidence", length = 32)
+    private String authorProvenanceConfidence;
+
     // --- Content-based tracking fields ---
 
     /** MD5 hex of the whitespace-normalized source line at detection time. */
@@ -212,6 +224,15 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
 
     public String getVcsAuthorUsername() { return vcsAuthorUsername; }
     public void setVcsAuthorUsername(String vcsAuthorUsername) { this.vcsAuthorUsername = vcsAuthorUsername; }
+
+    public String getIntroducingCommitHash() { return introducingCommitHash; }
+    public void setIntroducingCommitHash(String introducingCommitHash) { this.introducingCommitHash = introducingCommitHash; }
+    public String getIntroducingAuthorName() { return introducingAuthorName; }
+    public void setIntroducingAuthorName(String introducingAuthorName) { this.introducingAuthorName = introducingAuthorName; }
+    public String getIntroducingAuthorEmail() { return introducingAuthorEmail; }
+    public void setIntroducingAuthorEmail(String introducingAuthorEmail) { this.introducingAuthorEmail = introducingAuthorEmail; }
+    public String getAuthorProvenanceConfidence() { return authorProvenanceConfidence; }
+    public void setAuthorProvenanceConfidence(String authorProvenanceConfidence) { this.authorProvenanceConfidence = authorProvenanceConfidence; }
 
     public String getLineHash() { return lineHash; }
     public void setLineHash(String lineHash) { this.lineHash = lineHash; }

@@ -7,24 +7,31 @@ import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndex;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndexGeneration;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepository;
+import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexGenerationRepository;
 import org.rostilos.codecrow.core.service.AnalysisJobService;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
+import org.rostilos.codecrow.ragengine.branch.BranchIndexGenerationBuildService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -32,11 +39,10 @@ import java.util.Set;
 import java.util.function.Consumer;
 
 /**
- * Implementation of RagOperationsService using single-collection-per-project
- * architecture.
- * 
- * Each project has ONE Qdrant collection containing all branches.
- * Branch is stored as metadata in each point, allowing multi-branch queries.
+ * Coordinates both legacy project collections and exact branch generations.
+ * Existing projects retain the shared collection path until exact branch
+ * indexing is configured; configured branches use immutable, branch-bound
+ * generation targets selected through the registry.
  */
 @Service
 public class RagOperationsServiceImpl implements RagOperationsService {
@@ -50,6 +56,11 @@ public class RagOperationsServiceImpl implements RagOperationsService {
     private final RagBranchIndexRepository ragBranchIndexRepository;
     private final VcsClientProvider vcsClientProvider;
     private final RagPipelineClient ragPipelineClient;
+    private final RagBranchIndexRegistryService branchIndexRegistryService;
+    private final BranchIndexGenerationBuildService branchGenerationBuildService;
+
+    @Autowired(required = false)
+    private RagBranchIndexGenerationRepository branchGenerationRepository;
 
     @Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
@@ -62,6 +73,38 @@ public class RagOperationsServiceImpl implements RagOperationsService {
             RagBranchIndexRepository ragBranchIndexRepository,
             VcsClientProvider vcsClientProvider,
             RagPipelineClient ragPipelineClient) {
+        this(ragIndexTrackingService, incrementalRagUpdateService,
+                analysisLockService, analysisJobService,
+                ragBranchIndexRepository, vcsClientProvider,
+                ragPipelineClient, null, null);
+    }
+
+    public RagOperationsServiceImpl(
+            RagIndexTrackingService ragIndexTrackingService,
+            IncrementalRagUpdateService incrementalRagUpdateService,
+            AnalysisLockService analysisLockService,
+            AnalysisJobService analysisJobService,
+            RagBranchIndexRepository ragBranchIndexRepository,
+            VcsClientProvider vcsClientProvider,
+            RagPipelineClient ragPipelineClient,
+            RagBranchIndexRegistryService branchIndexRegistryService) {
+        this(ragIndexTrackingService, incrementalRagUpdateService,
+                analysisLockService, analysisJobService,
+                ragBranchIndexRepository, vcsClientProvider,
+                ragPipelineClient, branchIndexRegistryService, null);
+    }
+
+    @Autowired
+    public RagOperationsServiceImpl(
+            RagIndexTrackingService ragIndexTrackingService,
+            IncrementalRagUpdateService incrementalRagUpdateService,
+            AnalysisLockService analysisLockService,
+            AnalysisJobService analysisJobService,
+            RagBranchIndexRepository ragBranchIndexRepository,
+            VcsClientProvider vcsClientProvider,
+            RagPipelineClient ragPipelineClient,
+            RagBranchIndexRegistryService branchIndexRegistryService,
+            BranchIndexGenerationBuildService branchGenerationBuildService) {
         this.ragIndexTrackingService = ragIndexTrackingService;
         this.incrementalRagUpdateService = incrementalRagUpdateService;
         this.analysisLockService = analysisLockService;
@@ -69,6 +112,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         this.ragBranchIndexRepository = ragBranchIndexRepository;
         this.vcsClientProvider = vcsClientProvider;
         this.ragPipelineClient = ragPipelineClient;
+        this.branchIndexRegistryService = branchIndexRegistryService;
+        this.branchGenerationBuildService = branchGenerationBuildService;
     }
 
     @Override
@@ -132,8 +177,26 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 return false;
             }
 
-            String effectiveRawDiff = resolveDiffFromCompletedCheckpoint(
-                    project, branchName, commitHash, rawDiff);
+            boolean exactGenerationMode = usesExactGenerations(project);
+            RagBranchIndexKind exactGenerationKind = exactGenerationMode
+                    ? indexKind(project, branchName) : null;
+            boolean publishBranchAlias = exactGenerationKind == RagBranchIndexKind.PRIMARY
+                    || exactGenerationKind == RagBranchIndexKind.DURABLE;
+            boolean publishLegacyProjectAlias = exactGenerationKind
+                    == RagBranchIndexKind.PRIMARY;
+            RagBranchIndexGeneration initialSourceGeneration = exactGenerationMode
+                    ? ragBranchIndexRepository
+                            .findByProjectIdAndBranchName(project.getId(), branchName)
+                            .map(RagBranchIndex::getActiveGeneration)
+                            .orElse(null)
+                    : null;
+            boolean fullExactSnapshotRequired = exactGenerationMode
+                    && initialSourceGeneration == null;
+
+            String effectiveRawDiff = fullExactSnapshotRequired
+                    ? ""
+                    : resolveDiffFromCompletedCheckpoint(
+                            project, branchName, commitHash, rawDiff);
             log.info("RAG checkpoint reconciliation complete; parsing effective diff...");
 
             // Parse the diff to find changed files
@@ -147,7 +210,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
 
             log.info("Diff parsed: added={}, modified={}, deleted={}", addedFiles, modifiedFiles, deletedFiles);
 
-            if (addedOrModifiedSize == 0 && deletedFiles.isEmpty()) {
+            if (addedOrModifiedSize == 0 && deletedFiles.isEmpty()
+                    && !exactGenerationMode) {
                 log.info("Skipping RAG incremental update - no files changed in diff");
                 return true;
             }
@@ -198,17 +262,95 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 String workspaceSlug = vcsRepoBinding.getExternalNamespace();
                 String repoSlug = vcsRepoBinding.getExternalRepoSlug();
 
-                // Perform the actual incremental update
-                Map<String, Object> result = incrementalRagUpdateService.performIncrementalUpdate(
-                        project,
-                        vcsConnection,
-                        workspaceSlug,
-                        repoSlug,
-                        branchName,
-                        commitHash,
-                        addedFiles,
-                        modifiedFiles,
-                        deletedFiles);
+                RagBranchIndexGeneration sourceGeneration = null;
+                RagBranchIndexRegistryService.BuildRegistration branchBuild = null;
+                if (exactGenerationMode) {
+                    sourceGeneration = initialSourceGeneration;
+                    if (sourceGeneration != null) {
+                        branchBuild = branchIndexRegistryService.registerBuild(
+                                project,
+                                branchName,
+                                exactGenerationKind,
+                                sourceGeneration.getRevision(),
+                                commitHash,
+                                sourceGeneration.getRepresentationFingerprint());
+                        branchIndexRegistryService.startBuild(
+                                branchBuild.operation().getId(),
+                                job != null ? job.getId() : null);
+                    }
+                }
+
+                Map<String, Object> result;
+                try {
+                    if (fullExactSnapshotRequired) {
+                        var ragConfig = project.getConfiguration().ragConfig();
+                        result = branchGenerationBuildService.build(
+                                project,
+                                vcsConnection,
+                                workspaceSlug,
+                                repoSlug,
+                                branchName,
+                                commitHash,
+                                exactGenerationKind,
+                                ragConfig.includePatterns(),
+                                ragConfig.excludePatterns(),
+                                job != null ? job.getId() : null);
+                    } else if (exactGenerationMode) {
+                        result = incrementalRagUpdateService.performIncrementalUpdate(
+                                    project,
+                                    vcsConnection,
+                                    workspaceSlug,
+                                    repoSlug,
+                                    branchName,
+                                    commitHash,
+                                    addedFiles,
+                                    modifiedFiles,
+                                    deletedFiles,
+                                    sourceGeneration.getRevision(),
+                                    sourceGeneration.getCollectionName(),
+                                    branchBuild.generation().getCollectionName(),
+                                    false,
+                                    false);
+                    } else {
+                        result = incrementalRagUpdateService.performIncrementalUpdate(
+                                    project,
+                                    vcsConnection,
+                                    workspaceSlug,
+                                    repoSlug,
+                                    branchName,
+                                    commitHash,
+                                    addedFiles,
+                                    modifiedFiles,
+                                    deletedFiles);
+                    }
+                    if (exactGenerationMode && !fullExactSnapshotRequired) {
+                        Object digest = result.get("generation_manifest_sha256");
+                        if (!(digest instanceof String manifestDigest)
+                                || manifestDigest.isBlank()) {
+                            throw new IllegalStateException(
+                                    "Advanced RAG generation has no manifest digest");
+                        }
+                        RagBranchIndexGeneration published = branchIndexRegistryService.publish(
+                                branchBuild.operation().getId(),
+                                manifestDigest,
+                                ((Number) result.getOrDefault("document_count", 0)).intValue(),
+                                ((Number) result.getOrDefault("chunk_count", 0)).intValue());
+                        publishReadableAliasesIfActive(
+                                project, branchName, commitHash,
+                                branchBuild.generation().getCollectionName(),
+                                published, publishBranchAlias,
+                                publishLegacyProjectAlias);
+                    }
+                } catch (Exception generationFailure) {
+                    if (branchBuild != null) {
+                        branchIndexRegistryService.fail(
+                                branchBuild.operation().getId(),
+                                generationFailure.getMessage() != null
+                                        ? generationFailure.getMessage()
+                                        : generationFailure.getClass().getSimpleName());
+                    }
+                    throw generationFailure;
+                }
 
                 int filesUpdated = (Integer) result.getOrDefault("updatedFiles", 0);
                 int filesDeleted = (Integer) result.getOrDefault("deletedFiles", 0);
@@ -281,6 +423,30 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                     "state", "rag_error",
                     "message", "RAG incremental update failed: " + e.getMessage()));
             return false;
+        }
+    }
+
+    private void publishReadableAliasesIfActive(
+            Project project,
+            String branch,
+            String revision,
+            String collectionTarget,
+            RagBranchIndexGeneration published,
+            boolean publishBranchAlias,
+            boolean publishLegacyProjectAlias) {
+        if (published == null
+                || published.getStatus() != RagBranchIndexGenerationStatus.ACTIVE
+                || !publishBranchAlias) {
+            return;
+        }
+        try {
+            ragPipelineClient.publishGenerationAliases(
+                    project.getWorkspace().getName(), project.getNamespace(),
+                    branch, revision, collectionTarget,
+                    true, publishLegacyProjectAlias);
+        } catch (IOException aliasFailure) {
+            log.warn("Readable alias publication failed for active RAG generation {}: {}",
+                    published.getId(), aliasFailure.getMessage());
         }
     }
 
@@ -411,9 +577,6 @@ public class RagOperationsServiceImpl implements RagOperationsService {
             Project project,
             String targetBranch,
             Consumer<Map<String, Object>> eventConsumer) {
-        // Update branch index - calculates diff between base branch and target branch
-        // Unlike ensureBranchIndexForPrTarget, this always recalculates the full diff
-
         if (!isRagEnabled(project)) {
             log.debug("RAG not enabled for project={}", project.getId());
             return false;
@@ -421,6 +584,17 @@ public class RagOperationsServiceImpl implements RagOperationsService {
 
         if (!isRagIndexReady(project)) {
             log.warn("Cannot update branch index - base RAG index not ready for project={}", project.getId());
+            return false;
+        }
+
+        if (!targetBranch.equals(getBaseBranch(project))
+                && !shouldHaveBranchIndex(project, targetBranch)) {
+            log.info("Skipping branch index update for non-retained branch: project={}, branch={}",
+                    project.getId(), targetBranch);
+            eventConsumer.accept(Map.of(
+                    "type", "info",
+                    "state", "rag_skipped",
+                    "message", "Branch is not configured as a retained RAG branch"));
             return false;
         }
 
@@ -445,7 +619,28 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         try {
             VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
 
-            log.info("Updating branch index for project={}, branch={} (diff vs {})",
+            String targetCommit = vcsClient.getLatestCommitHash(workspaceSlug, repoSlug, targetBranch);
+            Optional<RagBranchIndex> completedBranchIndex = ragBranchIndexRepository
+                    .findByProjectIdAndBranchName(project.getId(), targetBranch)
+                    .filter(index -> index.getCommitHash() != null && !index.getCommitHash().isBlank());
+
+            if (completedBranchIndex.isPresent()) {
+                String checkpoint = completedBranchIndex.get().getCommitHash();
+                if (checkpoint.equals(targetCommit)) {
+                    log.info("Branch index already represents project={}, branch={}, commit={}",
+                            project.getId(), targetBranch, targetCommit);
+                    return true;
+                }
+
+                log.info("Updating branch index from completed checkpoint: project={}, branch={}, {}..{}",
+                        project.getId(), targetBranch, checkpoint, targetCommit);
+                // triggerIncrementalUpdate resolves the exact checkpoint range. Passing an
+                // empty supplied diff avoids the former redundant base-to-target compare.
+                return triggerIncrementalUpdate(
+                        project, targetBranch, targetCommit, "", eventConsumer);
+            }
+
+            log.info("Seeding legacy branch index for project={}, branch={} (diff vs {})",
                     project.getId(), targetBranch, baseBranch);
 
             eventConsumer.accept(Map.of(
@@ -453,7 +648,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                     "state", "branch_index",
                     "message", String.format("Calculating diff between '%s' and '%s'", baseBranch, targetBranch)));
 
-            // Always get fresh diff between base branch and target branch
+            // Compatibility path for a branch that has no checkpoint yet. The exact
+            // generation builder replaces this with a complete verified snapshot.
             String rawDiff = vcsClient.getBranchDiff(workspaceSlug, repoSlug, baseBranch, targetBranch);
 
             if (rawDiff == null || rawDiff.isEmpty()) {
@@ -461,10 +657,15 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 eventConsumer.accept(Map.of(
                         "type", "info",
                         "message", String.format("Branch '%s' has same content as '%s'", targetBranch, baseBranch)));
+                if (usesExactGenerations(project)) {
+                    // No completed checkpoint means there is still no exact
+                    // target-branch generation. An empty tree delta must seed
+                    // the complete revision rather than report a false success.
+                    return triggerIncrementalUpdate(
+                            project, targetBranch, targetCommit, "", eventConsumer);
+                }
                 return true;
             }
-
-            String targetCommit = vcsClient.getLatestCommitHash(workspaceSlug, repoSlug, targetBranch);
 
             log.info("Branch diff found: {} bytes, triggering incremental update for branch={}, commit={}",
                     rawDiff.length(), targetBranch, targetCommit);
@@ -519,12 +720,33 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         String repoSlug = vcsRepoBinding.getExternalRepoSlug();
 
         // Get base branch (main branch)
-        String baseBranch = getBaseBranch(project);
+            String baseBranch = getBaseBranch(project);
 
         // Same branch? Already indexed via main index
         if (targetBranch.equals(baseBranch)) {
             log.debug("Target branch {} is same as base branch {} - already indexed", targetBranch, baseBranch);
             return true;
+        }
+
+        // Exact-generation mode seeds an immutable snapshot of the target
+        // revision. It must not first compute the potentially enormous
+        // primary-to-target diff that motivated multi-branch indexing.
+        if (usesExactGenerations(project)) {
+            if (!shouldHaveBranchIndex(project, targetBranch)
+                    && !shouldCreateTransientBranchIndex(project, targetBranch)) {
+                return false;
+            }
+            try {
+                VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
+                String targetCommit = vcsClient.getLatestCommitHash(
+                        workspaceSlug, repoSlug, targetBranch);
+                return triggerIncrementalUpdate(
+                        project, targetBranch, targetCommit, "", eventConsumer);
+            } catch (Exception failure) {
+                log.warn("Failed to seed exact branch generation for project={}, branch={}: {}",
+                        project.getId(), targetBranch, failure.getMessage());
+                return false;
+            }
         }
 
         // Check if branch already has indexed data (RagBranchIndex exists)
@@ -616,8 +838,26 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                     "state", "branch_delete",
                     "message", String.format("Deleting RAG index for branch '%s'", branchName)));
 
-            // Delete from RAG pipeline
-            boolean success = ragPipelineClient.deleteBranch(workspaceSlug, projectSlug, branchName);
+            boolean success;
+            Optional<RagBranchIndex> trackedIndex = ragBranchIndexRepository
+                    .findByProjectIdAndBranchName(project.getId(), branchName);
+            List<RagBranchIndexGeneration> generations = trackedIndex.isPresent()
+                    && branchGenerationRepository != null
+                    ? branchGenerationRepository.findByBranchIndexIdOrderByCreatedAtDesc(
+                            trackedIndex.get().getId())
+                    : List.of();
+            if (!generations.isEmpty()) {
+                success = true;
+                for (RagBranchIndexGeneration generation : generations) {
+                    success &= ragPipelineClient.deleteBranch(
+                            project.getWorkspace().getName(), project.getNamespace(),
+                            branchName, generation.getCollectionName());
+                }
+            } else {
+                // Backward-compatible cleanup for the legacy shared collection.
+                success = ragPipelineClient.deleteBranch(
+                        workspaceSlug, projectSlug, branchName);
+            }
 
             if (success) {
                 // Clean up database tracking
@@ -663,8 +903,13 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         String baseBranch = getBaseBranch(project);
 
         try {
-            // Get indexed branches
-            List<String> indexedBranches = ragPipelineClient.getIndexedBranches(workspaceSlug, projectSlug);
+            // The durable registry is authoritative for exact-generation
+            // branches. Merge it with legacy shared-collection discovery so
+            // stale cleanup remains compatible with both storage models.
+            Set<String> indexedBranches = new LinkedHashSet<>(
+                    ragBranchIndexRepository.findBranchNamesByProjectId(project.getId()));
+            indexedBranches.addAll(
+                    ragPipelineClient.getIndexedBranches(workspaceSlug, projectSlug));
 
             // Determine branches to keep: base branch + active branches
             Set<String> branchesToKeep = new HashSet<>(activeBranches);
@@ -696,9 +941,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
 
             for (String branch : staleBranches) {
                 try {
-                    boolean success = ragPipelineClient.deleteBranch(workspaceSlug, projectSlug, branch);
+                    boolean success = deleteBranchIndex(project, branch, eventConsumer);
                     if (success) {
-                        ragBranchIndexRepository.deleteByProjectIdAndBranchName(project.getId(), branch);
                         deletedBranches.add(branch);
                     } else {
                         failedBranches.add(branch);
@@ -769,6 +1013,17 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                         eventConsumer);
             }
 
+            if (!shouldHaveBranchIndex(project, targetBranch)
+                    && !shouldCreateTransientBranchIndex(project, targetBranch)) {
+                log.info("Skipping RAG preparation for non-indexed PR target: project={}, branch={}",
+                        project.getId(), targetBranch);
+                eventConsumer.accept(Map.of(
+                        "type", "info",
+                        "state", "rag_skipped",
+                        "message", "PR target is not configured for retained or temporary RAG indexing"));
+                return false;
+            }
+
             // Case 2: Different branch - ensure main index is ready, then ensure branch is
             // indexed
             log.info("Target branch '{}' differs from base branch '{}' - will ensure branch index", targetBranch,
@@ -819,6 +1074,17 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         }
 
         String indexedCommit = indexStatus.get().getIndexedCommitHash();
+
+        if (usesExactGenerations(project)
+                && ragBranchIndexRepository
+                        .findByProjectIdAndBranchName(project.getId(), branchName)
+                        .map(RagBranchIndex::getActiveGeneration)
+                        .isEmpty()) {
+            log.info("Creating first exact primary generation for project={}, branch={}, commit={}",
+                    project.getId(), branchName, currentCommit);
+            return triggerIncrementalUpdate(
+                    project, branchName, currentCommit, "", eventConsumer);
+        }
 
         // If commits match, index is up to date
         if (currentCommit.equals(indexedCommit)) {
@@ -873,7 +1139,12 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 .findByProjectIdAndBranchName(project.getId(), targetBranch);
 
         if (branchIndexOpt.isEmpty()) {
-            // No branch index exists - create it by getting full diff vs main
+            // The exact path seeds from a complete target snapshot; the legacy
+            // implementation below retains the former base-diff behavior.
+            if (usesExactGenerations(project)) {
+                return triggerIncrementalUpdate(
+                        project, targetBranch, currentCommit, "", eventConsumer);
+            }
             log.info("No RagBranchIndex entry found for project={}, branch={} - will create with full diff vs {}",
                     project.getId(), targetBranch, baseBranch);
             return ensureBranchIndexForPrTarget(project, targetBranch, eventConsumer);
@@ -883,6 +1154,11 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         String indexedCommit = branchIndex.getCommitHash();
         log.info("Existing RagBranchIndex for project={}, branch={}: indexedCommit={}",
                 project.getId(), targetBranch, indexedCommit);
+
+        if (usesExactGenerations(project) && branchIndex.getActiveGeneration() == null) {
+            return triggerIncrementalUpdate(
+                    project, targetBranch, currentCommit, "", eventConsumer);
+        }
 
         // If commits match, index is up to date
         if (currentCommit.equals(indexedCommit)) {
@@ -924,6 +1200,24 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 targetBranch, rawDiff.length());
         return triggerIncrementalUpdate(
                 project, targetBranch, currentCommit, rawDiff, eventConsumer);
+    }
+
+    private boolean usesExactGenerations(Project project) {
+        return branchIndexRegistryService != null
+                && branchGenerationBuildService != null
+                && project != null
+                && project.getConfiguration() != null
+                && project.getConfiguration().ragConfig() != null
+                && project.getConfiguration().ragConfig().isMultiBranchEnabled();
+    }
+
+    private RagBranchIndexKind indexKind(Project project, String branchName) {
+        if (branchName.equals(getBaseBranch(project))) {
+            return RagBranchIndexKind.PRIMARY;
+        }
+        return shouldHaveBranchIndex(project, branchName)
+                ? RagBranchIndexKind.DURABLE
+                : RagBranchIndexKind.TRANSIENT;
     }
 
 }

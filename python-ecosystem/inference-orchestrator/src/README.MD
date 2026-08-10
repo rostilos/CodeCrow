@@ -508,9 +508,17 @@ finding. This applies to `FILE` scope as well as line/block/function scope, and
 missing, stale, or out-of-hunk anchors are removed before verifier calls. For
 unused-import-like claims, the gate also rejects the claim when the named symbol
 is visibly referenced elsewhere. The same publication gate runs again after Stage 2, and rejected
-Stage 2 candidates are removed from Stage 3 report context. LLM tool verification
-remains a secondary check, and its file-content cache is request-local for
-concurrent reviews.
+Stage 2 candidates are removed from Stage 3 report context. Optional Stage 3 MCP
+verification remains a secondary check. Every active finding receives a stable
+execution-local Verification ID, and every source read is host-pinned to the
+immutable reviewed commit. For a concrete line, the host asks the VCS MCP server
+for an anchor-centred source window instead of sending an unrelated full large
+file or accepting a size-filter placeholder. A dismissal is accepted only when
+the response metadata binds the same Verification ID, path, revision, and a
+window covering the primary and every consolidated location. Empty content,
+tool errors, filter placeholders, missing locations, wrong revisions,
+comments-only evidence, or ambiguity keeps the finding. Fresh findings without
+database IDs use the same object-identity path.
 
 RAG latency safeguards keep slow semantic search from blocking analysis while
 preserving deterministic context:
@@ -530,17 +538,28 @@ Per-batch LLM reranking is disabled by default (`LLM_RERANK_ENABLED=false`) to
 avoid one extra model call per batch. The same retrieved chunks are preserved for
 the review model; set `LLM_RERANK_ENABLED=true` to opt into listwise reranking.
 
-Final issue deduplication is also conservative and local by default
-(`REVIEW_LLM_DEDUP_ENABLED=false`). It removes a candidate only when normalized
-file, category, exact line or exact source snippet, and closely matching
-root-cause text agree. Similar wording in different files or at different source
-anchors is retained. Set `REVIEW_LLM_DEDUP_ENABLED=true` only when the deployment
-explicitly accepts extra review-model calls and model-directed suppression.
-The Java persistence boundary does not broaden that identity: it merges only
-exact category-aware or category-agnostic anchored fingerprints. Sharing a file,
-line, category, or FILE scope cannot by itself suppress another finding, and an
-issue whose fingerprint lacks an actual line hash or exact snippet anchor passes
-through unchanged. These checks add no model calls.
+Final issue deduplication begins with exact local root identities and uses grouped
+semantic dedup by default (`REVIEW_LLM_DEDUP_ENABLED=true`). The host sends only
+ambiguous candidate components; unrelated singletons consume no dedup tokens.
+The model returns explicit duplicate groups, and only `HIGH`-confidence decisions
+inside one host-selected component can merge findings. Omitted, uncertain,
+malformed, or failed decisions retain all ambiguous findings. Category or
+severity drift does not split a proven root cause. Cross-file consolidation is
+allowed only for one shared causal defect and retains every secondary `file:line`
+in the finding's reason and `relatedLocations`.
+
+Candidate components are packed near `REVIEW_DEDUP_BATCH_CHAR_BUDGET=48000`
+without field-level clipping; an oversized component is sent intact by itself.
+`REVIEW_DEDUP_MAX_PARALLEL=4` limits candidate batches within one review and does
+not serialize concurrently admitted reviews. Set `REVIEW_LLM_DEDUP_ENABLED=false`
+to use exact local merging only.
+
+The Java persistence boundary adds an exact same-file substantive-title/reason
+safety net before its exact category-aware and category-agnostic anchored
+fingerprints. It retains the strongest source anchor, highest severity, best
+valid fix, and additional concrete locations. Short boilerplate, sharing only a
+file/line/category/FILE scope, and placeholder fingerprints without an actual
+anchor cannot suppress another finding. These Java checks add no model calls.
 
 Full-pipeline prompt dry runs forward the normal Stage 0–3 progress events and
 persist a compact `review_evidence_completed` record with terminal hunk counts,
