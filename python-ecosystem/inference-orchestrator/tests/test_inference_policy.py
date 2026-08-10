@@ -53,19 +53,24 @@ def _full_profile():
     )
 
 
-def test_llm_dedup_is_disabled_by_default():
-    assert should_use_llm_dedup(_full_profile(), 20) is False
+def test_grouped_llm_dedup_is_enabled_by_default():
+    assert should_use_llm_dedup(_full_profile(), 20) is True
+    assert should_use_llm_dedup(_fast_profile(), 2) is True
 
 
-def test_llm_dedup_requires_explicit_opt_in(monkeypatch):
+def test_llm_dedup_can_be_disabled_explicitly(monkeypatch):
     monkeypatch.setattr(
         "service.review.orchestrator.inference_policy.LLM_DEDUP_ENABLED",
-        True,
+        False,
     )
 
-    assert should_use_llm_dedup(_full_profile(), 20) is True
+    assert should_use_llm_dedup(_full_profile(), 20) is False
     assert should_use_llm_dedup(_full_profile(), 1) is False
     assert should_use_llm_dedup(_fast_profile(), 2) is False
+
+
+def test_llm_dedup_skips_single_finding():
+    assert should_use_llm_dedup(_full_profile(), 1) is False
 
 
 def test_task_context_forces_stage_2_in_fast_check():

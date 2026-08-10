@@ -40,7 +40,7 @@ OUTPUT_CAPS_ENABLED = _env_bool("REVIEW_OUTPUT_CAPS_ENABLED", True)
 OUTPUT_CAP_MODEL_KWARG = os.environ.get("REVIEW_OUTPUT_CAP_MODEL_KWARG", "").strip()
 FAST_CHECK_ENABLED = _env_bool("REVIEW_FAST_CHECK_ENABLED", True)
 STAGE_2_ENABLED = _env_bool("REVIEW_STAGE_2_ENABLED", True)
-LLM_DEDUP_ENABLED = _env_bool("REVIEW_LLM_DEDUP_ENABLED", False)
+LLM_DEDUP_ENABLED = _env_bool("REVIEW_LLM_DEDUP_ENABLED", True)
 
 FAST_CHECK_MAX_FILES = _env_int("REVIEW_FAST_CHECK_MAX_FILES", 4)
 FAST_CHECK_MAX_CHANGED_LINES = _env_int("REVIEW_FAST_CHECK_MAX_CHANGED_LINES", 800)
@@ -188,12 +188,9 @@ def should_use_llm_dedup(
     profile: ReviewInferenceProfile,
     issue_count: int,
 ) -> bool:
-    """LLM dedup is an explicit cost/quality opt-in, never a default stage."""
-    return (
-        LLM_DEDUP_ENABLED
-        and issue_count > 1
-        and not should_use_fast_dedup(profile, issue_count)
-    )
+    """Enable grouped semantic dedup; singleton candidate sets skip internally."""
+    del profile
+    return LLM_DEDUP_ENABLED and issue_count > 1
 
 
 def _count_review_files(

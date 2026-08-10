@@ -1,12 +1,15 @@
 """Tests for stage_3_aggregation: summarizers, dismissed issues, MCP stage 3."""
 import json
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
+from model.output_schemas import CodeReviewIssue
 from service.review.orchestrator.stage_3_aggregation import (
     execute_stage_3_aggregation,
     _summarize_issues_for_stage_3,
     _summarize_plan_for_stage_3,
     _extract_dismissed_issues,
+    _stage_3_with_mcp,
 )
 
 
@@ -34,7 +37,7 @@ class TestSummarizeIssuesStage3:
         assert "HIGH: 2" in result
         assert "MEDIUM: 1" in result
 
-    def test_top_findings_priority_order(self):
+    def test_complete_records_keep_stable_verification_identity(self):
         critical = MagicMock()
         critical.severity = "CRITICAL"
         critical.category = "SECURITY"
@@ -52,12 +55,11 @@ class TestSummarizeIssuesStage3:
         low.reason = "Naming convention"
 
         result = _summarize_issues_for_stage_3([low, critical])
-        lines = result.split("\n")
-        # Critical should appear before LOW in the top findings section
-        top_lines = [l for l in lines if "[CRITICAL]" in l or "[LOW]" in l]
-        assert len(top_lines) == 2
-        assert "CRITICAL" in top_lines[0]
-        assert "LOW" in top_lines[1]
+        records = json.loads(result.split("Complete verification records (JSON):\n", 1)[1])
+        assert records[0]["verification_id"] == "issue_0"
+        assert records[0]["original_id"] == "l1"
+        assert records[1]["verification_id"] == "issue_1"
+        assert records[1]["original_id"] == "c1"
 
     def test_all_issue_ids_listed(self):
         issues = []
@@ -190,6 +192,9 @@ class TestExecuteStage3Aggregation:
         request.changedFiles = ["a.py"]
         request.targetBranchName = "main"
         request.previousCodeAnalysisIssues = []
+        request.currentCommitHash = None
+        request.commitHash = None
+        request.taskContext = None
 
         plan = MagicMock()
         plan.file_groups = []
@@ -220,6 +225,9 @@ class TestExecuteStage3Aggregation:
         request.changedFiles = []
         request.targetBranchName = ""
         request.previousCodeAnalysisIssues = ["prev1", "prev2"]
+        request.currentCommitHash = None
+        request.commitHash = None
+        request.taskContext = None
 
         plan = MagicMock()
         plan.file_groups = []
@@ -237,7 +245,7 @@ class TestExecuteStage3Aggregation:
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_mcp_stage_dispatches(self):
-        """When use_mcp_tools=True and target_branch given, dispatches to MCP."""
+        """An immutable reviewed commit enables the MCP verification loop."""
         llm = MagicMock()
         mcp_client = MagicMock()
 
@@ -249,6 +257,9 @@ class TestExecuteStage3Aggregation:
         request.changedFiles = []
         request.targetBranchName = "main"
         request.previousCodeAnalysisIssues = []
+        request.currentCommitHash = "abc123"
+        request.commitHash = None
+        request.taskContext = None
 
         plan = MagicMock()
         plan.file_groups = []
@@ -266,3 +277,64 @@ class TestExecuteStage3Aggregation:
             )
             mock_mcp.assert_called_once()
             assert result["dismissed_issue_ids"] == ["x"]
+
+
+class TestStage3McpVerification:
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_successful_revision_read_validates_fresh_issue_dismissal(self):
+        issue = CodeReviewIssue(
+            file="src/a.py", line=10, severity="HIGH", category="BUG_RISK",
+            reason="Claim to verify.", suggestedFixDescription="Fix it.",
+        )
+        request = SimpleNamespace(
+            projectVcsWorkspace="workspace",
+            projectVcsRepoSlug="repo",
+        )
+        tool_response = SimpleNamespace(
+            content="",
+            tool_calls=[{
+                "id": "call-1",
+                "name": "getBranchFileContent",
+                "args": {
+                    "filePath": "src/a.py",
+                    "verificationId": "issue_0",
+                },
+            }],
+            response_metadata={},
+        )
+        final_response = SimpleNamespace(
+            content=(
+                "Verified report\n"
+                '<!-- DISMISSED_ISSUES: ["issue_0"] -->'
+            ),
+            tool_calls=[],
+            response_metadata={},
+        )
+        bound_llm = MagicMock()
+        bound_llm.ainvoke = AsyncMock(
+            side_effect=[tool_response, final_response]
+        )
+        llm = MagicMock()
+        llm.bind_tools.return_value = bound_llm
+        mcp_client = MagicMock()
+        mcp_client.session.call_tool = AsyncMock(return_value=SimpleNamespace(
+            content=[SimpleNamespace(text="current source")]
+        ))
+
+        result = await _stage_3_with_mcp(
+            llm,
+            request,
+            "prompt",
+            mcp_client,
+            "commit-abc",
+            {"issue_0": issue},
+        )
+
+        assert result["report"] == "Verified report"
+        assert result["dismissed_issue_ids"] == []
+        assert result["dismissed_issue_keys"] == ["issue_0"]
+        assert result["dismissed_issue_object_ids"] == [id(issue)]
+        call_args = mcp_client.session.call_tool.await_args.args[1]
+        assert call_args["branch"] == "commit-abc"
+        assert call_args["startLine"] == 1
+        assert call_args["endLine"] == 90

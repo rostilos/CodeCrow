@@ -1297,20 +1297,16 @@ class MultiStageReviewOrchestrator:
 
             # === FINAL DEDUP: after ALL issue-finding stages (1 + 1.5 + 2) ===
             # Historical resolutions are lifecycle updates, not competing
-            # findings. Keep them out of both dedup implementations, which are
-            # intentionally content-based and could otherwise discard the update.
+            # findings. Active historical identities do participate so duplicate
+            # history and fresh recreations can be consolidated. The merge keeps
+            # one persisted identity and emits explicit close updates for any
+            # superseded historical IDs.
             active_issues, resolved_lifecycle_issues = _partition_issue_lifecycle(
                 file_issues
             )
-            fresh_active_issues, protected_active_issues = (
-                _partition_protected_active_issues(
-                    active_issues,
-                    protected_open_issue_ids,
-                )
-            )
-            pre_dedup_count = len(fresh_active_issues)
-            if not fresh_active_issues:
-                deduplicated_fresh_issues = []
+            pre_dedup_count = len(active_issues)
+            if not active_issues:
+                deduplicated_active_issues = []
             elif should_use_llm_dedup(
                 inference_profile,
                 pre_dedup_count,
@@ -1319,13 +1315,13 @@ class MultiStageReviewOrchestrator:
                     self.event_callback,
                     "final_dedup_started",
                     (
-                        "Final dedup: opt-in semantic LLM dedup for "
+                        "Final dedup: grouped recall-safe semantic dedup for "
                         f"{pre_dedup_count} issue(s)"
                     ),
                 )
-                deduplicated_fresh_issues = await deduplicate_final_issues_llm(
+                deduplicated_active_issues = await deduplicate_final_issues_llm(
                     with_stage_output_cap(self.llm, "dedup", inference_profile),
-                    fresh_active_issues,
+                    active_issues,
                 )
             else:
                 fast_dedup = should_use_fast_dedup(
@@ -1349,37 +1345,50 @@ class MultiStageReviewOrchestrator:
                         f"{pre_dedup_count} issue(s)"
                     ),
                 )
-                deduplicated_fresh_issues = deduplicate_final_issues(
-                    fresh_active_issues
+                deduplicated_active_issues = deduplicate_final_issues(
+                    active_issues
                 )
-            before_final_dedup = list(fresh_active_issues)
+            before_final_dedup = list(active_issues)
             candidate_ledger.reject_removed(
                 before_final_dedup,
-                deduplicated_fresh_issues,
+                deduplicated_active_issues,
                 gate="deduplication",
                 code="final_duplicate",
             )
-            before_history_suppression = list(deduplicated_fresh_issues)
-            deduplicated_fresh_issues = _suppress_duplicates_of_protected_history(
-                deduplicated_fresh_issues,
-                protected_active_issues,
-            )
-            candidate_ledger.reject_removed(
-                before_history_suppression,
-                deduplicated_fresh_issues,
-                gate="deduplication",
-                code="duplicate_of_open_history",
-            )
-            if len(deduplicated_fresh_issues) != pre_dedup_count:
+
+            retained_object_ids = {
+                id(issue) for issue in deduplicated_active_issues
+            }
+            consolidated_history: List[CodeReviewIssue] = []
+            for removed_issue in before_final_dedup:
+                if id(removed_issue) in retained_object_ids:
+                    continue
+                removed_id = str(getattr(removed_issue, "id", "") or "").strip()
+                if removed_id not in protected_open_issue_ids:
+                    continue
+                resolved_copy = _resolved_historical_copy(
+                    removed_issue,
+                    protected_open_issue_ids,
+                    (
+                        "Closed because final root-cause deduplication "
+                        "consolidated this duplicate into the retained finding."
+                    ),
+                )
+                if resolved_copy is not None:
+                    consolidated_history.append(resolved_copy)
+
+            if len(deduplicated_active_issues) != pre_dedup_count:
                 logger.info(
-                    "Final dedup before Stage 3: %d → %d fresh active issues",
+                    "Final dedup before Stage 3: %d → %d active root findings "
+                    "(%d historical duplicate(s) closed)",
                     pre_dedup_count,
-                    len(deduplicated_fresh_issues),
+                    len(deduplicated_active_issues),
+                    len(consolidated_history),
                 )
             file_issues = (
-                deduplicated_fresh_issues
-                + protected_active_issues
+                deduplicated_active_issues
                 + resolved_lifecycle_issues
+                + consolidated_history
             )
 
             # Stage 3 receives the structured Stage 2 result separately from the
@@ -1414,25 +1423,34 @@ class MultiStageReviewOrchestrator:
                 pr_evidence_ledger.task_implementation_evidence_payload(task_key)
             )
             dismissed_ids = set(stage_3_result.get("dismissed_issue_ids", []))
+            dismissed_object_ids = {
+                int(value)
+                for value in stage_3_result.get(
+                    "dismissed_issue_object_ids",
+                    [],
+                )
+            }
 
             # A dismissed historical OPEN issue is a lifecycle update, not an
             # omission. Return it as resolved so the client can close the stored
             # record; only genuinely fresh candidates are removed outright.
-            if dismissed_ids:
+            if dismissed_ids or dismissed_object_ids:
                 before_stage_3_dismissals = list(file_issues)
                 file_issues, resolved_count, dropped_count = (
                     _apply_stage_3_dismissals(
                         file_issues,
                         dismissed_ids,
                         protected_open_issue_ids,
+                        dismissed_object_ids=dismissed_object_ids,
                     )
                 )
                 logger.info(
                     "Stage 3 dismissed %d fresh issue(s) and resolved %d "
-                    "historical OPEN issue(s) (IDs: %s)",
+                    "historical OPEN issue(s) after evidence validation "
+                    "(verification keys: %s)",
                     dropped_count,
                     resolved_count,
-                    dismissed_ids,
+                    stage_3_result.get("dismissed_issue_keys", []),
                 )
                 candidate_ledger.reject_removed(
                     before_stage_3_dismissals,
@@ -1773,6 +1791,30 @@ def _normalized_issue_resolution(issue: CodeReviewIssue) -> Optional[str]:
     return None
 
 
+def _resolved_historical_copy(
+    issue: CodeReviewIssue,
+    previous_open_ids: set[str],
+    explanation: str,
+) -> Optional[CodeReviewIssue]:
+    """Create a lifecycle close update without re-publishing rejected provenance.
+
+    Reconciled historical objects can be bound to a generated-candidate ledger
+    record. Dedup rejects the superseded candidate object, while this unbound copy
+    is returned solely so persistence can close the old database identity.
+    """
+    if hasattr(issue, "model_copy"):
+        resolved = issue.model_copy(deep=True)
+    else:
+        resolved = CodeReviewIssue(**issue.model_dump())
+    if not _resolve_historical_candidate(
+        resolved,
+        previous_open_ids,
+        explanation,
+    ):
+        return None
+    return resolved
+
+
 def _partition_protected_active_issues(
     active_issues: List[CodeReviewIssue],
     protected_ids: set[str],
@@ -1817,18 +1859,38 @@ def _deduplicate_cross_batch_issues_preserving_lifecycle(
     issues: List[CodeReviewIssue],
     protected_ids: Optional[set[str]] = None,
 ) -> List[CodeReviewIssue]:
-    """Deduplicate fresh Stage 1 findings without losing historical identity."""
+    """Deduplicate Stage 1 findings while retaining lifecycle close updates.
+
+    Active history participates in exact merging so its persisted identity can
+    absorb a fresh, better source anchor. If two persisted OPEN records collapse
+    into one root finding, the superseded ID is returned as an explicit resolved
+    update instead of disappearing.
+    """
     active, resolved = _partition_issue_lifecycle(issues)
     fresh, protected = _partition_protected_active_issues(
         active,
         protected_ids or set(),
     )
-    deduplicated_fresh = deduplicate_cross_batch_issues(fresh)
-    deduplicated_fresh = _suppress_duplicates_of_protected_history(
-        deduplicated_fresh,
-        protected,
-    )
-    return deduplicated_fresh + protected + resolved
+    # Preserve the established publication order (fresh, protected, resolved)
+    # while still allowing exact merging across the fresh/history boundary.
+    ordered_active = fresh + protected
+    deduplicated_active = deduplicate_cross_batch_issues(ordered_active)
+    retained_object_ids = {id(issue) for issue in deduplicated_active}
+    consolidated_history: List[CodeReviewIssue] = []
+    for issue in ordered_active:
+        if id(issue) in retained_object_ids:
+            continue
+        resolved_copy = _resolved_historical_copy(
+            issue,
+            protected_ids or set(),
+            (
+                "Closed because exact root-cause deduplication consolidated "
+                "this duplicate into the retained finding."
+            ),
+        )
+        if resolved_copy is not None:
+            consolidated_history.append(resolved_copy)
+    return deduplicated_active + resolved + consolidated_history
 
 
 def _serialize_issue_for_client(issue: CodeReviewIssue) -> Dict[str, Any]:
@@ -1858,8 +1920,15 @@ def _apply_stage_3_dismissals(
     issues: List[CodeReviewIssue],
     dismissed_ids: set[str],
     previous_open_ids: set[str],
+    *,
+    dismissed_object_ids: Optional[set[int]] = None,
 ) -> tuple[List[CodeReviewIssue], int, int]:
-    """Close dismissed OPEN history and drop only fresh false positives."""
+    """Close verified OPEN history and drop only verified fresh false positives.
+
+    Object identities are preferred because Stage 3 verification IDs cover fresh
+    findings that do not have a database ID and avoid touching resolved lifecycle
+    records that happen to share a persisted ID.
+    """
     normalized_dismissed_ids = {
         str(issue_id).strip()
         for issue_id in dismissed_ids
@@ -1868,10 +1937,16 @@ def _apply_stage_3_dismissals(
     retained: List[CodeReviewIssue] = []
     resolved_count = 0
     dropped_count = 0
+    use_object_identity = bool(dismissed_object_ids)
 
     for issue in issues:
         issue_id = str(getattr(issue, "id", "") or "").strip()
-        if issue_id not in normalized_dismissed_ids:
+        is_dismissed = (
+            id(issue) in (dismissed_object_ids or set())
+            if use_object_identity
+            else issue_id in normalized_dismissed_ids
+        )
+        if not is_dismissed:
             retained.append(issue)
             continue
 

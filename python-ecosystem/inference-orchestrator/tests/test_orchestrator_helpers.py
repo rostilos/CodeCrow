@@ -34,6 +34,7 @@ from model.multi_stage import (
 )
 from model.output_schemas import CodeReviewIssue
 from model.dtos import ReviewRequestDto
+from service.review.candidate_ledger import CandidateEvidenceLedger
 
 
 @pytest.fixture
@@ -703,6 +704,52 @@ class TestPartitionIssueLifecycle:
 
         assert retained_fresh == []
 
+    def test_superseded_history_close_copy_does_not_republish_rejected_candidate(self):
+        retained_history = CodeReviewIssue(
+            id="100", file="a.py", line=10, severity="MEDIUM",
+            category="BUG_RISK", title="Missing workspace guard",
+            reason="The update path does not validate workspace ownership.",
+            suggestedFixDescription="Add the ownership guard.",
+        )
+        superseded_history = CodeReviewIssue(
+            id="200", file="a.py", line=11, severity="HIGH",
+            category="SECURITY", title="Missing workspace guard",
+            reason="The update path does not validate workspace ownership.",
+            suggestedFixDescription="Add the ownership guard.",
+        )
+        ledger = CandidateEvidenceLedger()
+        ledger.register(
+            superseded_history,
+            stage="stage_1",
+            source_key="batch-1",
+            review_unit_ids=["unit-1"],
+            prompt_hunk_ids=["hunk-1"],
+            prompt_digest="sha256:" + ("0" * 64),
+        )
+        before = [retained_history, superseded_history]
+
+        result = _deduplicate_cross_batch_issues_preserving_lifecycle(
+            before,
+            {"100", "200"},
+        )
+
+        active, resolved = _partition_issue_lifecycle(result)
+        assert len(active) == 1
+        assert active[0].id == "100"
+        assert len(resolved) == 1
+        assert resolved[0].id == "200"
+        assert resolved[0] is not superseded_history
+        assert superseded_history.isResolved is False
+
+        ledger.reject_removed(
+            before,
+            result,
+            gate="deduplication",
+            code="cross_batch_duplicate",
+        )
+        ledger.publish(result)
+        ledger.assert_terminal()
+
 
 class TestSerializeIssueForClient:
     def test_active_issue_does_not_serialize_resolution_metadata(self):
@@ -795,3 +842,50 @@ class TestApplyStage3Dismissals:
         assert historical.resolutionExplanation == historical.resolutionReason
         assert resolved_count == 1
         assert dropped_count == 1
+
+    def test_object_identity_drops_verified_fresh_issue_without_database_id(self):
+        fresh = CodeReviewIssue(
+            file="a.py", line=10, severity="MEDIUM", category="BUG_RISK",
+            reason="Fresh false positive.", suggestedFixDescription="No fix.",
+        )
+        unaffected = CodeReviewIssue(
+            file="a.py", line=20, severity="MEDIUM", category="BUG_RISK",
+            reason="Independent real issue.", suggestedFixDescription="Fix it.",
+        )
+
+        retained, resolved_count, dropped_count = _apply_stage_3_dismissals(
+            [fresh, unaffected],
+            set(),
+            set(),
+            dismissed_object_ids={id(fresh)},
+        )
+
+        assert retained == [unaffected]
+        assert resolved_count == 0
+        assert dropped_count == 1
+
+    def test_object_identity_does_not_touch_resolved_record_with_same_id(self):
+        active = CodeReviewIssue(
+            id="12524", file="a.py", line=10, severity="MEDIUM",
+            category="BUG_RISK", reason="Unsupported active finding.",
+            suggestedFixDescription="No fix.",
+        )
+        prior_resolution = CodeReviewIssue(
+            id="12524", file="a.py", line=10, severity="INFO",
+            category="BUG_RISK", reason="Historical lifecycle update.",
+            suggestedFixDescription="Already fixed.", isResolved=True,
+            resolutionReason="Previously closed.",
+        )
+
+        retained, resolved_count, dropped_count = _apply_stage_3_dismissals(
+            [active, prior_resolution],
+            {"12524"},
+            {"12524"},
+            dismissed_object_ids={id(active)},
+        )
+
+        assert retained == [active, prior_resolution]
+        assert active.isResolved is True
+        assert prior_resolution.resolutionReason == "Previously closed."
+        assert resolved_count == 1
+        assert dropped_count == 0

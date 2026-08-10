@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.mcp;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -15,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class McpTools {
+    private static final int MAX_SOURCE_WINDOW_LINES = 401;
     private final VcsMcpClientFactory vcsMcpClientFactory;
     private VcsMcpClient vcsClient = null;
     private final LargeContentFilter largeContentFilter;
@@ -166,7 +168,9 @@ public class McpTools {
                         (String) arguments.get("workspace"),
                         (String) arguments.get("repoSlug"),
                         (String) arguments.get("branch"),
-                        (String) arguments.get("filePath")
+                        (String) arguments.get("filePath"),
+                        integerArgument(arguments.get("startLine")),
+                        integerArgument(arguments.get("endLine"))
                 );
             case "getRootDirectory":
                 return getRootDirectory(
@@ -319,14 +323,95 @@ public class McpTools {
     }
 
     public Map<String, Object> getBranchFileContent(String workspace, String repoSlug, String branch, String filePath) {
+        return getBranchFileContent(workspace, repoSlug, branch, filePath, null, null);
+    }
+
+    public Map<String, Object> getBranchFileContent(
+            String workspace,
+            String repoSlug,
+            String branch,
+            String filePath,
+            Integer startLine,
+            Integer endLine
+    ) {
         try {
             String fileContent = getVcsClient(true).getBranchFileContent(workspace, repoSlug, branch, filePath);
-            // Filter large file content to reduce token usage
+            if (startLine != null && startLine > 0) {
+                return sourceWindow(fileContent, startLine, endLine);
+            }
+
+            // Exploratory callers without an anchor retain the existing large-file
+            // safeguard. Review verification supplies an issue line and receives
+            // a bounded source window instead of this generic placeholder.
             String filteredContent = largeContentFilter.filterFileContent(fileContent, filePath);
-            return Map.of("fileContent", filteredContent);
+            boolean completeFile = filteredContent != null
+                    && !filteredContent.contains(LargeContentFilter.FILTERED_PLACEHOLDER);
+            int totalLines = lineCount(fileContent);
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("fileContent", filteredContent != null ? filteredContent : "");
+            response.put("startLine", completeFile && totalLines > 0 ? 1 : 0);
+            response.put("endLine", completeFile ? totalLines : 0);
+            response.put("totalLines", totalLines);
+            response.put("completeFile", completeFile);
+            return response;
         } catch (IOException e) {
             return Map.of("error", "Failed to get branch file content: " + e.getMessage());
         }
+    }
+
+    static Map<String, Object> sourceWindow(
+            String content,
+            int requestedStartLine,
+            Integer requestedEndLine
+    ) {
+        if (content == null) {
+            return Map.of("error", "File content is unavailable");
+        }
+        String[] lines = content.split("\\R", -1);
+        int totalLines = lines.length;
+        int startLine = Math.max(1, requestedStartLine);
+        if (startLine > totalLines) {
+            return Map.of(
+                    "error", "Requested source line is outside the file",
+                    "totalLines", totalLines
+            );
+        }
+        int requestedEnd = requestedEndLine != null && requestedEndLine >= startLine
+                ? requestedEndLine
+                : startLine;
+        int endLine = Math.min(
+                totalLines,
+                Math.min(requestedEnd, startLine + MAX_SOURCE_WINDOW_LINES - 1)
+        );
+        String fileContent = String.join(
+                "\n",
+                java.util.Arrays.copyOfRange(lines, startLine - 1, endLine)
+        );
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("fileContent", fileContent);
+        response.put("startLine", startLine);
+        response.put("endLine", endLine);
+        response.put("totalLines", totalLines);
+        response.put("completeFile", startLine == 1 && endLine == totalLines);
+        return response;
+    }
+
+    private static int lineCount(String content) {
+        return content == null ? 0 : content.split("\\R", -1).length;
+    }
+
+    private static Integer integerArgument(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text) {
+            try {
+                return Integer.valueOf(text.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     public Map<String,Object> getRootDirectory(String workspace, String projectKey, String branch) {

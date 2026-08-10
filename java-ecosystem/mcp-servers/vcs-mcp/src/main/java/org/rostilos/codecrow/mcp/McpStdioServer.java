@@ -621,12 +621,26 @@ public class McpStdioServer {
                     "filePath": {
                       "type": "string",
                       "description": "File Path."
+                    },
+                    "startLine": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Optional first source line for an anchor-centred verification window."
+                    },
+                    "endLine": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Optional last source line for the verification window. The server returns at most 401 lines."
                     }
                   },
                   "required": ["workspace", "repoSlug", "branch", "filePath"]
                 }
                 """;
-        tools.add(new Tool("getBranchFileContent", "Get full file content from specified branch or commit.", getBranchFileContentSchema));
+        tools.add(new Tool(
+                "getBranchFileContent",
+                "Get file content or an optional whole-line range from a branch or commit.",
+                getBranchFileContentSchema
+        ));
 
 
         String getRootDirectorySchema = """
