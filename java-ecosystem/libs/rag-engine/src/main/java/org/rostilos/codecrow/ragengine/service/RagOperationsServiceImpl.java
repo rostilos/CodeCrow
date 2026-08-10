@@ -31,6 +31,7 @@ import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -838,13 +839,15 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                     "message", String.format("Deleting RAG index for branch '%s'", branchName)));
 
             boolean success;
-            Optional<RagBranchIndex> exactIndex = ragBranchIndexRepository
-                    .findByProjectIdAndBranchName(project.getId(), branchName)
-                    .filter(index -> index.getActiveGeneration() != null);
-            if (exactIndex.isPresent() && branchGenerationRepository != null) {
-                List<RagBranchIndexGeneration> generations = branchGenerationRepository
-                        .findByBranchIndexIdOrderByCreatedAtDesc(exactIndex.get().getId());
-                success = !generations.isEmpty();
+            Optional<RagBranchIndex> trackedIndex = ragBranchIndexRepository
+                    .findByProjectIdAndBranchName(project.getId(), branchName);
+            List<RagBranchIndexGeneration> generations = trackedIndex.isPresent()
+                    && branchGenerationRepository != null
+                    ? branchGenerationRepository.findByBranchIndexIdOrderByCreatedAtDesc(
+                            trackedIndex.get().getId())
+                    : List.of();
+            if (!generations.isEmpty()) {
+                success = true;
                 for (RagBranchIndexGeneration generation : generations) {
                     success &= ragPipelineClient.deleteBranch(
                             project.getWorkspace().getName(), project.getNamespace(),
@@ -900,8 +903,13 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         String baseBranch = getBaseBranch(project);
 
         try {
-            // Get indexed branches
-            List<String> indexedBranches = ragPipelineClient.getIndexedBranches(workspaceSlug, projectSlug);
+            // The durable registry is authoritative for exact-generation
+            // branches. Merge it with legacy shared-collection discovery so
+            // stale cleanup remains compatible with both storage models.
+            Set<String> indexedBranches = new LinkedHashSet<>(
+                    ragBranchIndexRepository.findBranchNamesByProjectId(project.getId()));
+            indexedBranches.addAll(
+                    ragPipelineClient.getIndexedBranches(workspaceSlug, projectSlug));
 
             // Determine branches to keep: base branch + active branches
             Set<String> branchesToKeep = new HashSet<>(activeBranches);
@@ -933,9 +941,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
 
             for (String branch : staleBranches) {
                 try {
-                    boolean success = ragPipelineClient.deleteBranch(workspaceSlug, projectSlug, branch);
+                    boolean success = deleteBranchIndex(project, branch, eventConsumer);
                     if (success) {
-                        ragBranchIndexRepository.deleteByProjectIdAndBranchName(project.getId(), branch);
                         deletedBranches.add(branch);
                     } else {
                         failedBranches.add(branch);

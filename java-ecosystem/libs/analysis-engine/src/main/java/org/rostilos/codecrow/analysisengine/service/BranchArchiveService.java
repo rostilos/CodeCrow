@@ -5,6 +5,7 @@ import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.*;
@@ -29,17 +30,40 @@ public class BranchArchiveService {
 
     private static final Logger log = LoggerFactory.getLogger(BranchArchiveService.class);
 
-    /**
-     * Maximum single-file size retained by the in-memory extraction API.
-     * Directory extraction, used by RAG indexing, streams entries directly to
-     * disk and does not impose this limit on an archive or its members.
-     */
+    /** Maximum single-file size retained by the in-memory extraction API. */
     private static final long MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+    static final long DEFAULT_MAX_ARCHIVE_ENTRY_SIZE_BYTES = 256L * 1024 * 1024;
+    static final long DEFAULT_MAX_ARCHIVE_EXTRACTED_SIZE_BYTES = 4L * 1024 * 1024 * 1024;
+    static final int DEFAULT_MAX_ARCHIVE_ENTRIES = 500_000;
 
     private final VcsClientProvider vcsClientProvider;
+    private final long maxArchiveEntrySizeBytes;
+    private final long maxArchiveExtractedSizeBytes;
+    private final int maxArchiveEntries;
 
+    @Autowired
     public BranchArchiveService(VcsClientProvider vcsClientProvider) {
+        this(
+                vcsClientProvider,
+                envLong("RAG_ARCHIVE_MAX_ENTRY_SIZE_BYTES", DEFAULT_MAX_ARCHIVE_ENTRY_SIZE_BYTES),
+                envLong("RAG_ARCHIVE_MAX_EXTRACTED_SIZE_BYTES", DEFAULT_MAX_ARCHIVE_EXTRACTED_SIZE_BYTES),
+                envInt("RAG_ARCHIVE_MAX_ENTRIES", DEFAULT_MAX_ARCHIVE_ENTRIES));
+    }
+
+    BranchArchiveService(
+            VcsClientProvider vcsClientProvider,
+            long maxArchiveEntrySizeBytes,
+            long maxArchiveExtractedSizeBytes,
+            int maxArchiveEntries) {
         this.vcsClientProvider = vcsClientProvider;
+        if (maxArchiveEntrySizeBytes <= 0
+                || maxArchiveExtractedSizeBytes <= 0
+                || maxArchiveEntries <= 0) {
+            throw new IllegalArgumentException("Archive extraction limits must be positive");
+        }
+        this.maxArchiveEntrySizeBytes = maxArchiveEntrySizeBytes;
+        this.maxArchiveExtractedSizeBytes = maxArchiveExtractedSizeBytes;
+        this.maxArchiveEntries = maxArchiveEntries;
     }
 
     /**
@@ -223,6 +247,7 @@ public class BranchArchiveService {
         int skippedLarge = 0;
         int skippedNotNeeded = 0;
         int skippedUnsafe = 0;
+        ArchiveExtractionBudget budget = new ArchiveExtractionBudget();
 
         try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(archiveFile))) {
             ZipEntry entry;
@@ -233,11 +258,13 @@ public class BranchArchiveService {
                 }
 
                 String relativePath = stripArchiveRoot(entry.getName());
+                ArchiveEntryBudget entryBudget = budget.beginEntry(relativePath, entry.getSize());
 
                 // Skip files we don't need
                 if (neededFiles != null && !neededFiles.isEmpty()
                         && !neededFiles.contains(relativePath)) {
                     skippedNotNeeded++;
+                    drainEntry(zis, entryBudget);
                     zis.closeEntry();
                     continue;
                 }
@@ -247,7 +274,7 @@ public class BranchArchiveService {
                 // The in-memory API must not retain an unbounded archive
                 // member. RAG uses extractFilesToDirectory below instead,
                 // which streams every accepted entry to disk.
-                ZipEntryContent content = readZipEntryBounded(zis);
+                ZipEntryContent content = readZipEntryBounded(zis, entryBudget);
 
                 if (content.tooLarge()) {
                     log.debug("Skipping large file {} (more than {} bytes)",
@@ -304,6 +331,7 @@ public class BranchArchiveService {
         int skippedBinary = 0;
         int skippedNotNeeded = 0;
         int skippedUnsafe = 0;
+        ArchiveExtractionBudget budget = new ArchiveExtractionBudget();
 
         try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(archiveFile))) {
             ZipEntry entry;
@@ -314,9 +342,11 @@ public class BranchArchiveService {
                 }
 
                 String relativePath = stripArchiveRoot(entry.getName());
+                ArchiveEntryBudget entryBudget = budget.beginEntry(relativePath, entry.getSize());
                 if (neededFiles != null && !neededFiles.isEmpty()
                         && !neededFiles.contains(relativePath)) {
                     skippedNotNeeded++;
+                    drainEntry(zis, entryBudget);
                     zis.closeEntry();
                     continue;
                 }
@@ -325,13 +355,16 @@ public class BranchArchiveService {
                 Path targetFile = resolveTargetFile(targetDirectory, relativePath);
                 if (targetFile == null) {
                     skippedUnsafe++;
+                    drainEntry(zis, entryBudget);
                     zis.closeEntry();
                     continue;
                 }
 
                 byte[] prefix = zis.readNBytes(1024);
+                entryBudget.consume(prefix.length);
                 if (isBinary(prefix, prefix.length)) {
                     skippedBinary++;
+                    drainEntry(zis, entryBudget);
                     zis.closeEntry();
                     continue;
                 }
@@ -341,8 +374,12 @@ public class BranchArchiveService {
                     byte[] buffer = new byte[8192];
                     int length;
                     while ((length = zis.read(buffer)) > 0) {
+                        entryBudget.consume(length);
                         output.write(buffer, 0, length);
                     }
+                } catch (IOException extractionFailure) {
+                    Files.deleteIfExists(targetFile);
+                    throw extractionFailure;
                 }
                 setWorldReadable(targetFile, false);
                 extractedFiles.add(relativePath);
@@ -413,13 +450,17 @@ public class BranchArchiveService {
         return entryPath;
     }
 
-    private ZipEntryContent readZipEntryBounded(ZipInputStream zis) throws IOException {
+    private ZipEntryContent readZipEntryBounded(
+            ZipInputStream zis,
+            ArchiveEntryBudget entryBudget
+    ) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream(8192);
         byte[] buffer = new byte[8192];
         long totalBytes = 0;
         boolean tooLarge = false;
         int len;
         while ((len = zis.read(buffer)) > 0) {
+            entryBudget.consume(len);
             totalBytes += len;
             if (totalBytes > MAX_FILE_SIZE_BYTES) {
                 tooLarge = true;
@@ -430,6 +471,32 @@ public class BranchArchiveService {
         return tooLarge
                 ? ZipEntryContent.TOO_LARGE
                 : new ZipEntryContent(baos.toByteArray(), false);
+    }
+
+    private void drainEntry(ZipInputStream zis, ArchiveEntryBudget entryBudget) throws IOException {
+        byte[] buffer = new byte[8192];
+        int length;
+        while ((length = zis.read(buffer)) > 0) {
+            entryBudget.consume(length);
+        }
+    }
+
+    private static long envLong(String name, long fallback) {
+        try {
+            long value = Long.parseLong(System.getenv().getOrDefault(name, String.valueOf(fallback)));
+            return value > 0 ? value : fallback;
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static int envInt(String name, int fallback) {
+        try {
+            int value = Integer.parseInt(System.getenv().getOrDefault(name, String.valueOf(fallback)));
+            return value > 0 ? value : fallback;
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
     }
 
     /**
@@ -466,6 +533,61 @@ public class BranchArchiveService {
 
     private record ZipEntryContent(byte[] bytes, boolean tooLarge) {
         private static final ZipEntryContent TOO_LARGE = new ZipEntryContent(null, true);
+    }
+
+    private final class ArchiveExtractionBudget {
+        private long extractedBytes;
+        private int entries;
+
+        private ArchiveEntryBudget beginEntry(String relativePath, long declaredSize) throws IOException {
+            entries++;
+            if (entries > maxArchiveEntries) {
+                throw new IOException("Repository archive exceeds RAG_ARCHIVE_MAX_ENTRIES="
+                        + maxArchiveEntries);
+            }
+            if (declaredSize > maxArchiveEntrySizeBytes) {
+                throw new IOException("Repository archive entry '" + relativePath
+                        + "' exceeds RAG_ARCHIVE_MAX_ENTRY_SIZE_BYTES="
+                        + maxArchiveEntrySizeBytes);
+            }
+            if (declaredSize >= 0
+                    && declaredSize > maxArchiveExtractedSizeBytes - extractedBytes) {
+                throw new IOException("Repository archive exceeds RAG_ARCHIVE_MAX_EXTRACTED_SIZE_BYTES="
+                        + maxArchiveExtractedSizeBytes);
+            }
+            return new ArchiveEntryBudget(relativePath, this);
+        }
+
+        private void consume(String relativePath, long entryBytes, int length) throws IOException {
+            if (length > maxArchiveEntrySizeBytes - entryBytes) {
+                throw new IOException("Repository archive entry '" + relativePath
+                        + "' exceeds RAG_ARCHIVE_MAX_ENTRY_SIZE_BYTES="
+                        + maxArchiveEntrySizeBytes);
+            }
+            if (length > maxArchiveExtractedSizeBytes - extractedBytes) {
+                throw new IOException("Repository archive exceeds RAG_ARCHIVE_MAX_EXTRACTED_SIZE_BYTES="
+                        + maxArchiveExtractedSizeBytes);
+            }
+            extractedBytes += length;
+        }
+    }
+
+    private static final class ArchiveEntryBudget {
+        private final String relativePath;
+        private final ArchiveExtractionBudget archiveBudget;
+        private long bytes;
+
+        private ArchiveEntryBudget(
+                String relativePath,
+                ArchiveExtractionBudget archiveBudget) {
+            this.relativePath = relativePath;
+            this.archiveBudget = archiveBudget;
+        }
+
+        private void consume(int length) throws IOException {
+            archiveBudget.consume(relativePath, bytes, length);
+            bytes += length;
+        }
     }
 
     public record ArchiveSnapshot(

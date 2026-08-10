@@ -218,6 +218,77 @@ class BranchArchiveServiceTest {
         }
 
         @Test
+        void extractToDirectory_rejectsOversizedEntryAndDeletesPartialFile(@TempDir Path tempDir)
+                throws Exception {
+            service = new BranchArchiveService(vcsClientProvider, 32, 1024, 10);
+            VcsConnection conn = new VcsConnection();
+            when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);
+            byte[] zipBytes = createZip(Map.of(
+                    "root/oversized.txt", "x".repeat(64)
+            ));
+            when(vcsClient.downloadRepositoryArchiveToFile(
+                    anyString(), anyString(), anyString(), any(Path.class)))
+                    .thenAnswer(inv -> {
+                        Files.write(inv.getArgument(3, Path.class), zipBytes);
+                        return (long) zipBytes.length;
+                    });
+            Path targetDirectory = tempDir.resolve("repository");
+
+            assertThatThrownBy(() -> service.downloadAndExtractFilesToDirectory(
+                    conn, "ws", "repo", "main", null, targetDirectory))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("RAG_ARCHIVE_MAX_ENTRY_SIZE_BYTES=32");
+            assertThat(targetDirectory.resolve("oversized.txt")).doesNotExist();
+        }
+
+        @Test
+        void extractToDirectory_rejectsArchiveOverTotalExtractedLimit(@TempDir Path tempDir)
+                throws Exception {
+            service = new BranchArchiveService(vcsClientProvider, 64, 40, 10);
+            VcsConnection conn = new VcsConnection();
+            when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);
+            byte[] zipBytes = createZip(Map.of(
+                    "root/first.txt", "a".repeat(24),
+                    "root/second.txt", "b".repeat(24)
+            ));
+            when(vcsClient.downloadRepositoryArchiveToFile(
+                    anyString(), anyString(), anyString(), any(Path.class)))
+                    .thenAnswer(inv -> {
+                        Files.write(inv.getArgument(3, Path.class), zipBytes);
+                        return (long) zipBytes.length;
+                    });
+
+            assertThatThrownBy(() -> service.downloadAndExtractFilesToDirectory(
+                    conn, "ws", "repo", "main", null, tempDir.resolve("repository")))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("RAG_ARCHIVE_MAX_EXTRACTED_SIZE_BYTES=40");
+        }
+
+        @Test
+        void extractionCountsUnrequestedEntriesAgainstArchiveEntryLimit(@TempDir Path tempDir)
+                throws Exception {
+            service = new BranchArchiveService(vcsClientProvider, 64, 1024, 1);
+            VcsConnection conn = new VcsConnection();
+            when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);
+            byte[] zipBytes = createZip(Map.of(
+                    "root/requested.txt", "requested",
+                    "root/unrequested.txt", "unrequested"
+            ));
+            when(vcsClient.downloadRepositoryArchiveToFile(
+                    anyString(), anyString(), anyString(), any(Path.class)))
+                    .thenAnswer(inv -> {
+                        Files.write(inv.getArgument(3, Path.class), zipBytes);
+                        return (long) zipBytes.length;
+                    });
+
+            assertThatThrownBy(() -> service.downloadAndExtractFilesToDirectory(
+                    conn, "ws", "repo", "main", Set.of("missing.txt"),
+                    tempDir.resolve("repository")))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("RAG_ARCHIVE_MAX_ENTRIES=1");
+        }
+
+        @Test
         void snapshotReportsBinaryPathPresenceWithoutLoadingItsContent(@TempDir Path tempDir)
                 throws Exception {
             VcsConnection conn = new VcsConnection();

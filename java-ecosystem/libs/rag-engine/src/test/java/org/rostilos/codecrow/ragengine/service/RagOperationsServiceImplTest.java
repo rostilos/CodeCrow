@@ -13,10 +13,13 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndex;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndexGeneration;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepository;
+import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexGenerationRepository;
 import org.rostilos.codecrow.core.service.AnalysisJobService;
 import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
 import org.rostilos.codecrow.ragengine.branch.BranchIndexGenerationBuildService;
@@ -54,6 +57,9 @@ class RagOperationsServiceImplTest {
     private RagBranchIndexRepository ragBranchIndexRepository;
 
     @Mock
+    private RagBranchIndexGenerationRepository branchGenerationRepository;
+
+    @Mock
     private VcsClientProvider vcsClientProvider;
 
     @Mock
@@ -72,6 +78,8 @@ class RagOperationsServiceImplTest {
                 ragBranchIndexRepository,
                 vcsClientProvider,
                 ragPipelineClient);
+        ReflectionTestUtils.setField(
+                service, "branchGenerationRepository", branchGenerationRepository);
 
         testProject = new Project();
         ReflectionTestUtils.setField(testProject, "id", 100L);
@@ -483,6 +491,52 @@ class RagOperationsServiceImplTest {
 
         assertThat(result).containsEntry("status", "success");
         assertThat(result).containsEntry("total_deleted", 1);
+    }
+
+    @Test
+    void cleanupStaleBranchesDeletesEveryRegisteredExactGeneration() throws Exception {
+        setupRagEnabled();
+        setupVcsBinding();
+        setupProjectWithWorkspaceAndNamespace();
+        when(ragBranchIndexRepository.findBranchNamesByProjectId(100L))
+                .thenReturn(List.of("main", "stale-exact"));
+        when(ragPipelineClient.getIndexedBranches("my-workspace", "my-repo"))
+                .thenReturn(List.of("main"));
+
+        RagBranchIndex branchIndex = new RagBranchIndex(
+                testProject, "stale-exact", RagBranchIndexKind.DURABLE);
+        branchIndex.setId(501L);
+        RagBranchIndexGeneration first = new RagBranchIndexGeneration();
+        first.setCollectionName("cc_generation_1");
+        RagBranchIndexGeneration second = new RagBranchIndexGeneration();
+        second.setCollectionName("cc_generation_2");
+        when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "stale-exact"))
+                .thenReturn(Optional.of(branchIndex));
+        when(branchGenerationRepository.findByBranchIndexIdOrderByCreatedAtDesc(501L))
+                .thenReturn(List.of(first, second));
+        when(ragPipelineClient.deleteBranch(
+                "test-ws", "test-ns", "stale-exact", "cc_generation_1"))
+                .thenReturn(true);
+        when(ragPipelineClient.deleteBranch(
+                "test-ws", "test-ns", "stale-exact", "cc_generation_2"))
+                .thenReturn(true);
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+
+        Map<String, Object> result = service.cleanupStaleBranches(
+                testProject, Set.of(), eventConsumer);
+
+        assertThat(result).containsEntry("status", "success");
+        assertThat(result).containsEntry("total_deleted", 1);
+        assertThat(result.get("deleted_branches")).isEqualTo(List.of("stale-exact"));
+        verify(ragPipelineClient).deleteBranch(
+                "test-ws", "test-ns", "stale-exact", "cc_generation_1");
+        verify(ragPipelineClient).deleteBranch(
+                "test-ws", "test-ns", "stale-exact", "cc_generation_2");
+        verify(ragBranchIndexRepository)
+                .deleteByProjectIdAndBranchName(100L, "stale-exact");
+        verify(ragPipelineClient, never())
+                .deleteBranch("my-workspace", "my-repo", "stale-exact");
     }
 
     @Test

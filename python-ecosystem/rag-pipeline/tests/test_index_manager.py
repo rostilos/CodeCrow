@@ -428,6 +428,24 @@ class TestRAGIndexManager:
             "Workspace", "Project", "release/1.2"
         ).startswith("rag_workspace__project__release_1_2_")
 
+    def test_branch_operator_alias_preserves_case_sensitive_identity(self):
+        from rag_pipeline.core.index_manager.manager import RAGIndexManager
+
+        manager = object.__new__(RAGIndexManager)
+        manager.config = MagicMock(qdrant_collection_prefix="rag")
+        manager.config.qdrant_collection_prefix = "rag"
+
+        lowercase = manager._get_branch_operator_alias(
+            "Workspace", "Project", "feature"
+        )
+        uppercase = manager._get_branch_operator_alias(
+            "Workspace", "Project", "Feature"
+        )
+
+        assert lowercase != uppercase
+        assert lowercase == "rag_workspace__project__feature"
+        assert uppercase.startswith("rag_workspace__project__feature_")
+
     def test_readable_alias_publication_requires_immutable_generation_target(self):
         from rag_pipeline.core.index_manager.manager import RAGIndexManager
 

@@ -262,7 +262,10 @@ class RAGIndexManager:
         readable = re.sub(r"[^a-zA-Z0-9_-]", "_", raw_branch).lower()
         if not readable:
             readable = "branch"
-        if readable != raw_branch.lower() or len(readable) > 64:
+        # Branch identities are case-sensitive even though readable aliases are
+        # normalized to lowercase. Hash whenever normalization changes the
+        # original identity so case-only branches cannot share an alias.
+        if readable != raw_branch or len(readable) > 64:
             readable = (
                 f"{readable[:64]}_"
                 f"{hashlib.sha256(raw_branch.encode('utf-8')).hexdigest()[:10]}"
