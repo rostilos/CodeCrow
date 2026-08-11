@@ -166,10 +166,10 @@ public class RagBranchIndexRegistryService {
     }
 
     @Transactional
-    public void fail(long operationId, String errorMessage) {
+    public boolean fail(long operationId, String errorMessage) {
         RagIndexOperation operation = requireOperation(operationId);
         if (operation.getStatus() == RagIndexOperationStatus.SUCCEEDED) {
-            return;
+            return false;
         }
         String failure = requireText(errorMessage, "errorMessage");
         RagBranchIndexGeneration generation = operation.getGeneration();
@@ -187,6 +187,7 @@ public class RagBranchIndexRegistryService {
         }
         operation.fail(failure);
         operationRepository.save(operation);
+        return true;
     }
 
     @Transactional
@@ -224,6 +225,17 @@ public class RagBranchIndexRegistryService {
         return operationRepository.findByStatusInAndUpdatedAtBefore(
                 List.of(RagIndexOperationStatus.PENDING, RagIndexOperationStatus.RUNNING),
                 updatedBefore);
+    }
+
+    public List<RagIndexOperation> findFailedOperationsWithActiveProjections() {
+        return operationRepository.findFailedOperationsWithActiveProjections();
+    }
+
+    public boolean hasLiveOperation(long projectId, String branchName) {
+        return operationRepository.existsByProjectIdAndBranchNameAndStatusIn(
+                projectId,
+                requireText(branchName, "branchName"),
+                List.of(RagIndexOperationStatus.PENDING, RagIndexOperationStatus.RUNNING));
     }
 
     static String physicalCollectionName(

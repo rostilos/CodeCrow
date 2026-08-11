@@ -664,6 +664,25 @@ public class JiraCloudClient implements TaskManagementClient {
         while (pos < len) {
             char c = text.charAt(pos);
 
+            // ── Bare HTTP(S) URL ──
+            // Jira does not auto-link plain text inside an ADF document. Add
+            // the link mark explicitly, preserving fragments used by opaque
+            // public-share URLs.
+            if (text.startsWith("https://", pos) || text.startsWith("http://", pos)) {
+                int end = pos;
+                while (end < len && !Character.isWhitespace(text.charAt(end))) {
+                    end++;
+                }
+                while (end > pos && ".,;!?".indexOf(text.charAt(end - 1)) >= 0) {
+                    end--;
+                }
+                String url = text.substring(pos, end);
+                flushPlain(nodes, plain);
+                addLinkTextNode(nodes, url, url);
+                pos = end;
+                continue;
+            }
+
             // ── Backslash escape: \* \_ \` \\ ──
             if (c == '\\' && pos + 1 < len) {
                 char next = text.charAt(pos + 1);
@@ -753,6 +772,23 @@ public class JiraCloudClient implements TaskManagementClient {
             }
             textNode.set("marks", marks);
         }
+        nodes.add(textNode);
+    }
+
+    private void addLinkTextNode(ArrayNode nodes, String text, String href) {
+        ObjectNode textNode = objectMapper.createObjectNode();
+        textNode.put("type", "text");
+        textNode.put("text", text);
+
+        ObjectNode link = objectMapper.createObjectNode();
+        link.put("type", "link");
+        ObjectNode attributes = objectMapper.createObjectNode();
+        attributes.put("href", href);
+        link.set("attrs", attributes);
+
+        ArrayNode marks = objectMapper.createArrayNode();
+        marks.add(link);
+        textNode.set("marks", marks);
         nodes.add(textNode);
     }
 

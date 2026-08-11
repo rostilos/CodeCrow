@@ -38,7 +38,7 @@ import java.util.stream.Collectors;
  * <ul>
  *   <li>Assembling the request payload (analysis summary, task context, template config)</li>
  *   <li>Making the HTTP call with retry logic</li>
- *   <li>Parsing the response into a ready-to-post comment body</li>
+ *   <li>Parsing the response into the full document stored by CodeCrow</li>
  * </ul>
  */
 @Service

@@ -19,6 +19,16 @@ import java.util.Optional;
 @Repository
 public interface RagBranchIndexRepository extends JpaRepository<RagBranchIndex, Long> {
 
+    interface OperatorAliasCandidate {
+        Long getProjectId();
+        String getWorkspaceName();
+        String getProjectNamespace();
+        String getBranchName();
+        String getRevision();
+        String getCollectionName();
+        RagBranchIndexKind getIndexKind();
+    }
+
     Optional<RagBranchIndex> findByProjectIdAndBranchName(Long projectId, String branchName);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -47,4 +57,26 @@ public interface RagBranchIndexRepository extends JpaRepository<RagBranchIndex, 
 
     @Query("SELECT b.branchName FROM RagBranchIndex b WHERE b.project.id = :projectId")
     List<String> findBranchNamesByProjectId(@Param("projectId") Long projectId);
+
+    /**
+     * Reads the immutable values needed by optional operator-alias repair.
+     * Returning a scalar projection lets the database transaction finish
+     * before the caller performs any potentially slow RAG/Qdrant request.
+     */
+    @Query("""
+            SELECT b.project.id AS projectId,
+                   b.project.workspace.name AS workspaceName,
+                   b.project.namespace AS projectNamespace,
+                   b.branchName AS branchName,
+                   b.activeGeneration.revision AS revision,
+                   b.activeGeneration.collectionName AS collectionName,
+                   b.indexKind AS indexKind
+            FROM RagBranchIndex b
+            WHERE b.activeGeneration IS NOT NULL
+              AND b.indexKind IN (
+                org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.PRIMARY,
+                org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.DURABLE
+              )
+            """)
+    List<OperatorAliasCandidate> findOperatorAliasCandidates();
 }

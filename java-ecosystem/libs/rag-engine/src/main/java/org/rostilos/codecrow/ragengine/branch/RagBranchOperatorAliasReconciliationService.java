@@ -1,6 +1,5 @@
 package org.rostilos.codecrow.ragengine.branch;
 
-import org.rostilos.codecrow.core.model.rag.RagBranchIndex;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
 import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepository;
 import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
@@ -8,7 +7,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Restores human-readable Qdrant aliases for already active branch generations.
@@ -37,38 +35,24 @@ public class RagBranchOperatorAliasReconciliationService {
     @Scheduled(
             fixedDelayString = "${codecrow.rag.operator-alias.reconcile-interval-ms:300000}",
             initialDelayString = "${codecrow.rag.operator-alias.reconcile-initial-delay-ms:15000}")
-    @Transactional(readOnly = true)
     public void reconcileActiveGenerationAliases() {
-        for (RagBranchIndex branchIndex : branchIndexRepository.findAll()) {
-            if (!isPublishedOperatorBranch(branchIndex)) {
-                continue;
-            }
-            var generation = branchIndex.getActiveGeneration();
-            var project = branchIndex.getProject();
+        for (var candidate : branchIndexRepository.findOperatorAliasCandidates()) {
             try {
                 pipelineClient.publishGenerationAliases(
-                        project.getWorkspace().getName(),
-                        project.getNamespace(),
-                        branchIndex.getBranchName(),
-                        generation.getRevision(),
-                        generation.getCollectionName(),
+                        candidate.getWorkspaceName(),
+                        candidate.getProjectNamespace(),
+                        candidate.getBranchName(),
+                        candidate.getRevision(),
+                        candidate.getCollectionName(),
                         true,
-                        branchIndex.getIndexKind() == RagBranchIndexKind.PRIMARY);
+                        candidate.getIndexKind() == RagBranchIndexKind.PRIMARY);
             } catch (Exception failure) {
                 log.warn(
                         "Could not reconcile readable RAG alias for project={} branch={}: {}",
-                        project.getId(),
-                        branchIndex.getBranchName(),
+                        candidate.getProjectId(),
+                        candidate.getBranchName(),
                         failure.getMessage());
             }
         }
-    }
-
-    private static boolean isPublishedOperatorBranch(RagBranchIndex branchIndex) {
-        if (branchIndex == null || branchIndex.getActiveGeneration() == null) {
-            return false;
-        }
-        return branchIndex.getIndexKind() == RagBranchIndexKind.PRIMARY
-                || branchIndex.getIndexKind() == RagBranchIndexKind.DURABLE;
     }
 }

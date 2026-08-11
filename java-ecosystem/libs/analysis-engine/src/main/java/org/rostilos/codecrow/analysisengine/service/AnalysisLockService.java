@@ -21,6 +21,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -275,6 +276,37 @@ public class AnalysisLockService {
         } else {
             log.debug("Lock not found (may have already expired): {}", lockKey);
         }
+    }
+
+    /**
+     * Release the branch lock left behind by an abandoned producer, but only
+     * when it still belongs to the same revision. A newer retry for the branch
+     * therefore keeps its lock even if an older recovery scan finishes late.
+     */
+    @Transactional
+    public boolean releaseMatchingLock(
+            Long projectId,
+            String branchName,
+            AnalysisLockType lockType,
+            String commitHash) {
+        Optional<AnalysisLock> lockOpt = lockRepository
+                .findByProjectIdAndBranchNameAndAnalysisType(
+                        projectId, branchName, lockType);
+        if (lockOpt.isEmpty()) {
+            return false;
+        }
+
+        AnalysisLock lock = lockOpt.get();
+        if (!Objects.equals(lock.getCommitHash(), commitHash)) {
+            log.info(
+                    "Preserving newer lock for project={}, branch={}, type={}: "
+                            + "lock commit {} does not match abandoned commit {}",
+                    projectId, branchName, lockType,
+                    lock.getCommitHash(), commitHash);
+            return false;
+        }
+
+        return lockRepository.deleteByLockKey(lock.getLockKey()) > 0;
     }
 
     @Transactional

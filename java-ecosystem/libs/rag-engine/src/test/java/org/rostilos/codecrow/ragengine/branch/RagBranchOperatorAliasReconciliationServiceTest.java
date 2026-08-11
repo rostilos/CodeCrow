@@ -1,11 +1,7 @@
 package org.rostilos.codecrow.ragengine.branch;
 
 import org.junit.jupiter.api.Test;
-import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.core.model.rag.RagBranchIndex;
-import org.rostilos.codecrow.core.model.rag.RagBranchIndexGeneration;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
-import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepository;
 import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
 
@@ -22,10 +18,9 @@ class RagBranchOperatorAliasReconciliationServiceTest {
         RagBranchOperatorAliasReconciliationService service =
                 new RagBranchOperatorAliasReconciliationService(repository, client);
 
-        RagBranchIndex primary = index("main", RagBranchIndexKind.PRIMARY, "main-target");
-        RagBranchIndex durable = index("develop", RagBranchIndexKind.DURABLE, "develop-target");
-        RagBranchIndex transientIndex = index("release", RagBranchIndexKind.TRANSIENT, "release-target");
-        when(repository.findAll()).thenReturn(List.of(primary, durable, transientIndex));
+        var primary = candidate("main", RagBranchIndexKind.PRIMARY, "main-target");
+        var durable = candidate("develop", RagBranchIndexKind.DURABLE, "develop-target");
+        when(repository.findOperatorAliasCandidates()).thenReturn(List.of(primary, durable));
 
         service.reconcileActiveGenerationAliases();
 
@@ -36,24 +31,18 @@ class RagBranchOperatorAliasReconciliationServiceTest {
         verifyNoMoreInteractions(client);
     }
 
-    private static RagBranchIndex index(
+    private static RagBranchIndexRepository.OperatorAliasCandidate candidate(
             String branch,
             RagBranchIndexKind kind,
             String target) {
-        Workspace workspace = mock(Workspace.class);
-        when(workspace.getName()).thenReturn("workspace");
-        Project project = mock(Project.class);
-        when(project.getWorkspace()).thenReturn(workspace);
-        when(project.getNamespace()).thenReturn("project");
-        when(project.getId()).thenReturn(1L);
-        RagBranchIndexGeneration generation = mock(RagBranchIndexGeneration.class);
-        when(generation.getRevision()).thenReturn("revision");
-        when(generation.getCollectionName()).thenReturn(target);
-        RagBranchIndex index = mock(RagBranchIndex.class);
-        when(index.getProject()).thenReturn(project);
-        when(index.getBranchName()).thenReturn(branch);
-        when(index.getIndexKind()).thenReturn(kind);
-        when(index.getActiveGeneration()).thenReturn(generation);
-        return index;
+        var candidate = mock(RagBranchIndexRepository.OperatorAliasCandidate.class);
+        when(candidate.getProjectId()).thenReturn(1L);
+        when(candidate.getWorkspaceName()).thenReturn("workspace");
+        when(candidate.getProjectNamespace()).thenReturn("project");
+        when(candidate.getBranchName()).thenReturn(branch);
+        when(candidate.getRevision()).thenReturn("revision");
+        when(candidate.getCollectionName()).thenReturn(target);
+        when(candidate.getIndexKind()).thenReturn(kind);
+        return candidate;
     }
 }

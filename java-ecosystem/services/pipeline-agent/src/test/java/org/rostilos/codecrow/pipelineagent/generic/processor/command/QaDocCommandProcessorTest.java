@@ -18,6 +18,7 @@ import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
 import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.taskmanagement.ETaskManagementProvider;
 import org.rostilos.codecrow.core.model.taskmanagement.TaskManagementConnection;
+import org.rostilos.codecrow.core.model.qadoc.QaDocDocument;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.persistence.repository.taskmanagement.TaskManagementConnectionRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
@@ -27,6 +28,7 @@ import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler.WebhookResult;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocGenerationContext;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocGenerationService;
+import org.rostilos.codecrow.pipelineagent.qadoc.QaDocPublicPreviewService;
 import org.rostilos.codecrow.core.persistence.repository.qadoc.QaDocStateRepository;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
@@ -60,6 +62,7 @@ class QaDocCommandProcessorTest {
     @Mock private VcsClientProvider vcsClientProvider;
     @Mock private QaDocStateRepository qaDocStateRepository;
     @Mock private QaDocDocumentService qaDocDocumentService;
+    @Mock private QaDocPublicPreviewService qaDocPublicPreviewService;
     @Mock private PrFileEnrichmentService enrichmentService;
     @Mock private TokenEncryptionService tokenEncryptionService;
 
@@ -75,6 +78,22 @@ class QaDocCommandProcessorTest {
     private static final Long CONNECTION_ID = 100L;
     private static final String TASK_ID = "PROJ-123";
     private static final String PR_ID = "7";
+    private static final String GENERATED_QA_DOC = """
+            ### 1. Change Summary
+            Login validation changed.
+
+            ### 2. Scope
+            Web login flow.
+
+            <!-- codecrow-test-cases:start -->
+            ### 3. Test Scenarios
+            **Reject an invalid password** (HIGH)
+            - **Expected Result:** Test steps here
+            <!-- codecrow-test-cases:end -->
+
+            ### 4. Edge Cases
+            Verify an empty password.
+            """;
 
     @BeforeEach
     void setUp() {
@@ -86,6 +105,7 @@ class QaDocCommandProcessorTest {
                 vcsClientProvider,
                 qaDocStateRepository,
                 qaDocDocumentService,
+                qaDocPublicPreviewService,
                 enrichmentService,
                 tokenEncryptionService
         );
@@ -93,6 +113,21 @@ class QaDocCommandProcessorTest {
         project = new Project();
         ReflectionTestUtils.setField(project, "id", PROJECT_ID);
         ReflectionTestUtils.setField(project, "name", "Test Project");
+
+        QaDocDocument persistedDocument = new QaDocDocument(project, 7L);
+        ReflectionTestUtils.setField(persistedDocument, "id", 701L);
+        lenient().when(qaDocDocumentService.upsertLatestDocument(
+                any(), anyLong(), anyString(), nullable(Long.class), nullable(String.class), anyString()
+        )).thenReturn(persistedDocument);
+        lenient().when(qaDocPublicPreviewService.createTestCasesPreviewUrl(any()))
+                .thenReturn("https://app.codecrow.example/share#token=ccs_test-token");
+        lenient().when(qaDocPublicPreviewService.buildTaskComment(anyString(), anyString()))
+                .thenReturn("<!-- codecrow-qa-autodoc -->\n\n"
+                        + "### 1. Change Summary\nLogin validation changed.\n\n"
+                        + "### 2. Scope\nWeb login flow.\n\n"
+                        + "### 3. Test Scenarios\n\n"
+                        + "https://app.codecrow.example/share#token=ccs_test-token\n\n"
+                        + "### 4. Edge Cases\nVerify an empty password.");
 
         capturedEvents = new ArrayList<>();
         eventConsumer = capturedEvents::add;
@@ -206,7 +241,7 @@ class QaDocCommandProcessorTest {
         when(qaDocGenerationService.generateQaDocumentation(
                 any(Project.class), anyLong(), anyInt(), anyInt(),
                 anyMap(), any(QaDocGenerationContext.class)
-        )).thenReturn("## QA Documentation\n\nTest steps here...");
+        )).thenReturn(GENERATED_QA_DOC);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -493,12 +528,25 @@ class QaDocCommandProcessorTest {
                     anyMap(), any(QaDocGenerationContext.class)
             );
 
-            // Verify comment was posted (not updated)
-            verify(taskManagementClient).postComment(eq(TASK_ID), contains("codecrow-qa-autodoc"));
+            // Every section remains in Jira except the broad test-case body.
+            ArgumentCaptor<String> commentCaptor = ArgumentCaptor.forClass(String.class);
+            verify(taskManagementClient).postComment(eq(TASK_ID), commentCaptor.capture());
+            assertThat(commentCaptor.getValue())
+                    .contains(
+                            "codecrow-qa-autodoc",
+                            "### 1. Change Summary",
+                            "Login validation changed",
+                            "### 2. Scope",
+                            "### 3. Test Scenarios",
+                            "/share#token=ccs_",
+                            "### 4. Edge Cases",
+                            "Verify an empty password")
+                    .doesNotContain("Reject an invalid password")
+                    .doesNotContain("Test steps here");
             verify(taskManagementClient, never()).updateComment(anyString(), anyString(), anyString());
             verify(qaDocDocumentService).upsertLatestDocument(
                     eq(project), eq(7L), eq(TASK_ID), isNull(), eq("abc123"),
-                    eq("## QA Documentation\n\nTest steps here...")
+                    eq(GENERATED_QA_DOC)
             );
         }
 
@@ -749,12 +797,10 @@ class QaDocCommandProcessorTest {
             )).thenReturn("doc content");
             when(taskManagementClient.findCommentByMarker(eq(TASK_ID), anyString()))
                     .thenReturn(Optional.empty());
-            when(taskManagementClient.postComment(eq(TASK_ID), anyString()))
-                    .thenReturn(new TaskComment("c-1", "bot", "doc", OffsetDateTime.now(), null));
-
             WebhookResult result = processor.process(payload, project, eventConsumer, Map.of());
 
-            assertThat(result.success()).isTrue();
+            assertThat(result.success()).isFalse();
+            assertThat(result.message()).contains("secure public preview");
             // Should not attempt to look up analysis when PR number is null
             verify(codeAnalysisService, never()).getPreviousVersionCodeAnalysis(anyLong(), anyLong());
         }

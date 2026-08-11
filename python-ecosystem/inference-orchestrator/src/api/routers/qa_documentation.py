@@ -1,8 +1,8 @@
 """
 QA Auto-Documentation Router.
 
-Generates QA-oriented documentation for PR changes, intended to be posted
-as a comment on the linked task management ticket (e.g., Jira).
+Generates QA-oriented documentation for PR changes. The full document is kept
+in CodeCrow; task-management comments receive a public test-case preview link.
 
 Supports both single-pass (legacy / small PRs) and multi-stage ULTRATHINKING
 pipeline (large PRs with enrichment data).
@@ -103,7 +103,7 @@ async def generate_qa_documentation(
     2. Determines if documentation is needed (LLM decides).
     3. For large PRs: runs 3-stage ULTRATHINKING pipeline (batch → cross-impact → aggregate).
     4. For small PRs: runs single-pass generation.
-    5. Returns the document text ready to be posted as a task comment.
+    5. Returns the document text for CodeCrow storage and test-case extraction.
     """
     logger.info(
         "QA documentation request: project=%s, pr=#%s, mode=%s, diff_size=%d, enrichment=%s, delta=%s",
