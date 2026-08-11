@@ -4,8 +4,12 @@ import org.junit.jupiter.api.Test;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.qadoc.QaDocDocument;
+import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.QaDocDocumentService;
+import org.rostilos.codecrow.security.service.UserDetailsImpl;
+import org.rostilos.codecrow.security.web.WorkspaceSecurity;
+import org.springframework.security.core.Authentication;
 
 import java.util.Arrays;
 import java.util.Optional;
@@ -20,6 +24,7 @@ class QaDocTestCasesShareProviderTest {
     void returnsOnlyTheSanitizedTestCaseContract() {
         QaDocDocumentService documents = mock(QaDocDocumentService.class);
         CodeAnalysisService analyses = mock(CodeAnalysisService.class);
+        WorkspaceSecurity workspaceSecurity = mock(WorkspaceSecurity.class);
         Project project = mock(Project.class);
         when(project.getId()).thenReturn(12L);
         when(project.getName()).thenReturn("Acme Checkout");
@@ -30,12 +35,18 @@ class QaDocTestCasesShareProviderTest {
         document.setLastAnalysisId(71L);
         document.setCommitHash("0123456789012345678901234567890123456789");
         document.setMarkdownContent("""
-                # Internal overview
+                # QA Testing Guide — Saved cards
+                ## 1. What Changed
+                Customers can reuse a saved card.
+
                 <!-- codecrow-test-cases:start -->
                 ### Test Scenarios
                 **Save the form** (HIGH)
                 - **Expected Result:** The confirmation appears
                 <!-- codecrow-test-cases:end -->
+
+                ## 6. Setup and Environment Notes
+                - Enable saved cards in the QA environment.
                 """);
         CodeAnalysis analysis = mock(CodeAnalysis.class);
         when(analysis.getProject()).thenReturn(project);
@@ -43,19 +54,27 @@ class QaDocTestCasesShareProviderTest {
         when(analysis.getTaskSummary()).thenReturn("Add a saved-card checkout flow");
         when(documents.findDocumentById(88L)).thenReturn(Optional.of(document));
         when(analyses.findById(71L)).thenReturn(Optional.of(analysis));
-        QaDocTestCasesShareProvider provider = new QaDocTestCasesShareProvider(documents, analyses);
+        QaDocTestCasesShareProvider provider = new QaDocTestCasesShareProvider(
+                documents, analyses, workspaceSecurity);
 
-        QaDocTestCasesPublicPreview preview = provider.getPublicPreview("88").orElseThrow();
+        QaDocPublicPreview preview = provider.getPublicPreview("88").orElseThrow();
 
-        assertThat(preview.title()).isEqualTo("QA test cases");
+        assertThat(preview.title()).isEqualTo("QA documentation");
         assertThat(preview.projectName()).isEqualTo("Acme Checkout");
         assertThat(preview.taskKey()).isEqualTo("SHOP-42");
         assertThat(preview.taskSummary()).isEqualTo("Add a saved-card checkout flow");
+        assertThat(preview.overviewMarkdown())
+                .contains("What Changed", "Customers can reuse a saved card")
+                .doesNotContain("Save the form", "Setup and Environment Notes");
         assertThat(preview.testCases()).singleElement()
                 .satisfies(testCase -> assertThat(testCase.title()).isEqualTo("Save the form"));
-        assertThat(Arrays.stream(QaDocTestCasesPublicPreview.class.getRecordComponents())
+        assertThat(preview.environmentMarkdown())
+                .isEqualTo("- Enable saved cards in the QA environment.");
+        assertThat(Arrays.stream(QaDocPublicPreview.class.getRecordComponents())
                 .map(component -> component.getName()))
-                .containsExactly("title", "projectName", "taskKey", "taskSummary", "testCases")
+                .containsExactly(
+                        "title", "projectName", "taskKey", "taskSummary",
+                        "overviewMarkdown", "testCases", "environmentMarkdown")
                 .doesNotContain("id", "project", "workspace", "prNumber", "taskId", "commitHash");
     }
 
@@ -63,6 +82,7 @@ class QaDocTestCasesShareProviderTest {
     void neverFallsBackToSharingAnUnmarkedLegacyDocument() {
         QaDocDocumentService documents = mock(QaDocDocumentService.class);
         CodeAnalysisService analyses = mock(CodeAnalysisService.class);
+        WorkspaceSecurity workspaceSecurity = mock(WorkspaceSecurity.class);
         QaDocDocument document = new QaDocDocument(null, 17L);
         document.setId(89L);
         document.setMarkdownContent("""
@@ -72,7 +92,8 @@ class QaDocTestCasesShareProviderTest {
                 - **Expected Result:** It works
         """);
         when(documents.findDocumentById(89L)).thenReturn(Optional.of(document));
-        QaDocTestCasesShareProvider provider = new QaDocTestCasesShareProvider(documents, analyses);
+        QaDocTestCasesShareProvider provider = new QaDocTestCasesShareProvider(
+                documents, analyses, workspaceSecurity);
 
         assertThat(provider.getPublicPreview("89")).isEmpty();
     }
@@ -81,6 +102,7 @@ class QaDocTestCasesShareProviderTest {
     void doesNotExposeTaskSummaryFromAnotherProject() {
         QaDocDocumentService documents = mock(QaDocDocumentService.class);
         CodeAnalysisService analyses = mock(CodeAnalysisService.class);
+        WorkspaceSecurity workspaceSecurity = mock(WorkspaceSecurity.class);
         Project documentProject = mock(Project.class);
         Project analysisProject = mock(Project.class);
         when(documentProject.getId()).thenReturn(12L);
@@ -105,12 +127,44 @@ class QaDocTestCasesShareProviderTest {
         when(documents.findDocumentById(90L)).thenReturn(Optional.of(document));
         when(analyses.findById(72L)).thenReturn(Optional.of(analysis));
 
-        QaDocTestCasesPublicPreview preview = new QaDocTestCasesShareProvider(documents, analyses)
+        QaDocPublicPreview preview = new QaDocTestCasesShareProvider(
+                documents, analyses, workspaceSecurity)
                 .getPublicPreview("90")
                 .orElseThrow();
 
         assertThat(preview.projectName()).isEqualTo("Checkout");
         assertThat(preview.taskKey()).isEqualTo("SHOP-42");
         assertThat(preview.taskSummary()).isNull();
+    }
+
+    @Test
+    void returnsTheRealQaDocRouteOnlyForAnAuthorizedWorkspaceMember() {
+        QaDocDocumentService documents = mock(QaDocDocumentService.class);
+        CodeAnalysisService analyses = mock(CodeAnalysisService.class);
+        WorkspaceSecurity workspaceSecurity = mock(WorkspaceSecurity.class);
+        Project project = mock(Project.class);
+        Workspace workspace = mock(Workspace.class);
+        Authentication authentication = mock(Authentication.class);
+        UserDetailsImpl principal = mock(UserDetailsImpl.class);
+        when(authentication.isAuthenticated()).thenReturn(true);
+        when(authentication.getPrincipal()).thenReturn(principal);
+        when(project.getId()).thenReturn(12L);
+        when(project.getNamespace()).thenReturn("checkout-service");
+        when(project.getWorkspace()).thenReturn(workspace);
+        when(workspace.getSlug()).thenReturn("acme");
+        when(workspaceSecurity.isProjectWorkspaceMember(12L, authentication)).thenReturn(true);
+
+        QaDocDocument document = new QaDocDocument(project, 524L);
+        document.setId(91L);
+        when(documents.findDocumentById(91L)).thenReturn(Optional.of(document));
+        QaDocTestCasesShareProvider provider = new QaDocTestCasesShareProvider(
+                documents, analyses, workspaceSecurity);
+
+        assertThat(provider.getAuthorizedPath("91", authentication))
+                .contains("/dashboard/acme/projects/checkout-service?prNumber=524&subTab=qa-doc");
+
+        when(workspaceSecurity.isProjectWorkspaceMember(12L, authentication)).thenReturn(false);
+        assertThat(provider.getAuthorizedPath("91", authentication)).isEmpty();
+        assertThat(provider.getAuthorizedPath("91", null)).isEmpty();
     }
 }

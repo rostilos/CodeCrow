@@ -154,6 +154,10 @@ class QaDocOrchestrator(BaseOrchestrator):
             return {"documentation_needed": False, "documentation": None}
 
         documentation = await self._ensure_test_cases(documentation, placeholders)
+        documentation = self._normalize_document_title(
+            documentation,
+            placeholders["pr_title"],
+        )
 
         # ── Footer with PR tracking ──────────────────────────────────
         documented_prs = self._extract_documented_prs(previous_documentation)
@@ -856,6 +860,25 @@ class QaDocOrchestrator(BaseOrchestrator):
         ) is not None
         return has_markers and has_scenario
 
+    @staticmethod
+    def _normalize_document_title(documentation: str, fallback_title: str) -> str:
+        """Replace a leaked empty-title sentinel in the rendered guide heading."""
+        return re.sub(
+            r"(?mi)^(#\s+QA Testing Guide\s*[—–-]\s*)(?:N\s*/?\s*A|None|null)\s*$",
+            lambda match: f"{match.group(1)}{fallback_title}",
+            documentation,
+            count=1,
+        )
+
+    @staticmethod
+    def _display_value(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized or normalized.casefold() in {"n/a", "na", "none", "null"}:
+            return None
+        return normalized
+
     # ==================================================================
     # Shared helpers
     # ==================================================================
@@ -904,14 +927,25 @@ class QaDocOrchestrator(BaseOrchestrator):
         """Build the placeholder dictionary used for prompt formatting."""
         task_ctx = task_context_dict or {}
         effective_language = output_language if output_language and output_language.strip() else "English"
+        normalized_project_name = self._display_value(project_name)
+        task_key = self._display_value(task_ctx.get("task_key"))
+        task_summary = self._display_value(task_ctx.get("task_summary"))
+        pr_title = (
+            self._display_value(pr_metadata.get("prTitle"))
+            or task_summary
+            or task_key
+            or (f"PR #{pr_number}" if pr_number is not None else None)
+            or normalized_project_name
+            or "QA documentation"
+        )
         return {
-            "project_name": project_name or "Unknown",
+            "project_name": normalized_project_name or "Unknown",
             "pr_number": str(pr_number) if pr_number else "N/A",
-            "task_key": task_ctx.get("task_key", "N/A"),
-            "task_summary": task_ctx.get("task_summary", "N/A"),
+            "task_key": task_key or "N/A",
+            "task_summary": task_summary or "N/A",
             "source_branch": source_branch,
             "target_branch": target_branch,
-            "pr_title": pr_metadata.get("prTitle", "N/A"),
+            "pr_title": pr_title,
             "pr_description": self._truncate(pr_metadata.get("prDescription", ""), 500),
             "issues_found": str(issues_found),
             "files_analyzed": str(files_analyzed),

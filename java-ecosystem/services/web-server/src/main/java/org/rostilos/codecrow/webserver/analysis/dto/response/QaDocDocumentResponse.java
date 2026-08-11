@@ -16,10 +16,12 @@ public record QaDocDocumentResponse(
         String markdownContent,
         String overviewMarkdown,
         List<QaDocTestCaseResponse> testCases,
+        String environmentMarkdown,
         OffsetDateTime generatedAt
 ) {
     public static QaDocDocumentResponse missing(Long prNumber) {
-        return new QaDocDocumentResponse(false, prNumber, null, null, null, null, null, List.of(), null);
+        return new QaDocDocumentResponse(
+                false, prNumber, null, null, null, null, null, List.of(), null, null);
     }
 
     public static QaDocDocumentResponse fromDocument(QaDocDocument document) {
@@ -33,6 +35,7 @@ public record QaDocDocumentResponse(
                 document.getMarkdownContent(),
                 content.overviewMarkdown(),
                 content.testCases().stream().map(QaDocTestCaseResponse::fromTestCase).toList(),
+                content.environmentMarkdown(),
                 document.getGeneratedAt()
         );
     }

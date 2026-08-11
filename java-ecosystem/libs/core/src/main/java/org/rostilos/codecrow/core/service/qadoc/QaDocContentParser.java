@@ -6,7 +6,7 @@ import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Splits rendered QA markdown into its overview and independently rendered test cases. */
+/** Splits rendered QA markdown into overview, test cases, and environment/setup notes. */
 public final class QaDocContentParser {
 
     public static final String TEST_CASES_START = "<!-- codecrow-test-cases:start -->";
@@ -26,6 +26,11 @@ public final class QaDocContentParser {
                     + "Environment(?: and Setup Notes)?|Setup Notes).*$",
             Pattern.CASE_INSENSITIVE
     );
+    private static final Pattern ENVIRONMENT_SECTION_HEADING = Pattern.compile(
+            "^(?:6\\.\\s+.+|(?:\\d+\\.\\s*)?(?:Environment and Setup Notes|"
+                    + "Setup and Environment Notes|Environment Setup Notes|Environment Notes|Setup Notes))$",
+            Pattern.CASE_INSENSITIVE
+    );
 
     private QaDocContentParser() {
     }
@@ -33,18 +38,32 @@ public final class QaDocContentParser {
     public static QaDocContent parse(String markdown) {
         String source = markdown == null ? "" : markdown.trim();
         Section section = findTestCaseSection(source);
+        String withoutTestCases;
+        List<QaDocTestCase> testCases;
         if (section == null) {
-            return new QaDocContent(source, parseTestCases(source));
+            withoutTestCases = source;
+            testCases = parseTestCases(source);
+        } else {
+            withoutTestCases = (source.substring(0, section.start())
+                    + "\n\n"
+                    + source.substring(section.end()))
+                    .replace(TEST_CASES_START, "")
+                    .replace(TEST_CASES_END, "");
+            testCases = parseTestCases(section.content());
         }
 
-        String overview = (source.substring(0, section.start())
-                + "\n\n"
-                + source.substring(section.end()))
-                .replace(TEST_CASES_START, "")
-                .replace(TEST_CASES_END, "")
-                .trim()
-                .replaceAll("\\n{3,}", "\n\n");
-        return new QaDocContent(overview, parseTestCases(section.content()));
+        Section environmentSection = findEnvironmentSection(withoutTestCases);
+        String overview = environmentSection == null
+                ? normalizeDocumentPart(withoutTestCases)
+                : normalizeDocumentPart(
+                        withoutTestCases.substring(0, environmentSection.start())
+                                + "\n\n"
+                                + withoutTestCases.substring(environmentSection.end()));
+        String environment = environmentSection == null
+                ? null
+                : stripFirstHeading(environmentSection.content());
+
+        return new QaDocContent(overview, testCases, normalizeNullablePart(environment));
     }
 
     /**
@@ -189,6 +208,48 @@ public final class QaDocContentParser {
     private static boolean isLaterDocumentSection(String headingTitle) {
         return NUMBERED_SECTION_HEADING.matcher(headingTitle).matches()
                 || KNOWN_LATER_SECTION_HEADING.matcher(headingTitle).matches();
+    }
+
+    private static Section findEnvironmentSection(String markdown) {
+        Matcher headings = HEADING_PATTERN.matcher(markdown);
+        while (headings.find()) {
+            String title = headings.group(2).trim();
+            if (!ENVIRONMENT_SECTION_HEADING.matcher(title).matches()) {
+                continue;
+            }
+
+            int headingLevel = headings.group(1).length();
+            int sectionStart = headings.start();
+            int sectionEnd = markdown.length();
+            Matcher followingHeadings = HEADING_PATTERN.matcher(markdown);
+            followingHeadings.region(headings.end(), markdown.length());
+            while (followingHeadings.find()) {
+                if (followingHeadings.group(1).length() <= headingLevel) {
+                    sectionEnd = followingHeadings.start();
+                    break;
+                }
+            }
+            return new Section(
+                    sectionStart,
+                    sectionEnd,
+                    markdown.substring(sectionStart, sectionEnd).trim());
+        }
+        return null;
+    }
+
+    private static String stripFirstHeading(String section) {
+        return HEADING_PATTERN.matcher(section).replaceFirst("").trim();
+    }
+
+    private static String normalizeDocumentPart(String value) {
+        return value == null
+                ? ""
+                : value.trim().replaceAll("\\n{3,}", "\n\n");
+    }
+
+    private static String normalizeNullablePart(String value) {
+        String normalized = normalizeDocumentPart(value);
+        return normalized.isBlank() ? null : normalized;
     }
 
     private static List<QaDocTestCase> parseTestCases(String section) {

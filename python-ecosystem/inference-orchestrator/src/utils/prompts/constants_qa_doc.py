@@ -507,7 +507,7 @@ Bullet list of unusual conditions to verify:
 Areas of the application that were NOT changed but might be affected:
 - [Feature/screen] — why it might be impacted, how to verify
 
-## 6. Setup and Environment Notes
+## 6. Environment and Setup Notes
 Any special requirements:
 - Test data needed
 - Configuration or feature flags to enable

@@ -357,7 +357,56 @@ class TestBuildPlaceholders:
         )
         assert result["project_name"] == "Unknown"
         assert result["pr_number"] == "N/A"
+        assert result["pr_title"] == "QA documentation"
         assert result["diff"] == "No diff available."
+
+    def test_title_falls_back_to_task_summary_before_task_key(self):
+        orch = QaDocOrchestrator(llm=MagicMock())
+        result = orch._build_placeholders(
+            project_name="TestProject",
+            pr_number=42,
+            issues_found=0,
+            files_analyzed=0,
+            pr_metadata={"prTitle": "N/A"},
+            task_context_dict={
+                "task_key": "JIRA-123",
+                "task_summary": "Support split shipments",
+            },
+            task_context_block="",
+            diff="d",
+        )
+
+        assert result["pr_title"] == "Support split shipments"
+
+    def test_title_falls_back_to_pr_number_without_task_metadata(self):
+        orch = QaDocOrchestrator(llm=MagicMock())
+        result = orch._build_placeholders(
+            project_name=None,
+            pr_number=42,
+            issues_found=0,
+            files_analyzed=0,
+            pr_metadata={"prTitle": "  "},
+            task_context_dict=None,
+            task_context_block="",
+            diff="d",
+        )
+
+        assert result["pr_title"] == "PR #42"
+
+    def test_replaces_na_in_the_rendered_guide_title(self):
+        documentation = """# QA Testing Guide — N/A
+
+## 1. What Changed
+Checkout behavior changed.
+"""
+
+        normalized = QaDocOrchestrator._normalize_document_title(
+            documentation,
+            "Support split shipments",
+        )
+
+        assert normalized.startswith("# QA Testing Guide — Support split shipments")
+        assert "— N/A" not in normalized
 
     def test_custom_language(self):
         orch = QaDocOrchestrator(llm=MagicMock())

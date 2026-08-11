@@ -4,6 +4,7 @@ import org.rostilos.codecrow.publicshare.api.ResolvedPublicShare;
 import org.rostilos.codecrow.publicshare.service.PublicShareLinkService;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -31,10 +32,11 @@ public class PublicShareController {
     }
 
     @PostMapping("/resolve")
-    public ResponseEntity<?> resolvePublicPreview(@RequestBody PublicShareResolveRequest request) {
+    public ResponseEntity<?> resolvePublicPreview(@RequestBody PublicShareResolveRequest request,
+                                                  Authentication authentication) {
         String token = request == null ? null : request.token();
         return shareLinkService.resolve(token)
-                .flatMap(this::resolvePreview)
+                .flatMap(share -> resolvePreview(share, authentication))
                 .map(this::ok)
                 .orElseGet(this::notFound);
     }
@@ -53,11 +55,18 @@ public class PublicShareController {
                 .build();
     }
 
-    private java.util.Optional<?> resolvePreview(ResolvedPublicShare share) {
+    private java.util.Optional<PublicSharePreviewResponse> resolvePreview(
+            ResolvedPublicShare share,
+            Authentication authentication) {
         PublicShareResourceProvider provider = providers.get(share.resourceType());
         if (provider == null) {
             return java.util.Optional.empty();
         }
-        return provider.getPublicPreview(share.resourceKey());
+        return provider.getPublicPreview(share.resourceKey())
+                .map(content -> new PublicSharePreviewResponse(
+                        share.resourceType(),
+                        content,
+                        provider.getAuthorizedPath(share.resourceKey(), authentication).orElse(null)
+                ));
     }
 }

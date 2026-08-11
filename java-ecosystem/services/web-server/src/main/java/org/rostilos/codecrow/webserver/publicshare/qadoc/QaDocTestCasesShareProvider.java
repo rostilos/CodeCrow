@@ -1,15 +1,21 @@
 package org.rostilos.codecrow.webserver.publicshare.qadoc;
 
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.qadoc.QaDocDocument;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.QaDocDocumentService;
+import org.rostilos.codecrow.core.service.qadoc.QaDocContent;
 import org.rostilos.codecrow.core.service.qadoc.QaDocContentParser;
 import org.rostilos.codecrow.core.service.qadoc.QaDocPublicShareResource;
+import org.rostilos.codecrow.security.service.UserDetailsImpl;
+import org.rostilos.codecrow.security.web.WorkspaceSecurity;
 import org.rostilos.codecrow.webserver.analysis.dto.response.QaDocTestCaseResponse;
 import org.rostilos.codecrow.webserver.publicshare.PublicShareResourceProvider;
+import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -19,11 +25,14 @@ public class QaDocTestCasesShareProvider implements PublicShareResourceProvider 
 
     private final QaDocDocumentService qaDocDocumentService;
     private final CodeAnalysisService codeAnalysisService;
+    private final WorkspaceSecurity workspaceSecurity;
 
     public QaDocTestCasesShareProvider(QaDocDocumentService qaDocDocumentService,
-                                       CodeAnalysisService codeAnalysisService) {
+                                       CodeAnalysisService codeAnalysisService,
+                                       WorkspaceSecurity workspaceSecurity) {
         this.qaDocDocumentService = qaDocDocumentService;
         this.codeAnalysisService = codeAnalysisService;
+        this.workspaceSecurity = workspaceSecurity;
     }
 
     @Override
@@ -33,38 +42,72 @@ public class QaDocTestCasesShareProvider implements PublicShareResourceProvider 
 
     @Override
     @Transactional(readOnly = true)
-    public Optional<QaDocTestCasesPublicPreview> getPublicPreview(String resourceKey) {
-        Long documentId;
-        try {
-            documentId = Long.valueOf(resourceKey);
-        } catch (NumberFormatException ignored) {
-            return Optional.empty();
-        }
-
-        return qaDocDocumentService.findDocumentById(documentId)
+    public Optional<QaDocPublicPreview> getPublicPreview(String resourceKey) {
+        return parseDocumentId(resourceKey)
+                .flatMap(qaDocDocumentService::findDocumentById)
                 .flatMap(this::toPublicPreview);
     }
 
-    private Optional<QaDocTestCasesPublicPreview> toPublicPreview(QaDocDocument document) {
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<String> getAuthorizedPath(String resourceKey, Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()
+                || !(authentication.getPrincipal() instanceof UserDetailsImpl)) {
+            return Optional.empty();
+        }
+
+        return parseDocumentId(resourceKey)
+                .flatMap(qaDocDocumentService::findDocumentById)
+                .flatMap(document -> authorizedDocumentPath(document, authentication));
+    }
+
+    private Optional<QaDocPublicPreview> toPublicPreview(QaDocDocument document) {
         var testCases = QaDocContentParser.parseMarkedTestCases(document.getMarkdownContent());
         if (testCases.isEmpty()) {
             return Optional.empty();
         }
+        QaDocContent content = QaDocContentParser.parse(document.getMarkdownContent());
 
         String projectName = document.getProject() == null
                 ? null
                 : normalize(document.getProject().getName());
         String taskKey = normalize(document.getTaskId());
 
-        return Optional.of(new QaDocTestCasesPublicPreview(
-                "QA test cases",
+        return Optional.of(new QaDocPublicPreview(
+                "QA documentation",
                 projectName,
                 taskKey,
                 findTaskSummary(document),
+                content.overviewMarkdown(),
                 testCases.stream()
                         .map(QaDocTestCaseResponse::fromTestCase)
-                        .toList()
+                        .toList(),
+                content.environmentMarkdown()
         ));
+    }
+
+    private Optional<String> authorizedDocumentPath(
+            QaDocDocument document,
+            Authentication authentication) {
+        Project project = document.getProject();
+        if (project == null || project.getId() == null || project.getWorkspace() == null
+                || !workspaceSecurity.isProjectWorkspaceMember(project.getId(), authentication)) {
+            return Optional.empty();
+        }
+
+        String workspaceSlug = normalize(project.getWorkspace().getSlug());
+        String projectNamespace = normalize(project.getNamespace());
+        if (workspaceSlug == null || projectNamespace == null || document.getPrNumber() == null) {
+            return Optional.empty();
+        }
+
+        return Optional.of(UriComponentsBuilder
+                .fromPath("/dashboard/{workspaceSlug}/projects/{projectNamespace}")
+                .queryParam("prNumber", document.getPrNumber())
+                .queryParam("subTab", "qa-doc")
+                .buildAndExpand(workspaceSlug, projectNamespace)
+                .encode()
+                .toUriString());
     }
 
     private String findTaskSummary(QaDocDocument document) {
@@ -99,5 +142,13 @@ public class QaDocTestCasesShareProvider implements PublicShareResourceProvider 
             return null;
         }
         return value.trim();
+    }
+
+    private static Optional<Long> parseDocumentId(String resourceKey) {
+        try {
+            return Optional.of(Long.valueOf(resourceKey));
+        } catch (NumberFormatException ignored) {
+            return Optional.empty();
+        }
     }
 }

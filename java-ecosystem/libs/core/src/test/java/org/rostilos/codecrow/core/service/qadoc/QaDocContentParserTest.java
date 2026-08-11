@@ -37,6 +37,7 @@ class QaDocContentParserTest {
         assertThat(result.overviewMarkdown())
                 .contains("What Changed", "Regression Risks")
                 .doesNotContain("Complete checkout", "codecrow-test-cases");
+        assertThat(result.environmentMarkdown()).isNull();
         assertThat(result.testCases()).hasSize(2);
         assertThat(result.testCases().get(0))
                 .extracting(QaDocTestCase::title, QaDocTestCase::priority, QaDocTestCase::functionalArea)
@@ -139,9 +140,14 @@ class QaDocContentParserTest {
         assertThat(parsed.overviewMarkdown())
                 .contains(
                         "### 4. Edge Cases and Negative Testing",
-                        "### 5. Regression Risks",
-                        "### 6. Environment and Setup Notes")
-                .doesNotContain("Pay with a gift card", "codecrow-test-cases");
+                        "### 5. Regression Risks")
+                .doesNotContain(
+                        "Pay with a gift card",
+                        "codecrow-test-cases",
+                        "### 6. Environment and Setup Notes",
+                        "Use the QA payment environment");
+        assertThat(parsed.environmentMarkdown())
+                .isEqualTo("- Use the QA payment environment.");
         assertThat(comment)
                 .contains("### 3. Test Scenarios\n\nhttps://codecrow.cloud/share#token=ccs_public-token")
                 .contains(
@@ -153,5 +159,43 @@ class QaDocContentParserTest {
                         "Use the QA payment environment")
                 .doesNotContain("Pay with a gift card", "The balance is applied")
                 .contains("https://codecrow.cloud/share#token=ccs_public-token\n<!-- codecrow-test-cases:end -->\n\n### 4.");
+    }
+
+    @Test
+    void separatesSetupAndEnvironmentNotesFromAnUnmarkedDocument() {
+        QaDocContent parsed = QaDocContentParser.parse("""
+                # QA Testing Guide — Checkout
+
+                ## 1. What Changed
+                Saved cards can now be selected at checkout.
+
+                ## 6. Setup and Environment Notes
+                - Enable the saved-card feature flag.
+                - Use a customer with an existing payment method.
+                """);
+
+        assertThat(parsed.overviewMarkdown())
+                .contains("What Changed", "Saved cards")
+                .doesNotContain("Setup and Environment Notes", "feature flag");
+        assertThat(parsed.environmentMarkdown())
+                .contains("Enable the saved-card feature flag", "existing payment method")
+                .doesNotContain("## 6.");
+    }
+
+    @Test
+    void preservesSectionsAfterEnvironmentNotesInTheOverview() {
+        QaDocContent parsed = QaDocContentParser.parse("""
+                ## Overview
+                Summary.
+
+                ## Environment and Setup Notes
+                Use staging.
+
+                ## Appendix
+                Contact the QA lead.
+                """);
+
+        assertThat(parsed.environmentMarkdown()).isEqualTo("Use staging.");
+        assertThat(parsed.overviewMarkdown()).contains("Overview", "Appendix", "Contact the QA lead");
     }
 }
