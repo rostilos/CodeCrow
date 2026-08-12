@@ -40,8 +40,17 @@ public class QaDocPublicPreviewService {
         if (previewUrl == null || previewUrl.isBlank()) {
             throw new IllegalArgumentException("A public preview URL is required.");
         }
+        String normalizedPreviewUrl = previewUrl.trim();
         return QaAutoDocListener.COMMENT_MARKER
                 + "\n\n"
-                + QaDocContentParser.replaceMarkedTestCases(qaDocument, previewUrl.trim());
+                + QaDocContentParser.replaceShareableSections(
+                        qaDocument,
+                        withTab(normalizedPreviewUrl, "test-cases"),
+                        withTab(normalizedPreviewUrl, "environment")
+                );
+    }
+
+    private static String withTab(String previewUrl, String tab) {
+        return previewUrl + (previewUrl.contains("#") ? "&" : "#") + "tab=" + tab;
     }
 }

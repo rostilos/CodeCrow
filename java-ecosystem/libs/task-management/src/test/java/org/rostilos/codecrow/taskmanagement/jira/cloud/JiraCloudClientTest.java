@@ -149,7 +149,7 @@ class JiraCloudClientTest {
     @DisplayName("renders a bare public-share URL as a clickable Jira link")
     void postCommentAddsAdfLinkMarkToBarePublicShareUrl() throws Exception {
         server.enqueue(commentResponse(201));
-        String shareUrl = "https://codecrow.cloud/share#token=ccs_opaque-token";
+        String shareUrl = "https://codecrow.cloud/share#token=ccs_opaque-token&tab=environment";
 
         client.postComment("PROJ-123", """
                 ### 3. Test Scenarios
