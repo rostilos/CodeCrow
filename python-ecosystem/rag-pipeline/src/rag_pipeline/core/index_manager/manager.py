@@ -333,6 +333,7 @@ class RAGIndexManager:
         exclude_patterns: Optional[List[str]] = None,
         source_tree_sha256: Optional[str] = None,
         collection_target: Optional[str] = None,
+        reuse_collection_target: Optional[str] = None,
         publish_branch_alias: bool = False,
         publish_legacy_project_alias: bool = False,
         progress_callback: Optional[Callable[[dict], None]] = None,
@@ -363,6 +364,18 @@ class RAGIndexManager:
             publish_branch_alias,
             publish_legacy_project_alias,
         )
+        reuse_collection_name = None
+        if reuse_collection_target:
+            reuse_collection_name = (
+                self._collection_manager.resolve_collection_target(
+                    reuse_collection_target
+                )
+            )
+            if reuse_collection_name is None:
+                logger.info(
+                    "Prior RAG generation is unavailable for vector reuse; "
+                    "embedding the target snapshot normally"
+                )
         with self._mutation_coordinator.acquire(
             workspace,
             project,
@@ -384,6 +397,7 @@ class RAGIndexManager:
                 source_tree=source_tree,
                 seal_generation=collection_target is not None,
                 publication_aliases=publication_aliases,
+                reuse_collection_name=reuse_collection_name,
                 operation_id=lease.token,
                 activation_guard=lease.assert_owned,
                 progress_callback=progress_callback,

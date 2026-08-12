@@ -22,7 +22,6 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichme
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
-import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
@@ -72,7 +71,6 @@ public class PullRequestAnalysisProcessor {
     private final AiAnalysisClient aiAnalysisClient;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
-    private final RagOperationsService ragOperationsService;
     private final ApplicationEventPublisher eventPublisher;
     private final AnalyzedCommitService analyzedCommitService;
     private final VcsClientProvider vcsClientProvider;
@@ -98,7 +96,6 @@ public class PullRequestAnalysisProcessor {
             FileSnapshotService fileSnapshotService,
             PrIssueTrackingService prIssueTrackingService,
             AstScopeEnricher astScopeEnricher,
-            @Autowired(required = false) RagOperationsService ragOperationsService,
             @Autowired(required = false) ApplicationEventPublisher eventPublisher
     ) {
         this.codeAnalysisService = codeAnalysisService;
@@ -107,7 +104,6 @@ public class PullRequestAnalysisProcessor {
         this.aiAnalysisClient = aiAnalysisClient;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
-        this.ragOperationsService = ragOperationsService;
         this.eventPublisher = eventPublisher;
         this.analyzedCommitService = analyzedCommitService;
         this.vcsClientProvider = vcsClientProvider;
@@ -245,9 +241,6 @@ public class PullRequestAnalysisProcessor {
                         "Prompt dry run bypassing analysis caches for project={}, PR={}",
                         project.getId(), request.getPullRequestId());
             }
-
-            // Only prepare RAG after the exact snapshot/configuration cache has missed.
-            ensureRagIndexForTargetBranch(project, request.getTargetBranchName(), consumer);
 
             Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiRequest, event -> {
                 log.debug("Received event from AI client: type={}", event.get("type"));
@@ -942,41 +935,6 @@ public class PullRequestAnalysisProcessor {
             return new java.util.ArrayList<>(selected.subList(0, 1));
         }
         return selected;
-    }
-
-    /**
-     * Ensures RAG index is up-to-date for the PR target branch.
-     * <p>
-     * For PRs targeting the main branch:
-     * - Checks if the main RAG index commit matches the current target branch HEAD
-     * - If outdated, performs incremental update before analysis
-     * <p>
-     * For PRs targeting non-main branches with multi-branch enabled:
-     * - First ensures the main index is up to date
-     * - Then ensures branch index exists and is up to date for the target branch
-     * <p>
-     * This ensures analysis always uses the most current codebase context.
-     */
-    private void ensureRagIndexForTargetBranch(Project project, String targetBranch, EventConsumer consumer) {
-        if (ragOperationsService == null) {
-            log.debug("RagOperationsService not available - skipping RAG index check for target branch");
-            return;
-        }
-
-        try {
-            boolean ready = ragOperationsService.ensureRagIndexUpToDate(
-                    project,
-                    targetBranch,
-                    event -> emitEvent(consumer, event));
-            if (ready) {
-                log.info("RAG index ensured up-to-date for PR target branch: project={}, branch={}",
-                        project.getId(), targetBranch);
-            }
-        } catch (Exception e) {
-            log.warn(
-                    "Failed to ensure RAG index up-to-date for target branch (non-critical): project={}, branch={}, error={}",
-                    project.getId(), targetBranch, e.getMessage());
-        }
     }
 
     /**

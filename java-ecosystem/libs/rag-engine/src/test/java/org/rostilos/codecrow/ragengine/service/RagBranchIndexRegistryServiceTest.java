@@ -85,6 +85,7 @@ class RagBranchIndexRegistryServiceTest {
                 .startsWith("cc_w0_p42_b")
                 .doesNotContain("client", "private", "develop");
         assertThat(registration.operation().getOperationKey()).hasSize(64);
+        assertThat(registration.sourceCollectionTarget()).isNull();
     }
 
     @Test
@@ -105,6 +106,8 @@ class RagBranchIndexRegistryServiceTest {
         var registration = service.registerBuild(
                 project, "develop", RagBranchIndexKind.DURABLE,
                 "develop-400", "develop-401", "representation");
+        assertThat(registration.sourceCollectionTarget())
+                .isEqualTo("generation-400");
         when(operationRepository.findByIdForUpdate(30L)).thenReturn(Optional.of(registration.operation()));
         when(branchIndexRepository.findByIdForPublication(10L))
                 .thenReturn(Optional.of(branchIndex));

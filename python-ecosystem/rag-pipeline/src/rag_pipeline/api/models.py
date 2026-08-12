@@ -44,6 +44,7 @@ class IndexRequest(BaseModel):
         pattern=r"^[0-9a-f]{64}$",
     )
     collection_target: Optional[str] = Field(default=None, min_length=1)
+    reuse_collection_target: Optional[str] = Field(default=None, min_length=1)
     publish_branch_alias: bool = False
     publish_legacy_project_alias: bool = False
     preserve_other_branches: bool = False

@@ -15,7 +15,6 @@ import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
-import org.rostilos.codecrow.analysisengine.service.rag.RagOperationsService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
@@ -87,9 +86,6 @@ class PullRequestAnalysisProcessorTest {
         private AstScopeEnricher astScopeEnricher;
 
         @Mock
-        private RagOperationsService ragOperationsService;
-
-        @Mock
         private ApplicationEventPublisher eventPublisher;
 
         @Mock
@@ -142,7 +138,6 @@ class PullRequestAnalysisProcessorTest {
                                 fileSnapshotService,
                                 prIssueTrackingService,
                                 astScopeEnricher,
-                                ragOperationsService,
                                 eventPublisher);
         }
 
@@ -757,17 +752,6 @@ class PullRequestAnalysisProcessorTest {
                                                                 "message", "waiting"));
                                                 return Optional.of("lock-key-123");
                                         });
-                        when(ragOperationsService.ensureRagIndexUpToDate(
-                                        any(), anyString(), any()))
-                                        .thenAnswer(invocation -> {
-                                                @SuppressWarnings("unchecked")
-                                                java.util.function.Consumer<Map<String, Object>> progress =
-                                                                invocation.getArgument(2);
-                                                progress.accept(Map.of(
-                                                                "type", "status",
-                                                                "state", "rag_update"));
-                                                return true;
-                                        });
                         when(aiAnalysisClient.performAnalysis(any(), any())).thenAnswer(invocation -> {
                                 @SuppressWarnings("unchecked")
                                 java.util.function.Consumer<Map<String, Object>> progress =
@@ -784,7 +768,6 @@ class PullRequestAnalysisProcessorTest {
                         verify(reportingService).postAnalysisResults(
                                         eq(codeAnalysis), any(), anyLong(), any(), any());
                         verify(observer).accept(argThat(event -> "lock_wait".equals(event.get("type"))));
-                        verify(observer).accept(argThat(event -> "rag_update".equals(event.get("state"))));
                         verify(observer).accept(argThat(event -> "processing".equals(event.get("state"))));
                 }
 
@@ -1268,7 +1251,6 @@ class PullRequestAnalysisProcessorTest {
                                         fileSnapshotService,
                                         prIssueTrackingService,
                                         null, // astScopeEnricher
-                                        null, // ragOperationsService
                                         null // eventPublisher
                         );
 

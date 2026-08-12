@@ -324,6 +324,11 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
             optional_generation_args["source_tree_sha256"] = source_tree_sha256
         if isinstance(collection_target, str) and collection_target:
             optional_generation_args["collection_target"] = collection_target
+        reuse_collection_target = getattr(request, "reuse_collection_target", None)
+        if isinstance(reuse_collection_target, str) and reuse_collection_target:
+            optional_generation_args["reuse_collection_target"] = (
+                reuse_collection_target
+            )
         if getattr(request, "publish_branch_alias", False) is True:
             optional_generation_args["publish_branch_alias"] = True
         if getattr(request, "publish_legacy_project_alias", False) is True:
@@ -399,6 +404,10 @@ def index_repository_stream(request: IndexRequest):
             if request.collection_target:
                 optional_generation_args["collection_target"] = (
                     request.collection_target
+                )
+            if request.reuse_collection_target:
+                optional_generation_args["reuse_collection_target"] = (
+                    request.reuse_collection_target
                 )
             if getattr(request, "publish_branch_alias", False) is True:
                 optional_generation_args["publish_branch_alias"] = True

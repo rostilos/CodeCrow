@@ -232,6 +232,7 @@ class TestIndexRepository:
         req.exclude_patterns = None
         req.source_tree_sha256 = None
         req.collection_target = "target"
+        req.reuse_collection_target = "prior-target"
 
         response = index_repository_stream(req)
 
@@ -246,6 +247,9 @@ class TestIndexRepository:
         assert events[0]["estimatedRemainingMs"] == 1200
         assert events[1]["type"] == "complete"
         assert events[1]["result"]["chunk_count"] == 50
+        assert im.index_repository.call_args.kwargs[
+            "reuse_collection_target"
+        ] == "prior-target"
 
     def test_stream_progress_is_bounded_and_keeps_latest_event(self):
         from rag_pipeline.api.routers.index import _coalesce_stream_progress
@@ -540,6 +544,7 @@ class TestIndexRepository:
             repo_path="/tmp/repo", workspace="ws", project="proj",
             branch="develop", commit="a" * 40,
             collection_target="exact-develop-target",
+            reuse_collection_target="prior-develop-target",
             publish_branch_alias=True,
         )
 
@@ -549,6 +554,9 @@ class TestIndexRepository:
             "exact-develop-target"
         )
         assert im.index_repository.call_args.kwargs["publish_branch_alias"] is True
+        assert im.index_repository.call_args.kwargs["reuse_collection_target"] == (
+            "prior-develop-target"
+        )
 
 
 class TestAdvanceGeneration:

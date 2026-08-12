@@ -581,6 +581,51 @@ class TestRAGIndexManager:
                 publish_branch_alias=True,
             )
 
+    @patch(
+        "rag_pipeline.core.index_manager.manager.verify_repository_source_tree"
+    )
+    def test_exact_snapshot_forwards_resolved_prior_generation_for_vector_reuse(
+        self,
+        verify_source_tree,
+    ):
+        from rag_pipeline.core.index_manager.manager import RAGIndexManager
+
+        manager = object.__new__(RAGIndexManager)
+        manager._collection_manager = MagicMock()
+        manager._collection_manager.resolve_collection_target.return_value = (
+            "prior-generation-physical"
+        )
+        manager._indexer = MagicMock()
+        manager._indexer.index_repository.return_value = MagicMock()
+        manager._mutation_coordinator = MagicMock()
+        lease = MagicMock(token="operation-token")
+        lease.assert_owned = MagicMock()
+        manager._mutation_coordinator.acquire.return_value.__enter__.return_value = (
+            lease
+        )
+        manager._publication_aliases = MagicMock(return_value=[])
+        manager._publication_scope = MagicMock(return_value=None)
+        source_tree = MagicMock(tree_sha256="f" * 64)
+        verify_source_tree.return_value = source_tree
+
+        manager.index_repository(
+            repo_path="/tmp/repository",
+            workspace="workspace",
+            project="project",
+            branch="main",
+            commit="a" * 40,
+            source_tree_sha256="f" * 64,
+            collection_target="new-generation",
+            reuse_collection_target="prior-generation",
+        )
+
+        manager._collection_manager.resolve_collection_target.assert_called_once_with(
+            "prior-generation"
+        )
+        assert manager._indexer.index_repository.call_args.kwargs[
+            "reuse_collection_name"
+        ] == "prior-generation-physical"
+
     @patch("rag_pipeline.core.index_manager.manager.create_embedding_model")
     @patch("rag_pipeline.core.index_manager.manager.get_embedding_model_info")
     @patch("rag_pipeline.core.index_manager.manager.QdrantClient")

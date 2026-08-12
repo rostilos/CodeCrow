@@ -471,6 +471,25 @@ class RagPipelineClientTest {
     }
 
     @Test
+    void testIndexRepository_ForwardsPriorGenerationForVectorReuse() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setBody("{\"document_count\":42}")
+                .addHeader("Content-Type", "application/json"));
+
+        client.indexRepository(
+                repositoryPath.toString(), "ws", "proj", "main", "abc123",
+                null, null, "new-generation", false, false,
+                "prior-generation");
+
+        RecordedRequest request = mockWebServer.takeRequest();
+        Map<String, Object> payload = objectMapper.readValue(
+                request.getBody().readUtf8(), Map.class);
+        assertThat(payload)
+                .containsEntry("collection_target", "new-generation")
+                .containsEntry("reuse_collection_target", "prior-generation");
+    }
+
+    @Test
     void testIndexRepository_WhenDisabled() throws Exception {
         RagPipelineClient disabledClient = new RagPipelineClient(
                 mockWebServer.url("/").toString(), false, 5, 10, 20, "");

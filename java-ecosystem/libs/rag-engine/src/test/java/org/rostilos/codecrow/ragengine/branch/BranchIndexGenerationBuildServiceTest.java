@@ -71,12 +71,13 @@ class BranchIndexGenerationBuildServiceTest {
                 project, "develop", RagBranchIndexKind.DURABLE,
                 null, "develop-400", null))
                 .thenReturn(new RagBranchIndexRegistryService.BuildRegistration(
-                        generation.getBranchIndex(), generation, operation, false));
+                        generation.getBranchIndex(), generation, operation, false,
+                        "opaque-generation-source"));
         when(pipelineClient.indexRepository(
                 anyString(), eq("workspace"), eq("namespace"),
                 eq("develop"), eq("develop-400"), eq(List.of("src/**")),
                 eq(List.of("vendor/**")), eq("opaque-generation-target"),
-                eq(false), eq(false)))
+                eq(false), eq(false), eq("opaque-generation-source")))
                 .thenReturn(Map.of(
                         "generation_manifest_sha256", "manifest-400",
                         "document_count", 231,
@@ -102,6 +103,11 @@ class BranchIndexGenerationBuildServiceTest {
         verify(heartbeatService).start(30L);
         verify(heartbeatScope).close();
         verify(registryService).publish(30L, "manifest-400", 231, 400);
+        verify(pipelineClient).indexRepository(
+                anyString(), eq("workspace"), eq("namespace"),
+                eq("develop"), eq("develop-400"), eq(List.of("src/**")),
+                eq(List.of("vendor/**")), eq("opaque-generation-target"),
+                eq(false), eq(false), eq("opaque-generation-source"));
         verify(pipelineClient).publishGenerationAliases(
                 "workspace", "namespace", "develop", "develop-400",
                 "opaque-generation-target", "manifest-400", true, false);
@@ -205,11 +211,13 @@ class BranchIndexGenerationBuildServiceTest {
                 eq(project), eq("develop"), eq(RagBranchIndexKind.DURABLE),
                 isNull(), eq("develop-400"), startsWith("full-snapshot:job:77:")))
                 .thenReturn(new RagBranchIndexRegistryService.BuildRegistration(
-                        generation.getBranchIndex(), generation, operation, false));
+                        generation.getBranchIndex(), generation, operation, false,
+                        "opaque-generation-source"));
         when(pipelineClient.indexRepository(
                 anyString(), anyString(), anyString(), eq("develop"), eq("develop-400"),
                 anyList(), anyList(), eq("opaque-generation-target"),
-                eq(false), eq(false), eq(true), any(Runnable.class), any()))
+                eq(false), eq(false), eq(true), eq("opaque-generation-source"),
+                any(Runnable.class), any()))
                 .thenReturn(Map.of(
                         "generation_manifest_sha256", "fresh-manifest",
                         "document_count", 231,
@@ -235,7 +243,7 @@ class BranchIndexGenerationBuildServiceTest {
                 anyString(), eq("workspace"), eq("namespace"), eq("develop"),
                 eq("develop-400"), anyList(), anyList(),
                 eq("opaque-generation-target"), eq(false), eq(false), eq(true),
-                any(Runnable.class), any());
+                eq("opaque-generation-source"), any(Runnable.class), any());
         verify(pipelineClient).publishGenerationAliases(
                 "workspace", "namespace", "develop", "develop-400",
                 "opaque-generation-target", "fresh-manifest", true, false);
