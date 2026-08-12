@@ -178,6 +178,7 @@ public class RagOperationsServiceImpl implements RagOperationsService {
             }
 
             boolean exactGenerationMode = usesExactGenerations(project);
+            boolean tracksProjectStatus = branchName.equals(getBaseBranch(project));
             RagBranchIndexKind exactGenerationKind = exactGenerationMode
                     ? indexKind(project, branchName) : null;
             boolean publishBranchAlias = exactGenerationKind == RagBranchIndexKind.PRIMARY
@@ -247,7 +248,10 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                         "message",
                         "Updating RAG index with " + (addedOrModifiedSize + deletedFiles.size()) + " changed files"));
 
-                ragIndexTrackingService.markUpdatingStarted(project, branchName, commitHash);
+                if (tracksProjectStatus) {
+                    ragIndexTrackingService.markUpdatingStarted(
+                            project, branchName, commitHash, job != null ? job.getId() : null);
+                }
 
                 log.info("Performing RAG incremental update for project={}, branch={}, commit={}",
                         project.getId(), branchName, commitHash);
@@ -276,7 +280,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                                 sourceGeneration.getRepresentationFingerprint());
                         branchIndexRegistryService.startBuild(
                                 branchBuild.operation().getId(),
-                                job != null ? job.getId() : null);
+                                job != null ? job.getId() : null,
+                                ragLockKey.get());
                     }
                 }
 
@@ -294,7 +299,9 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                                 exactGenerationKind,
                                 ragConfig.includePatterns(),
                                 ragConfig.excludePatterns(),
-                                job != null ? job.getId() : null);
+                                job != null ? job.getId() : null,
+                                ragLockKey.get(),
+                                null);
                     } else if (exactGenerationMode) {
                         result = incrementalRagUpdateService.performIncrementalUpdate(
                                     project,
@@ -362,14 +369,16 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                     chunkCount = ((Number) result.get("chunk_count")).intValue();
                 }
 
-                ragIndexTrackingService.markUpdatingCompleted(
-                        project,
-                        branchName,
-                        commitHash,
-                        newlyAddedFilesCount != null ? newlyAddedFilesCount : 0,
-                        filesDeleted,
-                        chunkCount,
-                        branchName.equals(getBaseBranch(project)));
+                if (tracksProjectStatus) {
+                    ragIndexTrackingService.markUpdatingCompleted(
+                            project,
+                            branchName,
+                            commitHash,
+                            newlyAddedFilesCount != null ? newlyAddedFilesCount : 0,
+                            filesDeleted,
+                            chunkCount,
+                            job != null ? job.getId() : null);
+                }
 
                 // Track branch index for deleted files
                 trackBranchIndex(project, branchName, commitHash, deletedFiles);
@@ -397,7 +406,10 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 // Use markIncrementalUpdateFailed (keeps status INDEXED, increments failure counter)
                 // NOT markIndexingFailed which would set status to FAILED and permanently block
                 // all future incremental updates even though the base index is still valid.
-                ragIndexTrackingService.markIncrementalUpdateFailed(project, e.getMessage());
+                if (tracksProjectStatus) {
+                    ragIndexTrackingService.markIncrementalUpdateFailed(
+                            project, e.getMessage(), job != null ? job.getId() : null);
+                }
                 log.error("RAG incremental update failed", e);
                 if (job != null) {
                     analysisJobService.error(job, "rag_error", "RAG incremental update failed: " + e.getMessage());

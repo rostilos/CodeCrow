@@ -112,6 +112,12 @@
 
             <dependency>
                 <groupId>org.rostilos.codecrow</groupId>
+                <artifactId>codecrow-public-share</artifactId>
+                <version>1.0</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.rostilos.codecrow</groupId>
                 <artifactId>codecrow-commit-graph</artifactId>
                 <version>1.0</version>
             </dependency>
@@ -588,6 +594,7 @@
     <modules>
         <module>libs/vcs-client</module>
         <module>libs/core</module>
+        <module>libs/public-share</module>
         <module>libs/scm-evidence</module>
         <module>libs/commit-graph</module>
         <module>libs/file-content</module>

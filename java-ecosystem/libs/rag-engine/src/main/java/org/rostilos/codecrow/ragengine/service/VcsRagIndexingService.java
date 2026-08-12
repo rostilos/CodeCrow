@@ -200,7 +200,8 @@ public class VcsRagIndexingService {
                 return Map.of("status", "error", "message", errorMsg);
             }
 
-            ragIndexTrackingService.markIndexingStarted(project, branch, commitHash);
+            ragIndexTrackingService.markIndexingStarted(
+                    project, branch, commitHash, job != null ? job.getId() : null);
 
             String downloadMsg = "Downloading repository archive...";
             messageConsumer.accept(Map.of(
@@ -316,7 +317,8 @@ public class VcsRagIndexingService {
 
         } catch (Exception e) {
             log.error("RAG indexing failed for project {}", project.getName(), e);
-            ragIndexTrackingService.markIndexingFailed(project, e.getMessage());
+            ragIndexTrackingService.markIndexingFailed(
+                    project, e.getMessage(), job != null ? job.getId() : null);
             analysisLockService.releaseLock(lockKey);
 
             messageConsumer.accept(Map.of(
@@ -473,7 +475,8 @@ public class VcsRagIndexingService {
                                     + jobId;
                             break;
                         }
-                        ragIndexTrackingService.markIndexingHeartbeat(project);
+                        ragIndexTrackingService.markIndexingHeartbeat(
+                                project, job != null ? job.getId() : null);
                         continue;
                     }
                     errorMessage = "RAG indexing produced no worker heartbeat for "
@@ -500,7 +503,8 @@ public class VcsRagIndexingService {
                         // Redis activity keeps the lease alive; persist the same
                         // activity on the existing status row so long-running,
                         // healthy indexes do not look stalled to operators.
-                        ragIndexTrackingService.markIndexingHeartbeat(project);
+                        ragIndexTrackingService.markIndexingHeartbeat(
+                                project, job != null ? job.getId() : null);
 
                         String state = String.valueOf(event.getOrDefault("stage",
                                 event.getOrDefault("state", "indexing")));
@@ -551,7 +555,13 @@ public class VcsRagIndexingService {
 
             // Update Job and Project Tracking
             if (success) {
-                ragIndexTrackingService.markIndexingCompleted(project, branch, commitHash, filesIndexed, chunkCount);
+                ragIndexTrackingService.markIndexingCompleted(
+                        project,
+                        branch,
+                        commitHash,
+                        filesIndexed,
+                        chunkCount,
+                        job != null ? job.getId() : null);
                 String completeMsg = "RAG indexing completed successfully. Files indexed: "
                         + (filesIndexed != null ? filesIndexed : 0);
                 if (job != null) {
@@ -561,8 +571,10 @@ public class VcsRagIndexingService {
                 log.info("RAG indexing completed for project {} branch {}: {} files", project.getName(), branch,
                         filesIndexed);
             } else {
-                ragIndexTrackingService.markIndexingFailed(project,
-                        errorMessage != null ? errorMessage : "Unknown Error");
+                ragIndexTrackingService.markIndexingFailed(
+                        project,
+                        errorMessage != null ? errorMessage : "Unknown Error",
+                        job != null ? job.getId() : null);
                 if (job != null) {
                     jobService.logToJob(job, JobLogLevel.ERROR, "error", "RAG indexing failed: " + errorMessage);
                     jobService.failJob(job, "RAG indexing failed: " + errorMessage);

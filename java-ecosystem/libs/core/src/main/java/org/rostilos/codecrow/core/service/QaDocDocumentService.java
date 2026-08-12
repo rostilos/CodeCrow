@@ -53,6 +53,14 @@ public class QaDocDocumentService {
     }
 
     @Transactional(readOnly = true)
+    public Optional<QaDocDocument> findDocumentById(Long documentId) {
+        if (documentId == null) {
+            return Optional.empty();
+        }
+        return qaDocDocumentRepository.findById(documentId);
+    }
+
+    @Transactional(readOnly = true)
     public Optional<QaDocDocument> findLatestDocumentForTask(Long projectId,
                                                              String taskId,
                                                              Long excludedPrNumber) {

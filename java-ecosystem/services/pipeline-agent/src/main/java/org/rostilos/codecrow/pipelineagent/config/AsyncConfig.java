@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 import java.util.concurrent.Executor;
 
@@ -21,6 +22,23 @@ import java.util.concurrent.Executor;
 public class AsyncConfig {
 
     private static final Logger log = LoggerFactory.getLogger(AsyncConfig.class);
+
+    /**
+     * Keep liveness/recovery schedules independent from optional maintenance.
+     * A slow provider or Qdrant enrichment task must not prevent durable job
+     * recovery, heartbeat checks, or queue reconciliation from running.
+     */
+    @Bean(name = "taskScheduler")
+    public ThreadPoolTaskScheduler taskScheduler(
+            @Value("${spring.task.scheduling.pool.size:4}") int poolSize) {
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(poolSize);
+        scheduler.setThreadNamePrefix("scheduling-");
+        scheduler.setWaitForTasksToCompleteOnShutdown(true);
+        scheduler.setAwaitTerminationSeconds(30);
+        log.info("Scheduled task executor initialized with pool={}", poolSize);
+        return scheduler;
+    }
 
     /**
      * Default executor for general async tasks.

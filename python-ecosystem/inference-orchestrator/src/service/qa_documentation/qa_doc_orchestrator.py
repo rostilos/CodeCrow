@@ -11,6 +11,7 @@ Extends BaseOrchestrator for shared RAG, batching, and LLM infrastructure.
 import asyncio
 import json
 import logging
+import re
 from typing import Dict, Any, List, Optional, Callable, Set
 
 from model.enrichment import PrEnrichmentDataDto
@@ -35,6 +36,7 @@ from utils.prompts.constants_qa_doc import (
     QA_STAGE_3_AGGREGATION_PROMPT,
     QA_STAGE_3_DELTA_PROMPT,
     QA_STAGE_3_PREVIOUS_DOC_SECTION,
+    QA_DOC_TEST_CASES_REPAIR_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
@@ -150,6 +152,12 @@ class QaDocOrchestrator(BaseOrchestrator):
         if not documentation or len(documentation.strip()) < 50:
             logger.warning("QA doc generation produced empty/short output")
             return {"documentation_needed": False, "documentation": None}
+
+        documentation = await self._ensure_test_cases(documentation, placeholders)
+        documentation = self._normalize_document_title(
+            documentation,
+            placeholders["pr_title"],
+        )
 
         # ── Footer with PR tracking ──────────────────────────────────
         documented_prs = self._extract_documented_prs(previous_documentation)
@@ -715,6 +723,167 @@ class QaDocOrchestrator(BaseOrchestrator):
 
         return content
 
+    async def _ensure_test_cases(
+        self,
+        documentation: str,
+        placeholders: Dict[str, str],
+    ) -> str:
+        """Guarantee an independently extractable test-case section.
+
+        Normal generation is instructed to emit stable invisible markers. If a
+        custom template or model response omits them, one focused repair call
+        generates only the missing section without narrowing the requested test
+        coverage.
+        """
+        if self._contains_extractable_test_cases(documentation):
+            return self._normalize_test_case_markers(documentation)
+
+        repair_placeholders = dict(placeholders)
+        raw_diff = repair_placeholders.get("diff", "")
+        max_repair_diff = 120_000
+        if len(raw_diff) > max_repair_diff:
+            repair_placeholders["diff"] = (
+                raw_diff[:max_repair_diff]
+                + f"\n\n... (diff truncated — {len(raw_diff)} chars total, "
+                  f"showing first {max_repair_diff})"
+            )
+
+        logger.warning("QA doc omitted extractable test cases; running focused repair generation")
+        prompt = QA_DOC_TEST_CASES_REPAIR_PROMPT.format(**repair_placeholders)
+        response = await self.llm.ainvoke([
+            {"role": "system", "content": QA_DOC_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ])
+        generated = self._extract_text(response).strip()
+        if not generated:
+            raise ValueError("Test-case generation returned no content")
+
+        start_marker = "<!-- codecrow-test-cases:start -->"
+        end_marker = "<!-- codecrow-test-cases:end -->"
+        start = generated.find(start_marker)
+        end = generated.find(end_marker, start + len(start_marker)) if start >= 0 else -1
+        if start >= 0 and end >= 0:
+            test_case_section = generated[start:end + len(end_marker)]
+        else:
+            test_case_section = f"{start_marker}\n{generated}\n{end_marker}"
+
+        if not self._contains_extractable_test_cases(test_case_section):
+            raise ValueError("Test-case generation returned no structured scenarios")
+
+        return self._normalize_test_case_markers(
+            documentation.rstrip() + "\n\n" + test_case_section.strip()
+        )
+
+    @staticmethod
+    def _normalize_test_case_markers(documentation: str) -> str:
+        """Keep later peer sections outside the test-case disclosure boundary.
+
+        A model can occasionally place the closing marker at the end of the
+        document despite the prompt. Move it before the next heading at the
+        Test Scenarios heading level so sections such as Edge Cases,
+        Regression Risks, and Environment Notes remain independent.
+        """
+        start_marker = "<!-- codecrow-test-cases:start -->"
+        end_marker = "<!-- codecrow-test-cases:end -->"
+        start = documentation.find(start_marker)
+        if start < 0:
+            return documentation
+        content_start = start + len(start_marker)
+        end = documentation.find(end_marker, content_start)
+        if end < 0:
+            return documentation
+
+        marked_content = documentation[content_start:end]
+        test_heading = re.search(
+            r"(?mi)^\s*(#{2,6})\s+(?:\d+\.\s*)?"
+            r"Test Scenarios(?:\s+by Area)?\s*$",
+            marked_content,
+        )
+        if test_heading is None:
+            return documentation
+
+        heading_level = len(test_heading.group(1))
+        following = marked_content[test_heading.end():]
+        peer_heading = None
+        for candidate in re.finditer(
+            r"(?m)^\s*(#{2,6})\s+(.+?)\s*$",
+            following,
+        ):
+            candidate_level = len(candidate.group(1))
+            candidate_title = candidate.group(2).strip()
+            numbered_section = re.match(r"^\d+\.\s+.+$", candidate_title) is not None
+            known_later_section = re.match(
+                r"(?i)^(?:Edge Cases(?: and Negative Testing)?|Negative Testing|"
+                r"Regression Risks|Environment(?: and Setup Notes)?|Setup Notes).*$",
+                candidate_title,
+            ) is not None
+            if (
+                candidate_level < heading_level
+                or (
+                    candidate_level == heading_level
+                    and (numbered_section or known_later_section)
+                )
+            ):
+                peer_heading = test_heading.end() + candidate.start()
+                break
+        if peer_heading is None:
+            return documentation
+
+        test_content = marked_content[:peer_heading].strip()
+        later_sections = marked_content[peer_heading:].strip()
+        after_marker = documentation[end + len(end_marker):].strip()
+
+        normalized = (
+            documentation[:content_start].rstrip()
+            + "\n"
+            + test_content
+            + "\n"
+            + end_marker
+            + "\n\n"
+            + later_sections
+        )
+        if after_marker:
+            normalized += "\n\n" + after_marker
+        return normalized.strip()
+
+    @staticmethod
+    def _contains_extractable_test_cases(documentation: Optional[str]) -> bool:
+        if not documentation:
+            return False
+        start_marker = "<!-- codecrow-test-cases:start -->"
+        end_marker = "<!-- codecrow-test-cases:end -->"
+        start = documentation.find(start_marker)
+        if start < 0:
+            return False
+        content_start = start + len(start_marker)
+        end = documentation.find(end_marker, content_start)
+        if end < 0:
+            return False
+        marked_content = documentation[content_start:end]
+        return re.search(
+            r"(?mi)^\s*\*\*.+?\*\*\s*\((?:HIGH|MEDIUM|LOW)\)",
+            marked_content,
+        ) is not None
+
+    @staticmethod
+    def _normalize_document_title(documentation: str, fallback_title: str) -> str:
+        """Replace a leaked empty-title sentinel in the rendered guide heading."""
+        return re.sub(
+            r"(?mi)^(#\s+QA Testing Guide\s*[—–-]\s*)(?:N\s*/?\s*A|None|null)\s*$",
+            lambda match: f"{match.group(1)}{fallback_title}",
+            documentation,
+            count=1,
+        )
+
+    @staticmethod
+    def _display_value(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized or normalized.casefold() in {"n/a", "na", "none", "null"}:
+            return None
+        return normalized
+
     # ==================================================================
     # Shared helpers
     # ==================================================================
@@ -763,14 +932,25 @@ class QaDocOrchestrator(BaseOrchestrator):
         """Build the placeholder dictionary used for prompt formatting."""
         task_ctx = task_context_dict or {}
         effective_language = output_language if output_language and output_language.strip() else "English"
+        normalized_project_name = self._display_value(project_name)
+        task_key = self._display_value(task_ctx.get("task_key"))
+        task_summary = self._display_value(task_ctx.get("task_summary"))
+        pr_title = (
+            self._display_value(pr_metadata.get("prTitle"))
+            or task_summary
+            or task_key
+            or (f"PR #{pr_number}" if pr_number is not None else None)
+            or normalized_project_name
+            or "QA documentation"
+        )
         return {
-            "project_name": project_name or "Unknown",
+            "project_name": normalized_project_name or "Unknown",
             "pr_number": str(pr_number) if pr_number else "N/A",
-            "task_key": task_ctx.get("task_key", "N/A"),
-            "task_summary": task_ctx.get("task_summary", "N/A"),
+            "task_key": task_key or "N/A",
+            "task_summary": task_summary or "N/A",
             "source_branch": source_branch,
             "target_branch": target_branch,
-            "pr_title": pr_metadata.get("prTitle", "N/A"),
+            "pr_title": pr_title,
             "pr_description": self._truncate(pr_metadata.get("prDescription", ""), 500),
             "issues_found": str(issues_found),
             "files_analyzed": str(files_analyzed),

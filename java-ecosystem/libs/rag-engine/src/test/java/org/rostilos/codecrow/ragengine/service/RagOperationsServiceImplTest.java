@@ -129,7 +129,7 @@ class RagOperationsServiceImplTest {
                 eq(testProject), any(), eq("my-workspace"), eq("my-repo"),
                 eq("feature"), eq("develop-400"),
                 eq(org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.DURABLE),
-                any(), any(), eq(77L)))
+                any(), any(), eq(77L), eq("exact-feature-lock"), isNull()))
                 .thenReturn(Map.of(
                         "generation_manifest_sha256", "manifest-400",
                         "document_count", 231,
@@ -147,7 +147,7 @@ class RagOperationsServiceImplTest {
                 eq(testProject), any(), eq("my-workspace"), eq("my-repo"),
                 eq("feature"), eq("develop-400"),
                 eq(org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.DURABLE),
-                any(), any(), eq(77L));
+                any(), any(), eq(77L), eq("exact-feature-lock"), isNull());
     }
 
     @Test
@@ -675,9 +675,7 @@ class RagOperationsServiceImplTest {
                 testProject, "feature", "commit1", "diff content", eventConsumer);
 
         assertThat(result).isTrue();
-        verify(ragIndexTrackingService).markUpdatingStarted(testProject, "feature", "commit1");
-        verify(ragIndexTrackingService).markUpdatingCompleted(
-                testProject, "feature", "commit1", 0, 1, null, false);
+        verifyNoInteractions(ragIndexTrackingService);
         verify(analysisLockService).releaseLock("lock-key");
         verify(analysisJobService).completeJob(eq(mockJob), isNull());
         verify(ragBranchIndexRepository).save(any(RagBranchIndex.class));
@@ -748,9 +746,9 @@ class RagOperationsServiceImplTest {
                 service.triggerIncrementalUpdate(testProject, "feature", "c1", "diff", eventConsumer);
 
         assertThat(result).isFalse();
-        // Should call markIncrementalUpdateFailed (keeps status INDEXED) NOT markIndexingFailed
-        verify(ragIndexTrackingService).markIncrementalUpdateFailed(eq(testProject), anyString());
-        verify(ragIndexTrackingService, never()).markIndexingFailed(any(), anyString());
+        // A retained branch has its own durable operation state and cannot
+        // overwrite the primary branch's project-level status.
+        verifyNoInteractions(ragIndexTrackingService);
         verify(analysisLockService).releaseLock("lock-key");
     }
 
@@ -804,7 +802,7 @@ class RagOperationsServiceImplTest {
                 eq("main"), eq("current-head"), eq(Set.of("src/Recovered.java")),
                 eq(Set.of()), eq(Set.of()));
         verify(ragIndexTrackingService).markUpdatingCompleted(
-                testProject, "main", "current-head", 0, 0, null, true);
+                testProject, "main", "current-head", 0, 0, null, 0L);
     }
 
     @Test

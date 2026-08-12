@@ -77,8 +77,26 @@ public class BranchIndexGenerationBuildService {
             List<String> excludePatterns,
             Long jobId,
             Consumer<Map<String, Object>> progressEvents) throws IOException {
+        return build(project, connection, vcsWorkspace, repoSlug, branch, revision,
+                kind, includePatterns, excludePatterns, jobId, null, progressEvents);
+    }
+
+    public Map<String, Object> build(
+            Project project,
+            VcsConnection connection,
+            String vcsWorkspace,
+            String repoSlug,
+            String branch,
+            String revision,
+            RagBranchIndexKind kind,
+            List<String> includePatterns,
+            List<String> excludePatterns,
+            Long jobId,
+            String analysisLockKey,
+            Consumer<Map<String, Object>> progressEvents) throws IOException {
         return buildInternal(project, connection, vcsWorkspace, repoSlug, branch,
-                revision, kind, includePatterns, excludePatterns, jobId, progressEvents, false);
+                revision, kind, includePatterns, excludePatterns, jobId,
+                analysisLockKey, progressEvents, false);
     }
 
     /**
@@ -98,8 +116,26 @@ public class BranchIndexGenerationBuildService {
             List<String> excludePatterns,
             Long jobId,
             Consumer<Map<String, Object>> progressEvents) throws IOException {
+        return rebuild(project, connection, vcsWorkspace, repoSlug, branch, revision,
+                kind, includePatterns, excludePatterns, jobId, null, progressEvents);
+    }
+
+    public Map<String, Object> rebuild(
+            Project project,
+            VcsConnection connection,
+            String vcsWorkspace,
+            String repoSlug,
+            String branch,
+            String revision,
+            RagBranchIndexKind kind,
+            List<String> includePatterns,
+            List<String> excludePatterns,
+            Long jobId,
+            String analysisLockKey,
+            Consumer<Map<String, Object>> progressEvents) throws IOException {
         return buildInternal(project, connection, vcsWorkspace, repoSlug, branch,
-                revision, kind, includePatterns, excludePatterns, jobId, progressEvents, true);
+                revision, kind, includePatterns, excludePatterns, jobId,
+                analysisLockKey, progressEvents, true);
     }
 
     public Map<String, Object> build(
@@ -114,7 +150,7 @@ public class BranchIndexGenerationBuildService {
             List<String> excludePatterns,
             Long jobId) throws IOException {
         return buildInternal(project, connection, vcsWorkspace, repoSlug, branch,
-                revision, kind, includePatterns, excludePatterns, jobId, null, false);
+                revision, kind, includePatterns, excludePatterns, jobId, null, null, false);
     }
 
     private Map<String, Object> buildInternal(
@@ -128,6 +164,7 @@ public class BranchIndexGenerationBuildService {
             List<String> includePatterns,
             List<String> excludePatterns,
             Long jobId,
+            String analysisLockKey,
             Consumer<Map<String, Object>> progressEvents,
             boolean forceRebuild) throws IOException {
         var registration = registryService.registerBuild(
@@ -142,7 +179,8 @@ public class BranchIndexGenerationBuildService {
                     "generation_manifest_sha256", registration.generation().getManifestDigest());
         }
 
-        registryService.startBuild(registration.operation().getId(), jobId);
+        registryService.startBuild(
+                registration.operation().getId(), jobId, analysisLockKey);
         ScheduledFuture<?> heartbeat = heartbeatExecutor.scheduleAtFixedRate(
                 () -> heartbeat(registration.operation().getId()),
                 HEARTBEAT_INTERVAL_SECONDS,

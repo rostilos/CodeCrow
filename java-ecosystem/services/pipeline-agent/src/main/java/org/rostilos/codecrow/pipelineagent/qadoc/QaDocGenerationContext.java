@@ -34,7 +34,7 @@ public record QaDocGenerationContext(
         List<String> changedFilePaths,
 
         // ── State / mode flags ───────────────────────────────────
-        /** Existing QA doc comment body from an earlier PR on the same task (for merging). May be null. */
+        /** Existing stored QA document from an earlier PR on the same task (for merging). May be null. */
         String previousDocumentation,
         /** True when the current PR was already documented and this is a re-analysis (e.g., new commits pushed). */
         boolean isSamePrRerun,

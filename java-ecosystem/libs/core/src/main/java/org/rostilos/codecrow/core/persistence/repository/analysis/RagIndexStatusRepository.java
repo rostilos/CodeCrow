@@ -1,7 +1,9 @@
 package org.rostilos.codecrow.core.persistence.repository.analysis;
 
+import jakarta.persistence.LockModeType;
 import org.rostilos.codecrow.core.model.analysis.RagIndexStatus;
 import org.rostilos.codecrow.core.model.analysis.RagIndexingStatus;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -14,6 +16,10 @@ import java.util.Optional;
 public interface RagIndexStatusRepository extends JpaRepository<RagIndexStatus, Long> {
 
     Optional<RagIndexStatus> findByProjectId(Long projectId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM RagIndexStatus r WHERE r.project.id = :projectId")
+    Optional<RagIndexStatus> findByProjectIdForUpdate(@Param("projectId") Long projectId);
 
     Optional<RagIndexStatus> findByWorkspaceNameAndProjectName(String workspaceName, String projectName);
 
@@ -37,4 +43,3 @@ public interface RagIndexStatusRepository extends JpaRepository<RagIndexStatus, 
 
     void deleteByProjectId(Long projectId);
 }
-

@@ -166,4 +166,6 @@ module org.rostilos.codecrow.core {
             to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
     opens org.rostilos.codecrow.core.persistence.repository.qadoc
             to spring.core, spring.beans, spring.context;
+
+    exports org.rostilos.codecrow.core.service.qadoc;
 }

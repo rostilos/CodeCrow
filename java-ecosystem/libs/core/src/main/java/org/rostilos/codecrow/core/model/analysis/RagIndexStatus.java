@@ -63,6 +63,10 @@ public class RagIndexStatus {
     @Column(name = "chunk_count")
     private Integer chunkCount;
 
+    /** Durable producer identity used to keep stale recovery from touching a newer run. */
+    @Column(name = "active_job_id")
+    private Long activeJobId;
+
     @PreUpdate
     protected void onUpdate() {
         updatedAt = OffsetDateTime.now();
@@ -197,5 +201,13 @@ public class RagIndexStatus {
 
     public void setChunkCount(Integer chunkCount) {
         this.chunkCount = chunkCount;
+    }
+
+    public Long getActiveJobId() {
+        return activeJobId;
+    }
+
+    public void setActiveJobId(Long activeJobId) {
+        this.activeJobId = activeJobId;
     }
 }

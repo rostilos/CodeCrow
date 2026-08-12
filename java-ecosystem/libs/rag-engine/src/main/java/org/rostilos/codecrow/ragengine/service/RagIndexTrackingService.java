@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.Objects;
 import java.util.Optional;
 
 @Service
@@ -34,8 +35,13 @@ public class RagIndexTrackingService {
     }
 
     @Transactional
-    public RagIndexStatus markIndexingStarted(Project project, String branchName, String commitHash) {
-        Optional<RagIndexStatus> existingOpt = ragIndexStatusRepository.findByProjectId(project.getId());
+    public RagIndexStatus markIndexingStarted(
+            Project project,
+            String branchName,
+            String commitHash,
+            Long activeJobId) {
+        Optional<RagIndexStatus> existingOpt =
+                ragIndexStatusRepository.findByProjectIdForUpdate(project.getId());
 
         RagIndexStatus status;
         if (existingOpt.isPresent()) {
@@ -44,6 +50,7 @@ public class RagIndexTrackingService {
             status.setIndexedBranch(branchName);
             status.setIndexedCommitHash(commitHash);
             status.setErrorMessage(null);
+            status.setActiveJobId(activeJobId);
         } else {
             status = new RagIndexStatus();
             status.setProject(project);
@@ -53,6 +60,7 @@ public class RagIndexTrackingService {
             status.setIndexedBranch(branchName);
             status.setIndexedCommitHash(commitHash);
             status.setCollectionName(generateCollectionName(project));
+            status.setActiveJobId(activeJobId);
         }
 
         status = ragIndexStatusRepository.save(status);
@@ -63,9 +71,25 @@ public class RagIndexTrackingService {
     @Transactional
     public RagIndexStatus markIndexingCompleted(Project project, String branchName, String commitHash,
             Integer filesIndexed, Integer chunkCount) {
-        RagIndexStatus status = ragIndexStatusRepository.findByProjectId(project.getId())
+        return markIndexingCompleted(
+                project, branchName, commitHash, filesIndexed, chunkCount, null);
+    }
+
+    @Transactional
+    public RagIndexStatus markIndexingCompleted(
+            Project project,
+            String branchName,
+            String commitHash,
+            Integer filesIndexed,
+            Integer chunkCount,
+            Long expectedActiveJobId) {
+        RagIndexStatus status = ragIndexStatusRepository.findByProjectIdForUpdate(project.getId())
                 .orElseThrow(
                         () -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
+
+        if (!ownsStatus(status, expectedActiveJobId, "complete full indexing")) {
+            return status;
+        }
 
         status.setStatus(RagIndexingStatus.INDEXED);
         status.setIndexedBranch(branchName);
@@ -76,6 +100,7 @@ public class RagIndexTrackingService {
         }
         status.setLastIndexedAt(OffsetDateTime.now());
         status.setErrorMessage(null);
+        status.setActiveJobId(null);
         // Reset failed incremental count on successful full index
         status.resetFailedIncrementalCount();
 
@@ -87,13 +112,26 @@ public class RagIndexTrackingService {
 
     @Transactional
     public RagIndexStatus markIndexingFailed(Project project, String errorMessage) {
-        Optional<RagIndexStatus> existingOpt = ragIndexStatusRepository.findByProjectId(project.getId());
+        return markIndexingFailed(project, errorMessage, null);
+    }
+
+    @Transactional
+    public RagIndexStatus markIndexingFailed(
+            Project project,
+            String errorMessage,
+            Long expectedActiveJobId) {
+        Optional<RagIndexStatus> existingOpt =
+                ragIndexStatusRepository.findByProjectIdForUpdate(project.getId());
 
         RagIndexStatus status;
         if (existingOpt.isPresent()) {
             status = existingOpt.get();
+            if (!ownsStatus(status, expectedActiveJobId, "fail full indexing")) {
+                return status;
+            }
             status.setStatus(RagIndexingStatus.FAILED);
             status.setErrorMessage(errorMessage);
+            status.setActiveJobId(null);
         } else {
             status = new RagIndexStatus();
             status.setProject(project);
@@ -102,6 +140,7 @@ public class RagIndexTrackingService {
             status.setStatus(RagIndexingStatus.FAILED);
             status.setErrorMessage(errorMessage);
             status.setCollectionName(generateCollectionName(project));
+            status.setActiveJobId(null);
         }
 
         status = ragIndexStatusRepository.save(status);
@@ -118,14 +157,22 @@ public class RagIndexTrackingService {
      */
     @Transactional
     public boolean markIndexingHeartbeat(Project project) {
+        return markIndexingHeartbeat(project, null);
+    }
+
+    @Transactional
+    public boolean markIndexingHeartbeat(Project project, Long expectedActiveJobId) {
         Optional<RagIndexStatus> statusOpt =
-                ragIndexStatusRepository.findByProjectId(project.getId());
+                ragIndexStatusRepository.findByProjectIdForUpdate(project.getId());
         if (statusOpt.isEmpty()) {
             log.warn("Ignoring RAG heartbeat without index status for project {}", project.getId());
             return false;
         }
 
         RagIndexStatus status = statusOpt.get();
+        if (!ownsStatus(status, expectedActiveJobId, "record indexing heartbeat")) {
+            return false;
+        }
         if (status.getStatus() != RagIndexingStatus.INDEXING
                 && status.getStatus() != RagIndexingStatus.UPDATING) {
             log.debug(
@@ -141,12 +188,17 @@ public class RagIndexTrackingService {
     }
 
     @Transactional
-    public RagIndexStatus markUpdatingStarted(Project project, String branchName, String commitHash) {
-        RagIndexStatus status = ragIndexStatusRepository.findByProjectId(project.getId())
+    public RagIndexStatus markUpdatingStarted(
+            Project project,
+            String branchName,
+            String commitHash,
+            Long activeJobId) {
+        RagIndexStatus status = ragIndexStatusRepository.findByProjectIdForUpdate(project.getId())
                 .orElseThrow(() -> new IllegalStateException("Cannot update non-indexed project: " + project.getId()));
 
         status.setStatus(RagIndexingStatus.UPDATING);
         status.setErrorMessage(null);
+        status.setActiveJobId(activeJobId);
 
         status = ragIndexStatusRepository.save(status);
         log.info("Marked RAG indexing as UPDATING for project {} toward branch {} commit {}; "
@@ -164,7 +216,22 @@ public class RagIndexTrackingService {
     public RagIndexStatus markUpdatingCompleted(Project project, String branchName, String commitHash,
             Integer addedFilesCount, Integer deletedFilesCount, Integer chunkCount) {
         return markUpdatingCompleted(
-                project, branchName, commitHash, addedFilesCount, deletedFilesCount, chunkCount, true);
+                project, branchName, commitHash, addedFilesCount, deletedFilesCount,
+                chunkCount, true, null);
+    }
+
+    @Transactional
+    public RagIndexStatus markUpdatingCompleted(
+            Project project,
+            String branchName,
+            String commitHash,
+            Integer addedFilesCount,
+            Integer deletedFilesCount,
+            Integer chunkCount,
+            Long expectedActiveJobId) {
+        return markUpdatingCompleted(
+                project, branchName, commitHash, addedFilesCount, deletedFilesCount,
+                chunkCount, true, expectedActiveJobId);
     }
 
     /**
@@ -176,9 +243,28 @@ public class RagIndexTrackingService {
     public RagIndexStatus markUpdatingCompleted(Project project, String branchName, String commitHash,
             Integer addedFilesCount, Integer deletedFilesCount, Integer chunkCount,
             boolean advanceProjectCheckpoint) {
-        RagIndexStatus status = ragIndexStatusRepository.findByProjectId(project.getId())
+        return markUpdatingCompleted(
+                project, branchName, commitHash, addedFilesCount, deletedFilesCount,
+                chunkCount, advanceProjectCheckpoint, null);
+    }
+
+    @Transactional
+    public RagIndexStatus markUpdatingCompleted(
+            Project project,
+            String branchName,
+            String commitHash,
+            Integer addedFilesCount,
+            Integer deletedFilesCount,
+            Integer chunkCount,
+            boolean advanceProjectCheckpoint,
+            Long expectedActiveJobId) {
+        RagIndexStatus status = ragIndexStatusRepository.findByProjectIdForUpdate(project.getId())
                 .orElseThrow(
                         () -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
+
+        if (!ownsStatus(status, expectedActiveJobId, "complete incremental indexing")) {
+            return status;
+        }
 
         status.setStatus(RagIndexingStatus.INDEXED);
         if (advanceProjectCheckpoint) {
@@ -197,6 +283,7 @@ public class RagIndexTrackingService {
 
         status.setLastIndexedAt(OffsetDateTime.now());
         status.setErrorMessage(null);
+        status.setActiveJobId(null);
         // Reset failed incremental count on successful update
         status.resetFailedIncrementalCount();
 
@@ -214,15 +301,28 @@ public class RagIndexTrackingService {
      */
     @Transactional
     public RagIndexStatus markIncrementalUpdateFailed(Project project, String errorMessage) {
-        RagIndexStatus status = ragIndexStatusRepository.findByProjectId(project.getId())
+        return markIncrementalUpdateFailed(project, errorMessage, null);
+    }
+
+    @Transactional
+    public RagIndexStatus markIncrementalUpdateFailed(
+            Project project,
+            String errorMessage,
+            Long expectedActiveJobId) {
+        RagIndexStatus status = ragIndexStatusRepository.findByProjectIdForUpdate(project.getId())
                 .orElseThrow(
                         () -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
+
+        if (!ownsStatus(status, expectedActiveJobId, "fail incremental indexing")) {
+            return status;
+        }
 
         // Restore the usable terminal state and retain the last completed
         // branch/commit checkpoint. The attempted commit is never published.
         status.setStatus(RagIndexingStatus.INDEXED);
         status.setErrorMessage("Incremental update failed: " + errorMessage);
         status.incrementFailedIncrementalCount();
+        status.setActiveJobId(null);
 
         status = ragIndexStatusRepository.save(status);
         log.warn("Marked RAG incremental update as FAILED for project {} (failure count: {}): {}",
@@ -247,5 +347,22 @@ public class RagIndexTrackingService {
         String workspace = project.getWorkspace().getName().replaceAll("[^a-zA-Z0-9_-]", "_");
         String projectName = project.getName().replaceAll("[^a-zA-Z0-9_-]", "_");
         return String.format("%s_%s", workspace, projectName).toLowerCase();
+    }
+
+    private boolean ownsStatus(
+            RagIndexStatus status,
+            Long expectedActiveJobId,
+            String transition) {
+        if (Objects.equals(status.getActiveJobId(), expectedActiveJobId)) {
+            return true;
+        }
+        log.info(
+                "Ignoring stale RAG status transition '{}' for project {}: "
+                        + "expected owner {}, current owner {}",
+                transition,
+                status.getProject() != null ? status.getProject().getId() : null,
+                expectedActiveJobId,
+                status.getActiveJobId());
+        return false;
     }
 }
