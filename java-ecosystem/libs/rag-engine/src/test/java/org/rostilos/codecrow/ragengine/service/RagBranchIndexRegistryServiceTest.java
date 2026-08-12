@@ -12,9 +12,11 @@ import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepos
 import org.rostilos.codecrow.core.persistence.repository.rag.RagIndexOperationRepository;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.OffsetDateTime;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -44,14 +46,14 @@ class RagBranchIndexRegistryServiceTest {
             }
             return value;
         });
-        when(generationRepository.save(any())).thenAnswer(invocation -> {
+        lenient().when(generationRepository.save(any())).thenAnswer(invocation -> {
             RagBranchIndexGeneration value = invocation.getArgument(0);
             if (value.getId() == null) {
                 value.setId(20L);
             }
             return value;
         });
-        when(operationRepository.save(any())).thenAnswer(invocation -> {
+        lenient().when(operationRepository.save(any())).thenAnswer(invocation -> {
             RagIndexOperation value = invocation.getArgument(0);
             if (value.getId() == null) {
                 value.setId(30L);
@@ -83,6 +85,7 @@ class RagBranchIndexRegistryServiceTest {
                 .startsWith("cc_w0_p42_b")
                 .doesNotContain("client", "private", "develop");
         assertThat(registration.operation().getOperationKey()).hasSize(64);
+        assertThat(registration.sourceCollectionTarget()).isNull();
     }
 
     @Test
@@ -103,11 +106,13 @@ class RagBranchIndexRegistryServiceTest {
         var registration = service.registerBuild(
                 project, "develop", RagBranchIndexKind.DURABLE,
                 "develop-400", "develop-401", "representation");
-        when(operationRepository.findById(30L)).thenReturn(Optional.of(registration.operation()));
+        assertThat(registration.sourceCollectionTarget())
+                .isEqualTo("generation-400");
+        when(operationRepository.findByIdForUpdate(30L)).thenReturn(Optional.of(registration.operation()));
         when(branchIndexRepository.findByIdForPublication(10L))
                 .thenReturn(Optional.of(branchIndex));
 
-        service.startBuild(30L, 99L);
+        service.startBuild(30L, 99L, "rag-lock-owner-99");
         RagBranchIndexGeneration published = service.publish(30L, "manifest-401", 501, 1504);
 
         assertThat(previous.getStatus()).isEqualTo(RagBranchIndexGenerationStatus.SUPERSEDED);
@@ -117,6 +122,8 @@ class RagBranchIndexRegistryServiceTest {
         assertThat(registration.operation().getStatus()).isEqualTo(RagIndexOperationStatus.SUCCEEDED);
         assertThat(registration.operation().getAttemptCount()).isEqualTo(1);
         assertThat(registration.operation().getJobId()).isEqualTo(99L);
+        assertThat(registration.operation().getAnalysisLockKey())
+                .isEqualTo("rag-lock-owner-99");
     }
 
     @Test
@@ -141,7 +148,7 @@ class RagBranchIndexRegistryServiceTest {
         operation.setId(30L);
         operation.setGeneration(late);
         operation.start();
-        when(operationRepository.findById(30L)).thenReturn(Optional.of(operation));
+        when(operationRepository.findByIdForUpdate(30L)).thenReturn(Optional.of(operation));
         when(branchIndexRepository.findByIdForPublication(10L))
                 .thenReturn(Optional.of(branchIndex));
 
@@ -176,7 +183,7 @@ class RagBranchIndexRegistryServiceTest {
         var registration = service.registerBuild(
                 project, "master", RagBranchIndexKind.PRIMARY,
                 "master-100", "master-101", "representation");
-        when(operationRepository.findById(30L)).thenReturn(Optional.of(registration.operation()));
+        when(operationRepository.findByIdForUpdate(30L)).thenReturn(Optional.of(registration.operation()));
         when(branchIndexRepository.findByIdForPublication(10L))
                 .thenReturn(Optional.of(branchIndex));
 
@@ -206,7 +213,7 @@ class RagBranchIndexRegistryServiceTest {
         operation.setId(30L);
         operation.setGeneration(generation);
         operation.fail("worker restarted");
-        when(operationRepository.findById(30L)).thenReturn(Optional.of(operation));
+        when(operationRepository.findByIdForUpdate(30L)).thenReturn(Optional.of(operation));
 
         service.startBuild(30L, 91L);
 
@@ -236,7 +243,7 @@ class RagBranchIndexRegistryServiceTest {
         operation.setId(30L);
         operation.setGeneration(late);
         operation.start();
-        when(operationRepository.findById(30L)).thenReturn(Optional.of(operation));
+        when(operationRepository.findByIdForUpdate(30L)).thenReturn(Optional.of(operation));
         when(branchIndexRepository.findByIdForPublication(10L))
                 .thenReturn(Optional.of(branchIndex));
 
@@ -249,5 +256,67 @@ class RagBranchIndexRegistryServiceTest {
                 .isEqualTo(RagBranchIndexLifecycleStatus.BUILDING);
         assertThat(branchIndex.getErrorMessage()).isNull();
         verify(branchIndexRepository, never()).save(branchIndex);
+    }
+
+    @Test
+    void abandonmentClaimRechecksAHeartbeatUnderTheOperationLock() {
+        RagIndexOperation operation = new RagIndexOperation(
+                project, "develop", "develop-400", "develop-401", "heartbeat-key");
+        operation.setId(30L);
+        operation.start();
+        operation.setUpdatedAt(OffsetDateTime.now());
+        when(operationRepository.findByIdForUpdate(30L)).thenReturn(Optional.of(operation));
+
+        boolean failed = service.failIfAbandoned(
+                30L, OffsetDateTime.now().minusMinutes(30), "producer abandoned");
+
+        assertThat(failed).isFalse();
+        assertThat(operation.getStatus()).isEqualTo(RagIndexOperationStatus.RUNNING);
+        verifyNoInteractions(branchIndexRepository);
+        verify(operationRepository, never()).save(operation);
+    }
+
+    @Test
+    void cleanupClaimMakesExactGenerationUnavailableWithoutRefreshingIt() {
+        RagBranchIndex branchIndex = new RagBranchIndex(
+                project, "feature/expired", RagBranchIndexKind.TRANSIENT);
+        branchIndex.setId(10L);
+        branchIndex.setCleanupClaimToken("cleanup-owner");
+        when(branchIndexRepository.findByProjectIdAndBranchNameForUpdate(
+                42L, "feature/expired"))
+                .thenReturn(Optional.of(branchIndex));
+
+        assertThat(service.findAvailableGeneration(
+                42L, "feature/expired", "revision-100"))
+                .isEmpty();
+
+        verify(branchIndexRepository, never()).save(branchIndex);
+        verifyNoInteractions(generationRepository);
+    }
+
+    @Test
+    void cleanupClaimRejectsAConcurrentBuildRegistration() {
+        RagBranchIndex branchIndex = new RagBranchIndex(
+                project, "feature/expired", RagBranchIndexKind.TRANSIENT);
+        branchIndex.setId(10L);
+        branchIndex.setCleanupClaimToken("cleanup-owner");
+        when(operationRepository.findByProjectIdAndOperationKey(eq(42L), anyString()))
+                .thenReturn(Optional.empty());
+        when(branchIndexRepository.findByProjectIdAndBranchNameForUpdate(
+                42L, "feature/expired"))
+                .thenReturn(Optional.of(branchIndex));
+
+        assertThatThrownBy(() -> service.registerBuild(
+                project,
+                "feature/expired",
+                RagBranchIndexKind.TRANSIENT,
+                "revision-99",
+                "revision-100",
+                "representation"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("cleanup owns");
+
+        verify(branchIndexRepository, never()).save(any());
+        verifyNoInteractions(generationRepository);
     }
 }

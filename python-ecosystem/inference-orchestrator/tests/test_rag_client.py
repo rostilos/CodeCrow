@@ -1,6 +1,8 @@
 """
 Unit tests for service.rag.rag_client — RagClient (all async methods).
 """
+import logging
+
 import pytest
 import httpx
 import respx
@@ -185,6 +187,19 @@ class TestRagClientSuccess:
         ] == "cc_w1_p2_branch_generation"
         await c.close()
 
+    @pytest.mark.asyncio(loop_scope="function")
+    @respx.mock
+    async def test_delete_pr_files_treats_missing_collection_as_idempotent(self):
+        respx.delete("http://rag:8001/index/pr-files/ws/proj/1").mock(
+            return_value=httpx.Response(
+                200,
+                json={"status": "skipped", "message": "Collection does not exist"},
+            )
+        )
+        c = RagClient(base_url="http://rag:8001", enabled=True)
+        assert await c.delete_pr_files("ws", "proj", 1) is True
+        await c.close()
+
 
 # ── Error handling ───────────────────────────────────────────
 
@@ -204,7 +219,7 @@ class TestRagClientErrors:
 
     @pytest.mark.asyncio(loop_scope="function")
     @respx.mock
-    async def test_get_pr_context_preserves_reindex_409_detail(self):
+    async def test_get_pr_context_preserves_reindex_409_detail(self, caplog):
         respx.post("http://rag:8001/query/pr-context").mock(
             return_value=httpx.Response(
                 409,
@@ -214,12 +229,18 @@ class TestRagClientErrors:
             )
         )
         c = RagClient(base_url="http://rag:8001", enabled=True)
-        r = await c.get_pr_context("ws", "proj", "main", ["a.py"])
+        with caplog.at_level(logging.DEBUG, logger="service.rag.rag_client"):
+            r = await c.get_pr_context("ws", "proj", "main", ["a.py"])
         assert r == {
             "status": "error",
             "status_code": 409,
             "error": "branch 'main' requires a full reindex",
         }
+        assert not any(
+            record.levelno >= logging.WARNING
+            for record in caplog.records
+            if record.name == "service.rag.rag_client"
+        )
         await c.close()
 
     @pytest.mark.asyncio(loop_scope="function")
@@ -256,7 +277,40 @@ class TestRagClientErrors:
 
     @pytest.mark.asyncio(loop_scope="function")
     @respx.mock
-    async def test_index_pr_files_error(self):
+    async def test_deterministic_context_409_is_returned_without_client_warning(
+        self,
+        caplog,
+    ):
+        respx.post("http://rag:8001/query/deterministic").mock(
+            return_value=httpx.Response(
+                409,
+                json={"detail": "requested PR overlay generation is unavailable"},
+            )
+        )
+        c = RagClient(base_url="http://rag:8001", enabled=True)
+        with caplog.at_level(logging.DEBUG, logger="service.rag.rag_client"):
+            r = await c.get_deterministic_context(
+                "ws",
+                "proj",
+                ["main"],
+                ["a.py"],
+            )
+
+        assert r == {
+            "status": "error",
+            "status_code": 409,
+            "error": "requested PR overlay generation is unavailable",
+        }
+        assert not any(
+            record.levelno >= logging.WARNING
+            for record in caplog.records
+            if record.name == "service.rag.rag_client"
+        )
+        await c.close()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @respx.mock
+    async def test_index_pr_files_error(self, caplog):
         respx.post("http://rag:8001/index/pr-files").mock(
             return_value=httpx.Response(
                 409,
@@ -264,20 +318,58 @@ class TestRagClientErrors:
             )
         )
         c = RagClient(base_url="http://rag:8001", enabled=True)
-        r = await c.index_pr_files("ws", "proj", 1, "main", [{"path": "a.py", "content": "x", "change_type": "M"}])
+        with caplog.at_level(logging.DEBUG, logger="service.rag.rag_client"):
+            r = await c.index_pr_files("ws", "proj", 1, "main", [{"path": "a.py", "content": "x", "change_type": "M"}])
         assert r["status"] == "error"
         assert r["status_code"] == 409
         assert r["error"] == "target branch is missing plugin snapshots"
+        assert not any(
+            record.levelno >= logging.WARNING
+            for record in caplog.records
+            if record.name == "service.rag.rag_client"
+        )
         await c.close()
 
     @pytest.mark.asyncio(loop_scope="function")
     @respx.mock
-    async def test_delete_pr_files_error(self):
+    async def test_delete_pr_files_error(self, caplog):
         respx.delete("http://rag:8001/index/pr-files/ws/proj/1").mock(
-            return_value=httpx.Response(500)
+            return_value=httpx.Response(
+                500,
+                json={"detail": "cleanup backend timed out"},
+            )
         )
         c = RagClient(base_url="http://rag:8001", enabled=True)
-        assert await c.delete_pr_files("ws", "proj", 1) is False
+        with caplog.at_level(logging.WARNING, logger="service.rag.rag_client"):
+            assert await c.delete_pr_files("ws", "proj", 1) is False
+        assert "status=500 detail=cleanup backend timed out" in caplog.text
+        await c.close()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @respx.mock
+    async def test_delete_pr_failure_logs_only_outage_transitions(self, caplog):
+        route = respx.delete(
+            "http://rag:8001/index/pr-files/ws/proj/1"
+        ).mock(side_effect=[
+            httpx.Response(500, json={"detail": "timed out"}),
+            httpx.Response(500, json={"detail": "timed out"}),
+            httpx.Response(200, json={"status": "deleted"}),
+        ])
+        c = RagClient(base_url="http://rag:8001", enabled=True)
+
+        with caplog.at_level(logging.DEBUG, logger="service.rag.rag_client"):
+            assert await c.delete_pr_files("ws", "proj", 1) is False
+            assert await c.delete_pr_files("ws", "proj", 1) is False
+            assert await c.delete_pr_files("ws", "proj", 1) is True
+
+        assert route.call_count == 3
+        warnings = [
+            record for record in caplog.records
+            if record.levelno == logging.WARNING
+            and "RAG PR cleanup is degraded" in record.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert "RAG PR cleanup recovered" in caplog.text
         await c.close()
 
 

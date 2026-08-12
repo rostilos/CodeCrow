@@ -22,7 +22,6 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichme
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
-import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
@@ -46,7 +45,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Collections;
 import java.util.TreeMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import org.rostilos.codecrow.analysisengine.util.DiffFingerprintUtil;
@@ -73,7 +71,6 @@ public class PullRequestAnalysisProcessor {
     private final AiAnalysisClient aiAnalysisClient;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
-    private final RagOperationsService ragOperationsService;
     private final ApplicationEventPublisher eventPublisher;
     private final AnalyzedCommitService analyzedCommitService;
     private final VcsClientProvider vcsClientProvider;
@@ -99,7 +96,6 @@ public class PullRequestAnalysisProcessor {
             FileSnapshotService fileSnapshotService,
             PrIssueTrackingService prIssueTrackingService,
             AstScopeEnricher astScopeEnricher,
-            @Autowired(required = false) RagOperationsService ragOperationsService,
             @Autowired(required = false) ApplicationEventPublisher eventPublisher
     ) {
         this.codeAnalysisService = codeAnalysisService;
@@ -108,7 +104,6 @@ public class PullRequestAnalysisProcessor {
         this.aiAnalysisClient = aiAnalysisClient;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
-        this.ragOperationsService = ragOperationsService;
         this.eventPublisher = eventPublisher;
         this.analyzedCommitService = analyzedCommitService;
         this.vcsClientProvider = vcsClientProvider;
@@ -148,7 +143,7 @@ public class PullRequestAnalysisProcessor {
                     AnalysisLockType.PR_ANALYSIS,
                     request.getCommitHash(),
                     request.getPullRequestId(),
-                    consumer::accept);
+                    event -> emitEvent(consumer, event));
 
             if (acquiredLock.isEmpty()) {
                 String message = String.format(
@@ -171,7 +166,12 @@ public class PullRequestAnalysisProcessor {
             lockKey = acquiredLock.get();
         }
 
+        AnalysisLockService.LockLease lockLease = null;
         try {
+            lockLease = analysisLockService.maintainLockLease(
+                    lockKey,
+                    analysisLockService.getLeaseMinutes(AnalysisLockType.PR_ANALYSIS));
+            requireActiveLease(lockLease);
             EVcsProvider provider = ProjectVcsInfoRetriever.getVcsProvider(project);
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
             // Get all previous analyses for this PR to provide full issue history to AI
@@ -190,6 +190,7 @@ public class PullRequestAnalysisProcessor {
             // Request construction acquires and verifies the provider's immutable
             // full head object ID. Persist the PR only after that canonicalization,
             // never from an abbreviated or otherwise unverified webhook value.
+            requireConfirmedLease(lockLease);
             PullRequest pullRequest = pullRequestService.createOrUpdatePullRequest(
                     request.getProjectId(),
                     request.getPullRequestId(),
@@ -202,7 +203,8 @@ public class PullRequestAnalysisProcessor {
                 String message = "No changed files match the project analysis scope";
                 log.info("Skipping PR analysis for project={}, PR={}: {}",
                         project.getId(), request.getPullRequestId(), message);
-                consumer.accept(Map.of("type", "info", "message", message));
+                emitEvent(consumer, Map.of("type", "info", "message", message));
+                requireConfirmedLease(lockLease);
                 publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                         AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
                 return Map.of("status", "ignored", "message", message);
@@ -216,8 +218,9 @@ public class PullRequestAnalysisProcessor {
                 CacheHitType cacheHit = postAnalysisCacheIfExist(
                         project, pullRequest, request.getCommitHash(), request.getPullRequestId(),
                         reportingService, request.getPlaceholderCommentId(), request.getTargetBranchName(),
-                        request.getSourceBranchName(), diffFingerprint);
+                        request.getSourceBranchName(), diffFingerprint, lockLease);
                 if (cacheHit != CacheHitType.NONE) {
+                    requireConfirmedLease(lockLease);
                     publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                             AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
                     String cacheStatus = cacheHit == CacheHitType.COMMIT_HASH ? "cached_by_commit" : "cached";
@@ -225,8 +228,10 @@ public class PullRequestAnalysisProcessor {
                 }
 
                 if (postDiffFingerprintCacheIfExist(
-                        request, diffFingerprint, project, pullRequest, aiRequest, reportingService
+                        request, diffFingerprint, project, pullRequest, aiRequest, reportingService,
+                        lockLease
                 )) {
+                    requireConfirmedLease(lockLease);
                     publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                             AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
                     return Map.of("status", "cached_by_fingerprint", "cached", true);
@@ -237,43 +242,18 @@ public class PullRequestAnalysisProcessor {
                         project.getId(), request.getPullRequestId());
             }
 
-            // Only prepare RAG after the exact snapshot/configuration cache has missed.
-            ensureRagIndexForTargetBranch(project, request.getTargetBranchName(), consumer);
-
-            AtomicBoolean lockLeaseLost = new AtomicBoolean(false);
             Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiRequest, event -> {
-                if ("processing".equals(String.valueOf(event.get("state")))) {
-                    try {
-                        if (!analysisLockService.renewLock(
-                                lockKey,
-                                analysisLockService.getLeaseMinutes(AnalysisLockType.PR_ANALYSIS))) {
-                            lockLeaseLost.set(true);
-                            log.error("PR analysis lost its lock lease: {}", lockKey);
-                        }
-                    } catch (Exception leaseError) {
-                        lockLeaseLost.set(true);
-                        log.error("Failed to renew PR analysis lock lease: {}", lockKey, leaseError);
-                    }
-                }
-                try {
-                    log.debug("Received event from AI client: type={}", event.get("type"));
-                    consumer.accept(event);
-                    log.debug("Event forwarded to consumer successfully");
-                } catch (Exception ex) {
-                    log.error("Event consumer failed: {}", ex.getMessage(), ex);
-                }
+                log.debug("Received event from AI client: type={}", event.get("type"));
+                emitEvent(consumer, event);
             });
-            if (lockLeaseLost.get()) {
-                throw new IOException(
-                        "PR analysis lost its lock lease while the review worker was active");
-            }
+            requireConfirmedLease(lockLease);
 
             if (AiAnalysisClient.isPromptDryRunResult(aiResponse)) {
                 Object artifact = aiResponse.get("promptArtifact");
                 log.warn(
                         "Prompt dry run completed for project={}, PR={}; artifact={}",
                         project.getId(), request.getPullRequestId(), artifact);
-                consumer.accept(Map.of(
+                emitEvent(consumer, Map.of(
                         "type", "info",
                         "state", "prompt_dry_run_completed",
                         "message", "Prompt dry run completed without publishing an analysis",
@@ -297,6 +277,9 @@ public class PullRequestAnalysisProcessor {
                         request.getCommitHash());
             }
 
+            // Direct VCS fallback can itself be slow.  Establish an atomic lease
+            // barrier immediately before the first durable analysis write.
+            requireConfirmedLease(lockLease);
             CodeAnalysis newAnalysis = codeAnalysisService.createAnalysisFromAiResponse(
                     project,
                     aiResponse,
@@ -353,6 +336,10 @@ public class PullRequestAnalysisProcessor {
                 log.warn("PR issue tracking failed (non-critical): {}", trackEx.getMessage());
             }
 
+            // Ownership may have changed after persistence but before external
+            // publication. Perform an atomic proof instead of waiting for the
+            // next scheduled heartbeat to observe it.
+            requireConfirmedLease(lockLease);
             try {
                 reportingService.postAnalysisResults(
                         newAnalysis,
@@ -362,15 +349,17 @@ public class PullRequestAnalysisProcessor {
                         request.getPlaceholderCommentId());
             } catch (IOException e) {
                 log.error("Failed to post analysis results to VCS: {}", e.getMessage(), e);
-                consumer.accept(Map.of(
+                emitEvent(consumer, Map.of(
                         "type", "warning",
                         "message", "Analysis completed but failed to post results to VCS: " + e.getMessage()));
             }
 
             // === DAG: Mark PR commits as ANALYZED ===
+            requireConfirmedLease(lockLease);
             markPrCommitsAnalyzed(project, request, newAnalysis);
 
             // Publish successful completion event
+            requireConfirmedLease(lockLease);
             publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                     AnalysisCompletedEvent.CompletionStatus.SUCCESS, issuesFound,
                     allChangedFiles != null ? allChangedFiles.size() : 0, null);
@@ -378,7 +367,7 @@ public class PullRequestAnalysisProcessor {
             return aiResponse;
         } catch (IOException e) {
             log.error("IOException during PR analysis: {}", e.getMessage(), e);
-            consumer.accept(Map.of(
+            emitEvent(consumer, Map.of(
                     "type", "error",
                     "message", "Analysis failed due to I/O error: " + e.getMessage()));
 
@@ -388,9 +377,59 @@ public class PullRequestAnalysisProcessor {
 
             return Map.of("status", "error", "message", e.getMessage());
         } finally {
-            if (!isPreAcquired) {
-                analysisLockService.releaseLock(lockKey);
+            if (lockLease != null) {
+                try {
+                    lockLease.close();
+                } catch (RuntimeException closeFailure) {
+                    log.info(
+                            "PR analysis lock lease could not be closed after processing; "
+                                    + "continuing lock cleanup: project={}, PR={}, detail={}",
+                            project.getId(), request.getPullRequestId(),
+                            closeFailure.getMessage());
+                }
             }
+            if (!isPreAcquired) {
+                try {
+                    analysisLockService.releaseLock(lockKey);
+                } catch (RuntimeException releaseFailure) {
+                    // The analysis outcome is already decided. Cleanup failure
+                    // is observational; the durable lock lease will expire.
+                    log.info(
+                            "PR analysis lock could not be released after processing; "
+                                    + "leaving it to expiry: project={}, PR={}, detail={}",
+                            project.getId(), request.getPullRequestId(),
+                            releaseFailure.getMessage());
+                }
+            }
+        }
+    }
+
+    private static void requireActiveLease(AnalysisLockService.LockLease lease) throws IOException {
+        if (lease == null || lease.isOwnershipLost()) {
+            throw lostLeaseException();
+        }
+    }
+
+    private static void requireConfirmedLease(AnalysisLockService.LockLease lease) throws IOException {
+        if (lease == null || !lease.confirmOwnership()) {
+            throw lostLeaseException();
+        }
+    }
+
+    private static IOException lostLeaseException() {
+        return new IOException("PR analysis lost its lock lease while the review worker was active");
+    }
+
+    /** Progress delivery is observational and cannot change review ownership or outcome. */
+    private static void emitEvent(EventConsumer consumer, Map<String, Object> event) {
+        if (consumer == null) {
+            return;
+        }
+        try {
+            consumer.accept(event);
+        } catch (RuntimeException observerFailure) {
+            log.debug("PR progress observer rejected event type={} state={}: {}",
+                    event.get("type"), event.get("state"), observerFailure.getMessage());
         }
     }
 
@@ -494,7 +533,8 @@ public class PullRequestAnalysisProcessor {
      */
     private void persistPrSnapshotsForCacheHit(PullRequest pullRequest, CodeAnalysis cloned,
                                                CodeAnalysis sourceAnalysis, Project project,
-                                               String commitHash, List<String> changedFiles) {
+                                               String commitHash, List<String> changedFiles,
+                                               AnalysisLockService.LockLease lockLease) throws IOException {
         try {
             // Strategy 1: Copy PR-level snapshots from the source analysis's original PR
             if (sourceAnalysis.getPrNumber() != null) {
@@ -504,6 +544,7 @@ public class PullRequestAnalysisProcessor {
                     Map<String, String> sourceContents = fileSnapshotService.getFileContentsMapForPr(
                             sourcePr.get().getId());
                     if (!sourceContents.isEmpty()) {
+                        requireConfirmedLease(lockLease);
                         fileSnapshotService.persistSnapshotsForPr(pullRequest, cloned, sourceContents, commitHash);
                         log.info("Copied {} PR snapshots from source PR {} to PR {} (cache hit)",
                                 sourceContents.size(), sourceAnalysis.getPrNumber(), pullRequest.getPrNumber());
@@ -524,9 +565,12 @@ public class PullRequestAnalysisProcessor {
             if (!filePaths.isEmpty()) {
                 Map<String, String> fileContents = fetchFileContentsFromVcs(project, filePaths, commitHash);
                 if (!fileContents.isEmpty()) {
+                    requireConfirmedLease(lockLease);
                     fileSnapshotService.persistSnapshotsForPr(pullRequest, cloned, fileContents, commitHash);
                 }
             }
+        } catch (IOException ownershipFailure) {
+            throw ownershipFailure;
         } catch (Exception e) {
             log.warn("Failed to persist PR snapshots for cache hit (non-critical): {}", e.getMessage());
         }
@@ -538,9 +582,10 @@ public class PullRequestAnalysisProcessor {
             Project project,
             PullRequest pullRequest,
             AiAnalysisRequest aiRequest,
-            VcsReportingService reportingService
+            VcsReportingService reportingService,
+            AnalysisLockService.LockLease lockLease
 
-    ) {
+    ) throws IOException {
         // Get analysis cache by diff fingerprint (any PR ID) - less ideal than commit hash but still a win
         if(diffFingerprint == null) {
             return false;
@@ -554,14 +599,17 @@ public class PullRequestAnalysisProcessor {
                 "Diff fingerprint cache hit for project={}, fingerprint={} (source PR={}). Cloning for PR={}.",
                 project.getId(), diffFingerprint.substring(0, 8) + "...",
                 fingerprintHit.get().getPrNumber(), request.getPullRequestId());
+        requireConfirmedLease(lockLease);
         CodeAnalysis cloned = codeAnalysisService.cloneAnalysisForPr(
                 fingerprintHit.get(), project, request.getPullRequestId(),
                 request.getCommitHash(), request.getTargetBranchName(),
                 request.getSourceBranchName(), diffFingerprint);
+        requireConfirmedLease(lockLease);
         copyTaskImplementationEvidence(fingerprintHit.get(), cloned);
         // Persist PR-level snapshots for the source code viewer
         persistPrSnapshotsForCacheHit(pullRequest, cloned, fingerprintHit.get(), project,
-                request.getCommitHash(), aiRequest.getChangedFiles());
+                request.getCommitHash(), aiRequest.getChangedFiles(), lockLease);
+        requireConfirmedLease(lockLease);
         try {
             reportingService.postAnalysisResults(cloned, project,
                     request.getPullRequestId(), pullRequest.getId(),
@@ -584,8 +632,9 @@ public class PullRequestAnalysisProcessor {
             String placeholderCommentId,
             String targetBranch,
             String sourceBranch,
-            String expectedReviewIdentity
-    ) {
+            String expectedReviewIdentity,
+            AnalysisLockService.LockLease lockLease
+    ) throws IOException {
         Optional<CodeAnalysis> cachedAnalysis = codeAnalysisService.getCodeAnalysisCache(
                 project.getId(),
                 commitHash,
@@ -595,6 +644,7 @@ public class PullRequestAnalysisProcessor {
         if (cachedAnalysis.isPresent()
                 && expectedReviewIdentity != null
                 && expectedReviewIdentity.equals(cachedAnalysis.get().getDiffFingerprint())) {
+            requireConfirmedLease(lockLease);
             try {
                 reportingService.postAnalysisResults(cachedAnalysis.get(),
                         project,
@@ -617,14 +667,17 @@ public class PullRequestAnalysisProcessor {
                     project.getId(), commitHash,
                     commitHashHit.get().getPrNumber(), prId
             );
+            requireConfirmedLease(lockLease);
             CodeAnalysis cloned = codeAnalysisService.cloneAnalysisForPr(
                     commitHashHit.get(), project, prId,
                     commitHash, targetBranch,
                     sourceBranch, commitHashHit.get().getDiffFingerprint());
+            requireConfirmedLease(lockLease);
             copyTaskImplementationEvidence(commitHashHit.get(), cloned);
             // Persist PR-level snapshots for the source code viewer
             persistPrSnapshotsForCacheHit(pullRequest, cloned, commitHashHit.get(), project,
-                    commitHash, null);
+                    commitHash, null, lockLease);
+            requireConfirmedLease(lockLease);
             try {
                 reportingService.postAnalysisResults(
                         cloned,
@@ -882,41 +935,6 @@ public class PullRequestAnalysisProcessor {
             return new java.util.ArrayList<>(selected.subList(0, 1));
         }
         return selected;
-    }
-
-    /**
-     * Ensures RAG index is up-to-date for the PR target branch.
-     * <p>
-     * For PRs targeting the main branch:
-     * - Checks if the main RAG index commit matches the current target branch HEAD
-     * - If outdated, performs incremental update before analysis
-     * <p>
-     * For PRs targeting non-main branches with multi-branch enabled:
-     * - First ensures the main index is up to date
-     * - Then ensures branch index exists and is up to date for the target branch
-     * <p>
-     * This ensures analysis always uses the most current codebase context.
-     */
-    private void ensureRagIndexForTargetBranch(Project project, String targetBranch, EventConsumer consumer) {
-        if (ragOperationsService == null) {
-            log.debug("RagOperationsService not available - skipping RAG index check for target branch");
-            return;
-        }
-
-        try {
-            boolean ready = ragOperationsService.ensureRagIndexUpToDate(
-                    project,
-                    targetBranch,
-                    consumer::accept);
-            if (ready) {
-                log.info("RAG index ensured up-to-date for PR target branch: project={}, branch={}",
-                        project.getId(), targetBranch);
-            }
-        } catch (Exception e) {
-            log.warn(
-                    "Failed to ensure RAG index up-to-date for target branch (non-critical): project={}, branch={}, error={}",
-                    project.getId(), targetBranch, e.getMessage());
-        }
     }
 
     /**

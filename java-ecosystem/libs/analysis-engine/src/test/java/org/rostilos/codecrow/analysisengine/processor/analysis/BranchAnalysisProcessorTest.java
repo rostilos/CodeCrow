@@ -77,6 +77,9 @@ class BranchAnalysisProcessorTest {
     private AnalysisLockService analysisLockService;
 
     @Mock
+    private AnalysisLockService.LockLease lockLease;
+
+    @Mock
     private BranchAnalysisGateService branchAnalysisGateService;
 
     @Mock
@@ -144,6 +147,11 @@ class BranchAnalysisProcessorTest {
     @BeforeEach
     void setUp() {
         when(vcsClientProvider.getClient(vcsConnection)).thenReturn(authorizedClient);
+        lenient().when(analysisLockService.getLeaseMinutes(any()))
+                .thenReturn(30);
+        lenient().when(analysisLockService.maintainLockLease(anyString(), anyInt()))
+                .thenReturn(lockLease);
+        lenient().when(lockLease.confirmOwnership()).thenReturn(true);
         processor = new BranchAnalysisProcessor(
                 projectService,
                 branchRepository,
@@ -349,6 +357,76 @@ class BranchAnalysisProcessorTest {
 
             assertThat(result).containsEntry("status", "skipped");
             assertThat(result).containsEntry("reason", "commit_already_analyzed");
+            verify(analysisLockService).maintainLockLease("lock-key", 30);
+            verify(lockLease).close();
+            verify(analysisLockService).releaseLock("lock-key");
+        }
+
+        @Test
+        @DisplayName("cleanup failures cannot override a successful branch outcome")
+        void cleanupFailuresCannotOverrideSuccessfulBranchOutcome() throws IOException {
+            BranchProcessRequest request = createRequest();
+            when(projectService.getProjectWithConnections(1L)).thenReturn(project);
+            when(project.getId()).thenReturn(1L);
+            when(analysisLockService.acquireLockWithWait(
+                    any(), anyString(), any(), anyString(), any(), any()))
+                    .thenReturn(Optional.of("lock-key"));
+            Branch existingBranch = new Branch();
+            existingBranch.setLastSuccessfulCommitHash("abc123");
+            when(branchRepository.findByProjectIdAndBranchName(1L, "main"))
+                    .thenReturn(Optional.of(existingBranch));
+            when(branchFileOperationsService.getBranchFilePaths(1L, "main"))
+                    .thenReturn(Collections.emptySet());
+            doThrow(new IllegalStateException("lease executor unavailable"))
+                    .when(lockLease).close();
+            doThrow(new IllegalStateException("lock database unavailable"))
+                    .when(analysisLockService).releaseLock("lock-key");
+
+            Map<String, Object> result = processor.process(request, null);
+
+            assertThat(result).containsEntry("status", "skipped");
+            assertThat(result).containsEntry("reason", "commit_already_analyzed");
+            verify(lockLease).close();
+            verify(analysisLockService).releaseLock("lock-key");
+        }
+
+        @Test
+        @DisplayName("should fence cached snapshot publication when branch lease is lost")
+        void shouldFenceCachedSnapshotPublicationWhenLeaseIsLost() throws IOException {
+            BranchProcessRequest request = createRequest();
+
+            when(projectService.getProjectWithConnections(1L)).thenReturn(project);
+            when(project.getId()).thenReturn(1L);
+            when(analysisLockService.acquireLockWithWait(
+                    any(), anyString(), any(), anyString(), any(), any()))
+                    .thenReturn(Optional.of("lock-key"));
+            when(lockLease.confirmOwnership()).thenReturn(true, false);
+
+            Branch existingBranch = new Branch();
+            existingBranch.setLastSuccessfulCommitHash("abc123");
+            when(branchRepository.findByProjectIdAndBranchName(1L, "main"))
+                    .thenReturn(Optional.of(existingBranch));
+
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+            when(repoInfo.getRepoWorkspace()).thenReturn("ws");
+            when(repoInfo.getRepoSlug()).thenReturn("repo");
+            when(branchFileOperationsService.getBranchFilePaths(1L, "main"))
+                    .thenReturn(new HashSet<>(Set.of("src/App.java")));
+            when(branchFileOperationsService.downloadBranchFileSnapshot(
+                    any(), eq("abc123"), anySet()))
+                    .thenReturn(archiveSnapshot(Map.of("src/App.java", "content")));
+
+            assertThatThrownBy(() -> processor.process(request, null))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("lost its lock lease");
+
+            verify(branchFileOperationsService, never()).updateFileSnapshotsForBranch(
+                    anySet(), any(), any(),
+                    isA(BranchFileOperationsService.BranchFileSnapshot.class));
+            verify(branchHealthService, never()).handleProcessFailure(any(), any(), anyList(), any());
+            verify(lockLease).close();
             verify(analysisLockService).releaseLock("lock-key");
         }
 

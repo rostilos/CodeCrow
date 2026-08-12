@@ -192,6 +192,19 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 # Repair interval for readable Qdrant current-branch aliases of active generations.
 #codecrow.rag.operator-alias.reconcile-interval-ms=300000
 #codecrow.rag.operator-alias.reconcile-initial-delay-ms=15000
+# Exact-generation operation recovery. A live build heartbeats its persisted
+# operation; a published operation also repairs an interrupted job/status handoff.
+#codecrow.rag.generation.stale-after-minutes=30
+#codecrow.rag.generation.recovery-interval-ms=300000
+#codecrow.rag.generation.recovery-initial-delay-ms=60000
+# Legacy unsealed incremental updates use a separate database job lease because
+# they do not own an immutable generation operation.
+#codecrow.rag.legacy-job.lease-seconds=120
+#codecrow.rag.legacy-job.heartbeat-interval-seconds=15
+#codecrow.rag.legacy-job.heartbeat-threads=4
+#codecrow.rag.legacy-job.recovery-interval-ms=30000
+#codecrow.rag.legacy-job.recovery-initial-delay-ms=30000
+#codecrow.rag.legacy-job.recovery-batch-size=100
 # Shared VCS acquisition threshold for incremental RAG and reconciliation
 # fallback. The legacy codecrow.rag.incremental.archive-file-threshold property
 # remains a fallback when this property is not set.
@@ -200,6 +213,10 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 # Analysis Lock Configuration
 # Lock timeout - maximum time for a single analysis to hold a lock (in minutes)
 #analysis.lock.timeout.minutes=30
+# Independent lease-renewal scheduler capacity (default 4, minimum 2 threads)
+#analysis.lock.heartbeat.threads=4
+# Independent lease-renewal interval (seconds); bounded to one-third of the lease
+#analysis.lock.heartbeat.interval.seconds=60
 # RAG indexing lock timeout - longer timeout for RAG indexing operations (in minutes, default 6 hours)
 #analysis.lock.rag.timeout.minutes=360
 # Lock wait timeout - maximum time to wait for a lock to be released (in minutes)

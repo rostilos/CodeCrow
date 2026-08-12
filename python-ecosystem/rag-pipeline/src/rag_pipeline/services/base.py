@@ -41,9 +41,15 @@ class RAGQueryBase:
             index_representation_fingerprint(config)
         )
         self._observed_branch_cache: set[tuple[str, str]] = set()
+        qdrant_timeout = getattr(config, "qdrant_timeout_seconds", 30)
+        if isinstance(qdrant_timeout, bool) or not isinstance(
+            qdrant_timeout, int
+        ):
+            qdrant_timeout = 30
         self.qdrant_client = QdrantClient(
             url=config.qdrant_url,
             api_key=config.qdrant_api_key or None,
+            timeout=qdrant_timeout,
         )
 
         embed_info = get_embedding_model_info(config)
@@ -82,18 +88,29 @@ class RAGQueryBase:
     def _collection_or_alias_exists(self, name: str) -> bool:
         """Check if a collection or alias with the given name exists."""
         try:
-            collections = [c.name for c in self.qdrant_client.get_collections().collections]
+            collections = [
+                c.name for c in self.qdrant_client.get_collections().collections
+            ]
             if name in collections:
                 return True
 
             aliases = self.qdrant_client.get_aliases()
-            if any(a.alias_name == name for a in aliases.aliases):
-                return True
+            return any(a.alias_name == name for a in aliases.aliases)
+        except Exception as exception:
+            # Exact callers convert absence to their revision-bound 409; legacy
+            # optional callers return empty context. The HTTP owner records the
+            # one contextual degraded diagnostic, so this shared probe stays
+            # below warning level.
+            logger.debug(
+                "Collection/alias probe unavailable for %s: %s",
+                name,
+                exception,
+            )
+            return False
 
-            return False
-        except Exception as e:
-            logger.warning(f"Error checking collection/alias existence: {e}")
-            return False
+    def close(self) -> None:
+        """Release the query-side Qdrant transport."""
+        self.qdrant_client.close()
 
     def _get_project_collection_name(self, workspace: str, project: str) -> str:
         """Generate the legacy shared collection name for a project."""

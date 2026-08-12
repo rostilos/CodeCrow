@@ -13,6 +13,8 @@ import org.rostilos.codecrow.core.service.AnalysisJobService;
 import org.rostilos.codecrow.ragengine.service.RagIndexTrackingService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -39,9 +41,13 @@ import java.util.function.Consumer;
  */
 @Service
 public class BranchIndexMaintenanceService {
+    private static final Logger log = LoggerFactory.getLogger(
+            BranchIndexMaintenanceService.class);
+
     private final RagOperationsService ragOperationsService;
     private final VcsClientProvider vcsClientProvider;
     private final BranchIndexGenerationBuildService generationBuildService;
+    private final BranchIndexBuildAdmissionService buildAdmissionService;
     private final RagIndexTrackingService trackingService;
     private final AnalysisLockService lockService;
     private final AnalysisJobService jobService;
@@ -52,6 +58,7 @@ public class BranchIndexMaintenanceService {
             RagOperationsService ragOperationsService,
             VcsClientProvider vcsClientProvider,
             BranchIndexGenerationBuildService generationBuildService,
+            BranchIndexBuildAdmissionService buildAdmissionService,
             RagIndexTrackingService trackingService,
             AnalysisLockService lockService,
             AnalysisJobService jobService,
@@ -60,6 +67,7 @@ public class BranchIndexMaintenanceService {
         this.ragOperationsService = ragOperationsService;
         this.vcsClientProvider = vcsClientProvider;
         this.generationBuildService = generationBuildService;
+        this.buildAdmissionService = buildAdmissionService;
         this.trackingService = trackingService;
         this.lockService = lockService;
         this.jobService = jobService;
@@ -86,7 +94,7 @@ public class BranchIndexMaintenanceService {
                 String message = failure.getMessage() != null
                         ? failure.getMessage() : failure.getClass().getSimpleName();
                 failures.put(branch, message);
-                events.accept(Map.of("type", "progress", "stage", "branch_failed",
+                emitEvent(events, Map.of("type", "progress", "stage", "branch_failed",
                         "branch", branch,
                         "message", "RAG snapshot failed for branch '" + branch + "': " + message));
             }
@@ -101,7 +109,7 @@ public class BranchIndexMaintenanceService {
             for (BranchBuildPlan plan : plans.subList(from, to)) {
                 String branch = plan.branch();
                 wave.put(branch, CompletableFuture.runAsync(() -> {
-                    events.accept(Map.of("type", "progress", "stage", "branch",
+                    emitEvent(events, Map.of("type", "progress", "stage", "branch",
                             "branch", branch,
                             "message", "Building exact RAG snapshot for branch '" + branch + "'"));
                     rebuildOne(project, plan, events);
@@ -116,7 +124,7 @@ public class BranchIndexMaintenanceService {
                     String message = cause.getMessage() != null
                             ? cause.getMessage() : cause.getClass().getSimpleName();
                     failures.put(build.getKey(), message);
-                    events.accept(Map.of("type", "progress", "stage", "branch_failed",
+                    emitEvent(events, Map.of("type", "progress", "stage", "branch_failed",
                             "branch", build.getKey(),
                             "message", "RAG snapshot failed for branch '" + build.getKey()
                                     + "': " + message));
@@ -172,36 +180,45 @@ public class BranchIndexMaintenanceService {
         }
 
         boolean primary = branch.equals(ragOperationsService.getBaseBranch(project));
-        boolean primaryPreviouslyIndexed = primary && trackingService.isProjectIndexed(project);
-        Job job = jobService.createRagIndexJob(
-                project,
-                !primaryPreviouslyIndexed,
-                JobTriggerSource.UI,
-                branch,
-                revision);
-        jobService.startJob(job);
-        jobService.logToJob(
-                job,
-                JobLogLevel.INFO,
-                "branch_snapshot",
-                "Building exact RAG snapshot for branch: " + branch,
-                Map.of("branch", branch, "commit", revision));
+        RagBranchIndexKind kind = primary
+                ? RagBranchIndexKind.PRIMARY : RagBranchIndexKind.DURABLE;
+        Job job = null;
+        BranchIndexBuildAdmissionService.AdmittedBuild admittedBuild = null;
+        boolean executionStarted = false;
+        boolean publicationCompleted = false;
         try {
-            if (primary) {
-                trackingService.markIndexingStarted(project, branch, revision);
-            }
             var config = project.getConfiguration().ragConfig();
-            Map<String, Object> result = generationBuildService.rebuild(
+            if (config.includePatterns() == null || config.excludePatterns() == null) {
+                throw new IllegalStateException("RAG include/exclude patterns are unavailable");
+            }
+            admittedBuild = buildAdmissionService.admit(
+                    project,
+                branch,
+                revision,
+                kind,
+                JobTriggerSource.UI,
+                lock.get(),
+                BranchIndexBuildAdmissionService.BuildOrigin.OPERATOR);
+            job = admittedBuild.job();
+            Job admittedJob = job;
+            jobService.logToJob(
+                    admittedJob,
+                    JobLogLevel.INFO,
+                    "branch_snapshot",
+                    "Building exact RAG snapshot for branch: " + branch,
+                    Map.of("branch", branch, "commit", revision));
+            executionStarted = true;
+            Map<String, Object> result = generationBuildService.execute(
                     project,
                     connection,
                     workspace,
                     repository,
                     branch,
                     revision,
-                    primary ? RagBranchIndexKind.PRIMARY : RagBranchIndexKind.DURABLE,
+                    kind,
                     config.includePatterns(),
                     config.excludePatterns(),
-                    job.getId(), event -> {
+                    admittedBuild.preparedBuild(), event -> {
                         Map<String, Object> forwarded = new LinkedHashMap<>(event);
                         forwarded.put("type", "progress");
                         forwarded.put("branch", branch);
@@ -209,43 +226,88 @@ public class BranchIndexMaintenanceService {
                                 forwarded.getOrDefault("stage", "indexing"));
                         String message = String.valueOf(
                                 forwarded.getOrDefault("message", "Indexing branch '" + branch + "'"));
-                        jobService.logToJob(
-                                job,
-                                JobLogLevel.INFO,
-                                stage,
-                                message,
-                                forwarded);
-                        events.accept(forwarded);
+                        try {
+                            jobService.logToJob(
+                                    admittedJob,
+                                    JobLogLevel.INFO,
+                                    stage,
+                                    message,
+                                    forwarded);
+                        } catch (RuntimeException logFailure) {
+                            log.debug(
+                                    "Could not append exact RAG progress to job {}: {}",
+                                    admittedJob.getId(), logFailure.getMessage());
+                        }
+                        emitEvent(events, forwarded);
                     });
+            publicationCompleted = true;
             if (primary) {
-                trackingService.markIndexingCompleted(
+                trackingService.reconcilePublishedGeneration(
                         project,
                         branch,
                         revision,
                         number(result.get("document_count")),
-                        number(result.get("chunk_count")));
+                        number(result.get("chunk_count")),
+                        admittedJob.getId());
             }
-            jobService.completeJob(job, Map.of("branch", branch, "revision", revision));
-            events.accept(Map.of("type", "progress", "stage", "branch_complete", "branch", branch,
+            jobService.completeJob(
+                    admittedJob, Map.of("branch", branch, "revision", revision));
+            emitEvent(events, Map.of("type", "progress", "stage", "branch_complete", "branch", branch,
                     "message", "RAG snapshot is ready for branch '" + branch + "'"));
         } catch (Throwable failure) {
             String diagnostic = failure.getMessage() != null
                     ? failure.getMessage() : failure.getClass().getSimpleName();
-            if (primary) {
-                if (primaryPreviouslyIndexed) {
-                    trackingService.markIncrementalUpdateFailed(project, diagnostic);
-                } else {
-                    trackingService.markIndexingFailed(project, diagnostic);
+            if (publicationCompleted) {
+                // The registry operation and generation are already SUCCEEDED.
+                // Keep the admitted job/status ownership intact so durable
+                // operation recovery can finish any projection that failed.
+                log.error(
+                        "Exact RAG generation was published but its projections could not be finalized: "
+                                + "project={}, branch={}, job={}",
+                        project.getId(), branch, job != null ? job.getId() : null,
+                        failure);
+                throw failure instanceof RuntimeException runtime ? runtime
+                        : new IllegalStateException(
+                                "Published RAG snapshot awaits projection recovery for branch '"
+                                        + branch + "'",
+                                failure);
+            }
+            if (admittedBuild != null && !executionStarted) {
+                try {
+                    buildAdmissionService.abortOperation(admittedBuild, diagnostic);
+                } catch (Exception abortFailure) {
+                    // Durable recovery retries projection terminalization.
                 }
             }
-            jobService.failJob(job, diagnostic);
+            if (primary && job != null && admittedBuild != null) {
+                if (admittedBuild.statusAdmission()
+                        == BranchIndexBuildAdmissionService.ProjectStatusAdmission.UPDATING) {
+                    trackingService.markIncrementalUpdateFailed(
+                            project, diagnostic, job.getId());
+                } else {
+                    trackingService.markIndexingFailed(
+                            project, diagnostic, job.getId());
+                }
+            }
+            if (job != null) {
+                jobService.failJob(job, diagnostic);
+            }
             if (failure instanceof Error error) {
                 throw error;
             }
             throw failure instanceof RuntimeException runtime ? runtime
                     : new IllegalStateException("Failed to build RAG snapshot for branch '" + branch + "'", failure);
         } finally {
-            lockService.releaseLock(lock.get());
+            try {
+                lockService.releaseLock(lock.get());
+            } catch (RuntimeException releaseFailure) {
+                // The durable operation/job outcome is already decided. Keep a
+                // cleanup outage observational; recovery or TTL owns the lock.
+                log.info(
+                        "RAG maintenance lock could not be released after processing; "
+                                + "leaving it to recovery/expiry: project={}, branch={}, detail={}",
+                        project.getId(), branch, releaseFailure.getMessage());
+            }
         }
     }
 
@@ -288,5 +350,20 @@ public class BranchIndexMaintenanceService {
 
     private static int number(Object value) {
         return value instanceof Number number ? number.intValue() : 0;
+    }
+
+    /** UI delivery is observational and never owns the durable build outcome. */
+    private static void emitEvent(
+            Consumer<Map<String, Object>> events,
+            Map<String, Object> event) {
+        if (events == null) {
+            return;
+        }
+        try {
+            events.accept(event);
+        } catch (RuntimeException observerFailure) {
+            log.debug("RAG maintenance observer rejected event stage={}: {}",
+                    event.get("stage"), observerFailure.getMessage());
+        }
     }
 }

@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.analysisengine.service;
 
+import jakarta.annotation.PreDestroy;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLock;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.project.Project;
@@ -23,6 +24,14 @@ import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 @Service
@@ -33,6 +42,7 @@ public class AnalysisLockService {
     private final AnalysisLockRepository lockRepository;
     private final TransactionTemplate requiresNewTransactionTemplate;
     private final String instanceId;
+    private final ScheduledExecutorService leaseHeartbeatExecutor;
 
     @Autowired
     @Lazy
@@ -50,13 +60,29 @@ public class AnalysisLockService {
     @Value("${analysis.lock.wait.retry.interval.seconds:5}")
     private int lockWaitRetryIntervalSeconds;
 
-    public AnalysisLockService(AnalysisLockRepository lockRepository, PlatformTransactionManager transactionManager) {
+    @Value("${analysis.lock.heartbeat.interval.seconds:60}")
+    private int lockHeartbeatIntervalSeconds = 60;
+
+    public AnalysisLockService(
+            AnalysisLockRepository lockRepository,
+            PlatformTransactionManager transactionManager) {
+        this(lockRepository, transactionManager, 4);
+    }
+
+    @Autowired
+    public AnalysisLockService(
+            AnalysisLockRepository lockRepository,
+            PlatformTransactionManager transactionManager,
+            @Value("${analysis.lock.heartbeat.threads:4}") int heartbeatThreads) {
         this.lockRepository = lockRepository;
         this.instanceId = UUID.randomUUID().toString();
         
         // Create a TransactionTemplate with REQUIRES_NEW propagation for fully isolated lock inserts
         this.requiresNewTransactionTemplate = new TransactionTemplate(transactionManager);
         this.requiresNewTransactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.leaseHeartbeatExecutor = Executors.newScheduledThreadPool(
+                Math.max(2, heartbeatThreads),
+                new LeaseHeartbeatThreadFactory());
         
         log.info("AnalysisLockService initialized with instance ID: {}", instanceId);
     }
@@ -162,12 +188,10 @@ public class AnalysisLockService {
         if (branchName == null || branchName.isBlank()) {
             log.error("Cannot acquire lock with wait: branchName is required but was null or blank. " +
                     "project={}, lockType={}, prNumber={}", project.getId(), lockType, prNumber);
-            if (messageConsumer != null) {
-                messageConsumer.accept(Map.of(
+            emitLockEvent(messageConsumer, Map.of(
                     "type", "error",
                     "message", "Cannot start analysis: branch information is missing. Please ensure the PR has valid source branch information."
                 ));
-            }
             return Optional.empty();
         }
         
@@ -183,8 +207,7 @@ public class AnalysisLockService {
 
             if (lockKey.isPresent()) {
                 if (attemptCount > 1) {
-                    if (messageConsumer != null) {
-                        Map<String, Object> lockAcquiredMessage = Map.of(
+                    Map<String, Object> lockAcquiredMessage = Map.of(
                                 "type", "lock_acquired",
                                 "message", String.format("Lock acquired after %d attempts (waited %d seconds)",
                                         attemptCount,
@@ -192,8 +215,7 @@ public class AnalysisLockService {
                                 "lockType", lockType.name(),
                                 "branchName", branchName,
                                 "attemptCount", attemptCount);
-                        messageConsumer.accept(lockAcquiredMessage);
-                    }
+                    emitLockEvent(messageConsumer, lockAcquiredMessage);
                     log.info("Lock acquired after {} attempts (waited {} seconds)",
                             attemptCount,
                             Duration.between(startTime, OffsetDateTime.now()).getSeconds());
@@ -208,28 +230,18 @@ public class AnalysisLockService {
                     "Lock acquisition attempt {} failed for project={}, branch={}, type={}. Waiting {} seconds before retry...",
                     attemptCount, project.getId(), branchName, lockType, lockWaitRetryIntervalSeconds);
 
-            if (messageConsumer != null) {
-                try {
-                    // Use HashMap instead of Map.of() to allow null values
-                    Map<String, Object> lockWaitMessage = new java.util.HashMap<>();
-                    lockWaitMessage.put("type", "lock_wait");
-                    lockWaitMessage.put("message",
-                            String.format("Waiting for lock release... (attempt %d, waited %ds, timeout in %ds)",
-                                    attemptCount, waitedSeconds, remainingSeconds));
-                    lockWaitMessage.put("lockType", lockType.name());
-                    lockWaitMessage.put("branchName", branchName);
-                    lockWaitMessage.put("attemptCount", attemptCount);
-                    lockWaitMessage.put("waitedSeconds", waitedSeconds);
-                    lockWaitMessage.put("remainingSeconds", remainingSeconds);
-                    log.debug("Sending lock wait message to consumer: {}", lockWaitMessage);
-                    messageConsumer.accept(lockWaitMessage);
-                    log.debug("Lock wait message sent successfully");
-                } catch (Exception e) {
-                    log.warn("Failed to send lock wait message: {}", e.getMessage(), e);
-                }
-            } else {
-                log.warn("Message consumer is null, cannot send lock wait message");
-            }
+            // Use HashMap instead of Map.of() to allow null values
+            Map<String, Object> lockWaitMessage = new java.util.HashMap<>();
+            lockWaitMessage.put("type", "lock_wait");
+            lockWaitMessage.put("message",
+                    String.format("Waiting for lock release... (attempt %d, waited %ds, timeout in %ds)",
+                            attemptCount, waitedSeconds, remainingSeconds));
+            lockWaitMessage.put("lockType", lockType.name());
+            lockWaitMessage.put("branchName", branchName);
+            lockWaitMessage.put("attemptCount", attemptCount);
+            lockWaitMessage.put("waitedSeconds", waitedSeconds);
+            lockWaitMessage.put("remainingSeconds", remainingSeconds);
+            emitLockEvent(messageConsumer, lockWaitMessage);
 
             if (OffsetDateTime.now().plusSeconds(lockWaitRetryIntervalSeconds).isAfter(timeout)) {
                 break;
@@ -247,18 +259,12 @@ public class AnalysisLockService {
         log.warn("Failed to acquire lock after {} attempts and {} seconds (timeout exceeded)",
                 attemptCount, Duration.between(startTime, OffsetDateTime.now()).getSeconds());
 
-        if (messageConsumer != null) {
-            try {
-                messageConsumer.accept(Map.of(
+        emitLockEvent(messageConsumer, Map.of(
                         "type", "lock_timeout",
                         "message", "Failed to acquire lock: timeout exceeded",
                         "lockType", lockType.name(),
                         "branchName", branchName,
                         "totalAttempts", attemptCount));
-            } catch (Exception e) {
-                log.warn("Failed to send lock timeout message: {}", e.getMessage());
-            }
-        }
 
         return Optional.empty();
     }
@@ -297,25 +303,170 @@ public class AnalysisLockService {
         return true;
     }
 
-    @Transactional
     public boolean renewLock(String lockKey, int leaseMinutes) {
-        Optional<AnalysisLock> lockOpt = lockRepository.findByLockKey(lockKey);
-        if (lockOpt.isEmpty()) {
-            log.warn("Cannot renew lock - not found: {}", lockKey);
-            return false;
-        }
-
-        AnalysisLock lock = lockOpt.get();
-        if (lock.isExpired()) {
-            log.warn("Cannot renew expired lock: {}", lockKey);
+        if (lockKey == null || lockKey.isBlank()) {
             return false;
         }
 
         int boundedLeaseMinutes = Math.max(1, leaseMinutes);
-        lock.setExpiresAt(OffsetDateTime.now().plusMinutes(boundedLeaseMinutes));
-        lockRepository.save(lock);
-        log.debug("Renewed lock {} for {} minutes", lockKey, boundedLeaseMinutes);
-        return true;
+        OffsetDateTime now = OffsetDateTime.now();
+        OffsetDateTime expiresAt = now.plusMinutes(boundedLeaseMinutes);
+        Integer updated = requiresNewTransactionTemplate.execute(status ->
+                lockRepository.renewActiveLock(lockKey, now, expiresAt));
+        boolean renewed = updated != null && updated > 0;
+        if (renewed) {
+            log.debug("Renewed lock {} for {} minutes", lockKey, boundedLeaseMinutes);
+        } else {
+            // The lease owner records the single contextual ownership-loss
+            // diagnostic. Keep this primitive reusable without double logging.
+            log.debug("Cannot renew missing or expired lock: {}", lockKey);
+        }
+        return renewed;
+    }
+
+    /**
+     * Maintains a long-running analysis lease independently of worker progress
+     * events.  A quiet but healthy worker must not lose ownership merely because
+     * it has no streaming message to emit.
+     */
+    public LockLease maintainLockLease(String lockKey, int leaseMinutes) {
+        int boundedLeaseMinutes = Math.max(1, leaseMinutes);
+        long leaseSeconds = TimeUnit.MINUTES.toSeconds(boundedLeaseMinutes);
+        long intervalSeconds = Math.max(1L, Math.min(
+                Math.max(1, lockHeartbeatIntervalSeconds),
+                Math.max(1L, leaseSeconds / 3L)));
+        ActiveLockLease lease = new ActiveLockLease(lockKey, boundedLeaseMinutes);
+        lease.renew();
+        lease.schedule(intervalSeconds);
+        return lease;
+    }
+
+    public interface LockLease extends AutoCloseable {
+        boolean isOwnershipLost();
+
+        /** Performs a final atomic ownership proof before durable publication. */
+        boolean confirmOwnership();
+
+        @Override
+        void close();
+    }
+
+    private final class ActiveLockLease implements LockLease {
+        private final String lockKey;
+        private final int leaseMinutes;
+        private final AtomicBoolean ownershipLost = new AtomicBoolean(false);
+        private final AtomicBoolean closed = new AtomicBoolean(false);
+        private final AtomicBoolean transientFailureReported = new AtomicBoolean(false);
+        private final AtomicReference<OffsetDateTime> knownExpiresAt;
+        private volatile ScheduledFuture<?> heartbeat;
+
+        private ActiveLockLease(String lockKey, int leaseMinutes) {
+            this.lockKey = lockKey;
+            this.leaseMinutes = leaseMinutes;
+            // A pre-acquired lock may already be old.  Do not infer a fresh lease
+            // window until the first atomic renewal has actually succeeded.
+            this.knownExpiresAt = new AtomicReference<>();
+        }
+
+        private void schedule(long intervalSeconds) {
+            heartbeat = leaseHeartbeatExecutor.scheduleWithFixedDelay(
+                    this::renew, intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
+        }
+
+        private boolean renew() {
+            if (closed.get() || ownershipLost.get()) {
+                return false;
+            }
+            OffsetDateTime renewalStartedAt = OffsetDateTime.now();
+            try {
+                if (!renewLock(lockKey, leaseMinutes)) {
+                    ownershipLost.set(true);
+                    log.error("Analysis lock lease ownership was lost: {}", lockKey);
+                    return false;
+                }
+                knownExpiresAt.set(
+                        renewalStartedAt.plusMinutes(leaseMinutes).minusSeconds(1));
+                if (transientFailureReported.compareAndSet(true, false)) {
+                    log.info("Analysis lock heartbeat recovered: {}", lockKey);
+                }
+                return true;
+            } catch (RuntimeException renewalFailure) {
+                // A database outage is not evidence that ownership changed.  The
+                // previous successful lease remains authoritative until its known
+                // expiry, and the scheduled heartbeat will retry meanwhile.
+                OffsetDateTime knownExpiry = knownExpiresAt.get();
+                boolean previousLeaseStillActive = knownExpiry != null
+                        && OffsetDateTime.now().isBefore(knownExpiry);
+                if (!previousLeaseStillActive) {
+                    ownershipLost.set(true);
+                    log.error("Analysis lock ownership could not be confirmed before its known expiry: {}",
+                            lockKey, renewalFailure);
+                    return false;
+                }
+                if (transientFailureReported.compareAndSet(false, true)) {
+                    log.warn("Analysis lock renewal failed; the prior lease is still active "
+                                    + "and renewal will retry: {}",
+                            lockKey, renewalFailure);
+                } else {
+                    log.debug("Analysis lock heartbeat remains degraded within the active lease: {}",
+                            lockKey);
+                }
+                return true;
+            }
+        }
+
+        @Override
+        public boolean isOwnershipLost() {
+            return ownershipLost.get();
+        }
+
+        @Override
+        public boolean confirmOwnership() {
+            return renew();
+        }
+
+        @Override
+        public void close() {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            ScheduledFuture<?> scheduled = heartbeat;
+            if (scheduled != null) {
+                scheduled.cancel(false);
+            }
+        }
+    }
+
+    @PreDestroy
+    void shutdownLeaseHeartbeatExecutor() {
+        leaseHeartbeatExecutor.shutdownNow();
+    }
+
+    private static final class LeaseHeartbeatThreadFactory implements ThreadFactory {
+        private final AtomicInteger threadNumber = new AtomicInteger();
+
+        @Override
+        public Thread newThread(Runnable runnable) {
+            Thread thread = new Thread(
+                    runnable,
+                    "analysis-lock-heartbeat-" + threadNumber.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        }
+    }
+
+    private static void emitLockEvent(
+            Consumer<Map<String, Object>> messageConsumer,
+            Map<String, Object> event) {
+        if (messageConsumer == null) {
+            return;
+        }
+        try {
+            messageConsumer.accept(event);
+        } catch (RuntimeException observerFailure) {
+            log.debug("Analysis lock observer rejected event type={}: {}",
+                    event.get("type"), observerFailure.getMessage());
+        }
     }
 
     @Transactional(readOnly = true)

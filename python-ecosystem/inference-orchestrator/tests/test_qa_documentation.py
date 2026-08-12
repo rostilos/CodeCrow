@@ -7,9 +7,10 @@ Covers: _slim_stage_results, _build_placeholders, _extract_documented_prs,
         BaseOrchestrator._simple_batch, filter_diff_for_files,
         get_file_content_from_enrichment, build_enrichment_lookup
 """
-import pytest
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from service.qa_documentation.qa_doc_orchestrator import QaDocOrchestrator
 from service.qa_documentation.base_orchestrator import (
@@ -18,6 +19,7 @@ from service.qa_documentation.base_orchestrator import (
     emit_progress,
     emit_error,
 )
+from utils.prompts.constants_qa_doc import QA_DOC_CUSTOM_PROMPT
 
 
 # ── emit_status / emit_progress / emit_error ─────────────────────
@@ -84,6 +86,13 @@ class TestSimpleBatch:
         assert hasattr(item["file_info"], "path")
         assert item["file_info"].path == "a.py"
         assert item["priority"] == "MEDIUM"
+
+    def test_qa_orchestrator_has_no_rag_mutation_lifecycle(self):
+        orchestrator = QaDocOrchestrator(llm=MagicMock())
+
+        assert not hasattr(orchestrator, "rag_client")
+        assert not hasattr(orchestrator, "index_pr_files")
+        assert not hasattr(orchestrator, "cleanup_pr_files")
 
 
 # ── BaseOrchestrator.filter_diff_for_files ───────────────────────
@@ -209,6 +218,122 @@ class TestSlimStageResults:
         assert " " not in result  # Compact separators
 
 
+class TestIndependentTestCases:
+    def test_custom_template_cannot_remove_test_cases(self):
+        assert "custom template MUST NOT remove test cases" in QA_DOC_CUSTOM_PROMPT
+        assert "<!-- codecrow-test-cases:start -->" in QA_DOC_CUSTOM_PROMPT
+        assert "<!-- codecrow-test-cases:end -->" in QA_DOC_CUSTOM_PROMPT
+
+    def test_detects_only_marked_structured_scenarios(self):
+        valid = """
+        <!-- codecrow-test-cases:start -->
+        **Checkout succeeds** (HIGH)
+        - **Expected Result:** Confirmation appears
+        <!-- codecrow-test-cases:end -->
+        """
+        assert QaDocOrchestrator._contains_extractable_test_cases(valid)
+        assert not QaDocOrchestrator._contains_extractable_test_cases(
+            "**Checkout succeeds** (HIGH)"
+        )
+        assert not QaDocOrchestrator._contains_extractable_test_cases("""
+            <!-- codecrow-test-cases:start -->
+            <!-- codecrow-test-cases:end -->
+            **Scenario outside the disclosure boundary** (HIGH)
+        """)
+        assert not QaDocOrchestrator._contains_extractable_test_cases("""
+            <!-- codecrow-test-cases:end -->
+            **Scenario between reversed markers** (HIGH)
+            <!-- codecrow-test-cases:start -->
+        """)
+
+    def test_moves_an_overbroad_end_marker_before_later_numbered_sections(self):
+        documentation = """
+        ### 1. Change Summary
+        Checkout changed.
+
+        <!-- codecrow-test-cases:start -->
+        ### 3. Test Scenarios
+        ### Checkout
+        **Checkout succeeds** (HIGH)
+        - **Expected Result:** Confirmation appears
+
+        ### 4. Edge Cases and Negative Testing
+        - Try an expired card.
+
+        ### 5. Regression Risks
+        - Existing card payments.
+
+        ### 6. Environment and Setup Notes
+        - Use the QA environment.
+        <!-- codecrow-test-cases:end -->
+        """
+
+        normalized = QaDocOrchestrator._normalize_test_case_markers(documentation)
+
+        assert normalized.index("<!-- codecrow-test-cases:end -->") < normalized.index(
+            "### 4. Edge Cases and Negative Testing"
+        )
+        assert normalized.index("<!-- codecrow-test-cases:end -->") > normalized.index(
+            "**Checkout succeeds** (HIGH)"
+        )
+        assert "### 5. Regression Risks" in normalized
+        assert "### 6. Environment and Setup Notes" in normalized
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_repairs_a_custom_document_that_omits_test_cases(self):
+        response = MagicMock(content="""
+            <!-- codecrow-test-cases:start -->
+            ### Test Scenarios
+            **Checkout succeeds** (HIGH)
+            - **Expected Result:** Confirmation appears
+            <!-- codecrow-test-cases:end -->
+        """)
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock(return_value=response)
+        orchestrator = QaDocOrchestrator(llm=llm)
+        placeholders = {
+            "output_language": "English",
+            "pr_number": "12",
+            "project_name": "Project",
+            "pr_title": "Checkout",
+            "task_key": "QA-12",
+            "task_summary": "Test checkout",
+            "source_branch": "feature",
+            "target_branch": "main",
+            "task_context": "",
+            "analysis_summary": "Checkout behavior changed",
+            "diff": "+ changed behavior",
+        }
+
+        repaired = await orchestrator._ensure_test_cases("# Custom QA summary", placeholders)
+
+        assert repaired.startswith("# Custom QA summary")
+        assert "<!-- codecrow-test-cases:start -->" in repaired
+        assert "**Checkout succeeds** (HIGH)" in repaired
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_rejects_a_repair_without_a_structured_scenario(self):
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock(return_value=MagicMock(content="General testing notes"))
+        orchestrator = QaDocOrchestrator(llm=llm)
+        placeholders = {
+            "output_language": "English",
+            "pr_number": "12",
+            "project_name": "Project",
+            "pr_title": "Checkout",
+            "task_key": "QA-12",
+            "task_summary": "Test checkout",
+            "source_branch": "feature",
+            "target_branch": "main",
+            "task_context": "",
+            "analysis_summary": "Checkout behavior changed",
+            "diff": "+ changed behavior",
+        }
+
+        with pytest.raises(ValueError, match="no structured scenarios"):
+            await orchestrator._ensure_test_cases("# Custom QA summary", placeholders)
+
+
 # ── QaDocOrchestrator._build_placeholders ────────────────────────
 
 class TestBuildPlaceholders:
@@ -250,7 +375,56 @@ class TestBuildPlaceholders:
         )
         assert result["project_name"] == "Unknown"
         assert result["pr_number"] == "N/A"
+        assert result["pr_title"] == "QA documentation"
         assert result["diff"] == "No diff available."
+
+    def test_title_falls_back_to_task_summary_before_task_key(self):
+        orch = QaDocOrchestrator(llm=MagicMock())
+        result = orch._build_placeholders(
+            project_name="TestProject",
+            pr_number=42,
+            issues_found=0,
+            files_analyzed=0,
+            pr_metadata={"prTitle": "N/A"},
+            task_context_dict={
+                "task_key": "JIRA-123",
+                "task_summary": "Support split shipments",
+            },
+            task_context_block="",
+            diff="d",
+        )
+
+        assert result["pr_title"] == "Support split shipments"
+
+    def test_title_falls_back_to_pr_number_without_task_metadata(self):
+        orch = QaDocOrchestrator(llm=MagicMock())
+        result = orch._build_placeholders(
+            project_name=None,
+            pr_number=42,
+            issues_found=0,
+            files_analyzed=0,
+            pr_metadata={"prTitle": "  "},
+            task_context_dict=None,
+            task_context_block="",
+            diff="d",
+        )
+
+        assert result["pr_title"] == "PR #42"
+
+    def test_replaces_na_in_the_rendered_guide_title(self):
+        documentation = """# QA Testing Guide — N/A
+
+## 1. What Changed
+Checkout behavior changed.
+"""
+
+        normalized = QaDocOrchestrator._normalize_document_title(
+            documentation,
+            "Support split shipments",
+        )
+
+        assert normalized.startswith("# QA Testing Guide — Support split shipments")
+        assert "— N/A" not in normalized
 
     def test_custom_language(self):
         orch = QaDocOrchestrator(llm=MagicMock())

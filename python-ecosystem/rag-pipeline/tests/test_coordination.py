@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -137,6 +138,40 @@ def test_openrouter_capacity_limiter_falls_back_locally_when_redis_is_unavailabl
     pool._local.release()
 
 
+def test_openrouter_capacity_outage_logs_only_transitions(caplog):
+    pool = RedisPermitPool(
+        "redis://unused",
+        2,
+        permit_seconds=60,
+        acquire_timeout_seconds=0.1,
+    )
+    pool._client = MagicMock()
+    pool._client.eval.side_effect = [
+        RuntimeError("redis unavailable"),
+        RuntimeError("redis unavailable"),
+        True,
+    ]
+
+    with caplog.at_level(logging.DEBUG):
+        pool._disabled_until = 0
+        with pool.permit():
+            pass
+        pool._disabled_until = 0
+        with pool.permit():
+            pass
+        pool._disabled_until = 0
+        with pool.permit():
+            pass
+
+    warnings = [
+        record for record in caplog.records
+        if record.levelno == logging.WARNING
+        and "capacity limit unavailable" in record.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "capacity limit recovered" in caplog.text
+
+
 def test_pending_janitor_keeps_live_and_aliased_collections_and_deletes_expired():
     client = MagicMock()
     client.get_aliases.return_value.aliases = [
@@ -166,3 +201,26 @@ def test_pending_janitor_keeps_live_and_aliased_collections_and_deletes_expired(
     client.delete_collection.assert_called_once_with(
         "base_pending_1000000000_eeeeeeee_ffffffff"
     )
+
+
+def test_pending_janitor_propagates_alias_read_failure_to_lifecycle_owner():
+    client = MagicMock()
+    client.get_aliases.side_effect = RuntimeError("qdrant unavailable")
+    manager = CollectionManager(client, 3)
+
+    with pytest.raises(RuntimeError, match="qdrant unavailable"):
+        manager.cleanup_expired_pending_collections(
+            is_operation_active=lambda _token: False,
+            min_age_seconds=300,
+        )
+
+    client.get_collections.assert_not_called()
+    client.delete_collection.assert_not_called()
+
+
+def test_pending_janitor_operation_check_propagates_redis_failure():
+    coordinator = _coordinator()
+    coordinator._client.exists.side_effect = RuntimeError("redis unavailable")
+
+    with pytest.raises(RuntimeError, match="redis unavailable"):
+        coordinator.is_operation_active("aaaaaaaa")

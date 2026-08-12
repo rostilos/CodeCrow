@@ -17,6 +17,7 @@ from rag_pipeline.core.generation_manifest import (
     build_generation_manifest_node,
     collect_generation_members,
     compute_generation_members_digest,
+    generation_manifest_point_id,
 )
 from rag_pipeline.core.index_manager.collection_manager import CollectionManager
 from rag_pipeline.core.index_manager.manager import RAGIndexManager
@@ -121,6 +122,16 @@ def _sealed_source(client, point_ops, collection):
     assert point_ops.process_and_upsert_chunks(
         [manifest], collection, "ws", "project", "develop"
     ) == (1, 0)
+
+
+def _manifest_digest(client, collection):
+    records = client.retrieve(
+        collection_name=collection,
+        ids=[generation_manifest_point_id("ws", "project", "develop")],
+        with_payload=True,
+        with_vectors=False,
+    )
+    return records[0].payload["generation_manifest_sha256"]
 
 
 def test_copy_on_write_advance_keeps_source_and_seals_target_revision(tmp_path):
@@ -275,10 +286,57 @@ def test_exact_generation_delete_verifies_tenant_coordinates():
 
     with pytest.raises(
         IncrementalIndexPreconditionError,
-        match="does not belong",
+        match="does not match the registry generation receipt",
     ):
         manager.delete_collection_target(
-            "ws", "project", "develop", "foreign_generation"
+            "ws",
+            "project",
+            "develop",
+            "foreign_generation",
+            SOURCE_COMMIT,
+            "1" * 64,
         )
 
     assert manager._collection_manager.collection_exists("foreign_generation")
+
+
+def test_exact_generation_delete_allows_tenant_owned_pr_overlay_points():
+    client = QdrantClient(":memory:")
+    client.create_collection(
+        collection_name="review_generation",
+        vectors_config=VectorParams(size=4, distance=Distance.COSINE),
+    )
+    point_ops = PointOperations(client, _Embedding(), embedding_dim=4)
+    _sealed_source(client, point_ops, "review_generation")
+    point_ops.process_and_upsert_chunks(
+        [TextNode(text="pull request change", metadata={
+            "workspace": "ws",
+            "project": "project",
+            "branch": "feature/review",
+            "path": "src/Changed.java",
+            "pr": True,
+            "pr_number": 42,
+        })],
+        "review_generation",
+        "ws",
+        "project",
+        "feature/review",
+    )
+    manifest_digest = _manifest_digest(client, "review_generation")
+    client.scroll = MagicMock(
+        side_effect=AssertionError("exact generation deletion must remain O(1)")
+    )
+    manager = object.__new__(RAGIndexManager)
+    manager.qdrant_client = client
+    manager._collection_manager = CollectionManager(client, 4)
+    manager._mutation_coordinator = _Coordinator()
+
+    assert manager.delete_collection_target(
+        "ws",
+        "project",
+        "develop",
+        "review_generation",
+        SOURCE_COMMIT,
+        manifest_digest,
+    ) is True
+    assert not manager._collection_manager.collection_exists("review_generation")

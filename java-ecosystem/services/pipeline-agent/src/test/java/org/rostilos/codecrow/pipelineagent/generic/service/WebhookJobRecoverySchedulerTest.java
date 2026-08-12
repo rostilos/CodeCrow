@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -45,6 +46,7 @@ class WebhookJobRecoverySchedulerTest {
 
         when(job.getId()).thenReturn(10L);
         when(job.getExternalId()).thenReturn("job-10");
+        when(job.getJobType()).thenReturn(JobType.BRANCH_ANALYSIS);
         when(job.getProject()).thenReturn(project);
         when(project.getId()).thenReturn(20L);
         when(jobService.findWebhookDispatchPayload(10L))
@@ -94,5 +96,46 @@ class WebhookJobRecoverySchedulerTest {
         assertThat(payload.getValue().eventType()).isEqualTo("push");
         assertThat(payload.getValue().sourceBranch()).isEqualTo("release/10x");
         assertThat(payload.getValue().commitHash()).isEqualTo("abc123");
+    }
+
+    @Test
+    void neverClaimsPendingRagChildrenOrConsultsPersistedPayload() {
+        Job initial = mock(Job.class);
+        Job incremental = mock(Job.class);
+        when(initial.getId()).thenReturn(12L);
+        when(initial.getJobType()).thenReturn(JobType.RAG_INITIAL_INDEX);
+        when(incremental.getId()).thenReturn(13L);
+        when(incremental.getJobType()).thenReturn(JobType.RAG_INCREMENTAL_INDEX);
+        when(jobService.findRecoverableWebhookJobs(any(), eq(50)))
+                .thenReturn(List.of(initial, incremental));
+        scheduler.recoverAcceptedJobs();
+
+        verify(jobService, never()).claimRecoverableWebhookJob(eq(12L), any());
+        verify(jobService, never()).claimRecoverableWebhookJob(eq(13L), any());
+        verify(jobService, never()).findWebhookDispatchPayload(12L);
+        verify(jobService, never()).findWebhookDispatchPayload(13L);
+        verify(asyncProcessor, never()).processWebhookAsync(
+                any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void neverClaimsAbandonedRunningRagChildren() {
+        Job initial = mock(Job.class);
+        Job incremental = mock(Job.class);
+        when(initial.getId()).thenReturn(14L);
+        when(initial.getJobType()).thenReturn(JobType.RAG_INITIAL_INDEX);
+        when(incremental.getId()).thenReturn(15L);
+        when(incremental.getJobType()).thenReturn(JobType.RAG_INCREMENTAL_INDEX);
+        when(jobService.findAbandonedRunningWebhookJobs(any(), eq(20)))
+                .thenReturn(List.of(initial, incremental));
+
+        scheduler.recoverAcceptedJobs();
+
+        verify(jobService, never()).claimAbandonedRunningWebhookJob(eq(14L), any());
+        verify(jobService, never()).claimAbandonedRunningWebhookJob(eq(15L), any());
+        verify(jobService, never()).findWebhookDispatchPayload(14L);
+        verify(jobService, never()).findWebhookDispatchPayload(15L);
+        verify(asyncProcessor, never()).processWebhookAsync(
+                any(), any(), any(), any(), any());
     }
 }

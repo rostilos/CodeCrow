@@ -11,6 +11,7 @@ import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
 import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.qadoc.QaDocState;
+import org.rostilos.codecrow.core.model.qadoc.QaDocDocument;
 import org.rostilos.codecrow.core.model.taskmanagement.TaskManagementConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
@@ -29,9 +30,7 @@ import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibility;
 import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
-import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
-import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
@@ -73,8 +72,8 @@ public class QaAutoDocListener {
     private final VcsClientProvider vcsClientProvider;
     private final QaDocStateRepository qaDocStateRepository;
     private final QaDocDocumentService qaDocDocumentService;
+    private final QaDocPublicPreviewService qaDocPublicPreviewService;
     private final PrFileEnrichmentService enrichmentService;
-    private final VcsConnectionCredentialsExtractor credentialsExtractor;
 
     public QaAutoDocListener(ProjectRepository projectRepository,
                               TaskManagementConnectionRepository connectionRepository,
@@ -84,8 +83,8 @@ public class QaAutoDocListener {
                               VcsClientProvider vcsClientProvider,
                               QaDocStateRepository qaDocStateRepository,
                               QaDocDocumentService qaDocDocumentService,
-                              PrFileEnrichmentService enrichmentService,
-                              TokenEncryptionService tokenEncryptionService) {
+                              QaDocPublicPreviewService qaDocPublicPreviewService,
+                              PrFileEnrichmentService enrichmentService) {
         this.projectRepository = projectRepository;
         this.connectionRepository = connectionRepository;
         this.clientFactory = clientFactory;
@@ -94,8 +93,8 @@ public class QaAutoDocListener {
         this.vcsClientProvider = vcsClientProvider;
         this.qaDocStateRepository = qaDocStateRepository;
         this.qaDocDocumentService = qaDocDocumentService;
+        this.qaDocPublicPreviewService = qaDocPublicPreviewService;
         this.enrichmentService = enrichmentService;
-        this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
     }
 
     @Async
@@ -200,6 +199,17 @@ public class QaAutoDocListener {
         String sourceBranch = (metrics != null) ? (String) metrics.get("sourceBranch") : null;
         String targetBranch = (metrics != null) ? (String) metrics.get("targetBranch") : null;
 
+        Optional<QaDocDocument> pendingHandoffDocument = Optional.empty();
+        try {
+            pendingHandoffDocument = qaDocDocumentService
+                    .findLatestDocument(project.getId(), prNumber)
+                    .filter(document -> QaDocHandoffRetryPolicy.shouldReuse(
+                            document, state, currentCommitHash, taskId));
+        } catch (Exception e) {
+            log.warn("QA auto-doc: failed to inspect pending handoff for project {} PR #{}: {}",
+                    project.getId(), prNumber, e.getMessage());
+        }
+
         // 5a. Fetch full PR diff
         String diff = null;
         VcsClient vcsClient = null;
@@ -229,7 +239,8 @@ public class QaAutoDocListener {
 
         // 5c. Compute delta diff for same-PR re-runs (incremental update)
         String deltaDiff = null;
-        if (isSamePrRerun && state.getLastCommitHash() != null
+        if (pendingHandoffDocument.isEmpty()
+                && isSamePrRerun && state.getLastCommitHash() != null
                 && currentCommitHash != null && vcsClient != null) {
             DiffContentFilter contentFilter = new DiffContentFilter();
             final VcsClient client = vcsClient;
@@ -249,22 +260,11 @@ public class QaAutoDocListener {
                     currentCommitHash, changedFilePaths);
         }
 
-        // 5e. Extract VCS credentials for Python-side RAG queries
-        String oauthKey = null;
-        String oauthSecret = null;
-        String bearerToken = null;
-        String vcsProviderStr = null;
-        if (vcsConnection != null) {
-            try {
-                VcsConnectionCredentials creds = credentialsExtractor.extractCredentials(vcsConnection);
-                oauthKey = creds.oAuthClient();
-                oauthSecret = creds.oAuthSecret();
-                bearerToken = creds.accessToken();
-                vcsProviderStr = creds.vcsProviderString();
-            } catch (Exception e) {
-                log.warn("QA auto-doc: failed to extract VCS credentials (non-critical): {}", e.getMessage());
-            }
-        }
+        // 5e. Keep only the non-secret provider identifier used by the prompt.
+        String vcsProviderStr = vcsConnection == null
+                ? null
+                : VcsConnectionCredentialsExtractor.getVcsProviderString(
+                        vcsConnection.getProviderType());
 
         // 6. Resolve task management connection + fetch task details
         TaskManagementConnection connection = connectionRepository
@@ -327,7 +327,9 @@ public class QaAutoDocListener {
                     taskId, e.getMessage());
         }
 
-        if (previousDocumentation == null && existingComment.isPresent()) {
+        if (previousDocumentation == null
+                && existingComment.isPresent()
+                && !isPublicPreviewOnlyComment(existingComment.get().body())) {
             previousDocumentation = existingComment.get().body();
             log.info("QA auto-doc: using existing task comment as previous documentation for task {}",
                     taskId);
@@ -349,13 +351,16 @@ public class QaAutoDocListener {
                 .repoSlug(repoSlug)
                 .sourceBranch(sourceBranch)
                 .targetBranch(targetBranch)
-                .oauthKey(oauthKey)
-                .oauthSecret(oauthSecret)
-                .bearerToken(bearerToken)
                 .build();
 
-        String qaDocument = qaDocGenerationService.generateQaDocumentation(
-                project, event, ctx);
+        String qaDocument;
+        if (pendingHandoffDocument.isPresent()) {
+            qaDocument = pendingHandoffDocument.get().getMarkdownContent();
+            log.info("QA auto-doc: retrying pending task handoff without regenerating project {} PR #{}",
+                    project.getId(), prNumber);
+        } else {
+            qaDocument = qaDocGenerationService.generateQaDocumentation(project, event, ctx);
+        }
 
         if (qaDocument == null || qaDocument.isBlank()) {
             log.info("QA auto-doc: LLM determined no documentation needed for task {}", taskId);
@@ -369,13 +374,28 @@ public class QaAutoDocListener {
             return;
         }
 
-        // 9. Update server-side state (secure, tamper-proof)
+        // 9. Persist the full document before disclosing a preview link.
         Long analysisId = (analysis != null) ? analysis.getId() : null;
-        upsertQaDocState(project, taskId, currentCommitHash, analysisId, prNumber, state);
-        upsertQaDocDocument(project, prNumber, taskId, currentCommitHash, analysisId, qaDocument);
+        Optional<QaDocDocument> persistedDocument = pendingHandoffDocument.isPresent()
+                ? pendingHandoffDocument
+                : upsertQaDocDocument(
+                        project, prNumber, taskId, currentCommitHash, analysisId, qaDocument);
+        if (persistedDocument.isEmpty()) {
+            log.warn("QA auto-doc: not updating task {} because a secure public preview could not be created", taskId);
+            return;
+        }
 
-        // 10. Post or update Jira comment
-        String commentBody = COMMENT_MARKER + "\n\n" + qaDocument;
+        // 10. Keep the QA guide in Jira, replacing only its large test-case
+        // section with the public preview URL.
+        String commentBody;
+        try {
+            String previewUrl = qaDocPublicPreviewService.createPreviewUrl(persistedDocument.get());
+            commentBody = qaDocPublicPreviewService.buildTaskComment(qaDocument, previewUrl);
+        } catch (Exception e) {
+            log.warn("QA auto-doc: failed to create public QA-document preview for task {}: {}",
+                    taskId, e.getMessage());
+            return;
+        }
         TaskCommentVisibility visibility = toTaskCommentVisibility(qaConfig.commentVisibility());
 
         try {
@@ -399,7 +419,12 @@ public class QaAutoDocListener {
             String errorMessage = describeTaskManagementFailure(e);
             log.error("QA auto-doc: failed to post/update comment on task {}: {}",
                     taskId, errorMessage, e);
+            return;
         }
+
+        // Advance generation state only after the durable document, preview,
+        // and task handoff all succeeded, so a failed handoff remains retryable.
+        upsertQaDocState(project, taskId, currentCommitHash, analysisId, prNumber, state);
     }
 
     // ── Enrichment helpers ──────────────────────────────────────────
@@ -476,18 +501,19 @@ public class QaAutoDocListener {
     /**
      * Upsert the latest rendered QA doc markdown for the PR.
      */
-    protected void upsertQaDocDocument(Project project, Long prNumber, String taskId,
-                                       String commitHash, Long analysisId,
-                                       String qaDocument) {
+    protected Optional<QaDocDocument> upsertQaDocDocument(Project project, Long prNumber, String taskId,
+                                                          String commitHash, Long analysisId,
+                                                          String qaDocument) {
         try {
-            qaDocDocumentService.upsertLatestDocument(
+            QaDocDocument document = qaDocDocumentService.upsertLatestDocument(
                     project, prNumber, taskId, analysisId, commitHash, qaDocument);
             log.debug("QA auto-doc: persisted latest document for project {} PR #{}",
                     project.getId(), prNumber);
+            return Optional.of(document);
         } catch (Exception e) {
-            // Non-critical: Jira posting should still proceed.
             log.warn("QA auto-doc: failed to persist latest document for project {} PR #{}: {}",
                     project.getId(), prNumber, e.getMessage());
+            return Optional.empty();
         }
     }
 
@@ -552,6 +578,18 @@ public class QaAutoDocListener {
             }
         }
         return e.getMessage();
+    }
+
+    public static boolean isPublicPreviewOnlyComment(String body) {
+        if (body == null || (!body.contains("/share#token=ccs_")
+                && !body.contains("/share?token=ccs_"))) {
+            return false;
+        }
+        String withoutPreviewLink = body
+                .replaceAll("https?://\\S+/share(?:#|\\?)token=ccs_[A-Za-z0-9_-]+", "")
+                .replace("View QA test cases in CodeCrow", "")
+                .replaceAll("[\\[\\]()\\s]", "");
+        return withoutPreviewLink.isBlank();
     }
 
     private static String truncateProviderMessage(String providerMessage) {

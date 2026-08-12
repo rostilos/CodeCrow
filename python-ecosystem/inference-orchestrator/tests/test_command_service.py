@@ -7,6 +7,7 @@ Covers: _build_summarize_prompt, _build_ask_prompt, _build_jvm_props_for_*,
 """
 import pytest
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from service.command.command_service import CommandService
@@ -75,6 +76,42 @@ class TestBuildJvmPropsForAsk:
         )
         result = service._build_jvm_props_for_ask(request)
         assert isinstance(result, dict)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_summarize_rag_failure_has_one_owner_diagnostic_and_event(
+    service,
+    caplog,
+):
+    service.rag_client.get_pr_context = AsyncMock(return_value={
+        "status": "error",
+        "status_code": 503,
+        "error": "RAG service unavailable",
+    })
+    request = MagicMock(
+        projectWorkspace="ws",
+        projectNamespace="project",
+        pullRequestId=42,
+    )
+    request.get_rag_branch.return_value = "main"
+    request.get_rag_base_branch.return_value = None
+    events = []
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="service.command.command_service",
+    ):
+        result = await service._fetch_rag_context_for_summarize(
+            request,
+            events.append,
+        )
+
+    assert result is None
+    assert sum(
+        "Optional RAG context unavailable for summarize" in record.getMessage()
+        for record in caplog.records
+    ) == 1
+    assert any(event.get("state") == "rag_skipped" for event in events)
 
 
 # ── _build_platform_jvm_props ────────────────────────────────────

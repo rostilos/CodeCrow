@@ -63,6 +63,13 @@ def read_repository_revision_preflight(*args, **kwargs):
     )
 
 
+def read_repository_generation_manifest_receipt(*args, **kwargs):
+    """Patchable boundary around bounded readable-alias verification."""
+    return revision_preflight.read_repository_generation_manifest_receipt(
+        *args, **kwargs
+    )
+
+
 def _config_int(config, name: str, default: int) -> int:
     value = getattr(config, name, default)
     if isinstance(value, bool) or not isinstance(value, (int, str)):
@@ -162,6 +169,7 @@ class RAGIndexManager:
         self.qdrant_client = QdrantClient(
             url=config.qdrant_url,
             api_key=config.qdrant_api_key or None,
+            timeout=_config_int(config, "qdrant_timeout_seconds", 30),
         )
         logger.info(f"Connected to Qdrant at {config.qdrant_url}")
 
@@ -325,6 +333,7 @@ class RAGIndexManager:
         exclude_patterns: Optional[List[str]] = None,
         source_tree_sha256: Optional[str] = None,
         collection_target: Optional[str] = None,
+        reuse_collection_target: Optional[str] = None,
         publish_branch_alias: bool = False,
         publish_legacy_project_alias: bool = False,
         progress_callback: Optional[Callable[[dict], None]] = None,
@@ -355,6 +364,18 @@ class RAGIndexManager:
             publish_branch_alias,
             publish_legacy_project_alias,
         )
+        reuse_collection_name = None
+        if reuse_collection_target:
+            reuse_collection_name = (
+                self._collection_manager.resolve_collection_target(
+                    reuse_collection_target
+                )
+            )
+            if reuse_collection_name is None:
+                logger.info(
+                    "Prior RAG generation is unavailable for vector reuse; "
+                    "embedding the target snapshot normally"
+                )
         with self._mutation_coordinator.acquire(
             workspace,
             project,
@@ -376,6 +397,7 @@ class RAGIndexManager:
                 source_tree=source_tree,
                 seal_generation=collection_target is not None,
                 publication_aliases=publication_aliases,
+                reuse_collection_name=reuse_collection_name,
                 operation_id=lease.token,
                 activation_guard=lease.assert_owned,
                 progress_callback=progress_callback,
@@ -455,6 +477,7 @@ class RAGIndexManager:
         branch: str,
         commit: str,
         collection_target: str,
+        generation_manifest_sha256: Optional[str] = None,
         publish_branch_alias: bool = True,
         publish_legacy_project_alias: bool = False,
     ) -> List[str]:
@@ -486,11 +509,14 @@ class RAGIndexManager:
                 raise IncrementalIndexPreconditionError(
                     "repository generation is unavailable for alias publication"
                 )
-            receipt = read_repository_revision_preflight(
+            receipt = read_repository_generation_manifest_receipt(
                 self.qdrant_client,
                 physical,
+                workspace,
+                project,
                 branch,
                 commit,
+                generation_manifest_sha256,
             )
             if receipt is None or any(receipt.get(key) != value for key, value in (
                 ("workspace", workspace),
@@ -907,11 +933,18 @@ class RAGIndexManager:
         project: str,
         branch: str,
         collection_target: Optional[str] = None,
+        generation_revision: Optional[str] = None,
+        generation_manifest_sha256: Optional[str] = None,
     ) -> bool:
         """Delete all points for a specific branch from the project collection."""
         if collection_target:
             return self.delete_collection_target(
-                workspace, project, branch, collection_target
+                workspace,
+                project,
+                branch,
+                collection_target,
+                generation_revision,
+                generation_manifest_sha256,
             )
         with self._mutation_coordinator.acquire(
             workspace,
@@ -921,7 +954,10 @@ class RAGIndexManager:
             collection_name = self._get_project_collection_name(workspace, project)
             if not self._collection_manager.collection_exists(collection_name):
                 if not self._collection_manager.alias_exists(collection_name):
-                    logger.warning(f"Collection {collection_name} does not exist")
+                    logger.info(
+                        "Branch cleanup is already complete; collection %s does not exist",
+                        collection_name,
+                    )
                     return False
 
             lease.assert_owned()
@@ -933,8 +969,14 @@ class RAGIndexManager:
         project: str,
         branch: str,
         collection_target: str,
+        generation_revision: Optional[str],
+        generation_manifest_sha256: Optional[str],
     ) -> bool:
-        """Delete one exact generation after proving its tenant ownership."""
+        """Delete one registry-selected generation after O(1) seal proof."""
+        if not generation_revision or not generation_manifest_sha256:
+            raise IncrementalIndexPreconditionError(
+                "exact generation deletion requires its revision and manifest receipt"
+            )
         with self._mutation_coordinator.acquire(
             workspace, project, "delete-generation"
         ) as lease:
@@ -943,32 +985,18 @@ class RAGIndexManager:
             )
             if physical is None:
                 return False
-            offset = None
-            point_count = 0
-            while True:
-                points, offset = self.qdrant_client.scroll(
-                    collection_name=physical,
-                    limit=256,
-                    offset=offset,
-                    with_payload=["workspace", "project", "branch"],
-                    with_vectors=False,
-                )
-                point_count += len(points)
-                for point in points:
-                    payload = point.payload or {}
-                    if any(payload.get(key) != value for key, value in (
-                        ("workspace", workspace),
-                        ("project", project),
-                        ("branch", branch),
-                    )):
-                        raise IncrementalIndexPreconditionError(
-                            "collection target does not belong to the requested tenant branch"
-                        )
-                if offset is None:
-                    break
-            if point_count == 0:
+            receipt = read_repository_generation_manifest_receipt(
+                self.qdrant_client,
+                physical,
+                workspace,
+                project,
+                branch,
+                generation_revision,
+                generation_manifest_sha256,
+            )
+            if receipt is None:
                 raise IncrementalIndexPreconditionError(
-                    "empty collection target cannot be ownership-verified"
+                    "collection target does not match the registry generation receipt"
                 )
             lease.assert_owned()
             if self._collection_manager.alias_exists(collection_target):
@@ -1064,7 +1092,10 @@ class RAGIndexManager:
         )
 
     def close(self) -> None:
-        self._mutation_coordinator.close()
+        try:
+            self._mutation_coordinator.close()
+        finally:
+            self.qdrant_client.close()
 
     # Statistics
 

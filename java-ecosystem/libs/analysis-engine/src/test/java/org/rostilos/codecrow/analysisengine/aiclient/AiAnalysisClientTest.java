@@ -323,6 +323,8 @@ class AiAnalysisClientTest {
                 void shouldBindExactTargetBranchGenerationToQueuedReview() throws Exception {
                         var repository = mock(org.rostilos.codecrow.core.persistence.repository.rag
                                         .RagBranchIndexGenerationRepository.class);
+                        var branchRepository = mock(org.rostilos.codecrow.core.persistence.repository.rag
+                                        .RagBranchIndexRepository.class);
                         var generation = mock(org.rostilos.codecrow.core.model.rag
                                         .RagBranchIndexGeneration.class);
                         when(generation.getCollectionName()).thenReturn("opaque-master-generation");
@@ -332,6 +334,10 @@ class AiAnalysisClientTest {
                                         .thenReturn(List.of(generation));
                         org.springframework.test.util.ReflectionTestUtils.setField(
                                         client, "branchGenerationRepository", repository);
+                        org.springframework.test.util.ReflectionTestUtils.setField(
+                                        client, "branchIndexRepository", branchRepository);
+                        when(branchRepository.markAccessedIfUnclaimed(
+                                        eq(1L), eq("main"), any())).thenReturn(1);
                         AiAnalysisRequest exactRequest = new TestAiAnalysisRequest() {
                                 @Override
                                 public String getBaseCommitHash() {
@@ -357,6 +363,81 @@ class AiAnalysisClientTest {
                         assertThat(requestPayload)
                                         .containsEntry("ragCollectionTarget", "opaque-master-generation")
                                         .containsEntry("ragBaseGenerationManifestSha256", "master-manifest");
+                        verify(branchRepository).markAccessedIfUnclaimed(
+                                        eq(1L), eq("main"), any());
+                }
+
+                @Test
+                @DisplayName("should not bind a generation claimed by transient cleanup")
+                void shouldNotBindCleanupClaimedGeneration() throws Exception {
+                        var repository = mock(org.rostilos.codecrow.core.persistence.repository.rag
+                                        .RagBranchIndexGenerationRepository.class);
+                        var branchRepository = mock(org.rostilos.codecrow.core.persistence.repository.rag
+                                        .RagBranchIndexRepository.class);
+                        org.springframework.test.util.ReflectionTestUtils.setField(
+                                        client, "branchGenerationRepository", repository);
+                        org.springframework.test.util.ReflectionTestUtils.setField(
+                                        client, "branchIndexRepository", branchRepository);
+                        when(branchRepository.markAccessedIfUnclaimed(
+                                        eq(1L), eq("main"), any())).thenReturn(0);
+                        AiAnalysisRequest exactRequest = new TestAiAnalysisRequest() {
+                                @Override
+                                public String getBaseCommitHash() {
+                                        return "master-base";
+                                }
+                        };
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(Map.of(
+                                                        "type", "final",
+                                                        "result", Map.of(
+                                                                        "comment", "ok",
+                                                                        "issues", List.of()))));
+
+                        client.performAnalysis(exactRequest);
+
+                        verifyNoInteractions(repository);
+                }
+
+                @Test
+                @DisplayName("should not look up or bind a RAG generation when RAG is disabled")
+                void shouldNotBindRagGenerationWhenDisabled() throws Exception {
+                        var repository = mock(org.rostilos.codecrow.core.persistence.repository.rag
+                                        .RagBranchIndexGenerationRepository.class);
+                        org.springframework.test.util.ReflectionTestUtils.setField(
+                                        client, "branchGenerationRepository", repository);
+                        AiAnalysisRequest disabledRequest = new TestAiAnalysisRequest() {
+                                @Override
+                                public boolean getRagEnabled() {
+                                        return false;
+                                }
+
+                                @Override
+                                public String getBaseCommitHash() {
+                                        return "master-base";
+                                }
+                        };
+                        Map<String, Object> finalEvent = Map.of(
+                                        "type", "final",
+                                        "result", Map.of("comment", "ok", "issues", List.of()));
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        client.performAnalysis(disabledRequest);
+
+                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> queued = objectMapper.readValue(
+                                        payloadCaptor.getValue(), Map.class);
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> requestPayload =
+                                        (Map<String, Object>) queued.get("request");
+                        assertThat(requestPayload)
+                                        .containsEntry("ragEnabled", false)
+                                        .doesNotContainKeys(
+                                                        "ragCollectionTarget",
+                                                        "ragBaseGenerationManifestSha256");
+                        verifyNoInteractions(repository);
                 }
 
                 @Test

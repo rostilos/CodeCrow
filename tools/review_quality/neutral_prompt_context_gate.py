@@ -139,6 +139,15 @@ def _request(
         currentCommitHash=_revision("head", digest),
         commitHash=_revision("head", digest),
         baseCommitHash=_revision("base", digest),
+        # The deterministic adapter models a PR overlay on an immutable base
+        # generation. Supply the same complete base binding production sends;
+        # the dry-run facade then returns the matching PR-generation receipts.
+        # Without these coordinates Stage 1 correctly treats the request as an
+        # unbound legacy review and must not query PR-scoped vectors.
+        ragCollectionTarget=f"neutral_{digest}_main_generation",
+        ragBaseGenerationManifestSha256=hashlib.sha256(
+            f"base-generation\0{digest}".encode("utf-8")
+        ).hexdigest(),
         changedFiles=list(changed),
         rawDiff=_raw_diff(definition),
         prTitle=f"Provider-free neutral prompt gate: {definition.case_id}",

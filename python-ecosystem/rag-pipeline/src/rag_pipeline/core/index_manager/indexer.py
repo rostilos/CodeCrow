@@ -432,7 +432,11 @@ class RepositoryIndexer:
                     ) is FileDisposition.FULL
                 ]
         file_count = len(file_list)
-        logger.info(f"Found {file_count} files for estimation")
+        logger.info(
+            "RAG capacity scan found %s repository files "
+            "(this is not the LLM review scope)",
+            file_count,
+        )
 
         if file_count == 0:
             return 0, 0
@@ -497,6 +501,7 @@ class RepositoryIndexer:
         source_tree=None,
         seal_generation: bool = False,
         publication_aliases: Optional[List[str]] = None,
+        reuse_collection_name: Optional[str] = None,
         operation_id: Optional[str] = None,
         activation_guard: Optional[Callable[[], None]] = None,
         progress_callback: Optional[Callable[[dict], None]] = None,
@@ -571,6 +576,7 @@ class RepositoryIndexer:
         actual_old_collection = None
         if old_collection_exists:
             actual_old_collection = self.collection_manager.resolve_alias(alias_name) or alias_name
+        vector_reuse_collection = reuse_collection_name or actual_old_collection
         
         # Get file list
         repository_file_list = list(
@@ -851,7 +857,7 @@ class RepositoryIndexer:
                     workspace,
                     project,
                     branch,
-                    reuse_collection_name=actual_old_collection,
+                    reuse_collection_name=vector_reuse_collection,
                     operation_id=operation_id,
                     metrics=embedding_metrics,
                 )
@@ -996,7 +1002,7 @@ class RepositoryIndexer:
                     workspace,
                     project,
                     branch,
-                    reuse_collection_name=actual_old_collection,
+                    reuse_collection_name=vector_reuse_collection,
                     operation_id=operation_id,
                     metrics=embedding_metrics,
                 )
@@ -1751,21 +1757,30 @@ class FileOperations:
                 commit=revision,
             )
 
-        if repository_analysis_plugins:
-            documents_by_path = {
-                document.metadata["path"]: document for document in documents
-            }
-            missing = sorted(
-                path for path in active_updated_paths
-                if path not in documents_by_path
+        documents_by_path = {
+            document.metadata["path"]: document for document in documents
+        }
+        missing = sorted(
+            path for path in active_updated_paths
+            if path not in documents_by_path
+        )
+        if missing:
+            logger.info(
+                "Quarantining %s changed repository files that could not "
+                "be loaded during incremental indexing: %s",
+                len(missing),
+                ", ".join(missing[:10]),
             )
-            if missing:
-                logger.warning(
-                    "Quarantining %s changed repository files that could not "
-                    "be loaded during incremental indexing: %s",
-                    len(missing),
-                    ", ".join(missing[:10]),
-                )
+
+        if repository_analysis_plugins:
+            # A loader omission is not a deletion. Lock files, binary files,
+            # oversized files, and locally excluded files can all be present
+            # in the authoritative checkout while intentionally producing no
+            # Document. Feeding those paths to repository plugins as
+            # tombstones corrupts their restored state; dereferencing the
+            # absent document also used to raise a raw KeyError (for example,
+            # ``composer.lock``). Only successfully loaded updates and
+            # provider-declared deletions participate in the plugin overlay.
             artifacts = tuple(sorted((
                 *(
                     FileArtifact(
@@ -1773,10 +1788,11 @@ class FileOperations:
                         content=documents_by_path[path].text,
                     )
                     for path in active_updated_paths
+                    if path in documents_by_path
                 ),
                 *(
                     FileArtifact(path=path, content="", deleted=True)
-                    for path in (*active_deleted_paths, *missing)
+                    for path in active_deleted_paths
                 ),
             ), key=lambda artifact: artifact.path))
             handle = self.plugin_runtime.start_repository_analysis(
@@ -1821,8 +1837,21 @@ class FileOperations:
         for node in semantic_nodes:
             node.metadata.update(identity_metadata)
 
+        # Preserve the last usable semantic and repository-graph
+        # representations for updates which the loader quarantined. In
+        # copy-on-write generations this also keeps the already copied points
+        # intact. Real deletions and loaded updates still replace their prior
+        # representations normally. Repository facts intentionally continue
+        # to use the authoritative provider change set above.
+        replacement_paths = sorted({
+            *active_deleted_paths,
+            *(
+                path for path in active_updated_paths
+                if path in documents_by_path
+            ),
+        })
         old_path_records = self._records_for_values(
-            collection_name, branch, "path", paths
+            collection_name, branch, "path", replacement_paths
         )
         old_semantic_records = [
             record for record in old_path_records
@@ -1838,7 +1867,10 @@ class FileOperations:
 
         if analysis is not None:
             impacted_old_nodes = self._records_for_values(
-                collection_name, branch, "architecture_paths", paths
+                collection_name,
+                branch,
+                "architecture_paths",
+                replacement_paths,
             )
             impacted_old_nodes = [
                 record for record in impacted_old_nodes
@@ -1848,7 +1880,10 @@ class FileOperations:
                 architecture_group_from_payload(record.payload or {})
                 for record in impacted_old_nodes
             }
-            groups = old_groups | affected_architecture_groups(analysis, paths)
+            groups = old_groups | affected_architecture_groups(
+                analysis,
+                replacement_paths,
+            )
             group_ids = {architecture_group_id(group) for group in groups}
             old_group_nodes = self._records_for_values(
                 collection_name, branch, "architecture_group", group_ids
@@ -1866,7 +1901,7 @@ class FileOperations:
                 self.representation_fingerprint,
                 groups=groups,
             )
-            related_paths = set(paths)
+            related_paths = set(replacement_paths)
             for record in old_group_nodes:
                 related_paths.update(
                     (record.payload or {}).get("architecture_paths") or ()

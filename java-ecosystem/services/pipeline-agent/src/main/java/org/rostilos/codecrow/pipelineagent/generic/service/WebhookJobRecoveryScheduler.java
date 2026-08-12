@@ -52,6 +52,9 @@ public class WebhookJobRecoveryScheduler {
         OffsetDateTime pendingThreshold = OffsetDateTime.now().minusSeconds(30);
         List<Job> candidates = jobService.findRecoverableWebhookJobs(pendingThreshold, 50);
         for (Job candidate : candidates) {
+            if (!isSupportedWebhookAnalysis(candidate)) {
+                continue;
+            }
             if (!jobService.claimRecoverableWebhookJob(
                     candidate.getId(), pendingThreshold)) {
                 continue;
@@ -63,6 +66,9 @@ public class WebhookJobRecoveryScheduler {
         List<Job> abandoned = jobService.findAbandonedRunningWebhookJobs(
                 abandonedThreshold, 20);
         for (Job candidate : abandoned) {
+            if (!isSupportedWebhookAnalysis(candidate)) {
+                continue;
+            }
             if (!jobService.claimAbandonedRunningWebhookJob(
                     candidate.getId(), abandonedThreshold)) {
                 continue;
@@ -71,6 +77,11 @@ public class WebhookJobRecoveryScheduler {
                     "No pipeline activity for 30 minutes; resuming the persisted job");
             recover(candidate);
         }
+    }
+
+    private static boolean isSupportedWebhookAnalysis(Job job) {
+        return job != null && (job.getJobType() == JobType.PR_ANALYSIS
+                || job.getJobType() == JobType.BRANCH_ANALYSIS);
     }
 
     private void recover(Job job) {

@@ -28,6 +28,28 @@ public class RagPipelineClient {
     private final boolean ragEnabled;
     private final String serviceSecret;
 
+    /** HTTP response failure with enough structure for bounded retry decisions. */
+    public static final class RagApiException extends IOException {
+        private final int statusCode;
+
+        public RagApiException(int statusCode, String detail) {
+            super("RAG API error: " + statusCode + " — " + detail);
+            this.statusCode = statusCode;
+        }
+
+        public int getStatusCode() {
+            return statusCode;
+        }
+
+        public boolean isServiceFailure() {
+            return statusCode == 401
+                    || statusCode == 403
+                    || statusCode == 408
+                    || statusCode == 429
+                    || statusCode >= 500;
+        }
+    }
+
     public RagPipelineClient(
             @Value("${codecrow.rag.api.url:http://rag-pipeline:8001}") String ragApiUrl,
             @Value("${codecrow.rag.api.enabled:true}") boolean ragEnabled,
@@ -111,6 +133,25 @@ public class RagPipelineClient {
             boolean publishBranchAlias,
             boolean publishLegacyProjectAlias
     ) throws IOException {
+        return indexRepository(
+                repoPath, projectWorkspace, projectNamespace, branch, commit,
+                includePatterns, excludePatterns, collectionTarget,
+                publishBranchAlias, publishLegacyProjectAlias, (String) null);
+    }
+
+    public Map<String, Object> indexRepository(
+            String repoPath,
+            String projectWorkspace,
+            String projectNamespace,
+            String branch,
+            String commit,
+            List<String> includePatterns,
+            List<String> excludePatterns,
+            String collectionTarget,
+            boolean publishBranchAlias,
+            boolean publishLegacyProjectAlias,
+            String reuseCollectionTarget
+    ) throws IOException {
         if (!ragEnabled) {
             log.debug("RAG indexing disabled, skipping repository indexing");
             return Map.of("status", "skipped", "reason", "RAG disabled");
@@ -124,6 +165,9 @@ public class RagPipelineClient {
         payload.put("commit", commit);
         if (collectionTarget != null && !collectionTarget.isBlank()) {
             payload.put("collection_target", collectionTarget);
+        }
+        if (reuseCollectionTarget != null && !reuseCollectionTarget.isBlank()) {
+            payload.put("reuse_collection_target", reuseCollectionTarget);
         }
         if (publishBranchAlias) {
             payload.put("publish_branch_alias", true);
@@ -183,6 +227,58 @@ public class RagPipelineClient {
             boolean publishLegacyProjectAlias,
             Consumer<Map<String, Object>> progressConsumer
     ) throws IOException {
+        return indexRepository(
+                repoPath, projectWorkspace, projectNamespace, branch, commit,
+                includePatterns, excludePatterns, collectionTarget,
+                publishBranchAlias, publishLegacyProjectAlias, false, null,
+                progressConsumer);
+    }
+
+    /**
+     * Streaming exact-generation indexing with an explicit shared-snapshot
+     * ownership handoff. The RAG service atomically moves the snapshot before
+     * it emits admission, so a lost stream cannot expose its active worker to
+     * caller-side deletion of the original path.
+     */
+    public Map<String, Object> indexRepository(
+            String repoPath,
+            String projectWorkspace,
+            String projectNamespace,
+            String branch,
+            String commit,
+            List<String> includePatterns,
+            List<String> excludePatterns,
+            String collectionTarget,
+            boolean publishBranchAlias,
+            boolean publishLegacyProjectAlias,
+            boolean transferRepositoryOwnership,
+            Runnable ownershipAdmissionConsumer,
+            Consumer<Map<String, Object>> progressConsumer
+    ) throws IOException {
+        return indexRepository(
+                repoPath, projectWorkspace, projectNamespace, branch, commit,
+                includePatterns, excludePatterns, collectionTarget,
+                publishBranchAlias, publishLegacyProjectAlias,
+                transferRepositoryOwnership, null, ownershipAdmissionConsumer,
+                progressConsumer);
+    }
+
+    public Map<String, Object> indexRepository(
+            String repoPath,
+            String projectWorkspace,
+            String projectNamespace,
+            String branch,
+            String commit,
+            List<String> includePatterns,
+            List<String> excludePatterns,
+            String collectionTarget,
+            boolean publishBranchAlias,
+            boolean publishLegacyProjectAlias,
+            boolean transferRepositoryOwnership,
+            String reuseCollectionTarget,
+            Runnable ownershipAdmissionConsumer,
+            Consumer<Map<String, Object>> progressConsumer
+    ) throws IOException {
         if (!ragEnabled) {
             log.debug("RAG indexing disabled, skipping repository indexing");
             return Map.of("status", "skipped", "reason", "RAG disabled");
@@ -197,11 +293,17 @@ public class RagPipelineClient {
         if (collectionTarget != null && !collectionTarget.isBlank()) {
             payload.put("collection_target", collectionTarget);
         }
+        if (reuseCollectionTarget != null && !reuseCollectionTarget.isBlank()) {
+            payload.put("reuse_collection_target", reuseCollectionTarget);
+        }
         if (publishBranchAlias) {
             payload.put("publish_branch_alias", true);
         }
         if (publishLegacyProjectAlias) {
             payload.put("publish_legacy_project_alias", true);
+        }
+        if (transferRepositoryOwnership) {
+            payload.put("transfer_repo_ownership", true);
         }
         payload.put("source_tree_sha256", RepositorySourceTreeIdentity.sha256(Path.of(repoPath)));
         if (includePatterns != null && !includePatterns.isEmpty()) {
@@ -211,7 +313,8 @@ public class RagPipelineClient {
             payload.put("exclude_patterns", excludePatterns);
         }
         return postLongRunningSse(
-                ragApiUrl + "/index/repository/stream", payload, progressConsumer);
+                ragApiUrl + "/index/repository/stream", payload,
+                ownershipAdmissionConsumer, progressConsumer);
     }
 
     public Map<String, Object> updateFiles(
@@ -374,6 +477,7 @@ public class RagPipelineClient {
             String branch,
             String commit,
             String collectionTarget,
+            String generationManifestSha256,
             boolean publishBranchAlias,
             boolean publishLegacyProjectAlias) throws IOException {
         if (!ragEnabled || !publishBranchAlias) {
@@ -385,6 +489,7 @@ public class RagPipelineClient {
         payload.put("branch", branch);
         payload.put("commit", commit);
         payload.put("collection_target", collectionTarget);
+        payload.put("generation_manifest_sha256", generationManifestSha256);
         payload.put("publish_branch_alias", true);
         if (publishLegacyProjectAlias) {
             payload.put("publish_legacy_project_alias", true);
@@ -515,31 +620,122 @@ public class RagPipelineClient {
      * @return true if points were deleted or already absent, false on error
      */
     public boolean deletePrFiles(String workspace, String project, int prNumber) {
+        return deletePrFiles(workspace, project, prNumber, null);
+    }
+
+    /**
+     * Deletes PR overlay points from one immutable physical generation.
+     * Passing no target retains the legacy project-alias behavior for projects
+     * that predate the generation registry.
+     */
+    public boolean deletePrFiles(
+            String workspace,
+            String project,
+            int prNumber,
+            String collectionTarget) {
+        PrFilesDeletionOutcome outcome = deletePrFilesWithOutcome(
+                workspace, project, prNumber, collectionTarget);
+        if (!outcome.successful()) {
+            log.warn("Failed to delete PR #{} files from {}/{} target={}: status={} detail={}",
+                    prNumber, workspace, project, outcome.targetLabel(),
+                    outcome.statusCode() != null ? outcome.statusCode() : "transport",
+                    outcome.detail());
+        }
+        return outcome.successful();
+    }
+
+    /**
+     * Performs one PR-overlay deletion without logging. Multi-generation callers
+     * use the structured result to emit one contextual diagnostic and stop after
+     * a service-wide failure instead of repeating the same timeout per target.
+     */
+    public PrFilesDeletionOutcome deletePrFilesWithOutcome(
+            String workspace,
+            String project,
+            int prNumber,
+            String collectionTarget) {
+        String targetLabel = collectionTarget != null && !collectionTarget.isBlank()
+                ? collectionTarget
+                : "legacy-alias";
         if (!ragEnabled) {
             log.debug("RAG disabled, skipping PR files deletion");
-            return true;
+            return PrFilesDeletionOutcome.success(targetLabel);
         }
 
-        String url = String.format("%s/index/pr-files/%s/%s/%d", ragApiUrl, workspace, project, prNumber);
+        HttpUrl.Builder urlBuilder = HttpUrl.get(String.format(
+                "%s/index/pr-files/%s/%s/%d", ragApiUrl, workspace, project, prNumber)).newBuilder();
+        if (collectionTarget != null && !collectionTarget.isBlank()) {
+            urlBuilder.addQueryParameter("collection_target", collectionTarget);
+        }
 
         Request.Builder builder = new Request.Builder()
-                .url(url)
+                .url(urlBuilder.build())
                 .delete();
         addAuthHeader(builder);
         Request request = builder.build();
 
         try (Response response = httpClient.newCall(request).execute()) {
             if (response.isSuccessful()) {
-                log.info("Deleted PR #{} indexed data from {}/{}", prNumber, workspace, project);
-                return true;
+                log.info("Deleted PR #{} indexed data from {}/{} target={}",
+                        prNumber, workspace, project, targetLabel);
+                return PrFilesDeletionOutcome.success(targetLabel);
             } else {
-                log.warn("Failed to delete PR #{} files: {} - {}", prNumber, response.code(),
-                        response.body() != null ? response.body().string() : "no body");
-                return false;
+                int statusCode = response.code();
+                String detail = response.body() != null ? response.body().string() : "no body";
+                boolean serviceFailure = statusCode == 401
+                        || statusCode == 403
+                        || statusCode == 408
+                        || statusCode == 409
+                        || statusCode == 429
+                        || statusCode >= 500;
+                return PrFilesDeletionOutcome.failure(
+                        targetLabel,
+                        serviceFailure
+                                ? PrFilesDeletionFailure.SERVICE
+                                : PrFilesDeletionFailure.TARGET,
+                        statusCode,
+                        truncateDetail(detail));
             }
         } catch (IOException e) {
-            log.warn("Error deleting PR #{} files from {}/{}: {}", prNumber, workspace, project, e.getMessage());
-            return false;
+            return PrFilesDeletionOutcome.failure(
+                    targetLabel,
+                    PrFilesDeletionFailure.TRANSPORT,
+                    null,
+                    e.getMessage());
+        }
+    }
+
+    public enum PrFilesDeletionFailure {
+        NONE,
+        TARGET,
+        SERVICE,
+        TRANSPORT
+    }
+
+    public record PrFilesDeletionOutcome(
+            String targetLabel,
+            boolean successful,
+            PrFilesDeletionFailure failure,
+            Integer statusCode,
+            String detail) {
+
+        public static PrFilesDeletionOutcome success(String targetLabel) {
+            return new PrFilesDeletionOutcome(
+                    targetLabel, true, PrFilesDeletionFailure.NONE, null, null);
+        }
+
+        public static PrFilesDeletionOutcome failure(
+                String targetLabel,
+                PrFilesDeletionFailure failure,
+                Integer statusCode,
+                String detail) {
+            return new PrFilesDeletionOutcome(
+                    targetLabel, false, failure, statusCode, detail);
+        }
+
+        public boolean shouldStopRemainingTargets() {
+            return failure == PrFilesDeletionFailure.SERVICE
+                    || failure == PrFilesDeletionFailure.TRANSPORT;
         }
     }
 
@@ -563,8 +759,62 @@ public class RagPipelineClient {
             String branch,
             String collectionTarget
     ) throws IOException {
+        return deleteBranch(
+                workspace, project, branch, collectionTarget, null, null);
+    }
+
+    public boolean deleteBranch(
+            String workspace,
+            String project,
+            String branch,
+            String collectionTarget,
+            String generationRevision,
+            String generationManifestSha256
+    ) throws IOException {
+        BranchDeletionOutcome outcome = deleteBranchWithOutcome(
+                workspace, project, branch, collectionTarget,
+                generationRevision, generationManifestSha256);
+        if (outcome.failure() == BranchDeletionFailure.TRANSPORT) {
+            throw new IOException(outcome.detail());
+        }
+        if (!outcome.successful()
+                && !(outcome.statusCode() == null && "RAG disabled".equals(outcome.detail()))) {
+            log.warn("Failed to delete branch data target={}: status={} detail={}",
+                    outcome.targetLabel(), outcome.statusCode(), outcome.detail());
+        }
+        return outcome.successful();
+    }
+
+    /** Structured, non-logging branch deletion for multi-generation cleanup. */
+    public BranchDeletionOutcome deleteBranchWithOutcome(
+            String workspace,
+            String project,
+            String branch,
+            String collectionTarget
+    ) {
+        return deleteBranchWithOutcome(
+                workspace, project, branch, collectionTarget, null, null);
+    }
+
+    /**
+     * Deletes one exact generation using its registry-owned revision and
+     * manifest digest as an O(1) ownership proof. The RAG service retrieves the
+     * deterministic manifest point; it does not scan every collection member.
+     */
+    public BranchDeletionOutcome deleteBranchWithOutcome(
+            String workspace,
+            String project,
+            String branch,
+            String collectionTarget,
+            String generationRevision,
+            String generationManifestSha256
+    ) {
+        String targetLabel = collectionTarget != null && !collectionTarget.isBlank()
+                ? collectionTarget
+                : "legacy-alias";
         if (!ragEnabled) {
-            return false;
+            return BranchDeletionOutcome.failure(
+                    targetLabel, BranchDeletionFailure.TARGET, null, "RAG disabled");
         }
         
         // URL-encode branch name to handle slashes (e.g., feature/xyz -> feature%2Fxyz)
@@ -573,6 +823,14 @@ public class RagPipelineClient {
                 "%s/index/%s/%s/branch/%s", ragApiUrl, workspace, project, encodedBranch)).newBuilder();
         if (collectionTarget != null && !collectionTarget.isBlank()) {
             urlBuilder.addQueryParameter("collection_target", collectionTarget);
+            if (generationRevision != null && !generationRevision.isBlank()) {
+                urlBuilder.addQueryParameter("generation_revision", generationRevision);
+            }
+            if (generationManifestSha256 != null
+                    && !generationManifestSha256.isBlank()) {
+                urlBuilder.addQueryParameter(
+                        "generation_manifest_sha256", generationManifestSha256);
+            }
         }
         
         Request.Builder builder = new Request.Builder()
@@ -583,13 +841,68 @@ public class RagPipelineClient {
         
         try (Response response = httpClient.newCall(request).execute()) {
             if (response.isSuccessful()) {
-                log.info("Deleted branch data for {}/{}/{}", workspace, project, branch);
-                return true;
+                log.info("Deleted branch data for {}/{}/{} target={}",
+                        workspace, project, branch, targetLabel);
+                return BranchDeletionOutcome.success(targetLabel);
             } else {
-                log.warn("Failed to delete branch data: {} - {}", response.code(), 
-                        response.body() != null ? response.body().string() : "no body");
-                return false;
+                int statusCode = response.code();
+                String detail = response.body() != null
+                        ? response.body().string()
+                        : "no body";
+                boolean serviceFailure = statusCode == 401
+                        || statusCode == 403
+                        || statusCode == 408
+                        || statusCode == 409
+                        || statusCode == 429
+                        || statusCode >= 500;
+                return BranchDeletionOutcome.failure(
+                        targetLabel,
+                        serviceFailure
+                                ? BranchDeletionFailure.SERVICE
+                                : BranchDeletionFailure.TARGET,
+                        statusCode,
+                        truncateDetail(detail));
             }
+        } catch (IOException transportFailure) {
+            return BranchDeletionOutcome.failure(
+                    targetLabel,
+                    BranchDeletionFailure.TRANSPORT,
+                    null,
+                    transportFailure.getMessage());
+        }
+    }
+
+    public enum BranchDeletionFailure {
+        NONE,
+        TARGET,
+        SERVICE,
+        TRANSPORT
+    }
+
+    public record BranchDeletionOutcome(
+            String targetLabel,
+            boolean successful,
+            BranchDeletionFailure failure,
+            Integer statusCode,
+            String detail) {
+
+        public static BranchDeletionOutcome success(String targetLabel) {
+            return new BranchDeletionOutcome(
+                    targetLabel, true, BranchDeletionFailure.NONE, null, null);
+        }
+
+        public static BranchDeletionOutcome failure(
+                String targetLabel,
+                BranchDeletionFailure failure,
+                Integer statusCode,
+                String detail) {
+            return new BranchDeletionOutcome(
+                    targetLabel, false, failure, statusCode, detail);
+        }
+
+        public boolean shouldStopRemainingTargets() {
+            return failure == BranchDeletionFailure.SERVICE
+                    || failure == BranchDeletionFailure.TRANSPORT;
         }
     }
     
@@ -761,6 +1074,7 @@ public class RagPipelineClient {
     private Map<String, Object> postLongRunningSse(
             String url,
             Map<String, Object> payload,
+            Runnable ownershipAdmissionConsumer,
             Consumer<Map<String, Object>> progressConsumer
     ) throws IOException {
         RequestBody body = RequestBody.create(objectMapper.writeValueAsString(payload), JSON);
@@ -773,7 +1087,7 @@ public class RagPipelineClient {
         try (Response response = longRunningHttpClient.newCall(builder.build()).execute()) {
             if (!response.isSuccessful()) {
                 String detail = response.body() != null ? response.body().string() : "{}";
-                throw new IOException("RAG API error: " + response.code() + " — " + detail);
+                throw new RagApiException(response.code(), detail);
             }
             if (response.body() == null) {
                 throw new IOException("RAG progress stream returned no body");
@@ -789,6 +1103,15 @@ public class RagPipelineClient {
                 }
                 Map<String, Object> event = objectMapper.readValue(json, Map.class);
                 String type = String.valueOf(event.get("type"));
+                if ("admitted".equals(type)) {
+                    if (Boolean.TRUE.equals(
+                            event.get("repositoryOwnershipTransferred"))
+                            && ownershipAdmissionConsumer != null) {
+                        ownershipAdmissionConsumer.run();
+                        ownershipAdmissionConsumer = null;
+                    }
+                    continue;
+                }
                 if ("progress".equals(type)) {
                     if (progressConsumer != null) {
                         progressConsumer.accept(new LinkedHashMap<>(event));
@@ -808,6 +1131,13 @@ public class RagPipelineClient {
             }
         }
         throw new IOException("RAG progress stream ended without a terminal result");
+    }
+
+    private static String truncateDetail(String detail) {
+        if (detail == null) {
+            return "no detail";
+        }
+        return detail.length() > 500 ? detail.substring(0, 500) + "..." : detail;
     }
 
     /**
@@ -834,12 +1164,14 @@ public class RagPipelineClient {
             String responseBody = response.body() != null ? response.body().string() : "{}";
 
             if (!response.isSuccessful()) {
-                log.error("RAG API request failed: {} - {}", response.code(), responseBody);
+                // Callers own contextual, rate-bounded diagnostics. Keep the
+                // complete detail on the exception without logging it twice.
+                log.debug("RAG API request failed: {} - {}", response.code(), responseBody);
                 // Include truncated response body in exception so callers can see the actual error
                 String detail = responseBody.length() > 500
                         ? responseBody.substring(0, 500) + "..."
                         : responseBody;
-                throw new IOException("RAG API error: " + response.code() + " — " + detail);
+                throw new RagApiException(response.code(), detail);
             }
 
             return objectMapper.readValue(responseBody, Map.class);

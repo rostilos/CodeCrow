@@ -38,6 +38,9 @@ def _make_index_manager():
     )
     im._get_project_collection_name.return_value = "rag_ws__proj"
     im._collection_manager.collection_exists.return_value = True
+    im._collection_manager.resolve_collection_target.side_effect = (
+        lambda collection_name: collection_name
+    )
     im.splitter.split_documents.return_value = []
     im.splitter.split_documents_resilient.side_effect = (
         lambda documents, capabilities=None: (
@@ -829,6 +832,10 @@ class TestDeletePRFiles:
             "pr": True,
             "pr_number": 42,
         }
+        assert im.qdrant_client.delete.call_args.kwargs["wait"] is True
+        im._collection_manager.ensure_payload_indexes.assert_called_once_with(
+            "rag_ws__proj"
+        )
 
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
     def test_explicit_collection_target_still_uses_tenant_filter(self, mock_get):
@@ -852,7 +859,8 @@ class TestDeletePRFiles:
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
     def test_collection_not_found(self, mock_get):
         im = _make_index_manager()
-        im._collection_manager.collection_exists.return_value = False
+        im._collection_manager.resolve_collection_target.return_value = None
+        im._collection_manager.resolve_collection_target.side_effect = None
         mock_get.return_value = im
 
         from rag_pipeline.api.routers.pr import delete_pr_files

@@ -13,6 +13,7 @@ from qdrant_client.models import (
 )
 
 from rag_pipeline.core.generation_manifest import (
+    GENERATION_MANIFEST_PATH,
     GENERATION_SCHEMA,
     GenerationManifestError,
     build_generation_manifest_node,
@@ -20,14 +21,17 @@ from rag_pipeline.core.generation_manifest import (
     collect_generation_members,
     compute_generation_member_digest,
     compute_generation_members_digest,
+    generation_manifest_point_id,
     seal_generation_members,
 )
 from rag_pipeline.core.index_representation import (
     INDEX_REPRESENTATION_PAYLOAD_KEY,
 )
 from rag_pipeline.core.index_manager.manager import RAGIndexManager
+from rag_pipeline.core.index_manager.point_operations import PointOperations
 from rag_pipeline.core.repository_overlay import IncrementalIndexPreconditionError
 from rag_pipeline.core.revision_preflight import (
+    read_repository_generation_manifest_receipt,
     read_repository_revision_preflight,
 )
 
@@ -203,6 +207,82 @@ def test_exact_revision_preflight_returns_verified_state_identity():
         "main",
         OTHER_COMMIT,
     ) is None
+
+
+def test_alias_receipt_reads_only_deterministic_manifest_point():
+    manifest = _complete_revision_payloads()[-1]
+    client = MagicMock()
+    client.retrieve.return_value = [SimpleNamespace(payload=manifest)]
+    digest = manifest["generation_manifest_sha256"]
+
+    result = read_repository_generation_manifest_receipt(
+        client,
+        "physical-generation",
+        "workspace",
+        "project",
+        "main",
+        COMMIT,
+        digest,
+    )
+
+    assert result["generation_manifest_sha256"] == digest
+    client.retrieve.assert_called_once_with(
+        collection_name="physical-generation",
+        ids=[generation_manifest_point_id("workspace", "project", "main")],
+        with_payload=True,
+        with_vectors=False,
+    )
+    client.scroll.assert_not_called()
+
+
+def test_manifest_receipt_id_matches_point_storage_contract():
+    assert generation_manifest_point_id(
+        "workspace",
+        "project",
+        "main",
+    ) == PointOperations.generate_point_id(
+        "workspace",
+        "project",
+        "main",
+        GENERATION_MANIFEST_PATH,
+        0,
+    )
+
+
+def test_alias_receipt_rejects_registry_digest_mismatch():
+    manifest = _complete_revision_payloads()[-1]
+    client = MagicMock()
+    client.retrieve.return_value = [SimpleNamespace(payload=manifest)]
+
+    assert read_repository_generation_manifest_receipt(
+        client,
+        "physical-generation",
+        "workspace",
+        "project",
+        "main",
+        COMMIT,
+        "f" * 64,
+    ) is None
+
+
+def test_alias_receipt_accepts_legacy_caller_without_registry_digest():
+    manifest = _complete_revision_payloads()[-1]
+    client = MagicMock()
+    client.retrieve.return_value = [SimpleNamespace(payload=manifest)]
+
+    receipt = read_repository_generation_manifest_receipt(
+        client,
+        "physical-generation",
+        "workspace",
+        "project",
+        "main",
+        COMMIT,
+    )
+
+    assert receipt["generation_manifest_sha256"] == manifest[
+        "generation_manifest_sha256"
+    ]
+    client.scroll.assert_not_called()
 
 
 def test_exact_revision_preflight_rejects_incomplete_repository_state():
@@ -643,3 +723,63 @@ def test_index_manager_retains_stale_representation_as_provenance(mock_read):
     )
 
     assert result["index_representation_fingerprint"] == "sha256:stale"
+
+
+@patch(
+    "rag_pipeline.core.index_manager.manager."
+    "read_repository_generation_manifest_receipt"
+)
+@patch(
+    "rag_pipeline.core.index_manager.manager."
+    "read_repository_revision_preflight"
+)
+def test_alias_publication_uses_bounded_registry_receipt(
+    mock_full_preflight,
+    mock_manifest_receipt,
+):
+    manager = object.__new__(RAGIndexManager)
+    manager.config = SimpleNamespace(qdrant_collection_prefix="code")
+    manager.qdrant_client = MagicMock()
+    manager._collection_manager = MagicMock()
+    manager._collection_manager.resolve_collection_target.return_value = (
+        "physical-generation"
+    )
+    manager._mutation_coordinator = MagicMock()
+    lease = SimpleNamespace(assert_owned=MagicMock())
+    manager._mutation_coordinator.acquire.return_value.__enter__.return_value = (
+        lease
+    )
+    mock_manifest_receipt.return_value = {
+        "workspace": "workspace",
+        "project": "project",
+        "branch": "main",
+        "commit": COMMIT,
+        "generation_manifest_sha256": "e" * 64,
+    }
+
+    aliases = manager.publish_generation_aliases(
+        "workspace",
+        "project",
+        "main",
+        COMMIT,
+        "generation-target",
+        "e" * 64,
+        publish_branch_alias=True,
+        publish_legacy_project_alias=False,
+    )
+
+    assert aliases == ["code_workspace__project__main"]
+    mock_manifest_receipt.assert_called_once_with(
+        manager.qdrant_client,
+        "physical-generation",
+        "workspace",
+        "project",
+        "main",
+        COMMIT,
+        "e" * 64,
+    )
+    mock_full_preflight.assert_not_called()
+    lease.assert_owned.assert_called_once()
+    manager._collection_manager.atomic_assign_aliases.assert_called_once_with({
+        "code_workspace__project__main": "physical-generation",
+    })

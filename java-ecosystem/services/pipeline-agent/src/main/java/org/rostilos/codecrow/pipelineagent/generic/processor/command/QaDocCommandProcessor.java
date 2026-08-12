@@ -11,6 +11,7 @@ import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
 import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.qadoc.QaDocState;
+import org.rostilos.codecrow.core.model.qadoc.QaDocDocument;
 import org.rostilos.codecrow.core.model.taskmanagement.TaskManagementConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
@@ -24,6 +25,8 @@ import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler
 import org.rostilos.codecrow.pipelineagent.qadoc.QaAutoDocListener;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocGenerationContext;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocGenerationService;
+import org.rostilos.codecrow.pipelineagent.qadoc.QaDocHandoffRetryPolicy;
+import org.rostilos.codecrow.pipelineagent.qadoc.QaDocPublicPreviewService;
 import org.rostilos.codecrow.taskmanagement.ETaskManagementPlatform;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClient;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClientFactory;
@@ -33,9 +36,7 @@ import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibility;
 import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
-import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
-import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -48,8 +49,8 @@ import java.util.regex.Pattern;
 /**
  * Processor for the {@code /codecrow qa-doc} command.
  * <p>
- * Generates QA testing documentation for the current PR and posts it as a comment
- * on the linked Jira task. Reuses the same inference-orchestrator endpoint and
+ * Generates QA testing documentation for the current PR and posts its public
+ * QA-document preview links on the linked Jira task. Reuses the same inference-orchestrator endpoint and
  * task management client infrastructure as the automatic {@link QaAutoDocListener}.
  * <p>
  * Usage:
@@ -70,8 +71,8 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
     private final VcsClientProvider vcsClientProvider;
     private final QaDocStateRepository qaDocStateRepository;
     private final QaDocDocumentService qaDocDocumentService;
+    private final QaDocPublicPreviewService qaDocPublicPreviewService;
     private final PrFileEnrichmentService enrichmentService;
-    private final VcsConnectionCredentialsExtractor credentialsExtractor;
 
     public QaDocCommandProcessor(
             TaskManagementConnectionRepository connectionRepository,
@@ -81,8 +82,8 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             VcsClientProvider vcsClientProvider,
             QaDocStateRepository qaDocStateRepository,
             QaDocDocumentService qaDocDocumentService,
-            PrFileEnrichmentService enrichmentService,
-            TokenEncryptionService tokenEncryptionService
+            QaDocPublicPreviewService qaDocPublicPreviewService,
+            PrFileEnrichmentService enrichmentService
     ) {
         this.connectionRepository = connectionRepository;
         this.clientFactory = clientFactory;
@@ -91,8 +92,8 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
         this.vcsClientProvider = vcsClientProvider;
         this.qaDocStateRepository = qaDocStateRepository;
         this.qaDocDocumentService = qaDocDocumentService;
+        this.qaDocPublicPreviewService = qaDocPublicPreviewService;
         this.enrichmentService = enrichmentService;
-        this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
     }
 
     @Override
@@ -270,28 +271,29 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                         vcsConnection, workspace, repoSlug, commitHash, changedFilePaths);
             }
 
-            // 5e. Extract VCS credentials for Python-side RAG access
-            String oauthKey = null;
-            String oauthSecret = null;
-            String bearerToken = null;
-            String vcsProviderStr = null;
-            if (vcsConnection != null) {
-                try {
-                    VcsConnectionCredentials creds = credentialsExtractor.extractCredentials(vcsConnection);
-                    oauthKey = creds.oAuthClient();
-                    oauthSecret = creds.oAuthSecret();
-                    bearerToken = creds.accessToken();
-                    vcsProviderStr = creds.vcsProviderString();
-                } catch (Exception e) {
-                    log.warn("qa-doc command: failed to extract VCS credentials: {}", e.getMessage());
-                }
-            }
+            // 5e. Keep only the non-secret provider identifier used by the prompt.
+            String vcsProviderStr = vcsConnection == null
+                    ? null
+                    : VcsConnectionCredentialsExtractor.getVcsProviderString(
+                            vcsConnection.getProviderType());
 
             // 6. Load server-side state and check for existing Jira comment
             QaDocState state = (prNumber != null)
                     ? qaDocStateRepository.findByProjectIdAndTaskId(project.getId(), taskId).orElse(null)
                     : null;
             boolean isSamePrRerun = (state != null && prNumber != null && state.isPrDocumented(prNumber));
+            Optional<QaDocDocument> pendingHandoffDocument = Optional.empty();
+            if (prNumber != null) {
+                try {
+                    pendingHandoffDocument = qaDocDocumentService
+                            .findLatestDocument(project.getId(), prNumber)
+                            .filter(document -> QaDocHandoffRetryPolicy.shouldReuse(
+                                    document, state, commitHash, taskId));
+                } catch (Exception e) {
+                    log.warn("qa-doc command: failed to inspect pending handoff for project {} PR #{}: {}",
+                            project.getId(), prNumber, e.getMessage());
+                }
+            }
 
             Optional<TaskComment> existingComment = Optional.empty();
             try {
@@ -318,7 +320,9 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                         taskId, e.getMessage());
             }
 
-            if (previousDocumentation == null && existingComment.isPresent()) {
+            if (previousDocumentation == null
+                    && existingComment.isPresent()
+                    && !QaAutoDocListener.isPublicPreviewOnlyComment(existingComment.get().body())) {
                 previousDocumentation = existingComment.get().body();
                 log.info("qa-doc command: using existing task comment as previous documentation for task {}",
                         taskId);
@@ -326,7 +330,8 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
 
             // 6a. Compute delta diff for same-PR re-runs
             String deltaDiff = null;
-            if (isSamePrRerun && state.getLastCommitHash() != null
+            if (pendingHandoffDocument.isEmpty()
+                    && isSamePrRerun && state.getLastCommitHash() != null
                     && commitHash != null && vcsClient != null) {
                 DiffContentFilter contentFilter = new DiffContentFilter();
                 final VcsClient clientForDiff = vcsClient;
@@ -356,13 +361,17 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                     .repoSlug(repoSlug)
                     .sourceBranch(sourceBranch)
                     .targetBranch(targetBranch)
-                    .oauthKey(oauthKey)
-                    .oauthSecret(oauthSecret)
-                    .bearerToken(bearerToken)
                     .build();
 
-            String qaDocument = qaDocGenerationService.generateQaDocumentation(
-                    project, prNumber, issuesFound, filesAnalyzed, prMetadata, ctx);
+            String qaDocument;
+            if (pendingHandoffDocument.isPresent()) {
+                qaDocument = pendingHandoffDocument.get().getMarkdownContent();
+                log.info("qa-doc command: retrying pending task handoff without regenerating project {} PR #{}",
+                        project.getId(), prNumber);
+            } else {
+                qaDocument = qaDocGenerationService.generateQaDocumentation(
+                        project, prNumber, issuesFound, filesAnalyzed, prMetadata, ctx);
+            }
 
             if (qaDocument == null || qaDocument.isBlank()) {
                 return WebhookResult.ignored(
@@ -370,18 +379,27 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             }
 
             Long analysisId = (analysis != null) ? analysis.getId() : null;
-            if (prNumber != null) {
-                upsertQaDocDocument(project, prNumber, taskId, commitHash, analysisId, qaDocument);
+            Optional<QaDocDocument> persistedDocument = pendingHandoffDocument;
+            if (persistedDocument.isEmpty() && prNumber != null) {
+                persistedDocument = upsertQaDocDocument(
+                        project, prNumber, taskId, commitHash, analysisId, qaDocument);
             }
+            if (persistedDocument.isEmpty()) {
+                return WebhookResult.error(
+                        "QA documentation was generated but its secure public preview could not be created.");
+            }
+
+            String previewUrl = qaDocPublicPreviewService.createPreviewUrl(persistedDocument.get());
 
             eventConsumer.accept(Map.of(
                     "type", "status",
                     "state", "posting_comment",
-                    "message", "Posting documentation to " + taskId + "..."
+                    "message", "Posting QA-document preview links to " + taskId + "..."
             ));
 
-            // 8. Post or update comment on Jira task
-            String commentBody = QaAutoDocListener.COMMENT_MARKER + "\n\n" + qaDocument;
+            // 8. Keep the QA guide in Jira, replacing only its large test-case
+            // section with the public preview URL.
+            String commentBody = qaDocPublicPreviewService.buildTaskComment(qaDocument, previewUrl);
             TaskCommentVisibility visibility = toTaskCommentVisibility(qaConfig.commentVisibility());
             String action;
 
@@ -450,16 +468,18 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
         }
     }
 
-    private void upsertQaDocDocument(Project project, Long prNumber, String taskId,
-                                     String commitHash, Long analysisId, String qaDocument) {
+    private Optional<QaDocDocument> upsertQaDocDocument(Project project, Long prNumber, String taskId,
+                                                        String commitHash, Long analysisId, String qaDocument) {
         try {
-            qaDocDocumentService.upsertLatestDocument(
+            QaDocDocument document = qaDocDocumentService.upsertLatestDocument(
                     project, prNumber, taskId, analysisId, commitHash, qaDocument);
             log.debug("qa-doc command: persisted latest document for project {} PR #{}",
                     project.getId(), prNumber);
+            return Optional.of(document);
         } catch (Exception e) {
             log.warn("qa-doc command: failed to persist latest document for project {} PR #{}: {}",
                     project.getId(), prNumber, e.getMessage());
+            return Optional.empty();
         }
     }
 

@@ -5,7 +5,10 @@ CollectionManager, BranchManager, PointOperations, StatsManager, RAGIndexManager
 import pytest
 import uuid
 from httpx import Headers
-from qdrant_client.http.exceptions import UnexpectedResponse
+from qdrant_client.http.exceptions import (
+    ResponseHandlingException,
+    UnexpectedResponse,
+)
 from unittest.mock import patch, MagicMock, PropertyMock
 from datetime import datetime
 
@@ -126,26 +129,123 @@ class TestCollectionManager:
         ]
         assert len(operations) == 3
 
-    def test_payload_index_failure_does_not_skip_remaining_indexes(self):
+    def test_payload_index_failure_does_not_skip_remaining_indexes(
+        self,
+        caplog,
+    ):
         cm = self._make()
         cm.client.create_payload_index.side_effect = [
             RuntimeError("path index already exists"),
-            True,
-            True,
-            True,
-            True,
-            True,
+            *([True] * 12),
         ]
 
         cm._ensure_payload_indexes("test_coll")
 
-        assert cm.client.create_payload_index.call_count == 6
+        assert cm.client.create_payload_index.call_count == 13
+        warnings = [
+            record for record in caplog.records
+            if record.levelname == "WARNING"
+        ]
+        assert len(warnings) == 1
+        assert "failed for 1 field(s)" in warnings[0].getMessage()
+
+    def test_payload_index_failures_emit_one_aggregate_warning(self, caplog):
+        cm = self._make()
+        cm.client.create_payload_index.side_effect = RuntimeError("unsupported")
+
+        assert cm._ensure_payload_indexes("test_coll") is False
+
+        assert cm.client.create_payload_index.call_count == 13
+        warnings = [
+            record for record in caplog.records
+            if record.levelname == "WARNING"
+        ]
+        assert len(warnings) == 1
+        assert "failed for 13 field(s)" in warnings[0].getMessage()
+
+    def test_payload_index_repair_defers_when_schema_inspection_times_out(self):
+        cm = self._make()
+        cm.client.get_collection.side_effect = ResponseHandlingException(
+            TimeoutError("timed out")
+        )
+
+        assert cm._ensure_payload_indexes("test_coll") is False
+        cm.client.create_payload_index.assert_not_called()
+
+    def test_payload_index_repair_stops_after_transport_failure(self):
+        cm = self._make()
+        cm.client.create_payload_index.side_effect = (
+            ResponseHandlingException(TimeoutError("timed out"))
+        )
+
+        assert cm._ensure_payload_indexes("test_coll") is False
+        assert cm.client.create_payload_index.call_count == 1
+
+    def test_existing_collection_repairs_payload_indexes_once(self):
+        cm = self._make()
+        collection = MagicMock(name="test_coll")
+        collection.name = "test_coll"
+        cm.client.get_collections.return_value.collections = [collection]
+        cm.alias_exists = MagicMock(return_value=False)
+
+        cm.ensure_collection_exists("test_coll")
+        cm.ensure_collection_exists("test_coll")
+
+        assert cm.client.create_payload_index.call_count == 13
+
+    def test_payload_index_repair_only_creates_missing_schemas(self):
+        from qdrant_client.models import PayloadSchemaType
+
+        cm = self._make()
+        existing = MagicMock()
+        existing.data_type = PayloadSchemaType.KEYWORD
+        cm.client.get_collection.return_value.payload_schema = {
+            "workspace": existing,
+        }
+
+        cm._ensure_payload_indexes("test_coll")
+
+        fields = {
+            call.kwargs["field_name"]
+            for call in cm.client.create_payload_index.call_args_list
+        }
+        assert "workspace" not in fields
+        assert "project" in fields
+
+    def test_pr_payload_indexes_use_filter_compatible_schemas(self):
+        from qdrant_client.models import PayloadSchemaType
+
+        cm = self._make()
+        cm._ensure_payload_indexes("test_coll")
+        schemas = {
+            call.kwargs["field_name"]: call.kwargs["field_schema"]
+            for call in cm.client.create_payload_index.call_args_list
+        }
+
+        assert schemas["workspace"] is PayloadSchemaType.KEYWORD
+        assert schemas["project"] is PayloadSchemaType.KEYWORD
+        assert schemas["pr"] is PayloadSchemaType.BOOL
+        assert schemas["pr_number"] is PayloadSchemaType.INTEGER
 
     def test_delete_collection(self):
         cm = self._make()
         result = cm.delete_collection("test_coll")
         assert result is True
         cm.client.delete_collection.assert_called_once_with("test_coll")
+
+    def test_delete_then_recreate_repairs_payload_indexes_again(self):
+        cm = self._make()
+        cm._payload_indexes_ensured.add("test_coll")
+
+        assert cm.delete_collection("test_coll") is True
+
+        collection = MagicMock()
+        collection.name = "test_coll"
+        cm.client.get_collections.return_value.collections = [collection]
+        cm.alias_exists = MagicMock(return_value=False)
+        cm.ensure_collection_exists("test_coll")
+
+        assert cm.client.create_payload_index.call_count == 13
 
     def test_delete_collection_failure(self):
         cm = self._make()
@@ -399,6 +499,23 @@ class TestRAGIndexManager:
         mgr = RAGIndexManager(self._mock_config())
         assert mgr.qdrant_client is not None
         assert mgr.embed_model is mock_embed
+        MockQdrant.assert_called_once_with(
+            url="http://localhost:6333",
+            api_key=None,
+            timeout=30,
+        )
+
+    def test_close_releases_coordinator_and_qdrant_client(self):
+        from rag_pipeline.core.index_manager.manager import RAGIndexManager
+
+        manager = object.__new__(RAGIndexManager)
+        manager._mutation_coordinator = MagicMock()
+        manager.qdrant_client = MagicMock()
+
+        manager.close()
+
+        manager._mutation_coordinator.close.assert_called_once_with()
+        manager.qdrant_client.close.assert_called_once_with()
 
     @patch("rag_pipeline.core.index_manager.manager.create_embedding_model")
     @patch("rag_pipeline.core.index_manager.manager.get_embedding_model_info")
@@ -463,6 +580,51 @@ class TestRAGIndexManager:
                 commit="abc123",
                 publish_branch_alias=True,
             )
+
+    @patch(
+        "rag_pipeline.core.index_manager.manager.verify_repository_source_tree"
+    )
+    def test_exact_snapshot_forwards_resolved_prior_generation_for_vector_reuse(
+        self,
+        verify_source_tree,
+    ):
+        from rag_pipeline.core.index_manager.manager import RAGIndexManager
+
+        manager = object.__new__(RAGIndexManager)
+        manager._collection_manager = MagicMock()
+        manager._collection_manager.resolve_collection_target.return_value = (
+            "prior-generation-physical"
+        )
+        manager._indexer = MagicMock()
+        manager._indexer.index_repository.return_value = MagicMock()
+        manager._mutation_coordinator = MagicMock()
+        lease = MagicMock(token="operation-token")
+        lease.assert_owned = MagicMock()
+        manager._mutation_coordinator.acquire.return_value.__enter__.return_value = (
+            lease
+        )
+        manager._publication_aliases = MagicMock(return_value=[])
+        manager._publication_scope = MagicMock(return_value=None)
+        source_tree = MagicMock(tree_sha256="f" * 64)
+        verify_source_tree.return_value = source_tree
+
+        manager.index_repository(
+            repo_path="/tmp/repository",
+            workspace="workspace",
+            project="project",
+            branch="main",
+            commit="a" * 40,
+            source_tree_sha256="f" * 64,
+            collection_target="new-generation",
+            reuse_collection_target="prior-generation",
+        )
+
+        manager._collection_manager.resolve_collection_target.assert_called_once_with(
+            "prior-generation"
+        )
+        assert manager._indexer.index_repository.call_args.kwargs[
+            "reuse_collection_name"
+        ] == "prior-generation-physical"
 
     @patch("rag_pipeline.core.index_manager.manager.create_embedding_model")
     @patch("rag_pipeline.core.index_manager.manager.get_embedding_model_info")

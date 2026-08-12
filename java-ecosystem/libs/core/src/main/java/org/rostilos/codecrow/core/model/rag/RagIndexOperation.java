@@ -43,6 +43,10 @@ public class RagIndexOperation {
     @Column(name = "job_id")
     private Long jobId;
 
+    /** Exact analysis-lock owner captured for safe abandoned-producer cleanup. */
+    @Column(name = "analysis_lock_key", length = 500)
+    private String analysisLockKey;
+
     @Column(name = "attempt_count", nullable = false)
     private int attemptCount;
 
@@ -124,6 +128,8 @@ public class RagIndexOperation {
     public void setGeneration(RagBranchIndexGeneration generation) { this.generation = generation; }
     public Long getJobId() { return jobId; }
     public void setJobId(Long jobId) { this.jobId = jobId; }
+    public String getAnalysisLockKey() { return analysisLockKey; }
+    public void setAnalysisLockKey(String analysisLockKey) { this.analysisLockKey = analysisLockKey; }
     public int getAttemptCount() { return attemptCount; }
     public void setAttemptCount(int attemptCount) { this.attemptCount = attemptCount; }
     public OffsetDateTime getCreatedAt() { return createdAt; }

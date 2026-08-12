@@ -44,6 +44,13 @@ public interface JobLogRepository extends JpaRepository<JobLog, Long> {
             @Param("step") String step
     );
 
+    @Query("SELECT CASE WHEN COUNT(l) > 0 THEN true ELSE false END " +
+            "FROM JobLog l WHERE l.job.id = :jobId AND l.step = :step")
+    boolean existsByJobIdAndStep(
+            @Param("jobId") Long jobId,
+            @Param("step") String step
+    );
+
     @Query("SELECT COALESCE(MAX(l.sequenceNumber), 0) + 1 FROM JobLog l WHERE l.job.id = :jobId")
     Long getNextSequenceNumber(@Param("jobId") Long jobId);
 

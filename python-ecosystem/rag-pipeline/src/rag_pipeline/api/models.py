@@ -44,10 +44,12 @@ class IndexRequest(BaseModel):
         pattern=r"^[0-9a-f]{64}$",
     )
     collection_target: Optional[str] = Field(default=None, min_length=1)
+    reuse_collection_target: Optional[str] = Field(default=None, min_length=1)
     publish_branch_alias: bool = False
     publish_legacy_project_alias: bool = False
     preserve_other_branches: bool = False
     cleanup_repo_path: bool = False
+    transfer_repo_ownership: bool = False
     include_patterns: Optional[List[str]] = None
     exclude_patterns: Optional[List[str]] = None
 
@@ -142,6 +144,10 @@ class GenerationAliasPublicationRequest(BaseModel):
     branch: str
     commit: str
     collection_target: str = Field(min_length=1)
+    generation_manifest_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     publish_branch_alias: bool = True
     publish_legacy_project_alias: bool = False
 

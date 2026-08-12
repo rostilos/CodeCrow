@@ -69,6 +69,12 @@ public class RagBranchIndex {
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
+    @Column(name = "cleanup_claim_token", length = 64)
+    private String cleanupClaimToken;
+
+    @Column(name = "cleanup_claimed_at")
+    private OffsetDateTime cleanupClaimedAt;
+
     /**
      * Files that were deleted in this branch (for query-time filtering).
      * These files should be excluded when querying the branch's context.
@@ -214,6 +220,22 @@ public class RagBranchIndex {
 
     public void setErrorMessage(String errorMessage) {
         this.errorMessage = errorMessage;
+    }
+
+    public String getCleanupClaimToken() {
+        return cleanupClaimToken;
+    }
+
+    public void setCleanupClaimToken(String cleanupClaimToken) {
+        this.cleanupClaimToken = cleanupClaimToken;
+    }
+
+    public OffsetDateTime getCleanupClaimedAt() {
+        return cleanupClaimedAt;
+    }
+
+    public void setCleanupClaimedAt(OffsetDateTime cleanupClaimedAt) {
+        this.cleanupClaimedAt = cleanupClaimedAt;
     }
 
     public Set<String> getDeletedFiles() {

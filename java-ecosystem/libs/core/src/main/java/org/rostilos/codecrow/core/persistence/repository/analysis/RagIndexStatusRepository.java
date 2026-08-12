@@ -1,8 +1,11 @@
 package org.rostilos.codecrow.core.persistence.repository.analysis;
 
+import jakarta.persistence.LockModeType;
 import org.rostilos.codecrow.core.model.analysis.RagIndexStatus;
 import org.rostilos.codecrow.core.model.analysis.RagIndexingStatus;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -14,6 +17,10 @@ import java.util.Optional;
 public interface RagIndexStatusRepository extends JpaRepository<RagIndexStatus, Long> {
 
     Optional<RagIndexStatus> findByProjectId(Long projectId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM RagIndexStatus r WHERE r.project.id = :projectId")
+    Optional<RagIndexStatus> findByProjectIdForUpdate(@Param("projectId") Long projectId);
 
     Optional<RagIndexStatus> findByWorkspaceNameAndProjectName(String workspaceName, String projectName);
 
@@ -35,6 +42,24 @@ public interface RagIndexStatusRepository extends JpaRepository<RagIndexStatus, 
     boolean 
     isProjectIndexed(@Param("projectId") Long projectId);
 
+    /**
+     * Restore the last usable checkpoint after a legacy incremental producer
+     * expires, but only while that exact job still owns the active status.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE RagIndexStatus r SET " +
+            "r.status = org.rostilos.codecrow.core.model.analysis.RagIndexingStatus.INDEXED, " +
+            "r.errorMessage = CONCAT('Incremental update failed: ', :errorMessage), " +
+            "r.failedIncrementalCount = COALESCE(r.failedIncrementalCount, 0) + 1, " +
+            "r.activeJobId = NULL " +
+            "WHERE r.project.id = :projectId AND r.activeJobId = :jobId " +
+            "AND r.status IN (" +
+            "org.rostilos.codecrow.core.model.analysis.RagIndexingStatus.INDEXING, " +
+            "org.rostilos.codecrow.core.model.analysis.RagIndexingStatus.UPDATING)")
+    int recoverAbandonedIncrementalUpdate(
+            @Param("projectId") Long projectId,
+            @Param("jobId") Long jobId,
+            @Param("errorMessage") String errorMessage);
+
     void deleteByProjectId(Long projectId);
 }
-

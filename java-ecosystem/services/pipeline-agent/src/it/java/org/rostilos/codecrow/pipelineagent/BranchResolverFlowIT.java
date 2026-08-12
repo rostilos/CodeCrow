@@ -53,6 +53,7 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anySet;
@@ -91,9 +92,12 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
     void configureMocks() throws Exception {
         vcsAiClientService = mock(VcsAiClientService.class);
         vcsClient = mock(VcsClient.class);
+        AnalysisLockService.LockLease lockLease = mock(AnalysisLockService.LockLease.class);
 
         when(analysisLockService.acquireLockWithWait(any(Project.class), anyString(), any(), anyString(), any(), any()))
                 .thenReturn(Optional.of("branch-resolver-it-lock"));
+        when(analysisLockService.maintainLockLease(anyString(), anyInt())).thenReturn(lockLease);
+        when(lockLease.confirmOwnership()).thenReturn(true);
         when(analysisLockService.isLocked(any(), anyString(), any())).thenReturn(false);
 
         when(vcsServiceFactory.getAiClientService(EVcsProvider.GITHUB)).thenReturn(vcsAiClientService);

@@ -113,6 +113,39 @@ async def test_long_running_review_emits_liveness_before_terminal_event():
 
 
 @pytest.mark.asyncio(loop_scope="function")
+async def test_service_error_is_the_only_terminal_review_event():
+    review_service = MagicMock()
+
+    async def process(_request, callback):
+        callback({"type": "error", "message": "provider failed"})
+        callback({"type": "status", "state": "late_diagnostic"})
+        return {
+            "result": {
+                "status": "error",
+                "message": "provider failed",
+            },
+        }
+
+    review_service.process_review_request = AsyncMock(side_effect=process)
+    consumer = RedisQueueConsumer(review_service)
+    consumer._redis = FakeRedis()
+
+    with patch("server.queue_consumer.ReviewRequestDto", return_value=MagicMock()):
+        await consumer._handle_job(_payload())
+
+    events = [event for _, event in consumer._redis.events]
+    assert events == [
+        {
+            "type": "status",
+            "state": "acknowledged",
+            "message": "Orchestrator picked up job from queue",
+        },
+        {"type": "error", "message": "provider failed"},
+    ]
+    assert sum(event["type"] in {"error", "final"} for event in events) == 1
+
+
+@pytest.mark.asyncio(loop_scope="function")
 async def test_neutral_mixed_language_dry_run_traverses_queue_handler(
     monkeypatch,
     tmp_path,
@@ -291,3 +324,56 @@ async def test_worker_capacity_is_reserved_before_job_is_dequeued():
         timeout=1,
     )
     assert not consumer._job_semaphore.locked()
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_stop_waits_for_admitted_review_before_closing_redis():
+    consumer = RedisQueueConsumer(MagicMock())
+    consumer._redis = MagicMock()
+    consumer._redis.aclose = AsyncMock()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handle_until_released(_payload):
+        started.set()
+        await release.wait()
+
+    consumer._handle_job = AsyncMock(side_effect=handle_until_released)
+    await consumer._job_semaphore.acquire()
+    job_task = asyncio.create_task(consumer._handle_admitted_job("payload"))
+    consumer._job_tasks.add(job_task)
+    job_task.add_done_callback(consumer._job_tasks.discard)
+    await started.wait()
+
+    stop_task = asyncio.create_task(consumer.stop())
+    await asyncio.sleep(0)
+
+    assert not stop_task.done()
+    consumer._redis.aclose.assert_not_awaited()
+
+    release.set()
+    await asyncio.wait_for(stop_task, timeout=1)
+
+    assert job_task.done()
+    consumer._redis.aclose.assert_awaited_once_with()
+
+
+def test_redis_outage_diagnostic_is_bounded_until_recovery():
+    consumer = RedisQueueConsumer(MagicMock())
+
+    with (
+        patch("server.queue_consumer.logger.warning") as warning,
+        patch("server.queue_consumer.logger.debug") as debug,
+        patch("server.queue_consumer.logger.info") as info,
+    ):
+        consumer._record_redis_failure("review event publication", RuntimeError("down"))
+        consumer._record_redis_failure("review consumer heartbeat", RuntimeError("still down"))
+        consumer._record_redis_success("review queue read")
+        consumer._record_redis_success("review consumer heartbeat")
+
+    warning.assert_called_once()
+    debug.assert_called_once()
+    info.assert_called_once_with(
+        "Redis connectivity restored during %s",
+        "review consumer heartbeat",
+    )

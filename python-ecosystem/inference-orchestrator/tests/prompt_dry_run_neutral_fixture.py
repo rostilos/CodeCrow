@@ -115,6 +115,8 @@ def neutral_request(
         pullRequestId=42,
         currentCommitHash=HEAD_REVISION,
         baseCommitHash=BASE_REVISION,
+        ragCollectionTarget="cc_workspace_project_main_generation",
+        ragBaseGenerationManifestSha256=BASE_GENERATION_MANIFEST,
         changedFiles=paths,
         rawDiff="\n".join(diffs) + "\n",
         enrichmentData=PrEnrichmentDataDto(fileContents=contents),

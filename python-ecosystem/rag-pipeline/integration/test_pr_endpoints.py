@@ -263,7 +263,10 @@ class TestDeletePRFiles:
         import rag_pipeline.api.api as api_module
         im = api_module.index_manager
         im._get_project_collection_name.return_value = "col_ws_proj"
-        im._collection_manager.collection_exists.return_value = True
+        im._collection_manager.resolve_collection_target.side_effect = None
+        im._collection_manager.resolve_collection_target.return_value = (
+            "col_ws_proj"
+        )
         im.qdrant_client.delete.return_value = None
 
         resp = await client.delete(
@@ -281,7 +284,8 @@ class TestDeletePRFiles:
         import rag_pipeline.api.api as api_module
         im = api_module.index_manager
         im._get_project_collection_name.return_value = "col_ws_proj"
-        im._collection_manager.collection_exists.return_value = False
+        im._collection_manager.resolve_collection_target.side_effect = None
+        im._collection_manager.resolve_collection_target.return_value = None
 
         resp = await client.delete(
             "/index/pr-files/ws/proj/99",
@@ -291,12 +295,22 @@ class TestDeletePRFiles:
         body = resp.json()
         assert body["status"] == "skipped"
 
+        # The application singleton is session-scoped in this integration
+        # suite. Restore a normal resolver so this absence case cannot leak
+        # into the following Qdrant-error scenario.
+        im._collection_manager.resolve_collection_target.side_effect = (
+            lambda collection_name: collection_name
+        )
+
     async def test_delete_pr_files_qdrant_error(self, client, auth_headers, rag_app):
         """Qdrant error → 500."""
         import rag_pipeline.api.api as api_module
         im = api_module.index_manager
         im._get_project_collection_name.return_value = "col_ws_proj"
-        im._collection_manager.collection_exists.return_value = True
+        im._collection_manager.resolve_collection_target.side_effect = None
+        im._collection_manager.resolve_collection_target.return_value = (
+            "col_ws_proj"
+        )
         im.qdrant_client.delete.side_effect = RuntimeError("qdrant down")
 
         resp = await client.delete(

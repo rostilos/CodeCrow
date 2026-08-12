@@ -14,6 +14,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -41,7 +42,16 @@ public class RagBranchIndexRegistryService {
             RagBranchIndex branchIndex,
             RagBranchIndexGeneration generation,
             RagIndexOperation operation,
-            boolean existingOperation) {
+            boolean existingOperation,
+            String sourceCollectionTarget) {
+
+        public BuildRegistration(
+                RagBranchIndex branchIndex,
+                RagBranchIndexGeneration generation,
+                RagIndexOperation operation,
+                boolean existingOperation) {
+            this(branchIndex, generation, operation, existingOperation, null);
+        }
     }
 
     @Transactional
@@ -63,16 +73,27 @@ public class RagBranchIndexRegistryService {
                 .findByProjectIdAndOperationKey(project.getId(), operationKey);
         if (existing.isPresent()) {
             RagIndexOperation operation = existing.get();
+            Long branchIndexId = operation.getGeneration().getBranchIndex().getId();
+            RagBranchIndex branchIndex = branchIndexRepository
+                    .findByIdForPublication(branchIndexId)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "RAG branch index not found: " + branchIndexId));
+            rejectCleanupClaim(branchIndex);
+            branchIndex.markAccessed();
+            branchIndexRepository.save(branchIndex);
+            operation.getGeneration().setBranchIndex(branchIndex);
             return new BuildRegistration(
-                    operation.getGeneration().getBranchIndex(),
+                    branchIndex,
                     operation.getGeneration(),
                     operation,
-                    true);
+                    true,
+                    sourceCollectionTarget(operation.getGeneration()));
         }
 
         RagBranchIndex branchIndex = branchIndexRepository
                 .findByProjectIdAndBranchNameForUpdate(project.getId(), branch)
                 .orElseGet(() -> new RagBranchIndex(project, branch, kind));
+        rejectCleanupClaim(branchIndex);
         if (branchIndex.getIndexKind() == RagBranchIndexKind.LEGACY
                 || kind == RagBranchIndexKind.PRIMARY
                 || (branchIndex.getIndexKind() == RagBranchIndexKind.TRANSIENT
@@ -98,13 +119,37 @@ public class RagBranchIndexRegistryService {
         operation.setGeneration(generation);
         operation = operationRepository.save(operation);
 
-        return new BuildRegistration(branchIndex, generation, operation, false);
+        return new BuildRegistration(
+                branchIndex,
+                generation,
+                operation,
+                false,
+                sourceCollectionTarget(generation));
+    }
+
+    private static String sourceCollectionTarget(
+            RagBranchIndexGeneration generation) {
+        RagBranchIndexGeneration parent = generation.getParentGeneration();
+        return parent != null ? parent.getCollectionName() : null;
     }
 
     @Transactional
     public void startBuild(long operationId, Long jobId) {
-        RagIndexOperation operation = requireOperation(operationId);
+        startBuild(operationId, jobId, null);
+    }
+
+    @Transactional
+    public void startBuild(long operationId, Long jobId, String analysisLockKey) {
+        RagIndexOperation operation = requireOperationForUpdate(operationId);
         if (operation.getStatus() == RagIndexOperationStatus.SUCCEEDED) {
+            return;
+        }
+        String normalizedLockKey = normalizeOptional(analysisLockKey);
+        if (operation.getStatus() == RagIndexOperationStatus.RUNNING
+                && Objects.equals(operation.getJobId(), jobId)
+                && Objects.equals(operation.getAnalysisLockKey(), normalizedLockKey)) {
+            operation.heartbeat();
+            operationRepository.save(operation);
             return;
         }
         if (operation.getStatus() == RagIndexOperationStatus.FAILED) {
@@ -112,6 +157,7 @@ public class RagBranchIndexRegistryService {
             generationRepository.save(operation.getGeneration());
         }
         operation.setJobId(jobId);
+        operation.setAnalysisLockKey(normalizedLockKey);
         operation.start();
         operationRepository.save(operation);
     }
@@ -122,7 +168,7 @@ public class RagBranchIndexRegistryService {
             String manifestDigest,
             int fileCount,
             int chunkCount) {
-        RagIndexOperation operation = requireOperation(operationId);
+        RagIndexOperation operation = requireOperationForUpdate(operationId);
         RagBranchIndexGeneration generation = operation.getGeneration();
         if (operation.getStatus() == RagIndexOperationStatus.SUCCEEDED) {
             return generation;
@@ -137,6 +183,7 @@ public class RagBranchIndexRegistryService {
                 .orElseThrow(() -> new IllegalStateException(
                         "RAG branch index not found: " + branchIndexId));
         generation.setBranchIndex(branchIndex);
+        rejectCleanupClaim(branchIndex);
 
         String digest = requireText(manifestDigest, "manifestDigest");
         if (!generation.getRevision().equals(branchIndex.getDesiredCommitHash())) {
@@ -166,10 +213,33 @@ public class RagBranchIndexRegistryService {
     }
 
     @Transactional
-    public void fail(long operationId, String errorMessage) {
-        RagIndexOperation operation = requireOperation(operationId);
-        if (operation.getStatus() == RagIndexOperationStatus.SUCCEEDED) {
-            return;
+    public boolean fail(long operationId, String errorMessage) {
+        return failOperation(requireOperationForUpdate(operationId), errorMessage);
+    }
+
+    /**
+     * Claims an abandoned operation only after serializing with heartbeat and
+     * publication updates and re-checking the cutoff inside that transaction.
+     */
+    @Transactional
+    public boolean failIfAbandoned(
+            long operationId,
+            OffsetDateTime updatedBefore,
+            String errorMessage) {
+        RagIndexOperation operation = requireOperationForUpdate(operationId);
+        if ((operation.getStatus() != RagIndexOperationStatus.PENDING
+                && operation.getStatus() != RagIndexOperationStatus.RUNNING)
+                || operation.getUpdatedAt() == null
+                || !operation.getUpdatedAt().isBefore(updatedBefore)) {
+            return false;
+        }
+        return failOperation(operation, errorMessage);
+    }
+
+    private boolean failOperation(RagIndexOperation operation, String errorMessage) {
+        if (operation.getStatus() == RagIndexOperationStatus.SUCCEEDED
+                || operation.getStatus() == RagIndexOperationStatus.FAILED) {
+            return false;
         }
         String failure = requireText(errorMessage, "errorMessage");
         RagBranchIndexGeneration generation = operation.getGeneration();
@@ -187,6 +257,7 @@ public class RagBranchIndexRegistryService {
         }
         operation.fail(failure);
         operationRepository.save(operation);
+        return true;
     }
 
     @Transactional
@@ -195,11 +266,17 @@ public class RagBranchIndexRegistryService {
             String branchName,
             String revision) {
         Optional<RagBranchIndex> branchIndex = branchIndexRepository
-                .findByProjectIdAndBranchName(projectId, requireText(branchName, "branchName"));
+                .findByProjectIdAndBranchNameForUpdate(
+                        projectId, requireText(branchName, "branchName"));
         if (branchIndex.isEmpty()) {
             return Optional.empty();
         }
         RagBranchIndex index = branchIndex.get();
+        if (index.getCleanupClaimToken() != null) {
+            // Cleanup has a durable claim. Returning a generation here would
+            // expose a physical target that may already have been deleted.
+            return Optional.empty();
+        }
         index.markAccessed();
         branchIndexRepository.save(index);
         if (index.getActiveGeneration() != null
@@ -215,15 +292,33 @@ public class RagBranchIndexRegistryService {
 
     @Transactional
     public void heartbeatBuild(long operationId) {
-        RagIndexOperation operation = requireOperation(operationId);
+        RagIndexOperation operation = requireOperationForUpdate(operationId);
         operation.heartbeat();
         operationRepository.save(operation);
     }
 
-    public List<RagIndexOperation> findRecoverableOperations(OffsetDateTime updatedBefore) {
-        return operationRepository.findByStatusInAndUpdatedAtBefore(
+    public List<RagIndexOperationRepository.RecoveryOperationProjection>
+            findRecoverableOperations(OffsetDateTime updatedBefore) {
+        return operationRepository.findRecoverableOperationProjections(
                 List.of(RagIndexOperationStatus.PENDING, RagIndexOperationStatus.RUNNING),
                 updatedBefore);
+    }
+
+    public List<RagIndexOperationRepository.RecoveryOperationProjection>
+            findFailedOperationsWithActiveProjections() {
+        return operationRepository.findFailedOperationsWithActiveProjections();
+    }
+
+    public List<RagIndexOperationRepository.SucceededOperationProjection>
+            findSucceededOperationsWithActiveProjections() {
+        return operationRepository.findSucceededOperationsWithActiveProjections();
+    }
+
+    public boolean hasLiveOperation(long projectId, String branchName) {
+        return operationRepository.existsByProjectIdAndBranchNameAndStatusIn(
+                projectId,
+                requireText(branchName, "branchName"),
+                List.of(RagIndexOperationStatus.PENDING, RagIndexOperationStatus.RUNNING));
     }
 
     static String physicalCollectionName(
@@ -254,8 +349,8 @@ public class RagBranchIndexRegistryService {
                 + nullToEmpty(representationFingerprint));
     }
 
-    private RagIndexOperation requireOperation(long operationId) {
-        return operationRepository.findById(operationId)
+    private RagIndexOperation requireOperationForUpdate(long operationId) {
+        return operationRepository.findByIdForUpdate(operationId)
                 .orElseThrow(() -> new IllegalArgumentException("RAG index operation not found: " + operationId));
     }
 
@@ -270,6 +365,17 @@ public class RagBranchIndexRegistryService {
             throw new IllegalArgumentException(field + " is required");
         }
         return value.trim();
+    }
+
+    private static String normalizeOptional(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static void rejectCleanupClaim(RagBranchIndex branchIndex) {
+        if (branchIndex.getCleanupClaimToken() != null) {
+            throw new IllegalStateException(
+                    "RAG branch index cleanup owns this transient branch; retry later");
+        }
     }
 
     private static String nullToEmpty(String value) {

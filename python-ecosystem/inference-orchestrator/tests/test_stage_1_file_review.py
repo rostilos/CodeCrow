@@ -8,6 +8,7 @@ Covers: chunk_files, _deduplicate_pr_stale_chunks,
 """
 import pytest
 import asyncio
+import logging
 import time
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -39,6 +40,7 @@ from service.review.orchestrator.stage_1_file_review import (
     _build_duplication_queries_from_diff,
     _scope_deterministic_to_diff,
     _extract_calibrated_issues,
+    _invoke_stage_1_batch_llm,
     create_smart_batches_wrapper,
 )
 from model.multi_stage import (
@@ -53,6 +55,27 @@ from utils.diff_processor import DiffChangeType, DiffFile, DiffProcessor, Proces
 
 
 # ── chunk_files ──────────────────────────────────────────────────
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_batch_llm_attempt_details_do_not_duplicate_owner_warning(caplog):
+    class FailingLlm:
+        def with_structured_output(self, _schema):
+            return self
+
+        async def ainvoke(self, _prompt):
+            raise RuntimeError("provider unavailable")
+
+    with caplog.at_level(logging.DEBUG):
+        result = await _invoke_stage_1_batch_llm(
+            FailingLlm(), "prompt", ["src/a.py"], "capped"
+        )
+
+    assert result is None
+    assert not [
+        record for record in caplog.records
+        if record.levelno >= logging.WARNING
+    ]
+
 
 class TestChunkFiles:
     def _make_groups(self, paths_per_group):
@@ -1151,6 +1174,7 @@ class TestFetchBatchRagContext:
         request.currentCommitHash = "a" * 40
         request.commitHash = "a" * 40
         request.baseCommitHash = "b" * 40
+        request.ragCollectionTarget = "cc_ws_proj_main_generation"
         request.ragBaseGenerationManifestSha256 = "c" * 64
         request.ragPrGenerationFingerprint = "d" * 64
         request.ragPrOverlayGenerationManifestSha256 = "e" * 64
@@ -1160,6 +1184,35 @@ class TestFetchBatchRagContext:
         request.projectRules = []
         request.previousCodeAnalysisIssues = []
         return request
+
+    @staticmethod
+    def _batch(path="src/a.py"):
+        return [{
+            "file": ReviewFile(
+                path=path,
+                focus_areas=["general"],
+                risk_level="MEDIUM",
+            ),
+            "priority": "MEDIUM",
+        }]
+
+    class _FallbackAwaitProbe:
+        def __init__(self):
+            self.awaited = False
+
+        def __await__(self):
+            self.awaited = True
+
+            async def resolve():
+                return {
+                    "relevant_code": [{
+                        "text": "STALE_FALLBACK_SENTINEL",
+                        "metadata": {"path": "src/a.py"},
+                        "score": 1.0,
+                    }]
+                }
+
+            return resolve().__await__()
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_missing_target_branch_does_not_query_an_invented_branch(self):
@@ -1182,6 +1235,7 @@ class TestFetchBatchRagContext:
 
         assert result is None
         assert state.deterministic_retrieval_states == ["failed"]
+        assert state.context_disabled is True
         rag.get_deterministic_context.assert_not_awaited()
         rag.get_pr_context.assert_not_awaited()
         rag.search_for_duplicates.assert_not_awaited()
@@ -1373,49 +1427,126 @@ class TestFetchBatchRagContext:
         assert rag.semantic_calls == 1
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_deterministic_failure_is_recorded_and_semantic_filler_survives(self):
+    async def test_concurrent_semantic_failures_emit_one_owner_warning(
+        self,
+        caplog,
+    ):
+        release = asyncio.Event()
+
         class Rag:
+            def __init__(self):
+                self.semantic_calls = 0
+
             async def get_deterministic_context(self, **kwargs):
-                return {
-                    "status": "error",
-                    "status_code": 500,
-                    "error": "exact retrieval failed",
-                }
+                return {"context": {"chunks": [], "related_definitions": {}}}
 
             async def get_pr_context(self, **kwargs):
+                self.semantic_calls += 1
+                await release.wait()
                 return {
-                    "context": {
-                        "relevant_code": [
-                            {
-                                "text": "class Client {}",
-                                "metadata": {"path": "src/client.py"},
-                            }
-                        ]
-                    }
+                    "status": "error",
+                    "status_code": 503,
+                    "error": "RAG service unavailable",
                 }
 
             async def search_for_duplicates(self, **kwargs):
                 return []
 
+        rag = Rag()
         state = Stage1RagState()
-        result = await fetch_batch_rag_context(
-            Rag(),
-            self._request(),
-            ["src/a.py"],
-            ["changed line"],
-            batch_priority="MEDIUM",
-            rag_state=state,
-        )
+        with caplog.at_level(
+            logging.WARNING,
+            logger="service.review.orchestrator.stage_1_file_review",
+        ):
+            tasks = [
+                asyncio.create_task(fetch_batch_rag_context(
+                    rag,
+                    self._request(),
+                    [file_path],
+                    ["changed line"],
+                    batch_priority="MEDIUM",
+                    rag_state=state,
+                ))
+                for file_path in ("src/a.py", "src/b.py")
+            ]
+            while rag.semantic_calls < 2:
+                await asyncio.sleep(0)
+            release.set()
+            assert await asyncio.gather(*tasks) == [None, None]
 
-        assert result is not None
-        assert [chunk["text"] for chunk in result["relevant_code"]] == [
-            "class Client {}"
+        assert state.semantic_disabled is True
+        assert state.semantic_failures == 1
+        owner_warnings = [
+            record for record in caplog.records
+            if record.levelno == logging.WARNING
+            and "Semantic RAG filler failed" in record.getMessage()
         ]
-        assert state.deterministic_retrieval_states == ["failed"]
-        assert state.semantic_disabled is False
+        assert len(owner_warnings) == 1
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_exact_deterministic_failure_prevents_review_model_call(self):
+    async def test_deterministic_failure_opens_one_review_context_circuit(
+        self,
+        caplog,
+    ):
+        class Rag:
+            def __init__(self):
+                self.deterministic_calls = 0
+                self.semantic_calls = 0
+
+            async def get_deterministic_context(self, **kwargs):
+                self.deterministic_calls += 1
+                return {
+                    "status": "error",
+                    "status_code": 500,
+                    "error": "RAG service unavailable",
+                }
+
+            async def get_pr_context(self, **kwargs):
+                self.semantic_calls += 1
+                raise AssertionError("semantic retrieval must not run")
+
+            async def search_for_duplicates(self, **kwargs):
+                return []
+
+        rag = Rag()
+        state = Stage1RagState()
+        with caplog.at_level(
+            logging.WARNING,
+            logger="service.review.orchestrator.stage_1_file_review",
+        ):
+            first = await fetch_batch_rag_context(
+                rag,
+                self._request(),
+                ["src/a.py"],
+                ["changed line"],
+                batch_priority="MEDIUM",
+                rag_state=state,
+            )
+            second = await fetch_batch_rag_context(
+                rag,
+                self._request(),
+                ["src/b.py"],
+                ["changed line"],
+                batch_priority="MEDIUM",
+                rag_state=state,
+            )
+
+        assert first is None
+        assert second is None
+        assert rag.deterministic_calls == 1
+        assert rag.semantic_calls == 0
+        assert state.deterministic_retrieval_states == ["failed"]
+        assert state.context_disabled is True
+        assert state.semantic_disabled is True
+        owner_warnings = [
+            record for record in caplog.records
+            if record.levelno == logging.WARNING
+            and "Optional RAG context is unavailable" in record.getMessage()
+        ]
+        assert len(owner_warnings) == 1
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_exact_deterministic_failure_fails_open_to_review_model(self):
         class Rag:
             async def get_deterministic_context(self, **kwargs):
                 return {
@@ -1430,72 +1561,129 @@ class TestFetchBatchRagContext:
             async def search_for_duplicates(self, **kwargs):
                 return []
 
-        batch = [{
-            "file": ReviewFile(
-                path="src/a.py",
-                focus_areas=["general"],
-                risk_level="MEDIUM",
-            ),
-            "priority": "MEDIUM",
-        }]
+        fallback = self._FallbackAwaitProbe()
 
         with patch(
             "service.review.orchestrator.stage_1_file_review."
             "_invoke_stage_1_batch_llm",
             new_callable=AsyncMock,
         ) as invoke:
-            with pytest.raises(
-                RuntimeError,
-                match="revision-bound deterministic RAG retrieval failed",
-            ):
-                await review_file_batch(
-                    MagicMock(),
-                    self._exact_request(),
-                    batch,
-                    rag_client=Rag(),
-                    prepared_context=Stage1PreparedContext(),
-                    pr_indexed=True,
-                    rag_state=Stage1RagState(),
-                )
+            invoke.return_value = []
+            state = Stage1RagState()
+            result = await review_file_batch(
+                MagicMock(),
+                self._exact_request(),
+                self._batch(),
+                rag_client=Rag(),
+                prepared_context=Stage1PreparedContext(),
+                fallback_rag_context=fallback,
+                pr_indexed=True,
+                rag_state=state,
+            )
 
-        invoke.assert_not_awaited()
+        assert result == []
+        assert state.context_disabled is True
+        assert fallback.awaited is False
+        assert "STALE_FALLBACK_SENTINEL" not in invoke.await_args.args[1]
+        invoke.assert_awaited_once()
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_exact_missing_rag_client_prevents_review_model_call(self):
-        batch = [{
-            "file": ReviewFile(
-                path="src/a.py",
-                focus_areas=["general"],
-                risk_level="MEDIUM",
-            ),
-            "priority": "MEDIUM",
-        }]
+    async def test_exact_missing_rag_client_fails_open_to_review_model(self):
+        fallback = self._FallbackAwaitProbe()
 
         with patch(
             "service.review.orchestrator.stage_1_file_review."
             "_invoke_stage_1_batch_llm",
             new_callable=AsyncMock,
         ) as invoke:
-            with pytest.raises(
-                RuntimeError,
-                match="requires a RAG client",
-            ):
-                await review_file_batch(
-                    MagicMock(),
-                    self._exact_request(),
-                    batch,
-                    rag_client=None,
-                    prepared_context=Stage1PreparedContext(),
-                    pr_indexed=True,
-                    rag_state=Stage1RagState(),
-                )
+            invoke.return_value = []
+            state = Stage1RagState()
+            result = await review_file_batch(
+                MagicMock(),
+                self._exact_request(),
+                self._batch(),
+                rag_client=None,
+                prepared_context=Stage1PreparedContext(),
+                fallback_rag_context=fallback,
+                pr_indexed=True,
+                rag_state=state,
+            )
 
-        invoke.assert_not_awaited()
+        assert result == []
+        assert state.context_disabled is True
+        assert fallback.awaited is False
+        assert "STALE_FALLBACK_SENTINEL" not in invoke.await_args.args[1]
+        invoke.assert_awaited_once()
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_exact_partial_deterministic_state_fails_closed(self):
+    async def test_exact_base_binding_never_consumes_unbound_fallback(self):
+        request = self._exact_request()
+        request.ragPrGenerationFingerprint = None
+        request.ragPrOverlayGenerationManifestSha256 = None
+        fallback = self._FallbackAwaitProbe()
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review."
+            "_invoke_stage_1_batch_llm",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as invoke:
+            state = Stage1RagState()
+            result = await review_file_batch(
+                MagicMock(),
+                request,
+                self._batch(),
+                rag_client=None,
+                prepared_context=Stage1PreparedContext(),
+                fallback_rag_context=fallback,
+                pr_indexed=False,
+                rag_state=state,
+            )
+
+        assert result == []
+        assert state.context_disabled is True
+        assert fallback.awaited is False
+        assert "STALE_FALLBACK_SENTINEL" not in invoke.await_args.args[1]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_legacy_unbound_review_still_uses_scoped_fallback(self):
+        request = self._request()
+        request.rawDiff = ""
+        request.deltaDiff = None
+        request.taskContext = None
+        request.projectRules = []
+        request.previousCodeAnalysisIssues = []
+        fallback = self._FallbackAwaitProbe()
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review."
+            "_invoke_stage_1_batch_llm",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as invoke:
+            result = await review_file_batch(
+                MagicMock(),
+                request,
+                self._batch(),
+                rag_client=None,
+                prepared_context=Stage1PreparedContext(),
+                fallback_rag_context=fallback,
+                pr_indexed=False,
+                rag_state=Stage1RagState(),
+            )
+
+        assert result == []
+        assert fallback.awaited is True
+        assert "STALE_FALLBACK_SENTINEL" in invoke.await_args.args[1]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_exact_partial_deterministic_state_fails_open_once(self):
         class Rag:
+            def __init__(self):
+                self.deterministic_calls = 0
+
             async def get_deterministic_context(self, **kwargs):
+                self.deterministic_calls += 1
                 return {
                     "context": {
                         "chunks": [{"text": "partial context"}],
@@ -1506,21 +1694,33 @@ class TestFetchBatchRagContext:
             async def search_for_duplicates(self, **kwargs):
                 return []
 
-        with pytest.raises(
-            RuntimeError,
-            match="deterministic RAG retrieval is not complete: partial",
-        ):
-            await fetch_batch_rag_context(
-                Rag(),
-                self._exact_request(),
-                ["src/a.py"],
-                ["changed line"],
-                pr_indexed=True,
-                rag_state=Stage1RagState(),
-            )
+        rag = Rag()
+        state = Stage1RagState()
+        first = await fetch_batch_rag_context(
+            rag,
+            self._exact_request(),
+            ["src/a.py"],
+            ["changed line"],
+            pr_indexed=True,
+            rag_state=state,
+        )
+        second = await fetch_batch_rag_context(
+            rag,
+            self._exact_request(),
+            ["src/b.py"],
+            ["changed line"],
+            pr_indexed=True,
+            rag_state=state,
+        )
+
+        assert first is None
+        assert second is None
+        assert rag.deterministic_calls == 1
+        assert state.context_disabled is True
+        assert state.deterministic_retrieval_states == ["partial"]
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_exact_semantic_transport_failure_fails_closed(self):
+    async def test_exact_semantic_transport_failure_keeps_review_available(self):
         class Rag:
             async def get_deterministic_context(self, **kwargs):
                 return {
@@ -1540,15 +1740,105 @@ class TestFetchBatchRagContext:
             async def search_for_duplicates(self, **kwargs):
                 return []
 
-        with pytest.raises(RuntimeError, match="semantic backend unavailable"):
-            await fetch_batch_rag_context(
-                Rag(),
-                self._exact_request(),
-                ["src/a.py"],
-                ["changed line"],
-                pr_indexed=True,
-                rag_state=Stage1RagState(),
-            )
+        state = Stage1RagState()
+        result = await fetch_batch_rag_context(
+            Rag(),
+            self._exact_request(),
+            ["src/a.py"],
+            ["changed line"],
+            pr_indexed=True,
+            rag_state=state,
+        )
+
+        assert result is None
+        assert state.context_disabled is False
+        assert state.semantic_disabled is True
+        assert state.semantic_disable_reason == "semantic backend unavailable"
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_degraded_overlay_uses_only_exact_base_binding(
+        self,
+        monkeypatch,
+    ):
+        import service.review.orchestrator.stage_1_file_review as stage1
+
+        monkeypatch.setattr(stage1, "SEMANTIC_RAG_FILLER_ENABLED", True)
+
+        class Rag:
+            def __init__(self):
+                self.deterministic_request = None
+                self.semantic_request = None
+
+            async def get_deterministic_context(self, **kwargs):
+                self.deterministic_request = kwargs
+                return {
+                    "context": {
+                        "chunks": [],
+                        "_metadata": {"retrieval_state": "complete"},
+                    }
+                }
+
+            async def get_pr_context(self, **kwargs):
+                self.semantic_request = kwargs
+                return {"context": {"relevant_code": []}}
+
+            async def search_for_duplicates(self, **kwargs):
+                return []
+
+        request = self._exact_request()
+        request.ragPrGenerationFingerprint = None
+        request.ragPrOverlayGenerationManifestSha256 = None
+        rag = Rag()
+
+        result = await fetch_batch_rag_context(
+            rag,
+            request,
+            ["src/a.py"],
+            ["changed line"],
+            pr_indexed=False,
+            rag_state=Stage1RagState(),
+        )
+
+        assert result == {"relevant_code": []}
+        assert rag.deterministic_request["branches"] == ["feature"]
+        assert rag.deterministic_request["base_revision"] == "b" * 40
+        assert (
+            rag.deterministic_request["base_generation_manifest_sha256"]
+            == "c" * 64
+        )
+        assert (
+            rag.deterministic_request["collection_target"]
+            == "cc_ws_proj_main_generation"
+        )
+        assert rag.deterministic_request["pr_number"] is None
+        assert rag.deterministic_request["pr_changed_files"] is None
+        assert rag.deterministic_request["source_revision"] is None
+        assert rag.deterministic_request["pr_generation_fingerprint"] is None
+        assert (
+            rag.deterministic_request[
+                "pr_overlay_generation_manifest_sha256"
+            ]
+            is None
+        )
+        assert rag.semantic_request["base_branch"] is None
+        assert rag.semantic_request["pr_number"] is None
+        assert rag.semantic_request["all_pr_changed_files"] is None
+        assert rag.semantic_request["deleted_files"] is None
+        assert rag.semantic_request["source_revision"] is None
+        assert rag.semantic_request["base_revision"] == "b" * 40
+        assert (
+            rag.semantic_request["base_generation_manifest_sha256"]
+            == "c" * 64
+        )
+        assert (
+            rag.semantic_request["collection_target"]
+            == "cc_ws_proj_main_generation"
+        )
+        assert rag.semantic_request["pr_generation_fingerprint"] is None
+        assert (
+            rag.semantic_request["pr_overlay_generation_manifest_sha256"]
+            is None
+        )
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_exact_bound_success_allows_intentional_semantic_disable(

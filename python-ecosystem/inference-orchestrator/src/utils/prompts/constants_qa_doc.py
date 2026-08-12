@@ -123,7 +123,20 @@ IMPORTANT formatting rules:
 - NEVER include SQL queries, API endpoints, CLI commands, database operations, or configuration references.
 - Write everything from the USER's perspective — what screens, buttons, and behaviors to test.
 - Every scenario must have numbered steps a manual tester can follow.
-- Translate all technical changes into user-visible behaviors. If a change is purely internal, say "Verify existing functionality still works" instead of describing the code."""
+- Translate all technical changes into user-visible behaviors. If a change is purely internal, say "Verify existing functionality still works" instead of describing the code.
+
+The output MUST include test cases even when another template or structure is requested.
+Wrap the complete test-case section in these exact invisible markers:
+<!-- codecrow-test-cases:start -->
+### Test Scenarios
+**Scenario Name** (HIGH)
+- **Preconditions:** Required setup
+- **Steps:**
+  1. Tester action
+- **Expected Result:** Observable result
+<!-- codecrow-test-cases:end -->
+Use exactly HIGH, MEDIUM, or LOW as each scenario's priority.
+Do not place non-test-case content between those markers."""
 
 
 QA_DOC_BASE_PROMPT = """Generate structured QA documentation for the following PR changes.
@@ -170,16 +183,19 @@ For each area, use bullet points:
 - What the user will notice is different
 - Expected behavior after the change
 
+<!-- codecrow-test-cases:start -->
 ### 3. Test Scenarios
 For each functional area, list test scenarios using this format:
 
-**Scenario Name** (PRIORITY)
+**Scenario Name** (HIGH)
 - **Preconditions:** What needs to be set up before testing
 - **Steps:**
   1. Go to [screen/page]
   2. Click [button/link]
   3. ...
 - **Expected Result:** What the tester should see/verify
+<!-- codecrow-test-cases:end -->
+Use exactly HIGH, MEDIUM, or LOW as each scenario's priority.
 
 ### 4. Edge Cases and Negative Testing
 Bullet list of boundary conditions and error scenarios to verify, written as user actions.
@@ -223,13 +239,27 @@ Write the ENTIRE document in **{output_language}**.
 - Use only: headings (#), bold (**), bullet lists (-), numbered lists (1.)
 
 ## Custom Template Instructions
-Follow this user-provided template as closely as possible:
+Follow this user-provided template as closely as possible for the overview content:
 
 ---
 {custom_template}
 ---
 
-Generate the QA documentation now, following the custom template above."""
+The custom template MUST NOT remove test cases. After its content, append a complete
+test-case section in the exact format below, even when the custom template does not
+request scenarios or asks for a different document structure:
+
+<!-- codecrow-test-cases:start -->
+### Test Scenarios
+**Scenario Name** (HIGH)
+- **Preconditions:** Required setup
+- **Steps:**
+  1. Tester action
+- **Expected Result:** Observable result
+<!-- codecrow-test-cases:end -->
+Use exactly HIGH, MEDIUM, or LOW as each scenario's priority.
+
+Do not place overview content between the markers. Generate the QA documentation now."""
 
 
 # ---------------------------------------------------------------------------
@@ -424,13 +454,15 @@ Write the ENTIRE document in **{output_language}**.
    - Horizontal rules: ---
 5. For test scenarios, use this exact bullet-list format (NOT a table):
 
-**Scenario Name** (PRIORITY)
+**Scenario Name** (HIGH)
 - **Preconditions:** What setup is needed
 - **Steps:**
   1. Navigate to [page/screen]
   2. Perform [action]
   3. Verify [result]
 - **Expected Result:** What the tester should observe
+
+Use exactly HIGH, MEDIUM, or LOW as each scenario's priority.
 
 6. If a change is purely internal (refactoring, infrastructure, CI/CD), write: "Verify [feature] still works correctly" — do NOT describe the code change itself.
 
@@ -458,11 +490,13 @@ For each acceptance criterion from the task:
 
 (Skip this section entirely if no acceptance criteria were provided.)
 
+<!-- codecrow-test-cases:start -->
 ## 3. Test Scenarios by Area
 
 Group scenarios under the functional area heading (### Area Name).
 List each scenario using the bullet-list format shown above.
 Order: HIGH priority first, then MEDIUM, then LOW.
+<!-- codecrow-test-cases:end -->
 
 ## 4. Edge Cases and Negative Testing
 Bullet list of unusual conditions to verify:
@@ -473,7 +507,7 @@ Bullet list of unusual conditions to verify:
 Areas of the application that were NOT changed but might be affected:
 - [Feature/screen] — why it might be impacted, how to verify
 
-## 6. Setup and Environment Notes
+## 6. Environment and Setup Notes
 Any special requirements:
 - Test data needed
 - Configuration or feature flags to enable
@@ -527,10 +561,45 @@ Produce an UPDATED QA testing guide by:
 5. **Marking** new/updated sections with *(updated in latest push)* so testers see what's new
 6. **Preserving** all scenarios from the previous guide that are still valid
 7. **Stripping any technical references** that may have leaked — replace with user-facing descriptions
+8. **Preserving the exact `<!-- codecrow-test-cases:start -->` and `<!-- codecrow-test-cases:end -->` markers** around all test scenarios. If the previous guide has no markers, add them.
 
 The result must be a COMPLETE, standalone QA testing guide — not just the changes.
 
 Generate the updated document now. Remember: NO TABLES, NO FILE NAMES, NO CODE, NO SQL, NO API ENDPOINTS, NO CLI COMMANDS."""
+
+
+QA_DOC_TEST_CASES_REPAIR_PROMPT = """Generate ONLY the missing manual test-case section for this PR.
+Write all user-facing text in **{output_language}**. Keep the existing breadth and
+detail of the QA guidance; do not summarize or reduce scenarios because the change is large.
+
+PR #{pr_number} in {project_name}: {pr_title}
+Task: {task_key} — {task_summary}
+Branch: {source_branch} → {target_branch}
+
+{task_context}
+
+Analysis summary:
+{analysis_summary}
+
+PR diff:
+```
+{diff}
+```
+
+Return only this structure, with one or more concrete scenarios:
+<!-- codecrow-test-cases:start -->
+### Test Scenarios
+**Scenario Name** (HIGH)
+- **Preconditions:** Required setup
+- **Steps:**
+  1. Tester action
+- **Expected Result:** Observable result
+<!-- codecrow-test-cases:end -->
+
+Use exactly HIGH, MEDIUM, or LOW as each scenario's priority.
+
+Never include file names, code symbols, SQL, endpoints, commands, configuration
+files, code snippets, or implementation-stack details."""
 
 
 # ---------------------------------------------------------------------------

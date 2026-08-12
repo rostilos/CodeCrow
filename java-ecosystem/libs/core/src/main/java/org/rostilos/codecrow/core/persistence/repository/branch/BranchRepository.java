@@ -13,6 +13,16 @@ import java.util.List;
 @Repository
 public interface BranchRepository extends JpaRepository<Branch, Long> {
 
+    interface StaleRetryCandidate {
+        Long getBranchId();
+        Long getProjectId();
+        String getBranchName();
+        String getCommitHash();
+        int getConsecutiveFailures();
+        java.time.OffsetDateTime getLastHealthCheckAt();
+        boolean getBranchAnalysisEnabled();
+    }
+
     Optional<Branch> findByProjectIdAndBranchName(Long projectId, String branchName);
 
     Optional<Branch> findByProjectIdAndCommitHash(Long projectId, String commitHash);
@@ -32,4 +42,22 @@ public interface BranchRepository extends JpaRepository<Branch, Long> {
      */
     @Query("SELECT b FROM Branch b JOIN FETCH b.project WHERE b.healthStatus = :status")
     List<Branch> findByHealthStatusWithProject(@Param("status") BranchHealthStatus status);
+
+    /**
+     * Materializes only scheduler inputs so the repository's short read
+     * transaction is closed before a retry performs VCS, RAG, or AI work.
+     */
+    @Query("""
+            SELECT b.id AS branchId,
+                   b.project.id AS projectId,
+                   b.branchName AS branchName,
+                   b.commitHash AS commitHash,
+                   b.consecutiveFailures AS consecutiveFailures,
+                   b.lastHealthCheckAt AS lastHealthCheckAt,
+                   b.project.branchAnalysisEnabled AS branchAnalysisEnabled
+            FROM Branch b
+            WHERE b.healthStatus = :status
+            """)
+    List<StaleRetryCandidate> findStaleRetryCandidates(
+            @Param("status") BranchHealthStatus status);
 }

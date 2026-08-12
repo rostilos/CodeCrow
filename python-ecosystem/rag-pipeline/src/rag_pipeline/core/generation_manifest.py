@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
@@ -377,3 +378,13 @@ def build_generation_manifest_node(
 def is_sha256_hex(value: object) -> bool:
     """Return whether ``value`` is one canonical lower-case SHA-256 digest."""
     return isinstance(value, str) and _SHA256_RE.fullmatch(value) is not None
+
+
+def generation_manifest_point_id(
+    workspace: str,
+    project: str,
+    branch: str,
+) -> str:
+    """Return the deterministic storage ID of a repository generation seal."""
+    key = f"{workspace}:{project}:{branch}:{GENERATION_MANIFEST_PATH}:0"
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, key))

@@ -655,6 +655,28 @@ class ReviewService:
                 timeout=self.GLOBAL_RAG_QUERY_TIMEOUT_SECONDS,
             )
 
+            if (
+                isinstance(rag_response, dict)
+                and rag_response.get("status") == "error"
+            ):
+                logger.info(
+                    "Global fallback RAG context unavailable; per-batch "
+                    "retrieval remains authoritative: status=%s detail=%s",
+                    rag_response.get("status_code") or "transport-error",
+                    rag_response.get("error")
+                    or rag_response.get("detail")
+                    or "unknown failure",
+                )
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "rag_skipped",
+                    "message": (
+                        "Global RAG fallback unavailable; per-batch retrieval "
+                        "remains active"
+                    ),
+                })
+                return None
+
             if rag_response and rag_response.get("context"):
                 context = rag_response.get("context")
                 relevant_code = context.get("relevant_code", [])

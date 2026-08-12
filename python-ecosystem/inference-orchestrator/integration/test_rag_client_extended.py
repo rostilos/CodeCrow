@@ -314,14 +314,14 @@ async def test_delete_pr_files_success(rag_client):
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
 async def test_delete_pr_files_not_found(rag_client):
-    """Collection doesn't exist → skipped status → False."""
+    """An already-absent overlay is an idempotent cleanup success."""
     respx.delete("http://rag-pipeline:8001/index/pr-files/ws/proj/99").mock(
         return_value=httpx.Response(200, json={"status": "skipped"})
     )
     result = await rag_client.delete_pr_files(
         workspace="ws", project="proj", pr_number=99,
     )
-    assert result is False  # status != "deleted"
+    assert result is True
     await rag_client.close()
 
 
