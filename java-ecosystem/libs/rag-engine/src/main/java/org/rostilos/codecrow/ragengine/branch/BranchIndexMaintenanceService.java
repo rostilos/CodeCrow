@@ -201,7 +201,7 @@ public class BranchIndexMaintenanceService {
                     primary ? RagBranchIndexKind.PRIMARY : RagBranchIndexKind.DURABLE,
                     config.includePatterns(),
                     config.excludePatterns(),
-                    job.getId(), event -> {
+                    job.getId(), lock.get(), event -> {
                         Map<String, Object> forwarded = new LinkedHashMap<>(event);
                         forwarded.put("type", "progress");
                         forwarded.put("branch", branch);
@@ -223,7 +223,8 @@ public class BranchIndexMaintenanceService {
                         branch,
                         revision,
                         number(result.get("document_count")),
-                        number(result.get("chunk_count")));
+                        number(result.get("chunk_count")),
+                        job.getId());
             }
             jobService.completeJob(job, Map.of("branch", branch, "revision", revision));
             events.accept(Map.of("type", "progress", "stage", "branch_complete", "branch", branch,
@@ -233,9 +234,9 @@ public class BranchIndexMaintenanceService {
                     ? failure.getMessage() : failure.getClass().getSimpleName();
             if (primary) {
                 if (primaryPreviouslyIndexed) {
-                    trackingService.markIncrementalUpdateFailed(project, diagnostic);
+                    trackingService.markIncrementalUpdateFailed(project, diagnostic, job.getId());
                 } else {
-                    trackingService.markIndexingFailed(project, diagnostic);
+                    trackingService.markIndexingFailed(project, diagnostic, job.getId());
                 }
             }
             jobService.failJob(job, diagnostic);

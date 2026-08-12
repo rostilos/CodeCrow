@@ -92,7 +92,7 @@ class BranchIndexGenerationBuildServiceTest {
 
         assertThat(result).containsEntry(
                 "generation_manifest_sha256", "manifest-400");
-        verify(registryService).startBuild(30L, 77L);
+        verify(registryService).startBuild(30L, 77L, null);
         verify(registryService).publish(30L, "manifest-400", 231, 400);
         verify(pipelineClient).publishGenerationAliases(
                 "workspace", "namespace", "develop", "develop-400",

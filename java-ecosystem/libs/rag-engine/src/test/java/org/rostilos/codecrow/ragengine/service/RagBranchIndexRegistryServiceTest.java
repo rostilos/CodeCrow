@@ -108,7 +108,7 @@ class RagBranchIndexRegistryServiceTest {
         when(branchIndexRepository.findByIdForPublication(10L))
                 .thenReturn(Optional.of(branchIndex));
 
-        service.startBuild(30L, 99L);
+        service.startBuild(30L, 99L, "rag-lock-owner-99");
         RagBranchIndexGeneration published = service.publish(30L, "manifest-401", 501, 1504);
 
         assertThat(previous.getStatus()).isEqualTo(RagBranchIndexGenerationStatus.SUPERSEDED);
@@ -118,6 +118,8 @@ class RagBranchIndexRegistryServiceTest {
         assertThat(registration.operation().getStatus()).isEqualTo(RagIndexOperationStatus.SUCCEEDED);
         assertThat(registration.operation().getAttemptCount()).isEqualTo(1);
         assertThat(registration.operation().getJobId()).isEqualTo(99L);
+        assertThat(registration.operation().getAnalysisLockKey())
+                .isEqualTo("rag-lock-owner-99");
     }
 
     @Test

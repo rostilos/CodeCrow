@@ -2,7 +2,6 @@ package org.rostilos.codecrow.ragengine.branch;
 
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
-import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.analysis.RagIndexingStatus;
 import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.rag.RagIndexOperation;
@@ -90,17 +89,9 @@ public class RagIndexOperationRecoveryService {
     private void recoverProjections(
             RagIndexOperation operation,
             String diagnostic) {
-        Long projectId = operation.getProject().getId();
-        String branchName = operation.getBranchName();
         failDurableJob(operation.getJobId(), diagnostic);
-
-        // A newer producer owns the observable status and lock. Only the old
-        // durable job should be repaired in that case.
-        if (registryService.hasLiveOperation(projectId, branchName)) {
-            return;
-        }
         terminalizePrimaryStatus(operation, diagnostic);
-        releaseAbandonedLock(projectId, branchName, operation.getToRevision());
+        releaseAbandonedLock(operation);
     }
 
     private void failDurableJob(Long jobId, String diagnostic) {
@@ -141,9 +132,10 @@ public class RagIndexOperationRecoveryService {
                 return;
             }
             if (status.getStatus() == RagIndexingStatus.INDEXING) {
-                trackingService.markIndexingFailed(project, diagnostic);
+                trackingService.markIndexingFailed(project, diagnostic, operation.getJobId());
             } else if (status.getStatus() == RagIndexingStatus.UPDATING) {
-                trackingService.markIncrementalUpdateFailed(project, diagnostic);
+                trackingService.markIncrementalUpdateFailed(
+                        project, diagnostic, operation.getJobId());
             }
         } catch (Exception failure) {
             log.error(
@@ -153,20 +145,22 @@ public class RagIndexOperationRecoveryService {
         }
     }
 
-    private void releaseAbandonedLock(
-            Long projectId,
-            String branchName,
-            String commitHash) {
+    private void releaseAbandonedLock(RagIndexOperation operation) {
+        Long projectId = operation.getProject().getId();
+        String branchName = operation.getBranchName();
+        String lockKey = operation.getAnalysisLockKey();
+        if (lockKey == null || lockKey.isBlank()) {
+            log.warn(
+                    "Cannot release abandoned RAG lock without its exact owner key; "
+                            + "leaving it to expire: project={}, branch={}, commit={}",
+                    projectId, branchName, operation.getToRevision());
+            return;
+        }
         try {
-            if (lockService.releaseMatchingLock(
-                    projectId,
-                    branchName,
-                    AnalysisLockType.RAG_INDEXING,
-                    commitHash)) {
-                log.warn(
-                        "Released abandoned RAG indexing lock for project={}, branch={}, commit={}",
-                        projectId, branchName, commitHash);
-            }
+            lockService.releaseLock(lockKey);
+            log.warn(
+                    "Released abandoned RAG indexing lock for project={}, branch={}, commit={}",
+                    projectId, branchName, operation.getToRevision());
         } catch (Exception failure) {
             log.error(
                     "Could not release abandoned RAG indexing lock: project={}, branch={}",

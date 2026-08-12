@@ -605,6 +605,7 @@ class QaDocCommandProcessorTest {
             QaDocDocument pendingDocument = new QaDocDocument(project, 7L);
             ReflectionTestUtils.setField(pendingDocument, "id", 702L);
             pendingDocument.setCommitHash("abc123");
+            pendingDocument.setTaskId(TASK_ID);
             pendingDocument.setMarkdownContent(GENERATED_QA_DOC);
             pendingDocument.setGeneratedAt(OffsetDateTime.now());
             QaDocState state = new QaDocState(project, TASK_ID);
@@ -626,6 +627,28 @@ class QaDocCommandProcessorTest {
             verify(qaDocPublicPreviewService).createPreviewUrl(pendingDocument);
             verify(taskManagementClient).postComment(eq(TASK_ID), contains("codecrow-qa-autodoc"));
             verify(qaDocStateRepository).save(state);
+        }
+
+        @Test
+        @DisplayName("should regenerate when the pending document belongs to another task")
+        void shouldNotReusePendingHandoffForAnotherTask() throws IOException {
+            setupHappyPath();
+            QaDocDocument pendingDocument = new QaDocDocument(project, 7L);
+            pendingDocument.setCommitHash("abc123");
+            pendingDocument.setTaskId("OTHER-456");
+            pendingDocument.setMarkdownContent(GENERATED_QA_DOC);
+            pendingDocument.setGeneratedAt(OffsetDateTime.now());
+            when(qaDocDocumentService.findLatestDocument(PROJECT_ID, 7L))
+                    .thenReturn(Optional.of(pendingDocument));
+
+            WebhookResult result = processor.process(
+                    createPayload("feature/PROJ-123-add-login"), project, eventConsumer, Map.of());
+
+            assertThat(result.success()).isTrue();
+            verify(qaDocGenerationService).generateQaDocumentation(
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any());
+            verify(qaDocDocumentService).upsertLatestDocument(
+                    eq(project), eq(7L), eq(TASK_ID), any(), eq("abc123"), anyString());
         }
 
         @Test

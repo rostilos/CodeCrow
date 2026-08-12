@@ -304,7 +304,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                     pendingHandoffDocument = qaDocDocumentService
                             .findLatestDocument(project.getId(), prNumber)
                             .filter(document -> QaDocHandoffRetryPolicy.shouldReuse(
-                                    document, state, commitHash));
+                                    document, state, commitHash, taskId));
                 } catch (Exception e) {
                     log.warn("qa-doc command: failed to inspect pending handoff for project {} PR #{}: {}",
                             project.getId(), prNumber, e.getMessage());

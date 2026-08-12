@@ -376,7 +376,8 @@ class VcsRagIndexingServiceTest {
             Map<String, Object> result = service.indexProjectFromVcs(createProjectDTO(100L), "main", messageConsumer);
 
             assertThat(result).containsEntry("status", "error");
-            verify(ragIndexTrackingService).markIndexingFailed(eq(testProject), anyString());
+            verify(ragIndexTrackingService).markIndexingFailed(
+                    eq(testProject), anyString(), eq(0L));
             verify(jobService).failJob(eq(mockJob), anyString());
             verify(analysisLockService).releaseLock("lock-key");
         }
@@ -406,7 +407,8 @@ class VcsRagIndexingServiceTest {
             assertThat(consumerWorkspace).exists();
             verify(analysisLockService).releaseLock("lock-key");
             verify(analysisLockService).renewLock("lock-key", 30);
-            verify(ragIndexTrackingService).markIndexingFailed(testProject, "worker failed");
+            verify(ragIndexTrackingService).markIndexingFailed(
+                    testProject, "worker failed", null);
         } finally {
             Files.deleteIfExists(consumerWorkspace);
         }
@@ -434,7 +436,7 @@ class VcsRagIndexingServiceTest {
                 "codecrow:queue:rag",
                 "queued-payload");
 
-        verify(ragIndexTrackingService).markIndexingHeartbeat(testProject);
+        verify(ragIndexTrackingService).markIndexingHeartbeat(testProject, 0L);
         verify(jobService).logToJob(
                 eq(job),
                 eq(JobLogLevel.INFO),
@@ -447,7 +449,8 @@ class VcsRagIndexingServiceTest {
                 "main",
                 "abc123",
                 12,
-                34);
+                34,
+                0L);
         verify(analysisLockService, times(2)).renewLock("lock-key", 30);
         verify(analysisLockService).releaseLock("lock-key");
     }

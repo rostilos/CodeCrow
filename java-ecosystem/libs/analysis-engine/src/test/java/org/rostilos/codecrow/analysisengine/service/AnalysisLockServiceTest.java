@@ -234,36 +234,6 @@ class AnalysisLockServiceTest {
     }
 
     @Test
-    void releaseMatchingLockRemovesOnlyTheAbandonedRevision() {
-        when(lockRepository.deleteMatchingLock(
-                1L, "main", AnalysisLockType.RAG_INDEXING, "commit-a"))
-                .thenReturn(1);
-
-        assertThat(lockService.releaseMatchingLock(
-                1L, "main", AnalysisLockType.RAG_INDEXING, "commit-a"))
-                .isTrue();
-
-        verify(lockRepository).deleteMatchingLock(
-                1L, "main", AnalysisLockType.RAG_INDEXING, "commit-a");
-        verify(lockRepository, never()).deleteByLockKey(any());
-    }
-
-    @Test
-    void releaseMatchingLockPreservesANewerRevision() {
-        when(lockRepository.deleteMatchingLock(
-                1L, "main", AnalysisLockType.RAG_INDEXING, "commit-old"))
-                .thenReturn(0);
-
-        assertThat(lockService.releaseMatchingLock(
-                1L, "main", AnalysisLockType.RAG_INDEXING, "commit-old"))
-                .isFalse();
-
-        verify(lockRepository).deleteMatchingLock(
-                1L, "main", AnalysisLockType.RAG_INDEXING, "commit-old");
-        verify(lockRepository, never()).deleteByLockKey(any());
-    }
-
-    @Test
     void testAcquireLock_DifferentLockTypes() {
         String branchName = "main";
 

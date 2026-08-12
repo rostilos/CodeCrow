@@ -103,6 +103,11 @@ public class RagBranchIndexRegistryService {
 
     @Transactional
     public void startBuild(long operationId, Long jobId) {
+        startBuild(operationId, jobId, null);
+    }
+
+    @Transactional
+    public void startBuild(long operationId, Long jobId, String analysisLockKey) {
         RagIndexOperation operation = requireOperationForUpdate(operationId);
         if (operation.getStatus() == RagIndexOperationStatus.SUCCEEDED) {
             return;
@@ -112,6 +117,7 @@ public class RagBranchIndexRegistryService {
             generationRepository.save(operation.getGeneration());
         }
         operation.setJobId(jobId);
+        operation.setAnalysisLockKey(normalizeOptional(analysisLockKey));
         operation.start();
         operationRepository.save(operation);
     }
@@ -304,6 +310,10 @@ public class RagBranchIndexRegistryService {
             throw new IllegalArgumentException(field + " is required");
         }
         return value.trim();
+    }
+
+    private static String normalizeOptional(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private static String nullToEmpty(String value) {

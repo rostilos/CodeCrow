@@ -209,7 +209,7 @@ public class QaAutoDocListener {
             pendingHandoffDocument = qaDocDocumentService
                     .findLatestDocument(project.getId(), prNumber)
                     .filter(document -> QaDocHandoffRetryPolicy.shouldReuse(
-                            document, state, currentCommitHash));
+                            document, state, currentCommitHash, taskId));
         } catch (Exception e) {
             log.warn("QA auto-doc: failed to inspect pending handoff for project {} PR #{}: {}",
                     project.getId(), prNumber, e.getMessage());

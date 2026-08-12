@@ -277,28 +277,6 @@ public class AnalysisLockService {
         }
     }
 
-    /**
-     * Release the branch lock left behind by an abandoned producer, but only
-     * when it still belongs to the same revision. A newer retry for the branch
-     * therefore keeps its lock even if an older recovery scan finishes late.
-     */
-    @Transactional
-    public boolean releaseMatchingLock(
-            Long projectId,
-            String branchName,
-            AnalysisLockType lockType,
-            String commitHash) {
-        int deleted = lockRepository.deleteMatchingLock(
-                projectId, branchName, lockType, commitHash);
-        if (deleted == 0) {
-            log.info(
-                    "No matching lock released for project={}, branch={}, type={}, commit={}; "
-                            + "the lock is absent or belongs to another producer",
-                    projectId, branchName, lockType, commitHash);
-        }
-        return deleted > 0;
-    }
-
     @Transactional
     public boolean extendLock(String lockKey, int additionalMinutes) {
         Optional<AnalysisLock> lockOpt = lockRepository.findByLockKey(lockKey);

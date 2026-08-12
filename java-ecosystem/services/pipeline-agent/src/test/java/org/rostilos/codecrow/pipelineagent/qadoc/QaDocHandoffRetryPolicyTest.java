@@ -15,7 +15,8 @@ class QaDocHandoffRetryPolicyTest {
         QaDocDocument document = document("commit-b", OffsetDateTime.parse("2026-08-12T10:05:00Z"));
         QaDocState state = state("commit-a", OffsetDateTime.parse("2026-08-12T10:00:00Z"));
 
-        assertThat(QaDocHandoffRetryPolicy.shouldReuse(document, state, "commit-b")).isTrue();
+        assertThat(QaDocHandoffRetryPolicy.shouldReuse(
+                document, state, "commit-b", "task-1")).isTrue();
     }
 
     @Test
@@ -23,8 +24,10 @@ class QaDocHandoffRetryPolicyTest {
         QaDocDocument delivered = document("commit-b", OffsetDateTime.parse("2026-08-12T10:00:00Z"));
         QaDocState state = state("commit-b", OffsetDateTime.parse("2026-08-12T10:05:00Z"));
 
-        assertThat(QaDocHandoffRetryPolicy.shouldReuse(delivered, state, "commit-b")).isFalse();
-        assertThat(QaDocHandoffRetryPolicy.shouldReuse(delivered, state, "commit-c")).isFalse();
+        assertThat(QaDocHandoffRetryPolicy.shouldReuse(
+                delivered, state, "commit-b", "TASK-1")).isFalse();
+        assertThat(QaDocHandoffRetryPolicy.shouldReuse(
+                delivered, state, "commit-c", "TASK-1")).isFalse();
     }
 
     @Test
@@ -32,7 +35,16 @@ class QaDocHandoffRetryPolicyTest {
         QaDocDocument document = document("commit-a", OffsetDateTime.now());
         document.setMarkdownContent("  ");
 
-        assertThat(QaDocHandoffRetryPolicy.shouldReuse(document, null, "commit-a")).isFalse();
+        assertThat(QaDocHandoffRetryPolicy.shouldReuse(
+                document, null, "commit-a", "TASK-1")).isFalse();
+    }
+
+    @Test
+    void doesNotReuseDocumentGeneratedForAnotherTask() {
+        QaDocDocument document = document("commit-a", OffsetDateTime.now());
+
+        assertThat(QaDocHandoffRetryPolicy.shouldReuse(
+                document, null, "commit-a", "TASK-2")).isFalse();
     }
 
     private static QaDocDocument document(String commit, OffsetDateTime generatedAt) {
@@ -40,6 +52,7 @@ class QaDocHandoffRetryPolicyTest {
         document.setCommitHash(commit);
         document.setGeneratedAt(generatedAt);
         document.setMarkdownContent("# QA document");
+        document.setTaskId("TASK-1");
         return document;
     }
 

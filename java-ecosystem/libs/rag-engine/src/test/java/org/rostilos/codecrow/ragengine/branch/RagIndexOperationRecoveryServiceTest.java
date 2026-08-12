@@ -4,7 +4,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
-import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.analysis.RagIndexStatus;
 import org.rostilos.codecrow.core.model.analysis.RagIndexingStatus;
 import org.rostilos.codecrow.core.model.job.Job;
@@ -53,6 +52,7 @@ class RagIndexOperationRecoveryServiceTest {
         when(operation.getBranchName()).thenReturn("main");
         when(operation.getToRevision()).thenReturn("commit-a");
         when(operation.getJobId()).thenReturn(91L);
+        when(operation.getAnalysisLockKey()).thenReturn("rag-lock-owner-91");
         when(registry.findFailedOperationsWithActiveProjections())
                 .thenReturn(List.of());
     }
@@ -71,19 +71,15 @@ class RagIndexOperationRecoveryServiceTest {
         when(projects.findByIdWithFullDetails(42L)).thenReturn(Optional.of(project));
         when(ragOperations.getBaseBranch(project)).thenReturn("main");
         when(tracking.getIndexStatus(project)).thenReturn(Optional.of(status));
-        when(locks.releaseMatchingLock(
-                42L, "main", AnalysisLockType.RAG_INDEXING, "commit-a"))
-                .thenReturn(true);
-
         recovery.failAbandonedOperations();
 
         verify(registry).failIfAbandoned(eq(81L), any(OffsetDateTime.class), argThat(message ->
                 message.contains("stopped heartbeating")
                         && message.contains("previous active generation was preserved")));
         verify(jobs).failJob(eq(job), contains("stopped heartbeating"));
-        verify(tracking).markIndexingFailed(eq(project), contains("stopped heartbeating"));
-        verify(locks).releaseMatchingLock(
-                42L, "main", AnalysisLockType.RAG_INDEXING, "commit-a");
+        verify(tracking).markIndexingFailed(
+                eq(project), contains("stopped heartbeating"), eq(91L));
+        verify(locks).releaseLock("rag-lock-owner-91");
     }
 
     @Test
@@ -103,24 +99,30 @@ class RagIndexOperationRecoveryServiceTest {
         recovery.failAbandonedOperations();
 
         verify(tracking).markIncrementalUpdateFailed(
-                eq(project), contains("stopped heartbeating"));
-        verify(tracking, never()).markIndexingFailed(any(), anyString());
+                eq(project), contains("stopped heartbeating"), eq(91L));
+        verify(tracking, never()).markIndexingFailed(any(), anyString(), any());
     }
 
     @Test
-    void newerLiveOperationOwnsStatusAndLockButOldJobIsStillFailed() {
+    void newerLiveOperationPreservesStatusWhileOldExactLockIsReleased() {
         Job job = new Job();
+        RagIndexStatus status = new RagIndexStatus();
+        status.setStatus(RagIndexingStatus.INDEXING);
+        status.setActiveJobId(92L);
         when(registry.findRecoverableOperations(any(OffsetDateTime.class)))
                 .thenReturn(List.of(operation));
         when(registry.failIfAbandoned(eq(81L), any(OffsetDateTime.class), anyString()))
                 .thenReturn(true);
-        when(registry.hasLiveOperation(42L, "main")).thenReturn(true);
         when(jobs.findById(91L)).thenReturn(Optional.of(job));
+        when(projects.findByIdWithFullDetails(42L)).thenReturn(Optional.of(project));
+        when(ragOperations.getBaseBranch(project)).thenReturn("main");
+        when(tracking.getIndexStatus(project)).thenReturn(Optional.of(status));
 
         recovery.failAbandonedOperations();
 
         verify(jobs).failJob(eq(job), contains("stopped heartbeating"));
-        verifyNoInteractions(projects, tracking, ragOperations, locks);
+        verify(tracking, never()).markIndexingFailed(any(), anyString(), any());
+        verify(locks).releaseLock("rag-lock-owner-91");
     }
 
     @Test
@@ -143,9 +145,8 @@ class RagIndexOperationRecoveryServiceTest {
 
         verify(registry, never()).failIfAbandoned(anyLong(), any(), anyString());
         verify(jobs).failJob(job, "producer was abandoned");
-        verify(tracking).markIndexingFailed(project, "producer was abandoned");
-        verify(locks).releaseMatchingLock(
-                42L, "main", AnalysisLockType.RAG_INDEXING, "commit-a");
+        verify(tracking).markIndexingFailed(project, "producer was abandoned", 91L);
+        verify(locks).releaseLock("rag-lock-owner-91");
     }
 
     @Test
@@ -163,9 +164,8 @@ class RagIndexOperationRecoveryServiceTest {
 
         recovery.failAbandonedOperations();
 
-        verify(tracking, never()).markIndexingFailed(any(), anyString());
-        verify(tracking, never()).markIncrementalUpdateFailed(any(), anyString());
-        verify(locks).releaseMatchingLock(
-                42L, "main", AnalysisLockType.RAG_INDEXING, "commit-a");
+        verify(tracking, never()).markIndexingFailed(any(), anyString(), any());
+        verify(tracking, never()).markIncrementalUpdateFailed(any(), anyString(), any());
+        verify(locks).releaseLock("rag-lock-owner-91");
     }
 }

@@ -88,7 +88,7 @@ class RagIndexTrackingServiceTest {
 
     @Test
     void testMarkIndexingStarted_NewStatus() {
-        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L)).thenReturn(Optional.empty());
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
         RagIndexStatus result = service.markIndexingStarted(testProject, "main", "abc123", 91L);
@@ -113,7 +113,7 @@ class RagIndexTrackingServiceTest {
         existing.setStatus(RagIndexingStatus.FAILED);
         existing.setErrorMessage("Previous error");
         
-        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
         service.markIndexingStarted(testProject, "develop", "xyz789", 92L);
@@ -136,10 +136,11 @@ class RagIndexTrackingServiceTest {
         existing.setStatus(RagIndexingStatus.INDEXING);
         existing.setActiveJobId(91L);
         
-        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
-        RagIndexStatus result = service.markIndexingCompleted(testProject, "main", "abc123", 150, null);
+        RagIndexStatus result = service.markIndexingCompleted(
+                testProject, "main", "abc123", 150, null, 91L);
 
         ArgumentCaptor<RagIndexStatus> captor = ArgumentCaptor.forClass(RagIndexStatus.class);
         verify(ragIndexStatusRepository).save(captor.capture());
@@ -156,9 +157,10 @@ class RagIndexTrackingServiceTest {
 
     @Test
     void testMarkIndexingCompleted_ThrowsWhenNotFound() {
-        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.markIndexingCompleted(testProject, "main", "abc123", 150, null))
+        assertThatThrownBy(() -> service.markIndexingCompleted(
+                testProject, "main", "abc123", 150, null, 91L))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("RAG index status not found");
     }
@@ -169,7 +171,7 @@ class RagIndexTrackingServiceTest {
         existing.setProject(testProject);
         existing.setStatus(RagIndexingStatus.INDEXING);
         
-        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
         service.markIndexingFailed(testProject, "Test error message");
@@ -184,7 +186,7 @@ class RagIndexTrackingServiceTest {
 
     @Test
     void testMarkIndexingFailed_NewStatus() {
-        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L)).thenReturn(Optional.empty());
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
         service.markIndexingFailed(testProject, "New error");
@@ -206,7 +208,7 @@ class RagIndexTrackingServiceTest {
         existing.setUpdatedAt(OffsetDateTime.now().minusMinutes(5));
         OffsetDateTime previousActivity = existing.getUpdatedAt();
 
-        when(ragIndexStatusRepository.findByProjectId(100L))
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L))
                 .thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class)))
                 .thenAnswer(i -> i.getArgument(0));
@@ -225,7 +227,7 @@ class RagIndexTrackingServiceTest {
         existing.setUpdatedAt(OffsetDateTime.now().minusMinutes(5));
         OffsetDateTime previousActivity = existing.getUpdatedAt();
 
-        when(ragIndexStatusRepository.findByProjectId(100L))
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L))
                 .thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class)))
                 .thenAnswer(i -> i.getArgument(0));
@@ -237,13 +239,30 @@ class RagIndexTrackingServiceTest {
     }
 
     @Test
+    void staleHeartbeatCannotRefreshANewerJobOwner() {
+        RagIndexStatus existing = new RagIndexStatus();
+        existing.setProject(testProject);
+        existing.setStatus(RagIndexingStatus.INDEXING);
+        existing.setActiveJobId(92L);
+        OffsetDateTime previousActivity = OffsetDateTime.now().minusMinutes(5);
+        existing.setUpdatedAt(previousActivity);
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L))
+                .thenReturn(Optional.of(existing));
+
+        assertThat(service.markIndexingHeartbeat(testProject, 91L)).isFalse();
+        assertThat(existing.getUpdatedAt()).isEqualTo(previousActivity);
+        assertThat(existing.getActiveJobId()).isEqualTo(92L);
+        verify(ragIndexStatusRepository, never()).save(any());
+    }
+
+    @Test
     void testMarkIndexingHeartbeat_DoesNotMutateTerminalStatus() {
         RagIndexStatus existing = new RagIndexStatus();
         existing.setProject(testProject);
         existing.setStatus(RagIndexingStatus.INDEXED);
         OffsetDateTime previousActivity = existing.getUpdatedAt();
 
-        when(ragIndexStatusRepository.findByProjectId(100L))
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L))
                 .thenReturn(Optional.of(existing));
 
         assertThat(service.markIndexingHeartbeat(testProject)).isFalse();
@@ -253,7 +272,7 @@ class RagIndexTrackingServiceTest {
 
     @Test
     void testMarkIndexingHeartbeat_WithoutStatusIsIgnored() {
-        when(ragIndexStatusRepository.findByProjectId(100L))
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L))
                 .thenReturn(Optional.empty());
 
         assertThat(service.markIndexingHeartbeat(testProject)).isFalse();
@@ -276,7 +295,7 @@ class RagIndexTrackingServiceTest {
         existing.setIndexedBranch("main");
         existing.setIndexedCommitHash("abc123");
 
-        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
         RagIndexStatus result = service.markUpdatingStarted(testProject, "main", "def456", 93L);
@@ -290,7 +309,7 @@ class RagIndexTrackingServiceTest {
 
     @Test
     void testMarkUpdatingStarted_ThrowsWhenNotFound() {
-        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.markUpdatingStarted(testProject, "main", "def456", 93L))
                 .isInstanceOf(IllegalStateException.class)
@@ -306,10 +325,11 @@ class RagIndexTrackingServiceTest {
         existing.setStatus(RagIndexingStatus.UPDATING);
         existing.setActiveJobId(93L);
 
-        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
-        RagIndexStatus result = service.markUpdatingCompleted(testProject, "main", "ghi789", null, null, null);
+        RagIndexStatus result = service.markUpdatingCompleted(
+                testProject, "main", "ghi789", null, null, null, 93L);
 
         assertThat(result.getStatus()).isEqualTo(RagIndexingStatus.INDEXED);
         assertThat(result.getIndexedBranch()).isEqualTo("main");
@@ -321,9 +341,10 @@ class RagIndexTrackingServiceTest {
 
     @Test
     void testMarkUpdatingCompleted_ThrowsWhenNotFound() {
-        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.markUpdatingCompleted(testProject, "main", "ghi789", null, null, null))
+        assertThatThrownBy(() -> service.markUpdatingCompleted(
+                testProject, "main", "ghi789", null, null, null, 93L))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("RAG index status not found");
     }
@@ -336,7 +357,7 @@ class RagIndexTrackingServiceTest {
         existing.setIndexedBranch("main");
         existing.setIndexedCommitHash("main-commit");
 
-        when(ragIndexStatusRepository.findByProjectId(100L))
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L))
                 .thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class)))
                 .thenAnswer(i -> i.getArgument(0));
@@ -359,10 +380,12 @@ class RagIndexTrackingServiceTest {
         existing.setIndexedBranch("main");
         existing.setIndexedCommitHash("abc123");
 
-        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
+        existing.setActiveJobId(93L);
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
-        RagIndexStatus result = service.markIncrementalUpdateFailed(testProject, "timeout error");
+        RagIndexStatus result = service.markIncrementalUpdateFailed(
+                testProject, "timeout error", 93L);
 
         assertThat(result.getStatus()).isEqualTo(RagIndexingStatus.INDEXED);
         assertThat(result.getIndexedBranch()).isEqualTo("main");
@@ -373,10 +396,47 @@ class RagIndexTrackingServiceTest {
 
     @Test
     void testMarkIncrementalUpdateFailed_ThrowsWhenNotFound() {
-        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.markIncrementalUpdateFailed(testProject, "error"))
+        assertThatThrownBy(() -> service.markIncrementalUpdateFailed(testProject, "error", 93L))
                 .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void staleCompletionCannotClearANewerJobOwner() {
+        RagIndexStatus existing = new RagIndexStatus();
+        existing.setProject(testProject);
+        existing.setStatus(RagIndexingStatus.INDEXING);
+        existing.setActiveJobId(92L);
+        existing.setIndexedCommitHash("newer-commit");
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L))
+                .thenReturn(Optional.of(existing));
+
+        RagIndexStatus result = service.markIndexingCompleted(
+                testProject, "main", "older-commit", 25, 50, 91L);
+
+        assertThat(result.getStatus()).isEqualTo(RagIndexingStatus.INDEXING);
+        assertThat(result.getActiveJobId()).isEqualTo(92L);
+        assertThat(result.getIndexedCommitHash()).isEqualTo("newer-commit");
+        verify(ragIndexStatusRepository, never()).save(any());
+    }
+
+    @Test
+    void staleFailureCannotTerminalizeANewerJobOwner() {
+        RagIndexStatus existing = new RagIndexStatus();
+        existing.setProject(testProject);
+        existing.setStatus(RagIndexingStatus.UPDATING);
+        existing.setActiveJobId(92L);
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L))
+                .thenReturn(Optional.of(existing));
+
+        RagIndexStatus result = service.markIncrementalUpdateFailed(
+                testProject, "older producer failed", 91L);
+
+        assertThat(result.getStatus()).isEqualTo(RagIndexingStatus.UPDATING);
+        assertThat(result.getActiveJobId()).isEqualTo(92L);
+        assertThat(result.getErrorMessage()).isNull();
+        verify(ragIndexStatusRepository, never()).save(any());
     }
 
     // ── canStartIndexing ─────────────────────────────────────────────────────
