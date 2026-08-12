@@ -18,10 +18,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-class QaDocTestCasesShareProviderTest {
+class QaDocShareProviderTest {
 
     @Test
-    void returnsOnlyTheSanitizedTestCaseContract() {
+    void returnsTheExplicitlyShareableDocumentTabs() {
         QaDocDocumentService documents = mock(QaDocDocumentService.class);
         CodeAnalysisService analyses = mock(CodeAnalysisService.class);
         WorkspaceSecurity workspaceSecurity = mock(WorkspaceSecurity.class);
@@ -54,7 +54,7 @@ class QaDocTestCasesShareProviderTest {
         when(analysis.getTaskSummary()).thenReturn("Add a saved-card checkout flow");
         when(documents.findDocumentById(88L)).thenReturn(Optional.of(document));
         when(analyses.findById(71L)).thenReturn(Optional.of(analysis));
-        QaDocTestCasesShareProvider provider = new QaDocTestCasesShareProvider(
+        QaDocShareProvider provider = new QaDocShareProvider(
                 documents, analyses, workspaceSecurity);
 
         QaDocPublicPreview preview = provider.getPublicPreview("88").orElseThrow();
@@ -92,7 +92,7 @@ class QaDocTestCasesShareProviderTest {
                 - **Expected Result:** It works
         """);
         when(documents.findDocumentById(89L)).thenReturn(Optional.of(document));
-        QaDocTestCasesShareProvider provider = new QaDocTestCasesShareProvider(
+        QaDocShareProvider provider = new QaDocShareProvider(
                 documents, analyses, workspaceSecurity);
 
         assertThat(provider.getPublicPreview("89")).isEmpty();
@@ -127,7 +127,7 @@ class QaDocTestCasesShareProviderTest {
         when(documents.findDocumentById(90L)).thenReturn(Optional.of(document));
         when(analyses.findById(72L)).thenReturn(Optional.of(analysis));
 
-        QaDocPublicPreview preview = new QaDocTestCasesShareProvider(
+        QaDocPublicPreview preview = new QaDocShareProvider(
                 documents, analyses, workspaceSecurity)
                 .getPublicPreview("90")
                 .orElseThrow();
@@ -157,7 +157,7 @@ class QaDocTestCasesShareProviderTest {
         QaDocDocument document = new QaDocDocument(project, 524L);
         document.setId(91L);
         when(documents.findDocumentById(91L)).thenReturn(Optional.of(document));
-        QaDocTestCasesShareProvider provider = new QaDocTestCasesShareProvider(
+        QaDocShareProvider provider = new QaDocShareProvider(
                 documents, analyses, workspaceSecurity);
 
         assertThat(provider.getAuthorizedPath("91", authentication))

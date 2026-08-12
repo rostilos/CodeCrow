@@ -34,7 +34,11 @@ public class RagIndexTrackingService {
     }
 
     @Transactional
-    public RagIndexStatus markIndexingStarted(Project project, String branchName, String commitHash) {
+    public RagIndexStatus markIndexingStarted(
+            Project project,
+            String branchName,
+            String commitHash,
+            Long activeJobId) {
         Optional<RagIndexStatus> existingOpt = ragIndexStatusRepository.findByProjectId(project.getId());
 
         RagIndexStatus status;
@@ -44,6 +48,7 @@ public class RagIndexTrackingService {
             status.setIndexedBranch(branchName);
             status.setIndexedCommitHash(commitHash);
             status.setErrorMessage(null);
+            status.setActiveJobId(activeJobId);
         } else {
             status = new RagIndexStatus();
             status.setProject(project);
@@ -53,6 +58,7 @@ public class RagIndexTrackingService {
             status.setIndexedBranch(branchName);
             status.setIndexedCommitHash(commitHash);
             status.setCollectionName(generateCollectionName(project));
+            status.setActiveJobId(activeJobId);
         }
 
         status = ragIndexStatusRepository.save(status);
@@ -76,6 +82,7 @@ public class RagIndexTrackingService {
         }
         status.setLastIndexedAt(OffsetDateTime.now());
         status.setErrorMessage(null);
+        status.setActiveJobId(null);
         // Reset failed incremental count on successful full index
         status.resetFailedIncrementalCount();
 
@@ -94,6 +101,7 @@ public class RagIndexTrackingService {
             status = existingOpt.get();
             status.setStatus(RagIndexingStatus.FAILED);
             status.setErrorMessage(errorMessage);
+            status.setActiveJobId(null);
         } else {
             status = new RagIndexStatus();
             status.setProject(project);
@@ -102,6 +110,7 @@ public class RagIndexTrackingService {
             status.setStatus(RagIndexingStatus.FAILED);
             status.setErrorMessage(errorMessage);
             status.setCollectionName(generateCollectionName(project));
+            status.setActiveJobId(null);
         }
 
         status = ragIndexStatusRepository.save(status);
@@ -141,12 +150,17 @@ public class RagIndexTrackingService {
     }
 
     @Transactional
-    public RagIndexStatus markUpdatingStarted(Project project, String branchName, String commitHash) {
+    public RagIndexStatus markUpdatingStarted(
+            Project project,
+            String branchName,
+            String commitHash,
+            Long activeJobId) {
         RagIndexStatus status = ragIndexStatusRepository.findByProjectId(project.getId())
                 .orElseThrow(() -> new IllegalStateException("Cannot update non-indexed project: " + project.getId()));
 
         status.setStatus(RagIndexingStatus.UPDATING);
         status.setErrorMessage(null);
+        status.setActiveJobId(activeJobId);
 
         status = ragIndexStatusRepository.save(status);
         log.info("Marked RAG indexing as UPDATING for project {} toward branch {} commit {}; "
@@ -197,6 +211,7 @@ public class RagIndexTrackingService {
 
         status.setLastIndexedAt(OffsetDateTime.now());
         status.setErrorMessage(null);
+        status.setActiveJobId(null);
         // Reset failed incremental count on successful update
         status.resetFailedIncrementalCount();
 
@@ -223,6 +238,7 @@ public class RagIndexTrackingService {
         status.setStatus(RagIndexingStatus.INDEXED);
         status.setErrorMessage("Incremental update failed: " + errorMessage);
         status.incrementFailedIncrementalCount();
+        status.setActiveJobId(null);
 
         status = ragIndexStatusRepository.save(status);
         log.warn("Marked RAG incremental update as FAILED for project {} (failure count: {}): {}",

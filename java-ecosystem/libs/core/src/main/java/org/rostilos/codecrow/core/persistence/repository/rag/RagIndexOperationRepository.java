@@ -1,9 +1,12 @@
 package org.rostilos.codecrow.core.persistence.repository.rag;
 
+import jakarta.persistence.LockModeType;
 import org.rostilos.codecrow.core.model.rag.RagIndexOperation;
 import org.rostilos.codecrow.core.model.rag.RagIndexOperationStatus;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.OffsetDateTime;
@@ -14,6 +17,10 @@ import java.util.Optional;
 public interface RagIndexOperationRepository extends JpaRepository<RagIndexOperation, Long> {
 
     Optional<RagIndexOperation> findByProjectIdAndOperationKey(Long projectId, String operationKey);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT o FROM RagIndexOperation o WHERE o.id = :operationId")
+    Optional<RagIndexOperation> findByIdForUpdate(@Param("operationId") Long operationId);
 
     List<RagIndexOperation> findByStatusInAndUpdatedAtBefore(
             List<RagIndexOperationStatus> statuses,
@@ -44,6 +51,7 @@ public interface RagIndexOperationRepository extends JpaRepository<RagIndexOpera
                   WHERE s.project_id = o.project_id
                     AND s.indexed_branch = o.branch_name
                     AND s.status IN ('INDEXING', 'UPDATING')
+                    AND (s.active_job_id IS NULL OR s.active_job_id = o.job_id)
                 )
                 OR EXISTS (
                   SELECT 1 FROM analysis_lock l

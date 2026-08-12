@@ -64,7 +64,7 @@ public class RagIndexOperationRecoveryService {
             String diagnostic = "Exact RAG generation producer stopped heartbeating for "
                     + staleAfterMinutes + " minutes; the previous active generation was preserved";
             try {
-                if (!registryService.fail(operation.getId(), diagnostic)) {
+                if (!registryService.failIfAbandoned(operation.getId(), cutoff, diagnostic)) {
                     continue;
                 }
                 log.warn("Failed abandoned RAG generation operation {} for branch {}",
@@ -99,7 +99,7 @@ public class RagIndexOperationRecoveryService {
         if (registryService.hasLiveOperation(projectId, branchName)) {
             return;
         }
-        terminalizePrimaryStatus(projectId, branchName, diagnostic);
+        terminalizePrimaryStatus(operation, diagnostic);
         releaseAbandonedLock(projectId, branchName, operation.getToRevision());
     }
 
@@ -118,10 +118,9 @@ public class RagIndexOperationRecoveryService {
         }
     }
 
-    private void terminalizePrimaryStatus(
-            Long projectId,
-            String branchName,
-            String diagnostic) {
+    private void terminalizePrimaryStatus(RagIndexOperation operation, String diagnostic) {
+        Long projectId = operation.getProject().getId();
+        String branchName = operation.getBranchName();
         try {
             var project = projectRepository.findByIdWithFullDetails(projectId)
                     .orElse(null);
@@ -131,6 +130,14 @@ public class RagIndexOperationRecoveryService {
             }
             var status = trackingService.getIndexStatus(project).orElse(null);
             if (status == null) {
+                return;
+            }
+            if (status.getActiveJobId() != null
+                    && !status.getActiveJobId().equals(operation.getJobId())) {
+                log.info(
+                        "Preserving RAG status owned by newer job {} while recovering abandoned job {}: "
+                                + "project={}, branch={}",
+                        status.getActiveJobId(), operation.getJobId(), projectId, branchName);
                 return;
             }
             if (status.getStatus() == RagIndexingStatus.INDEXING) {

@@ -673,9 +673,7 @@ public class JiraCloudClient implements TaskManagementClient {
                 while (end < len && !Character.isWhitespace(text.charAt(end))) {
                     end++;
                 }
-                while (end > pos && ".,;!?".indexOf(text.charAt(end - 1)) >= 0) {
-                    end--;
-                }
+                end = trimBareUrlEnd(text, pos, end);
                 String url = text.substring(pos, end);
                 flushPlain(nodes, plain);
                 addLinkTextNode(nodes, url, url);
@@ -748,6 +746,47 @@ public class JiraCloudClient implements TaskManagementClient {
 
         flushPlain(nodes, plain);
         return nodes;
+    }
+
+    private static int trimBareUrlEnd(String text, int start, int end) {
+        int trimmedEnd = end;
+        while (trimmedEnd > start) {
+            char trailing = text.charAt(trimmedEnd - 1);
+            if (".,;!?".indexOf(trailing) >= 0) {
+                trimmedEnd--;
+                continue;
+            }
+            char opening = switch (trailing) {
+                case ')' -> '(';
+                case ']' -> '[';
+                case '}' -> '{';
+                default -> '\0';
+            };
+            if (opening == '\0' || !hasUnmatchedClosingDelimiter(
+                    text, start, trimmedEnd, opening, trailing)) {
+                break;
+            }
+            trimmedEnd--;
+        }
+        return trimmedEnd;
+    }
+
+    private static boolean hasUnmatchedClosingDelimiter(
+            String text,
+            int start,
+            int end,
+            char opening,
+            char closing) {
+        int balance = 0;
+        for (int index = start; index < end; index++) {
+            char current = text.charAt(index);
+            if (current == opening) {
+                balance++;
+            } else if (current == closing) {
+                balance--;
+            }
+        }
+        return balance < 0;
     }
 
     /** Flush accumulated plain text into a text node, then clear the buffer. */

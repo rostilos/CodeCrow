@@ -168,6 +168,38 @@ class JiraCloudClientTest {
     }
 
     @Test
+    @DisplayName("keeps sentence delimiters outside bare URL links")
+    void postCommentExcludesUnmatchedClosingDelimitersFromBareUrls() throws Exception {
+        server.enqueue(commentResponse(201));
+        String shareUrl = "https://codecrow.cloud/share#token=ccs_opaque-token&tab=test-cases";
+
+        client.postComment("PROJ-123", "Open (" + shareUrl + ") or [" + shareUrl + "].");
+
+        JsonNode paragraph = mapper.readTree(server.takeRequest().getBody().readUtf8())
+                .path("body").path("content").get(0);
+        assertThat(paragraph.path("content").findValuesAsText("text"))
+                .containsExactly("Open (", shareUrl, ") or [", shareUrl, "].");
+        assertThat(paragraph.path("content").findValues("attrs"))
+                .extracting(node -> node.path("href").asText())
+                .containsExactly(shareUrl, shareUrl);
+    }
+
+    @Test
+    @DisplayName("preserves balanced delimiters that belong to a bare URL")
+    void postCommentKeepsBalancedUrlDelimiters() throws Exception {
+        server.enqueue(commentResponse(201));
+        String shareUrl = "https://example.test/docs/function_(value)";
+
+        client.postComment("PROJ-123", shareUrl);
+
+        JsonNode linkedText = mapper.readTree(server.takeRequest().getBody().readUtf8())
+                .path("body").path("content").get(0).path("content").get(0);
+        assertThat(linkedText.path("text").asText()).isEqualTo(shareUrl);
+        assertThat(linkedText.path("marks").get(0).path("attrs").path("href").asText())
+                .isEqualTo(shareUrl);
+    }
+
+    @Test
     @DisplayName("finds a Jira comment by non-rendered CodeCrow marker property")
     void findCommentByMarkerUsesCommentProperties() throws Exception {
         server.enqueue(jsonResponse("""

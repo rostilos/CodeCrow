@@ -36,6 +36,19 @@ public interface AnalysisLockRepository extends JpaRepository<AnalysisLock, Long
     @Query("DELETE FROM AnalysisLock l WHERE l.lockKey = :lockKey")
     int deleteByLockKey(@Param("lockKey") String lockKey);
 
+    @Modifying
+    @Query("""
+            DELETE FROM AnalysisLock l
+            WHERE l.project.id = :projectId
+              AND l.branchName = :branchName
+              AND l.analysisType = :analysisType
+              AND ((:commitHash IS NULL AND l.commitHash IS NULL) OR l.commitHash = :commitHash)
+            """)
+    int deleteMatchingLock(@Param("projectId") Long projectId,
+                           @Param("branchName") String branchName,
+                           @Param("analysisType") AnalysisLockType analysisType,
+                           @Param("commitHash") String commitHash);
+
     @Query("SELECT CASE WHEN COUNT(l) > 0 THEN true ELSE false END FROM AnalysisLock l " +
            "WHERE l.project.id = :projectId AND l.branchName = :branchName " +
            "AND l.analysisType = :analysisType AND l.expiresAt > :now")

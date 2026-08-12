@@ -227,6 +227,16 @@ class TestIndependentTestCases:
         assert not QaDocOrchestrator._contains_extractable_test_cases(
             "**Checkout succeeds** (HIGH)"
         )
+        assert not QaDocOrchestrator._contains_extractable_test_cases("""
+            <!-- codecrow-test-cases:start -->
+            <!-- codecrow-test-cases:end -->
+            **Scenario outside the disclosure boundary** (HIGH)
+        """)
+        assert not QaDocOrchestrator._contains_extractable_test_cases("""
+            <!-- codecrow-test-cases:end -->
+            **Scenario between reversed markers** (HIGH)
+            <!-- codecrow-test-cases:start -->
+        """)
 
     def test_moves_an_overbroad_end_marker_before_later_numbered_sections(self):
         documentation = """

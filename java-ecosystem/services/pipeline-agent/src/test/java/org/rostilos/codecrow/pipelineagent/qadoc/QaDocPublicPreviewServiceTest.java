@@ -19,7 +19,7 @@ class QaDocPublicPreviewServiceTest {
     void createsAnOpaquePublicLinkAndRedactsShareableBodiesFromTheTaskComment() {
         PublicShareLinkService publicShares = mock(PublicShareLinkService.class);
         SiteSettingsProvider settings = mock(SiteSettingsProvider.class);
-        when(publicShares.issue(QaDocPublicShareResource.TEST_CASES, "88"))
+        when(publicShares.issue(QaDocPublicShareResource.DOCUMENT, "88"))
                 .thenReturn(new IssuedPublicShare("ccs_opaque-public-credential"));
         when(settings.getBaseUrlSettings())
                 .thenReturn(new BaseUrlSettingsDTO(
@@ -57,7 +57,7 @@ class QaDocPublicPreviewServiceTest {
                 <!-- codecrow-qa-autodoc:prs=17 -->
                 """);
 
-        String previewUrl = service.createTestCasesPreviewUrl(document);
+        String previewUrl = service.createPreviewUrl(document);
         String comment = service.buildTaskComment(document.getMarkdownContent(), previewUrl);
 
         assertThat(previewUrl)
@@ -79,7 +79,7 @@ class QaDocPublicPreviewServiceTest {
                         "REDACTED TEST DETAILS",
                         "PRESERVED SETUP CONTENT")
                 .doesNotContain("[View QA test cases in CodeCrow]");
-        verify(publicShares).issue(QaDocPublicShareResource.TEST_CASES, "88");
+        verify(publicShares).issue(QaDocPublicShareResource.DOCUMENT, "88");
     }
 
     @Test
@@ -92,7 +92,7 @@ class QaDocPublicPreviewServiceTest {
         document.setMarkdownContent("SECRET OVERVIEW CONTENT");
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
-                        () -> service.createTestCasesPreviewUrl(document))
+                        () -> service.createPreviewUrl(document))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("marked QA test-case section");
     }

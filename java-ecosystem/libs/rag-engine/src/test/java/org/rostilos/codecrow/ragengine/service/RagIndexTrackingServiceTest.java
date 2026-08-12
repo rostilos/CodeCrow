@@ -91,7 +91,7 @@ class RagIndexTrackingServiceTest {
         when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
-        RagIndexStatus result = service.markIndexingStarted(testProject, "main", "abc123");
+        RagIndexStatus result = service.markIndexingStarted(testProject, "main", "abc123", 91L);
 
         ArgumentCaptor<RagIndexStatus> captor = ArgumentCaptor.forClass(RagIndexStatus.class);
         verify(ragIndexStatusRepository).save(captor.capture());
@@ -103,6 +103,7 @@ class RagIndexTrackingServiceTest {
         assertThat(saved.getIndexedCommitHash()).isEqualTo("abc123");
         assertThat(saved.getWorkspaceName()).isEqualTo("test-workspace");
         assertThat(saved.getProjectName()).isEqualTo("test-project");
+        assertThat(saved.getActiveJobId()).isEqualTo(91L);
     }
 
     @Test
@@ -115,7 +116,7 @@ class RagIndexTrackingServiceTest {
         when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
-        service.markIndexingStarted(testProject, "develop", "xyz789");
+        service.markIndexingStarted(testProject, "develop", "xyz789", 92L);
 
         ArgumentCaptor<RagIndexStatus> captor = ArgumentCaptor.forClass(RagIndexStatus.class);
         verify(ragIndexStatusRepository).save(captor.capture());
@@ -125,6 +126,7 @@ class RagIndexTrackingServiceTest {
         assertThat(saved.getIndexedBranch()).isEqualTo("develop");
         assertThat(saved.getIndexedCommitHash()).isEqualTo("xyz789");
         assertThat(saved.getErrorMessage()).isNull();
+        assertThat(saved.getActiveJobId()).isEqualTo(92L);
     }
 
     @Test
@@ -132,6 +134,7 @@ class RagIndexTrackingServiceTest {
         RagIndexStatus existing = new RagIndexStatus();
         existing.setProject(testProject);
         existing.setStatus(RagIndexingStatus.INDEXING);
+        existing.setActiveJobId(91L);
         
         when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
@@ -148,6 +151,7 @@ class RagIndexTrackingServiceTest {
         assertThat(saved.getTotalFilesIndexed()).isEqualTo(150);
         assertThat(saved.getLastIndexedAt()).isNotNull();
         assertThat(saved.getErrorMessage()).isNull();
+        assertThat(saved.getActiveJobId()).isNull();
     }
 
     @Test
@@ -275,19 +279,20 @@ class RagIndexTrackingServiceTest {
         when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
-        RagIndexStatus result = service.markUpdatingStarted(testProject, "main", "def456");
+        RagIndexStatus result = service.markUpdatingStarted(testProject, "main", "def456", 93L);
 
         assertThat(result.getStatus()).isEqualTo(RagIndexingStatus.UPDATING);
         assertThat(result.getIndexedBranch()).isEqualTo("main");
         assertThat(result.getIndexedCommitHash()).isEqualTo("abc123");
         assertThat(result.getErrorMessage()).isNull();
+        assertThat(result.getActiveJobId()).isEqualTo(93L);
     }
 
     @Test
     void testMarkUpdatingStarted_ThrowsWhenNotFound() {
         when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.markUpdatingStarted(testProject, "main", "def456"))
+        assertThatThrownBy(() -> service.markUpdatingStarted(testProject, "main", "def456", 93L))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Cannot update non-indexed project");
     }
@@ -299,6 +304,7 @@ class RagIndexTrackingServiceTest {
         RagIndexStatus existing = new RagIndexStatus();
         existing.setProject(testProject);
         existing.setStatus(RagIndexingStatus.UPDATING);
+        existing.setActiveJobId(93L);
 
         when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
@@ -308,6 +314,7 @@ class RagIndexTrackingServiceTest {
         assertThat(result.getStatus()).isEqualTo(RagIndexingStatus.INDEXED);
         assertThat(result.getIndexedBranch()).isEqualTo("main");
         assertThat(result.getIndexedCommitHash()).isEqualTo("ghi789");
+        assertThat(result.getActiveJobId()).isNull();
         assertThat(result.getLastIndexedAt()).isNotNull();
         assertThat(result.getErrorMessage()).isNull();
     }

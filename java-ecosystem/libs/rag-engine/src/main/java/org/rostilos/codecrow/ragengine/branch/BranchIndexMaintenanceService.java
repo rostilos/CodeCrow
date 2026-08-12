@@ -188,7 +188,7 @@ public class BranchIndexMaintenanceService {
                 Map.of("branch", branch, "commit", revision));
         try {
             if (primary) {
-                trackingService.markIndexingStarted(project, branch, revision);
+                trackingService.markIndexingStarted(project, branch, revision, job.getId());
             }
             var config = project.getConfiguration().ragConfig();
             Map<String, Object> result = generationBuildService.rebuild(

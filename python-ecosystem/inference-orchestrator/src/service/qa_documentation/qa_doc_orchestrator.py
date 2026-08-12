@@ -850,15 +850,20 @@ class QaDocOrchestrator(BaseOrchestrator):
     def _contains_extractable_test_cases(documentation: Optional[str]) -> bool:
         if not documentation:
             return False
-        has_markers = (
-            "<!-- codecrow-test-cases:start -->" in documentation
-            and "<!-- codecrow-test-cases:end -->" in documentation
-        )
-        has_scenario = re.search(
+        start_marker = "<!-- codecrow-test-cases:start -->"
+        end_marker = "<!-- codecrow-test-cases:end -->"
+        start = documentation.find(start_marker)
+        if start < 0:
+            return False
+        content_start = start + len(start_marker)
+        end = documentation.find(end_marker, content_start)
+        if end < 0:
+            return False
+        marked_content = documentation[content_start:end]
+        return re.search(
             r"(?mi)^\s*\*\*.+?\*\*\s*\((?:HIGH|MEDIUM|LOW)\)",
-            documentation,
+            marked_content,
         ) is not None
-        return has_markers and has_scenario
 
     @staticmethod
     def _normalize_document_title(documentation: str, fallback_title: str) -> str:

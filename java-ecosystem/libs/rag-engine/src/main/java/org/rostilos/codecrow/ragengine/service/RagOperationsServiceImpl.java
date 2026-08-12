@@ -247,7 +247,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                         "message",
                         "Updating RAG index with " + (addedOrModifiedSize + deletedFiles.size()) + " changed files"));
 
-                ragIndexTrackingService.markUpdatingStarted(project, branchName, commitHash);
+                ragIndexTrackingService.markUpdatingStarted(
+                        project, branchName, commitHash, job != null ? job.getId() : null);
 
                 log.info("Performing RAG incremental update for project={}, branch={}, commit={}",
                         project.getId(), branchName, commitHash);

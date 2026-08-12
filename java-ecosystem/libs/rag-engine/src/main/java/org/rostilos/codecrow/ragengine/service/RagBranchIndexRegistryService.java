@@ -103,7 +103,7 @@ public class RagBranchIndexRegistryService {
 
     @Transactional
     public void startBuild(long operationId, Long jobId) {
-        RagIndexOperation operation = requireOperation(operationId);
+        RagIndexOperation operation = requireOperationForUpdate(operationId);
         if (operation.getStatus() == RagIndexOperationStatus.SUCCEEDED) {
             return;
         }
@@ -122,7 +122,7 @@ public class RagBranchIndexRegistryService {
             String manifestDigest,
             int fileCount,
             int chunkCount) {
-        RagIndexOperation operation = requireOperation(operationId);
+        RagIndexOperation operation = requireOperationForUpdate(operationId);
         RagBranchIndexGeneration generation = operation.getGeneration();
         if (operation.getStatus() == RagIndexOperationStatus.SUCCEEDED) {
             return generation;
@@ -167,7 +167,29 @@ public class RagBranchIndexRegistryService {
 
     @Transactional
     public boolean fail(long operationId, String errorMessage) {
-        RagIndexOperation operation = requireOperation(operationId);
+        return failOperation(requireOperationForUpdate(operationId), errorMessage);
+    }
+
+    /**
+     * Claims an abandoned operation only after serializing with heartbeat and
+     * publication updates and re-checking the cutoff inside that transaction.
+     */
+    @Transactional
+    public boolean failIfAbandoned(
+            long operationId,
+            OffsetDateTime updatedBefore,
+            String errorMessage) {
+        RagIndexOperation operation = requireOperationForUpdate(operationId);
+        if ((operation.getStatus() != RagIndexOperationStatus.PENDING
+                && operation.getStatus() != RagIndexOperationStatus.RUNNING)
+                || operation.getUpdatedAt() == null
+                || !operation.getUpdatedAt().isBefore(updatedBefore)) {
+            return false;
+        }
+        return failOperation(operation, errorMessage);
+    }
+
+    private boolean failOperation(RagIndexOperation operation, String errorMessage) {
         if (operation.getStatus() == RagIndexOperationStatus.SUCCEEDED) {
             return false;
         }
@@ -216,7 +238,7 @@ public class RagBranchIndexRegistryService {
 
     @Transactional
     public void heartbeatBuild(long operationId) {
-        RagIndexOperation operation = requireOperation(operationId);
+        RagIndexOperation operation = requireOperationForUpdate(operationId);
         operation.heartbeat();
         operationRepository.save(operation);
     }
@@ -266,8 +288,8 @@ public class RagBranchIndexRegistryService {
                 + nullToEmpty(representationFingerprint));
     }
 
-    private RagIndexOperation requireOperation(long operationId) {
-        return operationRepository.findById(operationId)
+    private RagIndexOperation requireOperationForUpdate(long operationId) {
+        return operationRepository.findByIdForUpdate(operationId)
                 .orElseThrow(() -> new IllegalArgumentException("RAG index operation not found: " + operationId));
     }
 

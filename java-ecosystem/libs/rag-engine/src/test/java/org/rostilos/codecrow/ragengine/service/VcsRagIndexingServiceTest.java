@@ -324,7 +324,8 @@ class VcsRagIndexingServiceTest {
             assertThat(result).containsEntry("status", "queued");
             assertThat(result).containsEntry("branch", "main");
             assertThat(result).containsEntry("jobId", "rag-job-123");
-            verify(ragIndexTrackingService).markIndexingStarted(testProject, "main", "abc123");
+            verify(ragIndexTrackingService).markIndexingStarted(
+                    eq(testProject), eq("main"), eq("abc123"), anyLong());
             verify(mockVcs).downloadRepositoryArchiveToFile(
                     eq("my-workspace"),
                     eq("my-repo"),

@@ -62,9 +62,11 @@ class RagIndexOperationRecoveryServiceTest {
         Job job = new Job();
         RagIndexStatus status = new RagIndexStatus();
         status.setStatus(RagIndexingStatus.INDEXING);
+        status.setActiveJobId(91L);
         when(registry.findRecoverableOperations(any(OffsetDateTime.class)))
                 .thenReturn(List.of(operation));
-        when(registry.fail(eq(81L), anyString())).thenReturn(true);
+        when(registry.failIfAbandoned(eq(81L), any(OffsetDateTime.class), anyString()))
+                .thenReturn(true);
         when(jobs.findById(91L)).thenReturn(Optional.of(job));
         when(projects.findByIdWithFullDetails(42L)).thenReturn(Optional.of(project));
         when(ragOperations.getBaseBranch(project)).thenReturn("main");
@@ -75,7 +77,7 @@ class RagIndexOperationRecoveryServiceTest {
 
         recovery.failAbandonedOperations();
 
-        verify(registry).fail(eq(81L), argThat(message ->
+        verify(registry).failIfAbandoned(eq(81L), any(OffsetDateTime.class), argThat(message ->
                 message.contains("stopped heartbeating")
                         && message.contains("previous active generation was preserved")));
         verify(jobs).failJob(eq(job), contains("stopped heartbeating"));
@@ -88,9 +90,11 @@ class RagIndexOperationRecoveryServiceTest {
     void abandonedIncrementalOperationRestoresTheUsableIndexedStatus() {
         RagIndexStatus status = new RagIndexStatus();
         status.setStatus(RagIndexingStatus.UPDATING);
+        status.setActiveJobId(91L);
         when(registry.findRecoverableOperations(any(OffsetDateTime.class)))
                 .thenReturn(List.of(operation));
-        when(registry.fail(eq(81L), anyString())).thenReturn(true);
+        when(registry.failIfAbandoned(eq(81L), any(OffsetDateTime.class), anyString()))
+                .thenReturn(true);
         when(jobs.findById(91L)).thenReturn(Optional.empty());
         when(projects.findByIdWithFullDetails(42L)).thenReturn(Optional.of(project));
         when(ragOperations.getBaseBranch(project)).thenReturn("main");
@@ -108,7 +112,8 @@ class RagIndexOperationRecoveryServiceTest {
         Job job = new Job();
         when(registry.findRecoverableOperations(any(OffsetDateTime.class)))
                 .thenReturn(List.of(operation));
-        when(registry.fail(eq(81L), anyString())).thenReturn(true);
+        when(registry.failIfAbandoned(eq(81L), any(OffsetDateTime.class), anyString()))
+                .thenReturn(true);
         when(registry.hasLiveOperation(42L, "main")).thenReturn(true);
         when(jobs.findById(91L)).thenReturn(Optional.of(job));
 
@@ -123,6 +128,7 @@ class RagIndexOperationRecoveryServiceTest {
         Job job = new Job();
         RagIndexStatus status = new RagIndexStatus();
         status.setStatus(RagIndexingStatus.INDEXING);
+        status.setActiveJobId(91L);
         when(operation.getErrorMessage()).thenReturn("producer was abandoned");
         when(registry.findRecoverableOperations(any(OffsetDateTime.class)))
                 .thenReturn(List.of());
@@ -135,9 +141,30 @@ class RagIndexOperationRecoveryServiceTest {
 
         recovery.failAbandonedOperations();
 
-        verify(registry, never()).fail(anyLong(), anyString());
+        verify(registry, never()).failIfAbandoned(anyLong(), any(), anyString());
         verify(jobs).failJob(job, "producer was abandoned");
         verify(tracking).markIndexingFailed(project, "producer was abandoned");
+        verify(locks).releaseMatchingLock(
+                42L, "main", AnalysisLockType.RAG_INDEXING, "commit-a");
+    }
+
+    @Test
+    void alreadyFailedOperationPreservesStatusOwnedByANewerJob() {
+        RagIndexStatus status = new RagIndexStatus();
+        status.setStatus(RagIndexingStatus.INDEXING);
+        status.setActiveJobId(92L);
+        when(registry.findRecoverableOperations(any(OffsetDateTime.class)))
+                .thenReturn(List.of());
+        when(registry.findFailedOperationsWithActiveProjections())
+                .thenReturn(List.of(operation));
+        when(projects.findByIdWithFullDetails(42L)).thenReturn(Optional.of(project));
+        when(ragOperations.getBaseBranch(project)).thenReturn("main");
+        when(tracking.getIndexStatus(project)).thenReturn(Optional.of(status));
+
+        recovery.failAbandonedOperations();
+
+        verify(tracking, never()).markIndexingFailed(any(), anyString());
+        verify(tracking, never()).markIncrementalUpdateFailed(any(), anyString());
         verify(locks).releaseMatchingLock(
                 42L, "main", AnalysisLockType.RAG_INDEXING, "commit-a");
     }

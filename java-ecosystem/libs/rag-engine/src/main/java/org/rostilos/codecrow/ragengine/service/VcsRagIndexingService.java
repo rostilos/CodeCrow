@@ -200,7 +200,8 @@ public class VcsRagIndexingService {
                 return Map.of("status", "error", "message", errorMsg);
             }
 
-            ragIndexTrackingService.markIndexingStarted(project, branch, commitHash);
+            ragIndexTrackingService.markIndexingStarted(
+                    project, branch, commitHash, job != null ? job.getId() : null);
 
             String downloadMsg = "Downloading repository archive...";
             messageConsumer.accept(Map.of(

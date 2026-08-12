@@ -20,16 +20,17 @@ import org.springframework.web.util.UriComponentsBuilder;
 import java.util.Objects;
 import java.util.Optional;
 
+/** Resolves the explicitly shareable Overview, Test cases, and Environment QA tabs. */
 @Component
-public class QaDocTestCasesShareProvider implements PublicShareResourceProvider {
+public class QaDocShareProvider implements PublicShareResourceProvider {
 
     private final QaDocDocumentService qaDocDocumentService;
     private final CodeAnalysisService codeAnalysisService;
     private final WorkspaceSecurity workspaceSecurity;
 
-    public QaDocTestCasesShareProvider(QaDocDocumentService qaDocDocumentService,
-                                       CodeAnalysisService codeAnalysisService,
-                                       WorkspaceSecurity workspaceSecurity) {
+    public QaDocShareProvider(QaDocDocumentService qaDocDocumentService,
+                              CodeAnalysisService codeAnalysisService,
+                              WorkspaceSecurity workspaceSecurity) {
         this.qaDocDocumentService = qaDocDocumentService;
         this.codeAnalysisService = codeAnalysisService;
         this.workspaceSecurity = workspaceSecurity;
@@ -37,7 +38,7 @@ public class QaDocTestCasesShareProvider implements PublicShareResourceProvider 
 
     @Override
     public String resourceType() {
-        return QaDocPublicShareResource.TEST_CASES;
+        return QaDocPublicShareResource.DOCUMENT;
     }
 
     @Override
@@ -122,7 +123,7 @@ public class QaDocTestCasesShareProvider implements PublicShareResourceProvider 
                 .filter(analysis -> belongsToProject(analysis, documentProjectId))
                 .filter(analysis -> hasCompatibleTaskKey(analysis, documentTaskKey))
                 .map(CodeAnalysis::getTaskSummary)
-                .map(QaDocTestCasesShareProvider::normalize)
+                .map(QaDocShareProvider::normalize)
                 .orElse(null);
     }
 

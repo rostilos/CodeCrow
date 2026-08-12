@@ -204,6 +204,17 @@ public class QaAutoDocListener {
         String sourceBranch = (metrics != null) ? (String) metrics.get("sourceBranch") : null;
         String targetBranch = (metrics != null) ? (String) metrics.get("targetBranch") : null;
 
+        Optional<QaDocDocument> pendingHandoffDocument = Optional.empty();
+        try {
+            pendingHandoffDocument = qaDocDocumentService
+                    .findLatestDocument(project.getId(), prNumber)
+                    .filter(document -> QaDocHandoffRetryPolicy.shouldReuse(
+                            document, state, currentCommitHash));
+        } catch (Exception e) {
+            log.warn("QA auto-doc: failed to inspect pending handoff for project {} PR #{}: {}",
+                    project.getId(), prNumber, e.getMessage());
+        }
+
         // 5a. Fetch full PR diff
         String diff = null;
         VcsClient vcsClient = null;
@@ -233,7 +244,8 @@ public class QaAutoDocListener {
 
         // 5c. Compute delta diff for same-PR re-runs (incremental update)
         String deltaDiff = null;
-        if (isSamePrRerun && state.getLastCommitHash() != null
+        if (pendingHandoffDocument.isEmpty()
+                && isSamePrRerun && state.getLastCommitHash() != null
                 && currentCommitHash != null && vcsClient != null) {
             DiffContentFilter contentFilter = new DiffContentFilter();
             final VcsClient client = vcsClient;
@@ -360,8 +372,14 @@ public class QaAutoDocListener {
                 .bearerToken(bearerToken)
                 .build();
 
-        String qaDocument = qaDocGenerationService.generateQaDocumentation(
-                project, event, ctx);
+        String qaDocument;
+        if (pendingHandoffDocument.isPresent()) {
+            qaDocument = pendingHandoffDocument.get().getMarkdownContent();
+            log.info("QA auto-doc: retrying pending task handoff without regenerating project {} PR #{}",
+                    project.getId(), prNumber);
+        } else {
+            qaDocument = qaDocGenerationService.generateQaDocumentation(project, event, ctx);
+        }
 
         if (qaDocument == null || qaDocument.isBlank()) {
             log.info("QA auto-doc: LLM determined no documentation needed for task {}", taskId);
@@ -377,8 +395,10 @@ public class QaAutoDocListener {
 
         // 9. Persist the full document before disclosing a preview link.
         Long analysisId = (analysis != null) ? analysis.getId() : null;
-        Optional<QaDocDocument> persistedDocument = upsertQaDocDocument(
-                project, prNumber, taskId, currentCommitHash, analysisId, qaDocument);
+        Optional<QaDocDocument> persistedDocument = pendingHandoffDocument.isPresent()
+                ? pendingHandoffDocument
+                : upsertQaDocDocument(
+                        project, prNumber, taskId, currentCommitHash, analysisId, qaDocument);
         if (persistedDocument.isEmpty()) {
             log.warn("QA auto-doc: not updating task {} because a secure public preview could not be created", taskId);
             return;
@@ -388,10 +408,10 @@ public class QaAutoDocListener {
         // section with the public preview URL.
         String commentBody;
         try {
-            String previewUrl = qaDocPublicPreviewService.createTestCasesPreviewUrl(persistedDocument.get());
+            String previewUrl = qaDocPublicPreviewService.createPreviewUrl(persistedDocument.get());
             commentBody = qaDocPublicPreviewService.buildTaskComment(qaDocument, previewUrl);
         } catch (Exception e) {
-            log.warn("QA auto-doc: failed to create public test-case preview for task {}: {}",
+            log.warn("QA auto-doc: failed to create public QA-document preview for task {}: {}",
                     taskId, e.getMessage());
             return;
         }

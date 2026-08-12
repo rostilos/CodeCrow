@@ -25,6 +25,7 @@ import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler
 import org.rostilos.codecrow.pipelineagent.qadoc.QaAutoDocListener;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocGenerationContext;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocGenerationService;
+import org.rostilos.codecrow.pipelineagent.qadoc.QaDocHandoffRetryPolicy;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocPublicPreviewService;
 import org.rostilos.codecrow.taskmanagement.ETaskManagementPlatform;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClient;
@@ -51,7 +52,7 @@ import java.util.regex.Pattern;
  * Processor for the {@code /codecrow qa-doc} command.
  * <p>
  * Generates QA testing documentation for the current PR and posts its public
- * test-case preview link on the linked Jira task. Reuses the same inference-orchestrator endpoint and
+ * QA-document preview links on the linked Jira task. Reuses the same inference-orchestrator endpoint and
  * task management client infrastructure as the automatic {@link QaAutoDocListener}.
  * <p>
  * Usage:
@@ -297,6 +298,18 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                     ? qaDocStateRepository.findByProjectIdAndTaskId(project.getId(), taskId).orElse(null)
                     : null;
             boolean isSamePrRerun = (state != null && prNumber != null && state.isPrDocumented(prNumber));
+            Optional<QaDocDocument> pendingHandoffDocument = Optional.empty();
+            if (prNumber != null) {
+                try {
+                    pendingHandoffDocument = qaDocDocumentService
+                            .findLatestDocument(project.getId(), prNumber)
+                            .filter(document -> QaDocHandoffRetryPolicy.shouldReuse(
+                                    document, state, commitHash));
+                } catch (Exception e) {
+                    log.warn("qa-doc command: failed to inspect pending handoff for project {} PR #{}: {}",
+                            project.getId(), prNumber, e.getMessage());
+                }
+            }
 
             Optional<TaskComment> existingComment = Optional.empty();
             try {
@@ -333,7 +346,8 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
 
             // 6a. Compute delta diff for same-PR re-runs
             String deltaDiff = null;
-            if (isSamePrRerun && state.getLastCommitHash() != null
+            if (pendingHandoffDocument.isEmpty()
+                    && isSamePrRerun && state.getLastCommitHash() != null
                     && commitHash != null && vcsClient != null) {
                 DiffContentFilter contentFilter = new DiffContentFilter();
                 final VcsClient clientForDiff = vcsClient;
@@ -368,8 +382,15 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                     .bearerToken(bearerToken)
                     .build();
 
-            String qaDocument = qaDocGenerationService.generateQaDocumentation(
-                    project, prNumber, issuesFound, filesAnalyzed, prMetadata, ctx);
+            String qaDocument;
+            if (pendingHandoffDocument.isPresent()) {
+                qaDocument = pendingHandoffDocument.get().getMarkdownContent();
+                log.info("qa-doc command: retrying pending task handoff without regenerating project {} PR #{}",
+                        project.getId(), prNumber);
+            } else {
+                qaDocument = qaDocGenerationService.generateQaDocumentation(
+                        project, prNumber, issuesFound, filesAnalyzed, prMetadata, ctx);
+            }
 
             if (qaDocument == null || qaDocument.isBlank()) {
                 return WebhookResult.ignored(
@@ -377,8 +398,8 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             }
 
             Long analysisId = (analysis != null) ? analysis.getId() : null;
-            Optional<QaDocDocument> persistedDocument = Optional.empty();
-            if (prNumber != null) {
+            Optional<QaDocDocument> persistedDocument = pendingHandoffDocument;
+            if (persistedDocument.isEmpty() && prNumber != null) {
                 persistedDocument = upsertQaDocDocument(
                         project, prNumber, taskId, commitHash, analysisId, qaDocument);
             }
@@ -387,12 +408,12 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                         "QA documentation was generated but its secure public preview could not be created.");
             }
 
-            String previewUrl = qaDocPublicPreviewService.createTestCasesPreviewUrl(persistedDocument.get());
+            String previewUrl = qaDocPublicPreviewService.createPreviewUrl(persistedDocument.get());
 
             eventConsumer.accept(Map.of(
                     "type", "status",
                     "state", "posting_comment",
-                    "message", "Posting the test-case preview link to " + taskId + "..."
+                    "message", "Posting QA-document preview links to " + taskId + "..."
             ));
 
             // 8. Keep the QA guide in Jira, replacing only its large test-case

@@ -675,7 +675,8 @@ class RagOperationsServiceImplTest {
                 testProject, "feature", "commit1", "diff content", eventConsumer);
 
         assertThat(result).isTrue();
-        verify(ragIndexTrackingService).markUpdatingStarted(testProject, "feature", "commit1");
+        verify(ragIndexTrackingService).markUpdatingStarted(
+                eq(testProject), eq("feature"), eq("commit1"), anyLong());
         verify(ragIndexTrackingService).markUpdatingCompleted(
                 testProject, "feature", "commit1", 0, 1, null, false);
         verify(analysisLockService).releaseLock("lock-key");

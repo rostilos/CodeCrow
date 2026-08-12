@@ -21,7 +21,7 @@ public class QaDocPublicPreviewService {
         this.siteSettingsProvider = siteSettingsProvider;
     }
 
-    public String createTestCasesPreviewUrl(QaDocDocument document) {
+    public String createPreviewUrl(QaDocDocument document) {
         if (document == null || document.getId() == null) {
             throw new IllegalArgumentException("A persisted QA document is required for public preview.");
         }
@@ -30,7 +30,7 @@ public class QaDocPublicPreviewService {
                     "A marked QA test-case section is required for public preview.");
         }
         IssuedPublicShare share = publicShareLinkService.issue(
-                QaDocPublicShareResource.TEST_CASES,
+                QaDocPublicShareResource.DOCUMENT,
                 document.getId().toString()
         );
         return share.toFrontendUrl(siteSettingsProvider.getBaseUrlSettings().frontendUrl());

@@ -19,6 +19,7 @@ import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.taskmanagement.ETaskManagementProvider;
 import org.rostilos.codecrow.core.model.taskmanagement.TaskManagementConnection;
 import org.rostilos.codecrow.core.model.qadoc.QaDocDocument;
+import org.rostilos.codecrow.core.model.qadoc.QaDocState;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.persistence.repository.taskmanagement.TaskManagementConnectionRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
@@ -119,7 +120,7 @@ class QaDocCommandProcessorTest {
         lenient().when(qaDocDocumentService.upsertLatestDocument(
                 any(), anyLong(), anyString(), nullable(Long.class), nullable(String.class), anyString()
         )).thenReturn(persistedDocument);
-        lenient().when(qaDocPublicPreviewService.createTestCasesPreviewUrl(any()))
+        lenient().when(qaDocPublicPreviewService.createPreviewUrl(any()))
                 .thenReturn("https://app.codecrow.example/share#token=ccs_test-token");
         lenient().when(qaDocPublicPreviewService.buildTaskComment(anyString(), anyString()))
                 .thenReturn("<!-- codecrow-qa-autodoc -->\n\n"
@@ -238,7 +239,7 @@ class QaDocCommandProcessorTest {
         when(codeAnalysisService.getPreviousVersionCodeAnalysis(PROJECT_ID, 7L))
                 .thenReturn(Optional.of(analysis));
 
-        when(qaDocGenerationService.generateQaDocumentation(
+        lenient().when(qaDocGenerationService.generateQaDocumentation(
                 any(Project.class), anyLong(), anyInt(), anyInt(),
                 anyMap(), any(QaDocGenerationContext.class)
         )).thenReturn(GENERATED_QA_DOC);
@@ -595,6 +596,36 @@ class QaDocCommandProcessorTest {
             assertThat(result.data()).containsEntry("action", "updated");
             verify(taskManagementClient).updateComment(eq(TASK_ID), eq("c-existing"), contains("codecrow-qa-autodoc"));
             verify(taskManagementClient, never()).postComment(anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("should reuse a current document when only the Jira handoff is pending")
+        void shouldRetryPendingHandoffWithoutRegenerating() throws IOException {
+            setupHappyPath();
+            QaDocDocument pendingDocument = new QaDocDocument(project, 7L);
+            ReflectionTestUtils.setField(pendingDocument, "id", 702L);
+            pendingDocument.setCommitHash("abc123");
+            pendingDocument.setMarkdownContent(GENERATED_QA_DOC);
+            pendingDocument.setGeneratedAt(OffsetDateTime.now());
+            QaDocState state = new QaDocState(project, TASK_ID);
+            state.recordGeneration("previous-commit", null, 7L);
+            state.setLastGeneratedAt(OffsetDateTime.now().minusMinutes(5));
+            when(qaDocStateRepository.findByProjectIdAndTaskId(PROJECT_ID, TASK_ID))
+                    .thenReturn(Optional.of(state));
+            when(qaDocDocumentService.findLatestDocument(PROJECT_ID, 7L))
+                    .thenReturn(Optional.of(pendingDocument));
+
+            WebhookResult result = processor.process(
+                    createPayload("feature/PROJ-123-add-login"), project, eventConsumer, Map.of());
+
+            assertThat(result.success()).isTrue();
+            verify(qaDocGenerationService, never()).generateQaDocumentation(
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any());
+            verify(qaDocDocumentService, never()).upsertLatestDocument(
+                    any(), anyLong(), anyString(), any(), any(), anyString());
+            verify(qaDocPublicPreviewService).createPreviewUrl(pendingDocument);
+            verify(taskManagementClient).postComment(eq(TASK_ID), contains("codecrow-qa-autodoc"));
+            verify(qaDocStateRepository).save(state);
         }
 
         @Test
