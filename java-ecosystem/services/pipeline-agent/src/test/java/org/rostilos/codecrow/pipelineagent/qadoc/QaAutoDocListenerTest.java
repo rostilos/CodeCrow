@@ -11,7 +11,6 @@ import org.rostilos.codecrow.core.persistence.repository.taskmanagement.TaskMana
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.QaDocDocumentService;
 import org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent;
-import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClientFactory;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 
@@ -47,9 +46,6 @@ class QaAutoDocListenerTest {
     private QaDocPublicPreviewService qaDocPublicPreviewService;
     @Mock
     private PrFileEnrichmentService enrichmentService;
-    @Mock
-    private TokenEncryptionService tokenEncryptionService;
-
     @Test
     void loadsProjectWithVcsConnectionsForAsyncProcessing() {
         QaAutoDocListener listener = new QaAutoDocListener(
@@ -62,8 +58,7 @@ class QaAutoDocListenerTest {
                 qaDocStateRepository,
                 qaDocDocumentService,
                 qaDocPublicPreviewService,
-                enrichmentService,
-                tokenEncryptionService);
+                enrichmentService);
         AnalysisCompletedEvent event = new AnalysisCompletedEvent(
                 this,
                 "correlation-id",

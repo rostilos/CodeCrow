@@ -1383,7 +1383,8 @@ async def run_verification_agent(
                 result = await _run_verification_tool_loop(llm, prompt)
             except Exception as exception:
                 failed_batches += 1
-                logger.error(
+                log = logger.info if failed_batches == 1 else logger.debug
+                log(
                     "Stage 1.5 verification batch %d/%d failed; retaining its "
                     "%d issue(s): %s",
                     batch_index,
@@ -1438,7 +1439,7 @@ async def run_verification_agent(
         ]
         
     except Exception as e:
-        logger.error(f"Stage 1.5 Verification failed: {e}")
+        logger.info("Stage 1.5 verification unavailable; retaining all issues: %s", e)
         # Fallback: keep all issues if verification fails
         final_issues = issues
     finally:

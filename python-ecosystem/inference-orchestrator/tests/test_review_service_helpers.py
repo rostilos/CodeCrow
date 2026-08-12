@@ -5,7 +5,7 @@ Covers: _build_jvm_props, _build_pr_metadata, _emit_event, _create_llm,
         _create_mcp_client
 """
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from service.review.review_service import (
     ReviewService,
@@ -165,6 +165,38 @@ class TestReviewServiceRequestRag:
         )
 
         assert allow_unbound_global_rag_fallback(request) is True
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_failed_global_fallback_emits_reduced_context_status(
+        self,
+        service,
+    ):
+        service.rag_client = MagicMock(enabled=True)
+        service.rag_client.get_pr_context = AsyncMock(return_value={
+            "status": "error",
+            "status_code": 503,
+            "error": "RAG service unavailable",
+        })
+        service.rag_cache.get.return_value = None
+        request = MagicMock(
+            ragEnabled=True,
+            projectId=1,
+            pullRequestId=None,
+            projectWorkspace="ws",
+            projectNamespace="project",
+            changedFiles=["src/a.py"],
+            diffSnippets=[],
+            prTitle="Change A",
+            prDescription=None,
+        )
+        request.get_rag_branch.return_value = "main"
+        request.get_rag_base_branch.return_value = None
+        events = []
+
+        result = await service._fetch_rag_context(request, events.append)
+
+        assert result is None
+        assert any(event.get("state") == "rag_skipped" for event in events)
 
 
 # ── _create_llm ──────────────────────────────────────────────────

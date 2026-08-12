@@ -800,10 +800,10 @@ def index_pr_files(request: PRIndexRequest):
     except HTTPException:
         raise
     except IncrementalIndexPreconditionError as e:
-        logger.warning("Rejected PR indexing against invalid repository state: %s", e)
+        logger.info("Rejected PR indexing against invalid repository state: %s", e)
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
-        logger.warning(f"Invalid request for PR indexing: {e}")
+        logger.info(f"Invalid request for PR indexing: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except MutationLeaseUnavailable as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -826,6 +826,8 @@ def delete_pr_files(
 ):
     """Delete all indexed points for a specific PR."""
     index_manager = _get_index_manager()
+    if not isinstance(collection_target, str) or not collection_target.strip():
+        collection_target = None
     try:
         with index_manager.pr_overlay_mutation(
             workspace,
@@ -837,13 +839,25 @@ def delete_pr_files(
                 collection_target
                 or index_manager._get_project_collection_name(workspace, project)
             )
-
-            if not index_manager._collection_manager.collection_exists(collection_name):
+            physical_collection = (
+                index_manager._collection_manager.resolve_collection_target(
+                    collection_name
+                )
+            )
+            if physical_collection is None:
                 return {"status": "skipped", "message": "Collection does not exist"}
+
+            # Existing exact generations may predate the PR filter indexes.
+            # Repair them before the acknowledged filter delete. Keeping
+            # wait=True is correctness-critical: releasing the same-PR lease
+            # before Qdrant applies the delete could erase a subsequent rerun.
+            index_manager._collection_manager.ensure_payload_indexes(
+                physical_collection
+            )
 
             lease.assert_owned()
             index_manager.qdrant_client.delete(
-                collection_name=collection_name,
+                collection_name=physical_collection,
                 points_selector=Filter(
                     must=[
                         FieldCondition(key="workspace", match=MatchValue(value=workspace)),
@@ -851,15 +865,20 @@ def delete_pr_files(
                         FieldCondition(key="pr", match=MatchValue(value=True)),
                         FieldCondition(key="pr_number", match=MatchValue(value=pr_number)),
                     ]
-                )
+                ),
+                wait=True,
             )
 
-            logger.info(f"Deleted PR #{pr_number} points from {collection_name}")
+            logger.info(
+                "Deleted PR #%s points from %s",
+                pr_number,
+                physical_collection,
+            )
 
             return {
                 "status": "deleted",
                 "pr_number": pr_number,
-                "collection": collection_name
+                "collection": physical_collection
             }
 
     except MutationLeaseUnavailable as e:
@@ -867,5 +886,5 @@ def delete_pr_files(
     except MutationCoordinationUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        logger.error(f"Error deleting PR files: {e}")
+        logger.debug("PR file deletion failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

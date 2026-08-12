@@ -368,6 +368,32 @@ public class PipelineJobService implements AnalysisJobService {
         }
     }
 
+    @Override
+    public void skipJob(Job job, String reason) {
+        if (job == null) return;
+
+        try {
+            jobService.skipJob(job, reason);
+        } catch (Exception e) {
+            log.error("Error skipping redundant job {}", job.getExternalId(), e);
+        }
+    }
+
+    @Override
+    public void recordExternallyCompletedJob(
+            Job job,
+            String state,
+            String message) {
+        if (job == null) return;
+
+        try {
+            jobService.recordExternallyCompletedJob(job, state, message);
+        } catch (Exception e) {
+            log.warn("Could not record terminal notification for completed job {}: {}",
+                    job.getExternalId(), e.getMessage());
+        }
+    }
+
     public JobService getJobService() {
         return jobService;
     }

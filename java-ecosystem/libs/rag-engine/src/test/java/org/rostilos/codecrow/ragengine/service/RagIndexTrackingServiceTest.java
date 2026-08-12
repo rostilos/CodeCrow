@@ -442,6 +442,43 @@ class RagIndexTrackingServiceTest {
     // ── canStartIndexing ─────────────────────────────────────────────────────
 
     @Test
+    void succeededOperationRecoveryRequiresItsExactStatusOwner() {
+        RagIndexStatus ownerless = new RagIndexStatus();
+        ownerless.setProject(testProject);
+        ownerless.setStatus(RagIndexingStatus.UPDATING);
+        ownerless.setIndexedCommitHash("newer-checkpoint");
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L))
+                .thenReturn(Optional.of(ownerless));
+
+        boolean reconciled = service.reconcilePublishedGeneration(
+                testProject, "main", "old-checkpoint", 10, 20, 91L);
+
+        assertThat(reconciled).isFalse();
+        assertThat(ownerless.getIndexedCommitHash()).isEqualTo("newer-checkpoint");
+        assertThat(ownerless.getStatus()).isEqualTo(RagIndexingStatus.UPDATING);
+        verify(ragIndexStatusRepository, never()).save(any());
+    }
+
+    @Test
+    void sameRevisionLockOwnedReconciliationCanCreateMissingStatus() {
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L))
+                .thenReturn(Optional.empty());
+        when(ragIndexStatusRepository.save(any(RagIndexStatus.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        boolean reconciled = service.reconcilePublishedGeneration(
+                testProject, "main", "published-checkpoint", 10, 20);
+
+        assertThat(reconciled).isTrue();
+        ArgumentCaptor<RagIndexStatus> saved = ArgumentCaptor.forClass(
+                RagIndexStatus.class);
+        verify(ragIndexStatusRepository).save(saved.capture());
+        assertThat(saved.getValue().getIndexedCommitHash())
+                .isEqualTo("published-checkpoint");
+        assertThat(saved.getValue().getStatus()).isEqualTo(RagIndexingStatus.INDEXED);
+    }
+
+    @Test
     void testCanStartIndexing_NoStatus() {
         when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
 

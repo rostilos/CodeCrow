@@ -83,6 +83,7 @@ class RagClient:
             os.environ.get("SERVICE_SECRET")
             or os.environ.get("CODECROW_RAG_API_SECRET", "")
         )
+        self._cleanup_degraded = False
 
         if self.enabled:
             logger.info(f"RAG client initialized: {self.base_url}")
@@ -107,6 +108,18 @@ class RagClient:
         if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
             self._client = None
+
+    def _record_cleanup_failure(self, detail: str) -> None:
+        if not self._cleanup_degraded:
+            logger.warning("RAG PR cleanup is degraded: %s", detail)
+            self._cleanup_degraded = True
+        else:
+            logger.debug("RAG PR cleanup remains degraded: %s", detail)
+
+    def _record_cleanup_success(self) -> None:
+        if self._cleanup_degraded:
+            logger.info("RAG PR cleanup recovered")
+            self._cleanup_degraded = False
 
     async def get_pr_context(
         self,
@@ -232,7 +245,7 @@ class RagClient:
 
         except httpx.HTTPError as e:
             status_code, detail = _http_error_detail(e)
-            logger.warning(
+            logger.debug(
                 "Failed to retrieve PR context from RAG: status=%s detail=%s",
                 status_code or "transport-error",
                 detail,
@@ -243,7 +256,7 @@ class RagClient:
                 "error": detail,
             }
         except Exception as e:
-            logger.error(f"Unexpected error querying RAG: {e}")
+            logger.debug("Unexpected error querying RAG: %s", e, exc_info=True)
             return {
                 "status": "error",
                 "status_code": None,
@@ -308,7 +321,7 @@ class RagClient:
 
         except httpx.HTTPError as e:
             status_code, detail = _http_error_detail(e)
-            logger.warning(
+            logger.debug(
                 "Semantic search failed: status=%s detail=%s",
                 status_code or "transport-error",
                 detail,
@@ -320,7 +333,7 @@ class RagClient:
                 "results": [],
             }
         except Exception as e:
-            logger.error(f"Unexpected error in semantic search: {e}")
+            logger.debug("Unexpected error in semantic search: %s", e, exc_info=True)
             return {
                 "status": "error",
                 "status_code": None,
@@ -497,7 +510,7 @@ class RagClient:
                     "revision-bound duplication search failed: "
                     f"{type(e).__name__}: {e}"
                 ) from e
-            logger.warning(f"Failed duplication search: {e}")
+            logger.debug("Failed duplication search: %s", e, exc_info=True)
             return []
 
     async def get_deterministic_context(
@@ -600,7 +613,7 @@ class RagClient:
 
         except httpx.HTTPError as e:
             status_code, detail = _http_error_detail(e)
-            logger.warning(
+            logger.debug(
                 "Failed to retrieve deterministic context: status=%s detail=%s",
                 status_code or "transport-error",
                 detail,
@@ -611,7 +624,11 @@ class RagClient:
                 "error": detail,
             }
         except Exception as e:
-            logger.error(f"Unexpected error in deterministic RAG query: {e}")
+            logger.debug(
+                "Unexpected error in deterministic RAG query: %s",
+                e,
+                exc_info=True,
+            )
             return {
                 "status": "error",
                 "status_code": None,
@@ -719,7 +736,7 @@ class RagClient:
 
         except httpx.HTTPError as e:
             status_code, detail = _http_error_detail(e)
-            logger.warning(
+            logger.debug(
                 "Failed to index PR files: status=%s detail=%s timeout=%.1fs",
                 status_code or "transport-error",
                 detail,
@@ -731,7 +748,11 @@ class RagClient:
                 "error": detail,
             }
         except Exception as e:
-            logger.error(f"Unexpected error indexing PR files: {e}")
+            logger.debug(
+                "Unexpected error indexing PR files: %s",
+                e,
+                exc_info=True,
+            )
             return {"status": "error", "error": str(e)}
 
     async def delete_pr_files(
@@ -768,13 +789,35 @@ class RagClient:
             )
             response.raise_for_status()
             result = response.json()
-            
-            logger.info(f"Deleted PR #{pr_number} indexed data")
-            return result.get("status") == "deleted"
+
+            status = result.get("status")
+            if status == "deleted":
+                self._record_cleanup_success()
+                logger.info("Deleted PR #%s indexed data", pr_number)
+                return True
+            if status == "skipped":
+                self._record_cleanup_success()
+                logger.info(
+                    "PR #%s indexed-data cleanup was already complete: %s",
+                    pr_number,
+                    result.get("message") or "nothing to delete",
+                )
+                return True
+            self._record_cleanup_failure(
+                "PR #%s returned unexpected status %s"
+                % (pr_number, status or "missing")
+            )
+            return False
 
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to delete PR files: {e}")
+            status_code, detail = _http_error_detail(e)
+            self._record_cleanup_failure(
+                "status=%s detail=%s"
+                % (status_code or "transport-error", detail)
+            )
             return False
         except Exception as e:
-            logger.error(f"Unexpected error deleting PR files: {e}")
+            self._record_cleanup_failure(
+                f"unexpected {type(e).__name__}: {e}"
+            )
             return False

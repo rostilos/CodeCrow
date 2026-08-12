@@ -53,41 +53,67 @@ async def review_endpoint(req: ReviewRequestDto, request: Request):
         # Streaming behavior
         async def event_stream():
             queue = asyncio.Queue()
+            task = None
+            terminal_event_type = None
 
-            # Emit initial queued status
-            yield _json_event({"type": "status", "state": "queued", "message": "request received"})
+            try:
+                # Emit initial queued status
+                yield _json_event({"type": "status", "state": "queued", "message": "request received"})
 
-            # Event callback to capture service events
-            def event_callback(event: Dict[str, Any]):
-                try:
-                    queue.put_nowait(event)
-                except asyncio.QueueFull:
-                    pass  # Skip if queue is full
+                # Event callback to capture service events
+                def event_callback(event: Dict[str, Any]):
+                    nonlocal terminal_event_type
+                    event_type = event.get("type")
+                    if terminal_event_type is not None:
+                        logger.debug(
+                            "Ignoring streamed review event type=%s after "
+                            "terminal type=%s",
+                            event_type,
+                            terminal_event_type,
+                        )
+                        return
+                    if event_type in {"final", "error"}:
+                        terminal_event_type = event_type
+                    try:
+                        queue.put_nowait(event)
+                    except asyncio.QueueFull:
+                        pass  # Skip if queue is full
 
-            # Run processing in background
-            async def runner():
-                try:
-                    result = await review_service.process_review_request(
-                        req,
-                        event_callback=event_callback
-                    )
-                    # Emit final event with result
-                    final_event = {
-                        "type": "final",
-                        "result": result.get("result")
-                    }
-                    await queue.put(final_event)
-                except Exception as e:
-                    await queue.put({
-                        "type": "error",
-                        "message": str(e)
-                    })
+                # Run processing in background
+                async def runner():
+                    try:
+                        result = await review_service.process_review_request(
+                            req,
+                            event_callback=event_callback
+                        )
+                        # Emit final event with result
+                        final_event = {
+                            "type": "final",
+                            "result": result.get("result")
+                        }
+                        event_callback(final_event)
+                    except Exception as e:
+                        event_callback({
+                            "type": "error",
+                            "message": str(e)
+                        })
 
-            task = asyncio.create_task(runner())
+                task = asyncio.create_task(runner())
 
-            # Drain queue and yield events
-            async for event in _drain_queue_until_final(queue, task):
-                yield _json_event(event)
+                # Drain queue and yield events
+                async for event in _drain_queue_until_final(queue, task):
+                    yield _json_event(event)
+            finally:
+                # A disconnected streaming client no longer owns useful work.
+                # Retire its runner before application shutdown can close the
+                # shared RagClient underneath it.
+                if task is not None:
+                    if not task.done():
+                        task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
         return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 

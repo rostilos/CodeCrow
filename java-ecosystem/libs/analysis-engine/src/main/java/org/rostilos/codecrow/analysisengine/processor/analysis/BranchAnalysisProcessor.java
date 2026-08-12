@@ -195,13 +195,19 @@ public class BranchAnalysisProcessor {
 		}
 
 		List<String> unanalyzedCommits = Collections.emptyList();
+		AnalysisLockService.LockLease lockLease = null;
 
 		try {
+			lockLease = analysisLockService.maintainLockLease(
+					lockKey.get(),
+					analysisLockService.getLeaseMinutes(AnalysisLockType.BRANCH_ANALYSIS));
+			requireActiveLease(lockLease);
+			requireConfirmedLease(lockLease);
 			Optional<Branch> existingBranchOpt = branchRepository.findByProjectIdAndBranchName(
 					project.getId(), request.getTargetBranchName());
 
 			if (request.getSourcePrNumber() == null
-					&& matchCache(request, existingBranchOpt, project, consumer)) {
+					&& matchCache(request, existingBranchOpt, project, consumer, lockLease)) {
 				return Map.of(
 						"status", "skipped",
 						"reason", "commit_already_analyzed",
@@ -295,6 +301,7 @@ public class BranchAnalysisProcessor {
 			// This keeps PullRequestState accurate for commit coverage checks.
 			Set<Long> mergedPrNumbers = new LinkedHashSet<>();
 			if (prNumber != null) {
+				requireConfirmedLease(lockLease);
 				try {
 					pullRequestService.markPullRequestMerged(project.getId(), prNumber);
 					mergedPrNumbers.add(prNumber);
@@ -305,6 +312,7 @@ public class BranchAnalysisProcessor {
 			}
 
 			if (prNumber != null || isMergeCommit) {
+				requireConfirmedLease(lockLease);
 				PullRequestStatusSyncService.SyncResult syncResult = pullRequestStatusSyncService
 						.syncOpenPullRequestStates(
 								project, request.getTargetBranchName(), consumer);
@@ -320,6 +328,7 @@ public class BranchAnalysisProcessor {
 					&& prNumber == null
 					&& !isMergeCommit
 					&& mergedPrNumbers.isEmpty()) {
+				requireConfirmedLease(lockLease);
 				return skipAlreadyAnalyzedRange(project, request, existingBranchOpt, consumer);
 			}
 
@@ -381,12 +390,16 @@ public class BranchAnalysisProcessor {
 			}
 
 			if (changedFiles.isEmpty()) {
+				requireConfirmedLease(lockLease);
 				branchFileOperationsService.createOrUpdateProjectBranch(
 						project, request, existingBranchOpt.orElse(null));
 				EventNotificationEmitter.emitStatus(consumer, "skipped",
 						"No changed files match the project analysis scope");
+				requireConfirmedLease(lockLease);
 				performIncrementalRagUpdate(request, project, repositoryDiff, consumer, directPushLimited);
+				requireConfirmedLease(lockLease);
 				branchHealthService.markBranchHealthy(project, request);
+				requireConfirmedLease(lockLease);
 				branchHealthService.recordCommitsAnalyzed(project, unanalyzedCommits,
 						request.getTargetBranchName());
 				return Map.of("status", "accepted", "cached", false,
@@ -403,7 +416,8 @@ public class BranchAnalysisProcessor {
 			if (!isFirstAnalysis && !directPushLimited) {
 				performDirectPushAnalysisIfNeeded(
 						project, request, unanalyzedCommits, rawDiff,
-						changedFiles, provider, consumer, prNumber, isMergeCommit);
+						changedFiles, provider, consumer, prNumber, isMergeCommit,
+						lockLease);
 			} else if (isFirstAnalysis) {
 				log.info(
 						"First analysis for branch {} — skipping direct push analysis (establishing baseline, {} files)",
@@ -422,12 +436,15 @@ public class BranchAnalysisProcessor {
 			log.info("Branch archive: {} files extracted for {} changed files",
 					branchFileSnapshot.contents().size(), changedFiles.size());
 
+			requireConfirmedLease(lockLease);
 			Set<String> existingFiles = branchFileOperationsService.updateBranchFiles(
 					changedFiles, project, request.getTargetBranchName(), branchFileSnapshot);
 
+			requireConfirmedLease(lockLease);
 			Branch branch = branchFileOperationsService.createOrUpdateProjectBranch(
 					project, request, existingBranchOpt.orElse(null));
 
+			requireConfirmedLease(lockLease);
 			if (mergedPrNumbers.size() > 1) {
 				branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
 						changedFiles, existingFiles, branch, project, mergedPrNumbers);
@@ -435,15 +452,18 @@ public class BranchAnalysisProcessor {
 				branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
 						changedFiles, existingFiles, branch, project, prNumber);
 			}
+			requireConfirmedLease(lockLease);
 			branchIssueReconciliationService.reconcileIssueLineNumbers(rawDiff, changedFiles, branch);
 
 			// Update branch issue counts after mapping
+			requireConfirmedLease(lockLease);
 			Branch refreshedBranch = refreshAndSaveIssueCounts(branch);
 			log.info("Updated branch issue counts after mapping: total={}, high={}, medium={}, low={}, resolved={}",
 					refreshedBranch.getTotalIssues(), refreshedBranch.getHighSeverityCount(),
 					refreshedBranch.getMediumSeverityCount(), refreshedBranch.getLowSeverityCount(),
 					refreshedBranch.getResolvedCount());
 
+			requireConfirmedLease(lockLease);
 			branchIssueReconciliationService.reanalyzeCandidateIssues(
 					changedFiles, existingFiles, refreshedBranch, project,
 					request, consumer, branchFileSnapshot.contents(), rawDiff,
@@ -457,17 +477,22 @@ public class BranchAnalysisProcessor {
 			EventNotificationEmitter.emitStatus(consumer, "finalizing_branch_state",
 					"Saving changed-file reconciliation results");
 
+			requireConfirmedLease(lockLease);
 			branchFileOperationsService.updateFileSnapshotsForBranch(existingFiles, project, request,
 					branchFileSnapshot);
 
 			Branch branchForVerify = branchRepository.findByProjectIdAndBranchName(
 					project.getId(), request.getTargetBranchName()).orElse(refreshedBranch);
+			requireConfirmedLease(lockLease);
 			branchIssueReconciliationService.verifyIssueLineNumbersWithSnippets(
 					changedFiles, project, branchForVerify);
 
 			// ── Post-analysis housekeeping ────────────────────────────────────
+			requireConfirmedLease(lockLease);
 			performIncrementalRagUpdate(request, project, repositoryDiff, consumer, directPushLimited);
+			requireConfirmedLease(lockLease);
 			branchHealthService.markBranchHealthy(project, request);
+			requireConfirmedLease(lockLease);
 			branchHealthService.recordCommitsAnalyzed(project, unanalyzedCommits,
 					request.getTargetBranchName());
 
@@ -477,11 +502,36 @@ public class BranchAnalysisProcessor {
 			return Map.of("status", "accepted", "cached", false,
 					"branch", request.getTargetBranchName());
 
+		} catch (BranchAnalysisLeaseLostException e) {
+			log.info("Branch analysis stopped after lock lease ownership was lost: project={}, branch={}",
+					project.getId(), request.getTargetBranchName());
+			throw e;
 		} catch (Exception e) {
 			branchHealthService.handleProcessFailure(project, request, unanalyzedCommits, e);
 			throw e;
 		} finally {
-			analysisLockService.releaseLock(lockKey.get());
+			if (lockLease != null) {
+				try {
+					lockLease.close();
+				} catch (RuntimeException closeFailure) {
+					log.info(
+							"Branch analysis lock lease could not be closed after processing; "
+									+ "continuing lock cleanup: project={}, branch={}, detail={}",
+							project.getId(), request.getTargetBranchName(),
+							closeFailure.getMessage());
+				}
+			}
+			try {
+				analysisLockService.releaseLock(lockKey.get());
+			} catch (RuntimeException releaseFailure) {
+				// The branch outcome is already decided. Cleanup failure is
+				// observational; the durable lock lease will expire.
+				log.info(
+						"Branch analysis lock could not be released after processing; "
+								+ "leaving it to expiry: project={}, branch={}, detail={}",
+						project.getId(), request.getTargetBranchName(),
+						releaseFailure.getMessage());
+			}
 		}
 	}
 
@@ -490,12 +540,36 @@ public class BranchAnalysisProcessor {
 		return branchFullReconciliationService.fullReconcile(projectId, branchName, consumer);
 	}
 
+	private static void requireActiveLease(AnalysisLockService.LockLease lease) throws IOException {
+		if (lease == null || lease.isOwnershipLost()) {
+			throw lostLeaseException();
+		}
+	}
+
+	private static void requireConfirmedLease(AnalysisLockService.LockLease lease) throws IOException {
+		if (lease == null || !lease.confirmOwnership()) {
+			throw lostLeaseException();
+		}
+	}
+
+	private static BranchAnalysisLeaseLostException lostLeaseException() {
+		return new BranchAnalysisLeaseLostException(
+				"Branch analysis lost its lock lease while the worker was active");
+	}
+
+	private static final class BranchAnalysisLeaseLostException extends IOException {
+		private BranchAnalysisLeaseLostException(String message) {
+			super(message);
+		}
+	}
+
 	/**
 	 * Check if the incoming commit was already SUCCESSFULLY analyzed.
 	 * Uses lastSuccessfulCommitHash so that failed attempts are re-processed.
 	 */
 	private boolean matchCache(BranchProcessRequest request, Optional<Branch> existingBranchOpt,
-			Project project, Consumer<Map<String, Object>> consumer) {
+			Project project, Consumer<Map<String, Object>> consumer,
+			AnalysisLockService.LockLease lockLease) throws IOException {
 		if (request.getCommitHash() == null || existingBranchOpt.isEmpty())
 			return false;
 
@@ -517,9 +591,12 @@ public class BranchAnalysisProcessor {
 				BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
 						branchFileOperationsService.downloadBranchFileSnapshot(
 						vcsRepoInfoImpl, request.getCommitHash(), branchFiles);
+				requireConfirmedLease(lockLease);
 				branchFileOperationsService.updateFileSnapshotsForBranch(
 						branchFiles, project, request, branchFileSnapshot);
 			}
+		} catch (BranchAnalysisLeaseLostException leaseLost) {
+			throw leaseLost;
 		} catch (Exception snapEx) {
 			log.warn("Failed to refresh file snapshots on skip path (non-critical): {}",
 					snapEx.getMessage());
@@ -699,7 +776,8 @@ public class BranchAnalysisProcessor {
 			EVcsProvider provider,
 			Consumer<Map<String, Object>> consumer,
 			Long mergedPrNumber,
-			boolean isMergeCommit) {
+			boolean isMergeCommit,
+			AnalysisLockService.LockLease lockLease) throws IOException {
 
 		if (unanalyzedCommits.isEmpty()) {
 			log.debug("No unanalyzed commits — skipping direct push analysis check");
@@ -794,9 +872,12 @@ public class BranchAnalysisProcessor {
 					project, request, rawDiff, fileContents, new ArrayList<>(changedFiles));
 
 			// Call the inference orchestrator using single request
+			requireConfirmedLease(lockLease);
 			Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiRequests.get(0), event -> {
 				try {
-					consumer.accept(event);
+					if (consumer != null) {
+						consumer.accept(event);
+					}
 				} catch (Exception ex) {
 					log.debug("Event consumer failed during direct push analysis: {}",
 							ex.getMessage());
@@ -815,6 +896,7 @@ public class BranchAnalysisProcessor {
 			}
 
 			// Save the analysis with DetectionSource.DIRECT_PUSH_ANALYSIS
+			requireConfirmedLease(lockLease);
 			CodeAnalysis directPushAnalysis = codeAnalysisService.createDirectPushAnalysisFromAiResponse(
 					project, aiResponse, request.getTargetBranchName(),
 					request.getCommitHash(), fileContents);
@@ -842,6 +924,8 @@ public class BranchAnalysisProcessor {
 			EventNotificationEmitter.emitStatus(consumer, "direct_push_analysis_complete",
 					"Direct push analysis found " + issuesFound + " issues");
 
+		} catch (BranchAnalysisLeaseLostException leaseLost) {
+			throw leaseLost;
 		} catch (Exception e) {
 			// Direct push analysis failure is non-fatal — reconciliation will still run
 			log.warn("Direct push analysis failed (non-fatal, reconciliation will still run): {}",
@@ -913,7 +997,8 @@ public class BranchAnalysisProcessor {
 				boolean ragUpdated = ragOperationsService.triggerIncrementalUpdate(
 						project, targetBranch, request.getCommitHash(), commitDiff, consumer);
 				if (!ragUpdated) {
-					log.warn("RAG incremental update did not complete for project={}, branch={}, commit={}",
+					log.info("RAG incremental update did not complete; retaining the last usable index "
+							+ "for project={}, branch={}, commit={}",
 							project.getId(), targetBranch, request.getCommitHash());
 					return;
 				}
@@ -921,7 +1006,8 @@ public class BranchAnalysisProcessor {
 				log.info("Non-main branch push - updating branch index for project={}, branch={}",
 						project.getId(), targetBranch);
 				if (!ragOperationsService.updateBranchIndex(project, targetBranch, consumer)) {
-					log.warn("RAG branch index update did not complete for project={}, branch={}",
+					log.info("RAG branch index update did not complete; retaining the last usable index "
+							+ "for project={}, branch={}",
 							project.getId(), targetBranch);
 					return;
 				}

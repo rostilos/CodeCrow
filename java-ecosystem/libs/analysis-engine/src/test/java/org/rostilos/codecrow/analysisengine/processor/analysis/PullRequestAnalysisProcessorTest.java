@@ -69,6 +69,9 @@ class PullRequestAnalysisProcessorTest {
         private AnalysisLockService analysisLockService;
 
         @Mock
+        private AnalysisLockService.LockLease lockLease;
+
+        @Mock
         private AnalyzedCommitService analyzedCommitService;
 
         @Mock
@@ -121,6 +124,12 @@ class PullRequestAnalysisProcessorTest {
                                 .thenReturn(TaskImplementationEvidenceService.PersistenceResult.empty());
                 lenient().when(taskImplementationEvidenceService.copyForAnalysis(any(), any()))
                                 .thenReturn(TaskImplementationEvidenceService.PersistenceResult.empty());
+                lenient().when(analysisLockService.getLeaseMinutes(AnalysisLockType.PR_ANALYSIS))
+                                .thenReturn(30);
+                lenient().when(analysisLockService.maintainLockLease(anyString(), eq(30)))
+                                .thenReturn(lockLease);
+                lenient().when(lockLease.isOwnershipLost()).thenReturn(false);
+                lenient().when(lockLease.confirmOwnership()).thenReturn(true);
                 processor = new PullRequestAnalysisProcessor(
                                 pullRequestService,
                                 codeAnalysisService,
@@ -250,6 +259,43 @@ class PullRequestAnalysisProcessorTest {
                                         eq("feature-branch"),
                                         eq("main"),
                                         eq(project));
+                        verify(analysisLockService).releaseLock("lock-key-123");
+                }
+
+                @Test
+                @DisplayName("cleanup failures cannot override a successful PR outcome")
+                void cleanupFailuresCannotOverrideSuccessfulPrOutcome() throws Exception {
+                        PrProcessRequest request = createRequest();
+                        PullRequestAnalysisProcessor.EventConsumer consumer = mock(
+                                        PullRequestAnalysisProcessor.EventConsumer.class);
+                        VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+                        when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+                        when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+                        when(project.getId()).thenReturn(1L);
+                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+                        when(analysisLockService.acquireLockWithWait(
+                                        any(), anyString(), any(), anyString(), anyLong(), any()))
+                                        .thenReturn(Optional.of("lock-key-123"));
+                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(reportingService);
+                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(aiClientService);
+                        when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong()))
+                                        .thenReturn(List.of());
+                        when(pullRequestService.createOrUpdatePullRequest(
+                                        anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                                        .thenReturn(pullRequest);
+                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
+                                        .thenReturn(List.of());
+                        doThrow(new IllegalStateException("lease executor unavailable"))
+                                        .when(lockLease).close();
+                        doThrow(new IllegalStateException("lock database unavailable"))
+                                        .when(analysisLockService).releaseLock("lock-key-123");
+
+                        Map<String, Object> result = processor.process(request, consumer, project);
+
+                        assertThat(result).containsEntry("status", "ignored");
+                        verify(lockLease).close();
                         verify(analysisLockService).releaseLock("lock-key-123");
                 }
 
@@ -401,10 +447,6 @@ class PullRequestAnalysisProcessorTest {
                                                         "filename", "capture.json",
                                                         "containerPath",
                                                         "/app/logs/prompt-dry-runs/capture.json"));
-                        when(analysisLockService.getLeaseMinutes(AnalysisLockType.PR_ANALYSIS))
-                                        .thenReturn(30);
-                        when(analysisLockService.renewLock("lock-key-123", 30))
-                                        .thenReturn(true);
                         when(aiAnalysisClient.performAnalysis(any(), any()))
                                         .thenAnswer(invocation -> {
                                                 @SuppressWarnings("unchecked")
@@ -426,13 +468,15 @@ class PullRequestAnalysisProcessorTest {
                         verify(codeAnalysisService, never()).createAnalysisFromAiResponse(
                                         any(), any(), anyLong(), anyString(), anyString(), anyString(),
                                         any(), any(), any(), any(), any(), any());
-                        verify(analysisLockService).renewLock("lock-key-123", 30);
+                        verify(analysisLockService).maintainLockLease("lock-key-123", 30);
+                        verify(lockLease, times(2)).confirmOwnership();
+                        verify(lockLease).close();
                         verify(reportingService, never()).postAnalysisResults(
                                         any(), any(), anyLong(), any(), any());
                 }
 
                 @Test
-                @DisplayName("should reject a completed review after lock lease ownership is lost")
+                @DisplayName("should reject a quiet completed review when the independent lease heartbeat lost ownership")
                 void shouldRejectCompletedReviewAfterLockLeaseIsLost() throws Exception {
                         PrProcessRequest request = createRequest();
                         PullRequestAnalysisProcessor.EventConsumer consumer = mock(
@@ -458,22 +502,10 @@ class PullRequestAnalysisProcessorTest {
                                         .thenReturn(List.of(aiAnalysisRequest));
                         when(aiAnalysisRequest.getRawDiff()).thenReturn("diff");
                         when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
-                        when(analysisLockService.getLeaseMinutes(AnalysisLockType.PR_ANALYSIS))
-                                        .thenReturn(30);
-                        when(analysisLockService.renewLock("lock-key-123", 30))
-                                        .thenReturn(false);
-                        when(aiAnalysisClient.performAnalysis(any(), any()))
-                                        .thenAnswer(invocation -> {
-                                                @SuppressWarnings("unchecked")
-                                                java.util.function.Consumer<Map<String, Object>> eventHandler =
-                                                                invocation.getArgument(1);
-                                                eventHandler.accept(Map.of(
-                                                                "type", "status",
-                                                                "state", "processing"));
-                                                return Map.of(
-                                                                "comment", "must not be published",
-                                                                "issues", List.of());
-                                        });
+                        when(lockLease.confirmOwnership()).thenReturn(true, false);
+                        when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(Map.of(
+                                        "comment", "must not be published",
+                                        "issues", List.of()));
 
                         Map<String, Object> result = processor.process(request, consumer, project);
 
@@ -487,7 +519,273 @@ class PullRequestAnalysisProcessorTest {
                                         any(), any(), any(), any(), any(), any());
                         verify(reportingService, never()).postAnalysisResults(
                                         any(), any(), anyLong(), any(), any());
+                        verify(analysisLockService).maintainLockLease("lock-key-123", 30);
+                        verify(lockLease, times(2)).confirmOwnership();
+                        verify(lockLease).close();
                         verify(analysisLockService).releaseLock("lock-key-123");
+                }
+
+                @Test
+                @DisplayName("should re-confirm ownership after direct VCS fallback before persistence")
+                void shouldRejectLeaseLostDuringDirectVcsFallbackBeforePersistence() throws Exception {
+                        PrProcessRequest request = createRequest();
+                        PullRequestAnalysisProcessor.EventConsumer consumer = mock(
+                                        PullRequestAnalysisProcessor.EventConsumer.class);
+                        Map<String, Object> aiResponse = Map.of(
+                                        "comment", "must not be persisted",
+                                        "issues", List.of());
+                        stubReviewThroughAi(aiResponse);
+                        when(lockLease.confirmOwnership()).thenReturn(true, true, false);
+
+                        Map<String, Object> result = processor.process(request, consumer, project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verify(lockLease, times(3)).confirmOwnership();
+                        verify(codeAnalysisService, never()).createAnalysisFromAiResponse(
+                                        any(), any(), anyLong(), anyString(), anyString(), anyString(),
+                                        any(), any(), any(), any(), any(), any());
+                        verify(reportingService, never()).postAnalysisResults(
+                                        any(), any(), anyLong(), any(), any());
+                }
+
+                @Test
+                @DisplayName("should atomically re-confirm ownership before VCS publication")
+                void shouldRejectLeaseLostBeforeVcsPublication() throws Exception {
+                        PrProcessRequest request = createRequest();
+                        PullRequestAnalysisProcessor.EventConsumer consumer = mock(
+                                        PullRequestAnalysisProcessor.EventConsumer.class);
+                        Map<String, Object> aiResponse = Map.of(
+                                        "comment", "must not be published",
+                                        "issues", List.of());
+                        stubReviewThroughAi(aiResponse);
+                        when(lockLease.confirmOwnership()).thenReturn(true, true, true, false);
+                        when(codeAnalysisService.createAnalysisFromAiResponse(
+                                        any(), any(), anyLong(), anyString(), anyString(), anyString(),
+                                        any(), any(), any(), any(), any(), any()))
+                                        .thenReturn(codeAnalysis);
+
+                        Map<String, Object> result = processor.process(request, consumer, project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verify(lockLease, times(4)).confirmOwnership();
+                        verify(codeAnalysisService).createAnalysisFromAiResponse(
+                                        any(), eq(aiResponse), anyLong(), anyString(), anyString(), anyString(),
+                                        any(), any(), any(), any(), any(), any());
+                        verify(reportingService, never()).postAnalysisResults(
+                                        any(), any(), anyLong(), any(), any());
+                }
+
+                private void stubReviewThroughAi(Map<String, Object> aiResponse) throws Exception {
+                        VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+                        when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+                        when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+                        when(project.getId()).thenReturn(1L);
+                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+                        when(analysisLockService.acquireLockWithWait(
+                                        any(), anyString(), any(), anyString(), anyLong(), any()))
+                                        .thenReturn(Optional.of("lock-key-123"));
+                        when(pullRequestService.createOrUpdatePullRequest(
+                                        anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                                        .thenReturn(pullRequest);
+                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(reportingService);
+                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(aiClientService);
+                        when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong()))
+                                        .thenReturn(List.of());
+                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
+                                        .thenReturn(List.of(aiAnalysisRequest));
+                        when(aiAnalysisRequest.getRawDiff()).thenReturn("diff");
+                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
+                }
+
+                private String stubCacheLookupPrerequisites() throws Exception {
+                        VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+                        when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+                        when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+                        when(project.getId()).thenReturn(1L);
+                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+                        when(analysisLockService.acquireLockWithWait(
+                                        any(), anyString(), any(), anyString(), anyLong(), any()))
+                                        .thenReturn(Optional.of("lock-key-cache"));
+                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(reportingService);
+                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(aiClientService);
+                        when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong()))
+                                        .thenReturn(List.of());
+                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
+                                        .thenReturn(List.of(aiAnalysisRequest));
+                        when(pullRequestService.createOrUpdatePullRequest(
+                                        anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                                        .thenReturn(pullRequest);
+                        when(aiAnalysisRequest.getRawDiff()).thenReturn(
+                                        "diff --git a/file.java b/file.java\n@@ -1 +1 @@\n-old\n+new\n");
+                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        return processor.computeReviewIdentity(aiAnalysisRequest);
+                }
+
+                @Test
+                @DisplayName("should fence the first durable PR write after request construction")
+                void shouldRejectLeaseLostBeforePullRequestPersistence() throws Exception {
+                        VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+                        when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+                        when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+                        when(project.getId()).thenReturn(1L);
+                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+                        when(analysisLockService.acquireLockWithWait(
+                                        any(), anyString(), any(), anyString(), anyLong(), any()))
+                                        .thenReturn(Optional.of("lock-key-before-pr"));
+                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(reportingService);
+                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(aiClientService);
+                        when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong()))
+                                        .thenReturn(List.of());
+                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
+                                        .thenReturn(List.of(aiAnalysisRequest));
+                        when(lockLease.confirmOwnership()).thenReturn(false);
+
+                        Map<String, Object> result = processor.process(
+                                        createRequest(), mock(PullRequestAnalysisProcessor.EventConsumer.class), project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verify(pullRequestService, never()).createOrUpdatePullRequest(
+                                        anyLong(), anyLong(), anyString(), anyString(), anyString(), any());
+                }
+
+                @Test
+                @DisplayName("should fence exact cache publication")
+                void shouldRejectLeaseLostBeforeExactCachePublication() throws Exception {
+                        String identity = stubCacheLookupPrerequisites();
+                        when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
+                                        .thenReturn(Optional.of(codeAnalysis));
+                        when(codeAnalysis.getDiffFingerprint()).thenReturn(identity);
+                        when(lockLease.confirmOwnership()).thenReturn(true, false);
+
+                        Map<String, Object> result = processor.process(
+                                        createRequest(), mock(PullRequestAnalysisProcessor.EventConsumer.class), project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verify(reportingService, never()).postAnalysisResults(
+                                        any(), any(), anyLong(), any(), any());
+                }
+
+                @Test
+                @DisplayName("should fence commit cache cloning")
+                void shouldRejectLeaseLostBeforeCommitCacheClone() throws Exception {
+                        String identity = stubCacheLookupPrerequisites();
+                        when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
+                                        .thenReturn(Optional.empty());
+                        CodeAnalysis source = mock(CodeAnalysis.class);
+                        when(source.getDiffFingerprint()).thenReturn(identity);
+                        when(source.getPrNumber()).thenReturn(99L);
+                        when(codeAnalysisService.getAnalysisByCommitHash(1L, "abc123"))
+                                        .thenReturn(Optional.of(source));
+                        when(lockLease.confirmOwnership()).thenReturn(true, false);
+
+                        Map<String, Object> result = processor.process(
+                                        createRequest(), mock(PullRequestAnalysisProcessor.EventConsumer.class), project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verify(codeAnalysisService, never()).cloneAnalysisForPr(
+                                        any(), any(), anyLong(), anyString(), anyString(), anyString(), anyString());
+                }
+
+                @Test
+                @DisplayName("should fence fingerprint cache cloning")
+                void shouldRejectLeaseLostBeforeFingerprintCacheClone() throws Exception {
+                        stubCacheLookupPrerequisites();
+                        when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
+                                        .thenReturn(Optional.empty());
+                        when(codeAnalysisService.getAnalysisByCommitHash(1L, "abc123"))
+                                        .thenReturn(Optional.empty());
+                        when(codeAnalysisService.getAnalysisByDiffFingerprint(eq(1L), anyString()))
+                                        .thenReturn(Optional.of(mock(CodeAnalysis.class)));
+                        when(lockLease.confirmOwnership()).thenReturn(true, false);
+
+                        Map<String, Object> result = processor.process(
+                                        createRequest(), mock(PullRequestAnalysisProcessor.EventConsumer.class), project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verify(codeAnalysisService, never()).cloneAnalysisForPr(
+                                        any(), any(), anyLong(), anyString(), anyString(), anyString(), anyString());
+                }
+
+                @Test
+                @DisplayName("should re-confirm after VCS publication before commit receipts")
+                void shouldRejectLeaseLostAfterVcsPublicationBeforeCommitReceipts() throws Exception {
+                        Map<String, Object> aiResponse = Map.of("comment", "review", "issues", List.of());
+                        stubReviewThroughAi(aiResponse);
+                        when(codeAnalysisService.createAnalysisFromAiResponse(
+                                        any(), any(), anyLong(), anyString(), anyString(), anyString(),
+                                        any(), any(), any(), any(), any(), any()))
+                                        .thenReturn(codeAnalysis);
+                        when(lockLease.confirmOwnership()).thenReturn(true, true, true, true, false);
+
+                        Map<String, Object> result = processor.process(
+                                        createRequest(), mock(PullRequestAnalysisProcessor.EventConsumer.class), project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verify(reportingService).postAnalysisResults(
+                                        eq(codeAnalysis), any(), anyLong(), any(), any());
+                        verifyNoInteractions(analyzedCommitService);
+                }
+
+                @Test
+                @DisplayName("observer failure cannot turn a successful review into failure")
+                void observerFailureDoesNotChangeReviewOutcome() throws Exception {
+                        Map<String, Object> aiResponse = Map.of("comment", "review", "issues", List.of());
+                        stubReviewThroughAi(aiResponse);
+                        when(codeAnalysisService.createAnalysisFromAiResponse(
+                                        any(), any(), anyLong(), anyString(), anyString(), anyString(),
+                                        any(), any(), any(), any(), any(), any()))
+                                        .thenReturn(codeAnalysis);
+                        PullRequestAnalysisProcessor.EventConsumer observer = mock(
+                                        PullRequestAnalysisProcessor.EventConsumer.class);
+                        doThrow(new IllegalStateException("observer disconnected"))
+                                        .when(observer).accept(anyMap());
+                        when(analysisLockService.acquireLockWithWait(
+                                        any(), anyString(), any(), anyString(), anyLong(), any()))
+                                        .thenAnswer(invocation -> {
+                                                @SuppressWarnings("unchecked")
+                                                java.util.function.Consumer<Map<String, Object>> progress =
+                                                                invocation.getArgument(5);
+                                                progress.accept(Map.of(
+                                                                "type", "lock_wait",
+                                                                "message", "waiting"));
+                                                return Optional.of("lock-key-123");
+                                        });
+                        when(ragOperationsService.ensureRagIndexUpToDate(
+                                        any(), anyString(), any()))
+                                        .thenAnswer(invocation -> {
+                                                @SuppressWarnings("unchecked")
+                                                java.util.function.Consumer<Map<String, Object>> progress =
+                                                                invocation.getArgument(2);
+                                                progress.accept(Map.of(
+                                                                "type", "status",
+                                                                "state", "rag_update"));
+                                                return true;
+                                        });
+                        when(aiAnalysisClient.performAnalysis(any(), any())).thenAnswer(invocation -> {
+                                @SuppressWarnings("unchecked")
+                                java.util.function.Consumer<Map<String, Object>> progress =
+                                                invocation.getArgument(1);
+                                progress.accept(Map.of(
+                                                "type", "status",
+                                                "state", "processing"));
+                                return aiResponse;
+                        });
+
+                        Map<String, Object> result = processor.process(createRequest(), observer, project);
+
+                        assertThat(result).isEqualTo(aiResponse);
+                        verify(reportingService).postAnalysisResults(
+                                        eq(codeAnalysis), any(), anyLong(), any(), any());
+                        verify(observer).accept(argThat(event -> "lock_wait".equals(event.get("type"))));
+                        verify(observer).accept(argThat(event -> "rag_update".equals(event.get("state"))));
+                        verify(observer).accept(argThat(event -> "processing".equals(event.get("state"))));
                 }
 
                 @Test
@@ -884,7 +1182,7 @@ class PullRequestAnalysisProcessorTest {
 
                         PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
                                         project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
-                                        "main", "feature-branch", "identity");
+                                        "main", "feature-branch", "identity", lockLease);
 
                         assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.EXACT);
                         verify(reportingService).postAnalysisResults(eq(codeAnalysis), eq(project), eq(42L), eq(100L),
@@ -902,7 +1200,7 @@ class PullRequestAnalysisProcessorTest {
 
                         PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
                                         project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
-                                        "main", "feature-branch", "identity");
+                                        "main", "feature-branch", "identity", lockLease);
 
                         assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.NONE);
                         verify(reportingService, never()).postAnalysisResults(any(), any(), anyLong(), any(), any());
@@ -923,7 +1221,7 @@ class PullRequestAnalysisProcessorTest {
 
                         PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
                                         project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
-                                        "main", "feature-branch", "current-identity");
+                                        "main", "feature-branch", "current-identity", lockLease);
 
                         assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.NONE);
                         verify(reportingService, never()).postAnalysisResults(any(), any(), anyLong(), any(), any());
@@ -944,7 +1242,7 @@ class PullRequestAnalysisProcessorTest {
 
                         PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
                                         project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
-                                        "main", "feature-branch", "identity");
+                                        "main", "feature-branch", "identity", lockLease);
 
                         // Should still return EXACT (cache existed)
                         assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.EXACT);

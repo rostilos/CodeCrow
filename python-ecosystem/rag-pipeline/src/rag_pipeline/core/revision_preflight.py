@@ -16,6 +16,7 @@ from .generation_manifest import (
     canonical_index_selection_policy,
     compute_index_selection_policy_sha256,
     compute_generation_members_digest,
+    generation_manifest_point_id,
     generation_manifest_content,
     is_sha256_hex,
     verified_generation_member,
@@ -302,6 +303,119 @@ def _validate_generation_manifest(
         "index_include_patterns": index_include_patterns,
         "index_exclude_patterns": index_exclude_patterns,
         "index_selection_policy_sha256": index_selection_policy_sha256,
+    }
+
+
+def read_repository_generation_manifest_receipt(
+    client,
+    collection_name: str,
+    workspace: str,
+    project: str,
+    branch: str,
+    commit: str,
+    generation_manifest_sha256: str | None = None,
+):
+    """Validate one registry-selected immutable seal without scanning members.
+
+    Readable aliases are non-authoritative operator conveniences. The Java
+    registry has already accepted the digest returned by the full generation
+    build, so alias repair only needs to prove that the selected physical
+    target still contains that exact coordinate-bound manifest. Exact review
+    preflight continues to verify every member and vector separately.
+    """
+    if (
+        generation_manifest_sha256 is not None
+        and not is_sha256_hex(generation_manifest_sha256)
+    ):
+        raise IncrementalIndexPreconditionError(
+            "repository generation manifest receipt is invalid"
+        )
+    records = client.retrieve(
+        collection_name=collection_name,
+        ids=[generation_manifest_point_id(workspace, project, branch)],
+        with_payload=True,
+        with_vectors=False,
+    )
+    if len(records) != 1:
+        return None
+    payload = records[0].payload or {}
+    stored_manifest_sha256 = payload.get("generation_manifest_sha256")
+    if any(payload.get(key) != value for key, value in (
+        ("workspace", workspace),
+        ("project", project),
+        ("branch", branch),
+        ("commit", commit),
+    )):
+        return None
+    if (
+        payload.get(GENERATION_MANIFEST_PAYLOAD_KEY) is not True
+        or payload.get("generation_schema") != GENERATION_SCHEMA
+        or payload.get("path") != GENERATION_MANIFEST_PATH
+        or not is_sha256_hex(stored_manifest_sha256)
+        or (
+            generation_manifest_sha256 is not None
+            and stored_manifest_sha256 != generation_manifest_sha256
+        )
+    ):
+        return None
+
+    # Recompute the manifest digest from its complete coordinate/membership
+    # metadata. This remains O(1): member contents are intentionally not read
+    # on the optional alias-repair path.
+    expected_count = payload.get("generation_member_count")
+    members_sha256 = payload.get("generation_members_sha256")
+    source_tree_sha256 = payload.get("source_tree_sha256")
+    include_patterns = payload.get("index_include_patterns")
+    exclude_patterns = payload.get("index_exclude_patterns")
+    selection_digest = payload.get("index_selection_policy_sha256")
+    if (
+        type(expected_count) is not int
+        or expected_count < 1
+        or not is_sha256_hex(members_sha256)
+        or not is_sha256_hex(source_tree_sha256)
+        or not isinstance(include_patterns, list)
+        or not isinstance(exclude_patterns, list)
+        or not is_sha256_hex(selection_digest)
+    ):
+        return None
+    try:
+        policy = canonical_index_selection_policy(
+            include_patterns,
+            exclude_patterns,
+        )
+    except GenerationManifestError:
+        return None
+    if (
+        include_patterns != policy["includePatterns"]
+        or exclude_patterns != policy["excludePatterns"]
+        or selection_digest != compute_index_selection_policy_sha256(
+            include_patterns,
+            exclude_patterns,
+        )
+    ):
+        return None
+    content = generation_manifest_content(
+        workspace=workspace,
+        project=project,
+        branch=branch,
+        commit=commit,
+        member_count=expected_count,
+        members_sha256=members_sha256,
+        source_tree_sha256=source_tree_sha256,
+        index_include_patterns=include_patterns,
+        index_exclude_patterns=exclude_patterns,
+        index_selection_policy_sha256=selection_digest,
+    )
+    if hashlib.sha256(content.encode("utf-8")).hexdigest() != stored_manifest_sha256:
+        return None
+    if payload.get("text", payload.get("_node_content")) != content:
+        return None
+    return {
+        "workspace": workspace,
+        "project": project,
+        "branch": branch,
+        "commit": commit,
+        "generation_manifest_sha256": stored_manifest_sha256,
     }
 
 

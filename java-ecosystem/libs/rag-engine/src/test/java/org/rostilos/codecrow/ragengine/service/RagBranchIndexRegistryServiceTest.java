@@ -16,6 +16,7 @@ import java.time.OffsetDateTime;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -270,5 +271,49 @@ class RagBranchIndexRegistryServiceTest {
         assertThat(operation.getStatus()).isEqualTo(RagIndexOperationStatus.RUNNING);
         verifyNoInteractions(branchIndexRepository);
         verify(operationRepository, never()).save(operation);
+    }
+
+    @Test
+    void cleanupClaimMakesExactGenerationUnavailableWithoutRefreshingIt() {
+        RagBranchIndex branchIndex = new RagBranchIndex(
+                project, "feature/expired", RagBranchIndexKind.TRANSIENT);
+        branchIndex.setId(10L);
+        branchIndex.setCleanupClaimToken("cleanup-owner");
+        when(branchIndexRepository.findByProjectIdAndBranchNameForUpdate(
+                42L, "feature/expired"))
+                .thenReturn(Optional.of(branchIndex));
+
+        assertThat(service.findAvailableGeneration(
+                42L, "feature/expired", "revision-100"))
+                .isEmpty();
+
+        verify(branchIndexRepository, never()).save(branchIndex);
+        verifyNoInteractions(generationRepository);
+    }
+
+    @Test
+    void cleanupClaimRejectsAConcurrentBuildRegistration() {
+        RagBranchIndex branchIndex = new RagBranchIndex(
+                project, "feature/expired", RagBranchIndexKind.TRANSIENT);
+        branchIndex.setId(10L);
+        branchIndex.setCleanupClaimToken("cleanup-owner");
+        when(operationRepository.findByProjectIdAndOperationKey(eq(42L), anyString()))
+                .thenReturn(Optional.empty());
+        when(branchIndexRepository.findByProjectIdAndBranchNameForUpdate(
+                42L, "feature/expired"))
+                .thenReturn(Optional.of(branchIndex));
+
+        assertThatThrownBy(() -> service.registerBuild(
+                project,
+                "feature/expired",
+                RagBranchIndexKind.TRANSIENT,
+                "revision-99",
+                "revision-100",
+                "representation"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("cleanup owns");
+
+        verify(branchIndexRepository, never()).save(any());
+        verifyNoInteractions(generationRepository);
     }
 }

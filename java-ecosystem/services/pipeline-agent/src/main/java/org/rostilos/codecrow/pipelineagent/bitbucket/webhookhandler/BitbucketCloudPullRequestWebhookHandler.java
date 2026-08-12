@@ -308,7 +308,8 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
             if (deleted) {
                 log.info("Cleaned up PR #{} RAG data for project {} on close/merge", prNumber, project.getId());
             } else {
-                log.warn("Failed to cleanup PR #{} RAG data for project {}", prNumber, project.getId());
+                log.info("PR #{} RAG cleanup did not complete for project {}; "
+                        + "the cleanup operation recorded the failure detail", prNumber, project.getId());
             }
         } catch (Exception e) {
             log.warn("Error cleaning up PR RAG data for project {}: {}", project.getId(), e.getMessage());

@@ -7,9 +7,10 @@ Covers: _slim_stage_results, _build_placeholders, _extract_documented_prs,
         BaseOrchestrator._simple_batch, filter_diff_for_files,
         get_file_content_from_enrichment, build_enrichment_lookup
 """
-import pytest
 import json
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from service.qa_documentation.qa_doc_orchestrator import QaDocOrchestrator
 from service.qa_documentation.base_orchestrator import (
@@ -85,6 +86,13 @@ class TestSimpleBatch:
         assert hasattr(item["file_info"], "path")
         assert item["file_info"].path == "a.py"
         assert item["priority"] == "MEDIUM"
+
+    def test_qa_orchestrator_has_no_rag_mutation_lifecycle(self):
+        orchestrator = QaDocOrchestrator(llm=MagicMock())
+
+        assert not hasattr(orchestrator, "rag_client")
+        assert not hasattr(orchestrator, "index_pr_files")
+        assert not hasattr(orchestrator, "cleanup_pr_files")
 
 
 # ── BaseOrchestrator.filter_diff_for_files ───────────────────────

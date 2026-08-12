@@ -20,6 +20,14 @@ from utils.error_sanitizer import sanitize_error_for_display, create_user_friend
 logger = logging.getLogger(__name__)
 
 
+def _rag_response_error(response: Any) -> Optional[str]:
+    if not isinstance(response, dict) or response.get("status") != "error":
+        return None
+    detail = response.get("error") or response.get("detail") or "unknown failure"
+    status_code = response.get("status_code")
+    return f"status={status_code} detail={detail}" if status_code else str(detail)
+
+
 class CommandService:
     """Service class for handling CodeCrow commands with AI integration."""
 
@@ -122,6 +130,7 @@ class CommandService:
 
                 result = self._normalize_summarize_result(result, supports_mermaid=False)
                 if "error" in result:
+                    logger.error("Summarize failed: %s", result["error"])
                     self._emit_event(event_callback, {"type": "error", "message": result["error"]})
                     return result
 
@@ -237,6 +246,7 @@ class CommandService:
 
                 result = self._normalize_ask_result(result)
                 if "error" in result:
+                    logger.error("Ask failed: %s", result["error"])
                     self._emit_event(event_callback, {"type": "error", "message": result["error"]})
                     return result
 
@@ -384,6 +394,19 @@ class CommandService:
                 top_k=5,
                 base_branch=request.get_rag_base_branch(),
             )
+
+            if rag_error := _rag_response_error(rag_response):
+                logger.warning(
+                    "Optional RAG context unavailable for summarize; "
+                    "continuing without it: %s",
+                    rag_error,
+                )
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "rag_skipped",
+                    "message": "Codebase context unavailable; summary generation continues",
+                })
+                return None
 
             if rag_response and rag_response.get("context"):
                 self._emit_event(event_callback, {
@@ -739,7 +762,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             if "error" not in result:
                 return result
 
-            logger.warning("Summarize streaming produced an empty final summary; retrying without output_schema")
+            logger.info("Summarize streaming produced an empty final summary; retrying without output_schema")
             self._emit_event(event_callback, {
                 "type": "status",
                 "state": "retrying",
@@ -756,7 +779,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             if "error" not in result:
                 return result
 
-            logger.warning("Summarize agent retry also produced an empty summary; trying direct LLM fallback")
+            logger.info("Summarize agent retry also produced an empty summary; trying direct LLM fallback")
             direct_response = await llm.ainvoke(
                 prompt
                 + "\n\nIf tool calls are unavailable, summarize from the context already provided. "
@@ -765,7 +788,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             return self._coerce_summarize_final_result(direct_response, supports_mermaid)
 
         except Exception as e:
-            logger.warning(f"Summarize streaming failed, retrying without output_schema: {e}", exc_info=True)
+            logger.info("Summarize streaming failed; retrying without output_schema: %s", e)
             self._emit_event(event_callback, {
                 "type": "status",
                 "state": "retrying",
@@ -789,7 +812,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
                 )
                 return self._coerce_summarize_final_result(direct_response, supports_mermaid)
             except Exception as retry_error:
-                logger.error(f"Summarize agent error: {retry_error}", exc_info=True)
+                logger.debug("Summarize retries exhausted: %s", retry_error, exc_info=True)
                 sanitized_msg = create_user_friendly_error(retry_error)
                 return {"error": sanitized_msg}
 
@@ -966,7 +989,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             if "error" not in result:
                 return result
 
-            logger.warning("Ask streaming produced an empty final answer; retrying without output_schema")
+            logger.info("Ask streaming produced an empty final answer; retrying without output_schema")
             self._emit_event(event_callback, {
                 "type": "status",
                 "state": "retrying",
@@ -983,7 +1006,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             if "error" not in result:
                 return result
 
-            logger.warning("Ask agent retry also produced an empty answer; trying direct LLM fallback")
+            logger.info("Ask agent retry also produced an empty answer; trying direct LLM fallback")
             direct_response = await llm.ainvoke(
                 prompt
                 + "\n\nIf tool calls are unavailable, answer from the context already provided. "
@@ -992,7 +1015,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             return self._coerce_ask_final_result(direct_response)
 
         except Exception as e:
-            logger.error(f"Ask agent error: {e}", exc_info=True)
+            logger.debug("Ask agent retries exhausted: %s", e, exc_info=True)
             sanitized_msg = create_user_friendly_error(e)
             return {"error": sanitized_msg}
 
@@ -1153,7 +1176,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             except json.JSONDecodeError:
                 pass
 
-        logger.warning(f"Failed to parse JSON from response: {response[:200]}...")
+        logger.debug("Failed to parse JSON from response: %s...", response[:200])
         return None
 
     def _extract_json_object(self, text: str) -> Optional[str]:

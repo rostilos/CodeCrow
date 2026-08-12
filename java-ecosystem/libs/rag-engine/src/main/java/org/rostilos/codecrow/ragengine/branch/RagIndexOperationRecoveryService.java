@@ -4,8 +4,8 @@ import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.core.model.analysis.RagIndexingStatus;
 import org.rostilos.codecrow.core.model.job.Job;
-import org.rostilos.codecrow.core.model.rag.RagIndexOperation;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
+import org.rostilos.codecrow.core.persistence.repository.rag.RagIndexOperationRepository;
 import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.ragengine.service.RagBranchIndexRegistryService;
 import org.rostilos.codecrow.ragengine.service.RagIndexTrackingService;
@@ -16,6 +16,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Terminates registry operations whose producer disappeared before publishing
@@ -35,6 +36,7 @@ public class RagIndexOperationRecoveryService {
     private final RagOperationsService ragOperationsService;
     private final AnalysisLockService lockService;
     private final long staleAfterMinutes;
+    private final AtomicBoolean recoveryDegraded = new AtomicBoolean(false);
 
     public RagIndexOperationRecoveryService(
             RagBranchIndexRegistryService registryService,
@@ -59,112 +61,233 @@ public class RagIndexOperationRecoveryService {
             initialDelayString = "${codecrow.rag.generation.recovery-initial-delay-ms:60000}")
     public void failAbandonedOperations() {
         OffsetDateTime cutoff = OffsetDateTime.now().minusMinutes(staleAfterMinutes);
-        for (var operation : registryService.findRecoverableOperations(cutoff)) {
-            String diagnostic = "Exact RAG generation producer stopped heartbeating for "
-                    + staleAfterMinutes + " minutes; the previous active generation was preserved";
-            try {
-                if (!registryService.failIfAbandoned(operation.getId(), cutoff, diagnostic)) {
+        boolean passDegraded = false;
+        try {
+            for (var operation : registryService.findRecoverableOperations(cutoff)) {
+                String diagnostic = "Exact RAG generation producer stopped heartbeating for "
+                        + staleAfterMinutes + " minutes; the previous active generation was preserved";
+                try {
+                    if (!registryService.failIfAbandoned(
+                            operation.getOperationId(), cutoff, diagnostic)) {
+                        continue;
+                    }
+                    log.warn("Failed abandoned RAG generation operation {} for branch {}",
+                            operation.getOperationId(), operation.getBranchName());
+                } catch (Exception failure) {
+                    passDegraded = true;
+                    reportDegraded(
+                                    "Could not terminalize abandoned RAG generation operation "
+                                    + operation.getOperationId(),
+                            failure);
                     continue;
                 }
-                log.warn("Failed abandoned RAG generation operation {} for branch {}",
-                        operation.getId(), operation.getBranchName());
-            } catch (Exception failure) {
-                log.error("Could not terminalize abandoned RAG generation operation {}",
-                        operation.getId(), failure);
-                continue;
+
+                if (!recoverProjections(operation, diagnostic)) {
+                    passDegraded = true;
+                }
             }
 
-            recoverProjections(operation, diagnostic);
+            for (var operation : registryService.findFailedOperationsWithActiveProjections()) {
+                String diagnostic = operation.getErrorMessage() != null
+                        && !operation.getErrorMessage().isBlank()
+                        ? operation.getErrorMessage()
+                        : "RAG generation failed before its durable projections were terminalized";
+                if (!recoverProjections(operation, diagnostic)) {
+                    passDegraded = true;
+                }
+            }
+
+            for (var operation : registryService.findSucceededOperationsWithActiveProjections()) {
+                if (!recoverPublishedProjections(operation)) {
+                    passDegraded = true;
+                }
+            }
+        } catch (Exception selectionFailure) {
+            passDegraded = true;
+            reportDegraded(
+                    "Could not scan exact RAG operation recovery state",
+                    selectionFailure);
         }
 
-        for (var operation : registryService.findFailedOperationsWithActiveProjections()) {
-            String diagnostic = operation.getErrorMessage() != null
-                    && !operation.getErrorMessage().isBlank()
-                    ? operation.getErrorMessage()
-                    : "RAG generation failed before its durable projections were terminalized";
-            recoverProjections(operation, diagnostic);
+        if (!passDegraded && recoveryDegraded.compareAndSet(true, false)) {
+            log.info("Exact RAG operation recovery scan recovered");
         }
     }
 
-    private void recoverProjections(
-            RagIndexOperation operation,
+    private boolean recoverPublishedProjections(
+            RagIndexOperationRepository.SucceededOperationProjection operation) {
+        boolean recovered = true;
+        Long projectId = operation.getProjectId();
+        String branchName = operation.getBranchName();
+        Long jobId = operation.getJobId();
+        try {
+            var project = projectRepository.findByIdWithFullDetails(projectId)
+                    .orElse(null);
+            if (Boolean.TRUE.equals(operation.getActiveGeneration())
+                    && project != null
+                    && branchName.equals(ragOperationsService.getBaseBranch(project))) {
+                trackingService.reconcilePublishedGeneration(
+                        project,
+                        branchName,
+                        operation.getToRevision(),
+                        operation.getFileCount(),
+                        operation.getChunkCount(),
+                        jobId);
+            }
+        } catch (Exception failure) {
+            recovered = false;
+            reportDegraded(
+                    "Could not reconcile published RAG project status: project="
+                            + projectId + ", branch=" + branchName,
+                    failure);
+        }
+
+        if (jobId != null) {
+            try {
+                Job job = jobService.findById(jobId).orElse(null);
+                if (job != null && !job.isTerminal()) {
+                    jobService.completeJob(job);
+                }
+            } catch (Exception failure) {
+                recovered = false;
+                reportDegraded(
+                        "Could not complete durable job " + jobId
+                                + " for published RAG generation",
+                        failure);
+            }
+        }
+
+        return releasePublishedLock(operation) && recovered;
+    }
+
+    private boolean releasePublishedLock(
+            RagIndexOperationRepository.SucceededOperationProjection operation) {
+        String lockKey = operation.getAnalysisLockKey();
+        if (lockKey == null || lockKey.isBlank()) {
+            return true;
+        }
+        try {
+            lockService.releaseLock(lockKey);
+            log.info(
+                    "Released completed RAG indexing lock during projection recovery: "
+                            + "project={}, branch={}, commit={}",
+                    operation.getProjectId(), operation.getBranchName(),
+                    operation.getToRevision());
+            return true;
+        } catch (Exception failure) {
+            reportDegraded(
+                    "Could not release completed RAG indexing lock: project="
+                            + operation.getProjectId() + ", branch="
+                            + operation.getBranchName(),
+                    failure);
+            return false;
+        }
+    }
+
+    private boolean recoverProjections(
+            RagIndexOperationRepository.RecoveryOperationProjection operation,
             String diagnostic) {
-        failDurableJob(operation.getJobId(), diagnostic);
-        terminalizePrimaryStatus(operation, diagnostic);
-        releaseAbandonedLock(operation);
+        boolean jobRecovered = failDurableJob(operation.getJobId(), diagnostic);
+        boolean statusRecovered = terminalizePrimaryStatus(operation, diagnostic);
+        boolean lockRecovered = releaseAbandonedLock(operation);
+        return jobRecovered && statusRecovered && lockRecovered;
     }
 
-    private void failDurableJob(Long jobId, String diagnostic) {
+    private boolean failDurableJob(Long jobId, String diagnostic) {
         if (jobId == null) {
-            return;
+            return true;
         }
         try {
             Job job = jobService.findById(jobId).orElse(null);
             if (job != null && !job.isTerminal()) {
                 jobService.failJob(job, diagnostic);
             }
+            return true;
         } catch (Exception failure) {
-            log.error("Could not fail durable RAG job {} after producer abandonment",
-                    jobId, failure);
+            reportDegraded(
+                    "Could not fail durable RAG job " + jobId
+                            + " after producer abandonment",
+                    failure);
+            return false;
         }
     }
 
-    private void terminalizePrimaryStatus(RagIndexOperation operation, String diagnostic) {
-        Long projectId = operation.getProject().getId();
+    private boolean terminalizePrimaryStatus(
+            RagIndexOperationRepository.RecoveryOperationProjection operation,
+            String diagnostic) {
+        Long projectId = operation.getProjectId();
         String branchName = operation.getBranchName();
+        Long jobId = operation.getJobId();
         try {
             var project = projectRepository.findByIdWithFullDetails(projectId)
                     .orElse(null);
             if (project == null
                     || !branchName.equals(ragOperationsService.getBaseBranch(project))) {
-                return;
+                return true;
             }
             var status = trackingService.getIndexStatus(project).orElse(null);
             if (status == null) {
-                return;
+                return true;
             }
-            if (status.getActiveJobId() != null
-                    && !status.getActiveJobId().equals(operation.getJobId())) {
+            if (status.getActiveJobId() == null
+                    || !status.getActiveJobId().equals(jobId)) {
                 log.info(
-                        "Preserving RAG status owned by newer job {} while recovering abandoned job {}: "
+                        "Preserving RAG status owned by job {} while recovering abandoned job {}: "
                                 + "project={}, branch={}",
-                        status.getActiveJobId(), operation.getJobId(), projectId, branchName);
-                return;
+                        status.getActiveJobId(), jobId, projectId, branchName);
+                return true;
             }
             if (status.getStatus() == RagIndexingStatus.INDEXING) {
-                trackingService.markIndexingFailed(project, diagnostic, operation.getJobId());
+                trackingService.markIndexingFailed(project, diagnostic, jobId);
             } else if (status.getStatus() == RagIndexingStatus.UPDATING) {
                 trackingService.markIncrementalUpdateFailed(
-                        project, diagnostic, operation.getJobId());
+                        project, diagnostic, jobId);
             }
+            return true;
         } catch (Exception failure) {
-            log.error(
+            reportDegraded(
                     "Could not terminalize RAG project status after producer abandonment: "
-                            + "project={}, branch={}",
-                    projectId, branchName, failure);
+                            + "project=" + projectId + ", branch=" + branchName,
+                    failure);
+            return false;
         }
     }
 
-    private void releaseAbandonedLock(RagIndexOperation operation) {
-        Long projectId = operation.getProject().getId();
+    private boolean releaseAbandonedLock(
+            RagIndexOperationRepository.RecoveryOperationProjection operation) {
+        Long projectId = operation.getProjectId();
         String branchName = operation.getBranchName();
         String lockKey = operation.getAnalysisLockKey();
         if (lockKey == null || lockKey.isBlank()) {
-            log.warn(
+            log.info(
                     "Cannot release abandoned RAG lock without its exact owner key; "
                             + "leaving it to expire: project={}, branch={}, commit={}",
                     projectId, branchName, operation.getToRevision());
-            return;
+            return true;
         }
         try {
             lockService.releaseLock(lockKey);
-            log.warn(
+            log.info(
                     "Released abandoned RAG indexing lock for project={}, branch={}, commit={}",
                     projectId, branchName, operation.getToRevision());
+            return true;
         } catch (Exception failure) {
-            log.error(
-                    "Could not release abandoned RAG indexing lock: project={}, branch={}",
-                    projectId, branchName, failure);
+            reportDegraded(
+                    "Could not release abandoned RAG indexing lock: project="
+                            + projectId + ", branch=" + branchName,
+                    failure);
+            return false;
+        }
+    }
+
+    private void reportDegraded(String operation, Exception failure) {
+        String detail = failure.getMessage() != null
+                ? failure.getMessage()
+                : failure.getClass().getSimpleName();
+        if (recoveryDegraded.compareAndSet(false, true)) {
+            log.warn("Exact RAG operation recovery degraded: {}: {}", operation, detail);
+        } else {
+            log.debug("Exact RAG operation recovery remains degraded: {}: {}", operation, detail);
         }
     }
 }

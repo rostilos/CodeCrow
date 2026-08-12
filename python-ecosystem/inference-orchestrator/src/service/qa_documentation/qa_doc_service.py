@@ -19,7 +19,6 @@ from dotenv import load_dotenv
 from llm.llm_factory import LLMFactory
 from model.enrichment import PrEnrichmentDataDto
 from service.qa_documentation.qa_doc_orchestrator import QaDocOrchestrator
-from service.rag.rag_client import RagClient
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +27,8 @@ class QaDocumentationService:
     """
     Generates QA-oriented documentation for completed PR analyses.
 
-    Creates the LLM and RAG client, then delegates to QaDocOrchestrator
-    which runs the 3-stage pipeline or single-pass depending on PR size.
+    Creates the LLM, then delegates to QaDocOrchestrator which runs the
+    3-stage pipeline or single-pass depending on PR size.
     """
 
     def __init__(self):
@@ -37,7 +36,6 @@ class QaDocumentationService:
         self._ai_provider = os.environ.get("QA_DOC_AI_PROVIDER", os.environ.get("AI_PROVIDER", "openrouter"))
         self._ai_model = os.environ.get("QA_DOC_AI_MODEL", os.environ.get("AI_MODEL", "google/gemini-2.0-flash"))
         self._ai_api_key = os.environ.get("QA_DOC_AI_API_KEY", os.environ.get("AI_API_KEY", ""))
-        self._rag_pipeline_url = os.environ.get("RAG_PIPELINE_URL", "http://rag-pipeline:8020")
 
     # ------------------------------------------------------------------
     # Public API
@@ -88,12 +86,7 @@ class QaDocumentationService:
             max_tokens=16_384,  # QA docs need room for structured JSON output
         )
 
-        rag_client = self._create_rag_client()
-
-        orchestrator = QaDocOrchestrator(
-            llm=llm,
-            rag_client=rag_client,
-        )
+        orchestrator = QaDocOrchestrator(llm=llm)
 
         result = await orchestrator.run(
             project_name=project_name,
@@ -143,12 +136,3 @@ class QaDocumentationService:
             ai_base_url=ai_base_url,
             max_tokens=max_tokens,
         )
-
-    def _create_rag_client(self) -> Optional[RagClient]:
-        """Create RAG client if the RAG pipeline URL is configured."""
-        try:
-            if self._rag_pipeline_url:
-                return RagClient(base_url=self._rag_pipeline_url)
-        except Exception as e:
-            logger.warning("Failed to create RAG client (non-critical): %s", e)
-        return None

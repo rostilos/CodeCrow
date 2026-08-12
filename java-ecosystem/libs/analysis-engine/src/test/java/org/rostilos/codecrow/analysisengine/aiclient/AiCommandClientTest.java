@@ -10,6 +10,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.queue.RedisQueueService;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -36,6 +37,28 @@ class AiCommandClientTest {
         void setUp() {
                 objectMapper = new ObjectMapper();
                 client = new AiCommandClient(queueService, objectMapper);
+                lenient().when(queueService.hasKey(AiCommandClient.CONSUMER_HEARTBEAT_KEY))
+                                .thenReturn(true);
+        }
+
+        @Test
+        @DisplayName("should expose an unambiguous Spring injection constructor")
+        void shouldConstructThroughSpringContext() {
+                try (AnnotationConfigApplicationContext context =
+                                new AnnotationConfigApplicationContext()) {
+                        context.registerBean(
+                                        RedisQueueService.class,
+                                        () -> queueService);
+                        context.registerBean(
+                                        ObjectMapper.class,
+                                        () -> objectMapper);
+                        context.register(AiCommandClient.class);
+
+                        context.refresh();
+
+                        assertThat(context.getBean(AiCommandClient.class))
+                                        .isNotNull();
+                }
         }
 
         private AiCommandClient.SummarizeRequest createSummarizeRequest() {
@@ -84,6 +107,8 @@ class AiCommandClientTest {
                         assertThat(result.diagramType()).isEqualTo("MERMAID");
 
                         verify(queueService).leftPush(eq("codecrow:queue:commands"), anyString());
+                        verify(queueService).removeFromList(
+                                        eq("codecrow:queue:commands"), anyString());
                         verify(queueService).setExpiry(anyString(), anyLong());
                         verify(queueService).deleteKey(anyString());
                 }
@@ -124,6 +149,57 @@ class AiCommandClientTest {
                         assertThat(result.diagram()).isEmpty();
                         assertThat(result.diagramType()).isEqualTo("MERMAID");
                 }
+        }
+
+        @Test
+        @DisplayName("should reject commands before enqueue when no consumer is alive")
+        void shouldRejectWhenConsumerIsUnavailable() {
+                when(queueService.hasKey(AiCommandClient.CONSUMER_HEARTBEAT_KEY))
+                                .thenReturn(false);
+
+                assertThatThrownBy(() -> client.summarize(createSummarizeRequest(), null))
+                                .isInstanceOf(IOException.class)
+                                .hasMessageContaining("no live command queue consumer");
+
+                verify(queueService, never()).leftPush(anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("should remove an unadmitted command when the consumer disappears")
+        void shouldRemovePendingPayloadWhenConsumerDisappears() {
+                AiCommandClient supervisedClient = new AiCommandClient(
+                                queueService, objectMapper, 1_000L, 1_000L);
+                when(queueService.hasKey(AiCommandClient.CONSUMER_HEARTBEAT_KEY))
+                                .thenReturn(true, true, false);
+                when(queueService.rightPop(anyString(), anyLong())).thenReturn(null);
+
+                assertThatThrownBy(() ->
+                                supervisedClient.summarize(createSummarizeRequest(), null))
+                                .isInstanceOf(IOException.class)
+                                .hasMessageContaining("became unavailable before the command job was admitted");
+
+                verify(queueService).removeFromList(
+                                eq("codecrow:queue:commands"), anyString());
+        }
+
+        @Test
+        @DisplayName("should remove a command that exceeds bounded admission wait")
+        void shouldRemovePayloadWhenAdmissionTimesOut() {
+                AiCommandClient supervisedClient = new AiCommandClient(
+                                queueService, objectMapper, 1_000L, 10L);
+                when(queueService.rightPop(anyString(), anyLong()))
+                                .thenAnswer(invocation -> {
+                                        Thread.sleep(12L);
+                                        return null;
+                                });
+
+                assertThatThrownBy(() ->
+                                supervisedClient.summarize(createSummarizeRequest(), null))
+                                .isInstanceOf(IOException.class)
+                                .hasMessageContaining("was not admitted by Inference Orchestrator");
+
+                verify(queueService).removeFromList(
+                                eq("codecrow:queue:commands"), anyString());
         }
 
         @Nested

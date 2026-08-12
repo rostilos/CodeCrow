@@ -287,12 +287,11 @@ class ProjectMutationCoordinator:
     def is_operation_active(self, token: str) -> bool:
         if not self.enabled or self._client is None:
             return False
-        try:
-            return bool(self._client.exists(f"codecrow:rag:operation:{token}"))
-        except Exception:
-            # Cleanup is auxiliary and must fail open by retaining collections.
-            logger.warning("Could not verify pending-collection operation %s", token)
-            return True
+        # Cleanup is auxiliary and must retain uncertain collections. Let an
+        # unavailable ownership store escape to the lifecycle janitor instead
+        # of logging once per candidate; that owner stops the pass and emits
+        # one transition-bounded outage/recovery diagnostic.
+        return bool(self._client.exists(f"codecrow:rag:operation:{token}"))
 
     def close(self) -> None:
         if self._client is not None:
@@ -322,6 +321,7 @@ class RedisPermitPool:
             health_check_interval=30,
         )
         self._disabled_until = 0.0
+        self._distributed_unavailable = False
         self._state_lock = threading.Lock()
         self._key = "codecrow:rag:openrouter:index:permits"
 
@@ -337,8 +337,8 @@ class RedisPermitPool:
             if distributed:
                 try:
                     self._client.zrem(self._key, token)
-                except Exception:
-                    logger.warning("Could not release distributed OpenRouter permit")
+                except Exception as exception:
+                    self._record_distributed_failure(exception)
             self._local.release()
 
     def _acquire_distributed(self, token: str) -> bool:
@@ -346,6 +346,7 @@ class RedisPermitPool:
             if time.monotonic() < self._disabled_until:
                 return False
         deadline = time.monotonic() + self.acquire_timeout_seconds
+        wait_reported = False
         while True:
             now = time.time()
             try:
@@ -360,23 +361,40 @@ class RedisPermitPool:
                     self.permit_seconds,
                 )
                 if acquired:
+                    self._record_distributed_recovery()
                     return True
             except Exception as exception:
                 with self._state_lock:
                     self._disabled_until = time.monotonic() + 60
-                logger.warning(
-                    "Distributed OpenRouter capacity limit unavailable; "
-                    "using process-local cap for 60s: %s",
-                    exception,
-                )
+                self._record_distributed_failure(exception)
                 return False
             if time.monotonic() >= deadline:
-                logger.warning(
-                    "Still waiting for distributed OpenRouter capacity after %.1fs",
+                log = logger.info if not wait_reported else logger.debug
+                log(
+                    "Waiting for distributed OpenRouter capacity after %.1fs",
                     self.acquire_timeout_seconds,
                 )
+                wait_reported = True
                 deadline = time.monotonic() + self.acquire_timeout_seconds
             time.sleep(0.05)
+
+    def _record_distributed_failure(self, exception: BaseException) -> None:
+        with self._state_lock:
+            first_failure = not self._distributed_unavailable
+            self._distributed_unavailable = True
+        log = logger.warning if first_failure else logger.debug
+        log(
+            "Distributed OpenRouter capacity limit unavailable; using "
+            "process-local cap: %s",
+            exception,
+        )
+
+    def _record_distributed_recovery(self) -> None:
+        with self._state_lock:
+            recovered = self._distributed_unavailable
+            self._distributed_unavailable = False
+        if recovered:
+            logger.info("Distributed OpenRouter capacity limit recovered")
 
     def close(self) -> None:
         self._client.close()

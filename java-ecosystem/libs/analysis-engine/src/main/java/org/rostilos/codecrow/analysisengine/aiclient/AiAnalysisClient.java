@@ -12,11 +12,13 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.rostilos.codecrow.queue.RedisQueueService;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus;
 import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexGenerationRepository;
+import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,6 +41,9 @@ public class AiAnalysisClient {
 
     @Autowired(required = false)
     private RagBranchIndexGenerationRepository branchGenerationRepository;
+
+    @Autowired(required = false)
+    private RagBranchIndexRepository branchIndexRepository;
 
     static final String INACTIVITY_TIMEOUT_MINUTES_KEY =
             "ANALYSIS_QUEUE_INACTIVITY_TIMEOUT_MINUTES";
@@ -353,11 +358,16 @@ public class AiAnalysisClient {
         payload.put("previousCommitHash", request.getPreviousCommitHash());
         payload.put("currentCommitHash", request.getCurrentCommitHash());
         payload.put("baseCommitHash", request.getBaseCommitHash());
-        if (branchGenerationRepository != null
+        if (request.getRagEnabled()
+                && branchGenerationRepository != null
+                && branchIndexRepository != null
                 && request.getProjectId() != null
                 && request.getTargetBranchName() != null
                 && request.getBaseCommitHash() != null) {
-            branchGenerationRepository.findAvailableExactGeneration(
+            int accessed = branchIndexRepository.markAccessedIfUnclaimed(
+                    request.getProjectId(), request.getTargetBranchName(), OffsetDateTime.now());
+            if (accessed > 0) {
+                branchGenerationRepository.findAvailableExactGeneration(
                             request.getProjectId(),
                             request.getTargetBranchName(),
                             request.getBaseCommitHash(),
@@ -371,6 +381,7 @@ public class AiAnalysisClient {
                         payload.put("ragBaseGenerationManifestSha256",
                                 generation.getManifestDigest());
                     });
+            }
         }
         payload.put("previousCodeAnalysisIssues", request.getPreviousCodeAnalysisIssues());
         payload.put("reconciliationFileContents", request.getReconciliationFileContents());

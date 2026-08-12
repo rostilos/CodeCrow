@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rostilos.codecrow.queue.RedisQueueService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -24,10 +25,35 @@ public class AiCommandClient {
     private final RedisQueueService queueService;
     private final ObjectMapper objectMapper;
     private static final int COMMAND_TIMEOUT_MINUTES = 30;
+    static final String CONSUMER_HEARTBEAT_KEY =
+            "codecrow:commands:consumer:heartbeat";
+    private static final long DEFAULT_ADMISSION_TIMEOUT_MINUTES = 5L;
+    private static final String ADMISSION_TIMEOUT_MINUTES_KEY =
+            "COMMAND_QUEUE_ADMISSION_TIMEOUT_MINUTES";
+    private final long commandTimeoutMillis;
+    private final long admissionTimeoutMillis;
 
+    @Autowired
     public AiCommandClient(RedisQueueService queueService, ObjectMapper objectMapper) {
+        this(
+                queueService,
+                objectMapper,
+                TimeUnit.MINUTES.toMillis(COMMAND_TIMEOUT_MINUTES),
+                resolveAdmissionTimeoutMillis());
+    }
+
+    AiCommandClient(
+            RedisQueueService queueService,
+            ObjectMapper objectMapper,
+            long commandTimeoutMillis,
+            long admissionTimeoutMillis) {
         this.queueService = queueService;
         this.objectMapper = objectMapper;
+        if (commandTimeoutMillis <= 0 || admissionTimeoutMillis <= 0) {
+            throw new IllegalArgumentException("Command queue timeouts must be positive");
+        }
+        this.commandTimeoutMillis = commandTimeoutMillis;
+        this.admissionTimeoutMillis = admissionTimeoutMillis;
     }
 
     /**
@@ -85,24 +111,44 @@ public class AiCommandClient {
             Consumer<Map<String, Object>> eventHandler) throws IOException {
         String eventQueueKey = "codecrow:analysis:events:" + jobId;
         String jobsQueueKey = "codecrow:queue:commands";
+        String jsonPayload = null;
 
         try {
+            if (!queueService.hasKey(CONSUMER_HEARTBEAT_KEY)) {
+                throw new IOException(
+                        "Inference Orchestrator is unavailable: no live command queue consumer");
+            }
             Map<String, Object> jobPayload = Map.of(
                     "job_id", jobId,
                     "command_type", commandType,
                     "request", request);
 
-            String jsonPayload = objectMapper.writeValueAsString(jobPayload);
+            jsonPayload = objectMapper.writeValueAsString(jobPayload);
             queueService.leftPush(jobsQueueKey, jsonPayload);
             queueService.setExpiry(eventQueueKey, COMMAND_TIMEOUT_MINUTES + 1);
 
             long startTime = System.currentTimeMillis();
-            long timeoutMillis = TimeUnit.MINUTES.toMillis(COMMAND_TIMEOUT_MINUTES);
+            boolean workerAcknowledged = false;
 
             while (true) {
-                if (System.currentTimeMillis() - startTime > timeoutMillis) {
+                long now = System.currentTimeMillis();
+                if (!workerAcknowledged) {
+                    if (!queueService.hasKey(CONSUMER_HEARTBEAT_KEY)) {
+                        throw new IOException(
+                                "Inference Orchestrator became unavailable before "
+                                        + "the command job was admitted");
+                    }
+                    if (now - startTime > admissionTimeoutMillis) {
+                        throw new IOException(
+                                "AI command was not admitted by Inference Orchestrator within "
+                                        + TimeUnit.MILLISECONDS.toSeconds(admissionTimeoutMillis)
+                                        + " seconds");
+                    }
+                }
+                if (now - startTime > commandTimeoutMillis) {
                     throw new IOException(
-                            "AI command timed out after " + COMMAND_TIMEOUT_MINUTES + " minutes for Job: " + jobId);
+                            "AI command timed out after " + commandTimeoutMillis
+                                    + "ms for Job: " + jobId);
                 }
 
                 String eventJson = queueService.rightPop(eventQueueKey, 5);
@@ -110,6 +156,7 @@ public class AiCommandClient {
                 if (eventJson == null) {
                     continue; // Timeout on rightPop, continue to check overall timeout
                 }
+                workerAcknowledged = true;
 
                 try {
                     Map<String, Object> event = objectMapper.readValue(eventJson, Map.class);
@@ -150,10 +197,39 @@ public class AiCommandClient {
             log.error("Failed to communicate with AI async queue", e);
             throw new IOException("AI queue communication failed: " + e.getMessage(), e);
         } finally {
+            if (jsonPayload != null) {
+                try {
+                    queueService.removeFromList(jobsQueueKey, jsonPayload);
+                } catch (Exception cleanupError) {
+                    log.warn("Failed to remove command job {} from pending queue: {}",
+                            jobId, cleanupError.getMessage());
+                }
+            }
             try {
                 queueService.deleteKey(eventQueueKey);
             } catch (Exception ignored) {
             }
+        }
+    }
+
+    private static long resolveAdmissionTimeoutMillis() {
+        String configured = System.getProperty(ADMISSION_TIMEOUT_MINUTES_KEY);
+        if (configured == null || configured.isBlank()) {
+            configured = System.getenv(ADMISSION_TIMEOUT_MINUTES_KEY);
+        }
+        if (configured == null || configured.isBlank()) {
+            return TimeUnit.MINUTES.toMillis(DEFAULT_ADMISSION_TIMEOUT_MINUTES);
+        }
+        try {
+            long minutes = Long.parseLong(configured.trim());
+            if (minutes <= 0) {
+                throw new IllegalArgumentException(
+                        ADMISSION_TIMEOUT_MINUTES_KEY + " must be a positive integer");
+            }
+            return TimeUnit.MINUTES.toMillis(minutes);
+        } catch (NumberFormatException invalid) {
+            throw new IllegalArgumentException(
+                    ADMISSION_TIMEOUT_MINUTES_KEY + " must be a positive integer", invalid);
         }
     }
 

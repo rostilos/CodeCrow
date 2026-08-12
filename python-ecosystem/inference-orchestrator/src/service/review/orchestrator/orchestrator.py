@@ -61,7 +61,6 @@ from service.review.orchestrator.stages import (
     execute_stage_3_aggregation,
     _emit_status,
     _emit_progress,
-    _emit_error,
 )
 from service.review.plugin_context import (
     apply_effective_project_capabilities,
@@ -167,6 +166,23 @@ def _resolve_enrichment_content(
 
 INTERNAL_PR_INDEX_ENABLED = _env_bool("REVIEW_INTERNAL_PR_INDEX_ENABLED", True)
 VERIFICATION_ENABLED = _env_bool("REVIEW_VERIFICATION_ENABLED", True)
+
+_REQUEST_RAG_BINDING_FIELDS = (
+    "ragCollectionTarget",
+    "ragBaseGenerationManifestSha256",
+    "ragPrGenerationFingerprint",
+    "ragPrOverlayGenerationManifestSha256",
+    "ragBasePluginFingerprint",
+    "ragBasePluginDescriptorFingerprint",
+    "ragBasePluginImplementationFingerprint",
+    "ragBaseIndexRepresentationFingerprint",
+)
+
+
+def _clear_request_rag_bindings(request: ReviewRequestDto) -> None:
+    """Remove host-provided RAG bindings when the project disables RAG."""
+    for field_name in _REQUEST_RAG_BINDING_FIELDS:
+        setattr(request, field_name, None)
 
 
 def _review_log_id(request: ReviewRequestDto) -> str:
@@ -318,7 +334,11 @@ class MultiStageReviewOrchestrator:
         as a complete repository artifact.
         """
         self._repository_review_groups = ()
+        self._pr_indexed = False
+        request.ragPrGenerationFingerprint = None
+        request.ragPrOverlayGenerationManifestSha256 = None
         if not request.ragEnabled:
+            _clear_request_rag_bindings(request)
             logger.info("PR file indexing skipped because project RAG is disabled")
             return
         if not INTERNAL_PR_INDEX_ENABLED:
@@ -453,16 +473,21 @@ class MultiStageReviewOrchestrator:
                     request,
                     result.get("effective_project_capabilities"),
                 )
-                request.ragBaseGenerationManifestSha256 = (
+                base_generation_manifest = (
                     result.get("base_generation_manifest_sha256")
                     or request.ragBaseGenerationManifestSha256
                 )
-                request.ragPrGenerationFingerprint = result.get(
+                pr_generation_fingerprint = result.get(
                     "generation_fingerprint"
                 )
-                request.ragPrOverlayGenerationManifestSha256 = result.get(
+                overlay_generation_manifest = result.get(
                     "overlay_generation_manifest_sha256"
                 )
+                request.ragBaseGenerationManifestSha256 = (
+                    base_generation_manifest
+                )
+                request.ragPrGenerationFingerprint = None
+                request.ragPrOverlayGenerationManifestSha256 = None
                 request.ragBasePluginFingerprint = (
                     result.get("plugin_fingerprint")
                     or request.ragBasePluginFingerprint
@@ -479,7 +504,6 @@ class MultiStageReviewOrchestrator:
                     result.get("index_representation_fingerprint")
                     or request.ragBaseIndexRepresentationFingerprint
                 )
-                self._pr_indexed = True
                 self._repository_review_groups = tuple(
                     tuple(
                         path for path in group
@@ -488,21 +512,51 @@ class MultiStageReviewOrchestrator:
                     for group in (result.get("review_groups") or ())
                     if isinstance(group, (list, tuple))
                 )
-                logger.info(
-                    "%s PR #%s overlay: %s chunks, %s partial files, "
-                    "%s repository review groups",
-                    "Reused" if result.get("status") == "reused" else "Indexed",
-                    pr_number,
-                    result.get("chunks_indexed", 0),
-                    len(result.get("partial_files") or ()),
-                    len(self._repository_review_groups),
+                complete_overlay_binding = all(
+                    isinstance(value, str) and bool(value.strip())
+                    for value in (
+                        identity.head_revision,
+                        identity.base_revision,
+                        request.ragCollectionTarget,
+                        base_generation_manifest,
+                        pr_generation_fingerprint,
+                        overlay_generation_manifest,
+                    )
                 )
+                if complete_overlay_binding:
+                    request.ragPrGenerationFingerprint = (
+                        pr_generation_fingerprint
+                    )
+                    request.ragPrOverlayGenerationManifestSha256 = (
+                        overlay_generation_manifest
+                    )
+                    self._pr_indexed = True
+                    logger.info(
+                        "%s PR #%s overlay: %s chunks, %s partial files, "
+                        "%s repository review groups",
+                        "Reused" if result.get("status") == "reused" else "Indexed",
+                        pr_number,
+                        result.get("chunks_indexed", 0),
+                        len(result.get("partial_files") or ()),
+                        len(self._repository_review_groups),
+                    )
+                else:
+                    self._pr_indexed = False
+                    self._repository_review_groups = ()
+                    logger.info(
+                        "PR #%s overlay was prepared without a complete generation "
+                        "lease; continuing with target-branch and local evidence",
+                        pr_number,
+                    )
             elif result.get("status") == "skipped":
                 logger.info("PR indexing skipped: %s", result)
             else:
                 status_code = result.get("status_code")
                 detail = result.get("error") or result
-                logger.warning(
+                log_unavailable = (
+                    logger.info if status_code == 409 else logger.warning
+                )
+                log_unavailable(
                     "PR context indexing unavailable%s; continuing review without "
                     "the PR overlay: %s",
                     f" (HTTP {status_code})" if status_code else "",
@@ -529,13 +583,20 @@ class MultiStageReviewOrchestrator:
             return
         
         try:
-            await self.rag_client.delete_pr_files(
+            deleted = await self.rag_client.delete_pr_files(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
                 pr_number=self._pr_number,
                 collection_target=request.ragCollectionTarget,
             )
-            logger.info(f"Cleaned up PR #{self._pr_number} indexed data")
+            if deleted:
+                logger.info("Cleaned up PR #%s indexed data", self._pr_number)
+            else:
+                logger.info(
+                    "PR #%s indexed-data cleanup did not complete; the RAG "
+                    "client recorded the failure detail",
+                    self._pr_number,
+                )
         except Exception as e:
             logger.warning(f"Failed to cleanup PR files: {e}")
         finally:
@@ -889,6 +950,11 @@ class MultiStageReviewOrchestrator:
         Main entry point for the multi-stage review.
         Supports both FULL (initial review) and INCREMENTAL (follow-up review) modes.
         """
+        request_rag_client = self.rag_client if request.ragEnabled else None
+        request_rag_context = rag_context if request.ragEnabled else None
+        if not request.ragEnabled:
+            _clear_request_rag_bindings(request)
+
         snapshot_identity = validate_review_snapshot_identity(request)
         validate_acquired_diff_manifest(
             request.changedFiles or (),
@@ -1052,10 +1118,10 @@ class MultiStageReviewOrchestrator:
             )
             _emit_progress(self.event_callback, 10, stage_0_message)
 
-            if not inference_profile.fast_check_enabled and self.rag_client:
+            if not inference_profile.fast_check_enabled and request_rag_client:
                 stage_2_context_task = asyncio.create_task(
                     prefetch_stage_2_cross_module_context(
-                        self.rag_client,
+                        request_rag_client,
                         request,
                         processed_diff=processed_diff,
                         visible_evidence_by_id=stage_2_visible_evidence_by_id,
@@ -1072,8 +1138,8 @@ class MultiStageReviewOrchestrator:
                 with_stage_output_cap(self.llm, "stage_1", inference_profile),
                 request, 
                 review_plan, 
-                self.rag_client,
-                rag_context, 
+                request_rag_client,
+                request_rag_context,
                 processed_diff, 
                 is_incremental,
                 self.max_parallel_stage_1,
@@ -1169,7 +1235,7 @@ class MultiStageReviewOrchestrator:
                     file_issues,
                     review_plan,
                     processed_diff=processed_diff,
-                    rag_client=self.rag_client,
+                    rag_client=request_rag_client,
                     fallback_llm=self.llm,
                     prefetched_cross_module_context=prefetched_cross_module_context,
                     visible_evidence_by_id=stage_2_visible_evidence_by_id,
@@ -1489,8 +1555,14 @@ class MultiStageReviewOrchestrator:
             return response
 
         except Exception as e:
-            logger.error(f"Multi-stage review failed: {e}", exc_info=True)
-            _emit_error(self.event_callback, str(e))
+            # ReviewService owns the single terminal diagnostic and error
+            # event. Logging/emitting here as well duplicated the same failure
+            # at both the orchestration and transport boundaries.
+            logger.debug(
+                "Multi-stage review failed; propagating to ReviewService: %s",
+                e,
+                exc_info=True,
+            )
             raise
         finally:
             if stage_2_context_task and not stage_2_context_task.done():

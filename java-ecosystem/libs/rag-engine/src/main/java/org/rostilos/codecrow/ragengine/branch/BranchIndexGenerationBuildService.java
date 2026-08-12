@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.ragengine.branch;
 
+import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
@@ -10,6 +11,8 @@ import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
 import org.rostilos.codecrow.ragengine.service.RagBranchIndexRegistryService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -18,11 +21,8 @@ import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -34,21 +34,57 @@ import java.util.function.Consumer;
 public class BranchIndexGenerationBuildService {
     private static final Logger log = LoggerFactory.getLogger(
             BranchIndexGenerationBuildService.class);
-    private static final long HEARTBEAT_INTERVAL_SECONDS = 15;
-
     private final BranchArchiveService archiveService;
     private final RagPipelineClient pipelineClient;
     private final RagBranchIndexRegistryService registryService;
-    private final ScheduledExecutorService heartbeatExecutor;
+    private final RagIndexOperationHeartbeatService heartbeatService;
+    private final AnalysisLockService analysisLockService;
+    private final int ragLockLeaseMinutes;
+
+    /**
+     * The durable coordinates needed after build admission commits. Keeping
+     * this boundary scalar prevents callers from carrying detached registry
+     * entities (and their lazy associations) into archive or RAG I/O.
+     */
+    public record PreparedBuild(
+            long operationId,
+            String collectionTarget,
+            boolean alreadySucceeded,
+            String manifestDigest,
+            String analysisLockKey) {
+
+        public PreparedBuild {
+            if (operationId <= 0) {
+                throw new IllegalArgumentException("operationId must be positive");
+            }
+            if (collectionTarget == null || collectionTarget.isBlank()) {
+                throw new IllegalArgumentException("collectionTarget is required");
+            }
+        }
+    }
 
     public BranchIndexGenerationBuildService(
             BranchArchiveService archiveService,
             RagPipelineClient pipelineClient,
-            RagBranchIndexRegistryService registryService) {
+            RagBranchIndexRegistryService registryService,
+            RagIndexOperationHeartbeatService heartbeatService) {
+        this(archiveService, pipelineClient, registryService, heartbeatService, null, 360);
+    }
+
+    @Autowired
+    public BranchIndexGenerationBuildService(
+            BranchArchiveService archiveService,
+            RagPipelineClient pipelineClient,
+            RagBranchIndexRegistryService registryService,
+            RagIndexOperationHeartbeatService heartbeatService,
+            AnalysisLockService analysisLockService,
+            @Value("${analysis.lock.rag.timeout.minutes:360}") int ragLockLeaseMinutes) {
         this.archiveService = archiveService;
         this.pipelineClient = pipelineClient;
         this.registryService = registryService;
-        this.heartbeatExecutor = Executors.newSingleThreadScheduledExecutor(new HeartbeatThreadFactory());
+        this.heartbeatService = heartbeatService;
+        this.analysisLockService = analysisLockService;
+        this.ragLockLeaseMinutes = Math.max(1, ragLockLeaseMinutes);
     }
 
     public Map<String, Object> build(
@@ -169,25 +205,57 @@ public class BranchIndexGenerationBuildService {
             boolean forceRebuild) throws IOException {
         var registration = registryService.registerBuild(
                 project, branch, kind, null, revision,
-                forceRebuild ? "operator-refresh:" + requireJobId(jobId) : null);
-        if (registration.existingOperation()
-                && registration.operation().getStatus()
-                == RagIndexOperationStatus.SUCCEEDED) {
+                forceRebuild
+                        ? "full-snapshot:job:" + requireJobId(jobId) + ":" + UUID.randomUUID()
+                        : null);
+        PreparedBuild prepared = prepare(registration, analysisLockKey);
+        if (prepared.alreadySucceeded()) {
             return Map.of(
                     "status", "reused",
-                    "collection_target", registration.generation().getCollectionName(),
-                    "generation_manifest_sha256", registration.generation().getManifestDigest());
+                    "collection_target", prepared.collectionTarget(),
+                    "generation_manifest_sha256", prepared.manifestDigest());
         }
 
         registryService.startBuild(
-                registration.operation().getId(), jobId, analysisLockKey);
-        ScheduledFuture<?> heartbeat = heartbeatExecutor.scheduleAtFixedRate(
-                () -> heartbeat(registration.operation().getId()),
-                HEARTBEAT_INTERVAL_SECONDS,
-                HEARTBEAT_INTERVAL_SECONDS,
-                TimeUnit.SECONDS);
+                prepared.operationId(), jobId, analysisLockKey);
+        return execute(project, connection, vcsWorkspace, repoSlug, branch, revision,
+                kind, includePatterns, excludePatterns, prepared, progressEvents);
+    }
+
+    /**
+     * Executes an already-admitted build. The operation must have been linked
+     * to its durable job and transitioned to RUNNING in the admission
+     * transaction before this method is called.
+     */
+    public Map<String, Object> execute(
+            Project project,
+            VcsConnection connection,
+            String vcsWorkspace,
+            String repoSlug,
+            String branch,
+            String revision,
+            RagBranchIndexKind kind,
+            List<String> includePatterns,
+            List<String> excludePatterns,
+            PreparedBuild prepared,
+            Consumer<Map<String, Object>> progressEvents) throws IOException {
+        if (prepared == null) {
+            throw new IllegalArgumentException("prepared build is required");
+        }
+        if (prepared.alreadySucceeded()) {
+            return Map.of(
+                    "status", "reused",
+                    "collection_target", prepared.collectionTarget(),
+                    "generation_manifest_sha256", prepared.manifestDigest());
+        }
+
+        RagIndexOperationHeartbeatService.HeartbeatScope heartbeat = null;
+        AnalysisLockService.LockLease lockLease = null;
         Path snapshot = null;
+        AtomicBoolean snapshotOwnershipTransferred = new AtomicBoolean(false);
         try {
+            lockLease = startAnalysisLockLease(prepared);
+            heartbeat = heartbeatService.start(prepared.operationId());
             snapshot = Files.createTempDirectory("codecrow-rag-branch-generation-");
             archiveService.downloadAndExtractSnapshotToDirectory(
                     connection,
@@ -203,30 +271,35 @@ public class BranchIndexGenerationBuildService {
                     ? pipelineClient.indexRepository(
                             snapshot.toString(), project.getWorkspace().getName(),
                             project.getNamespace(), branch, revision, includePatterns,
-                            excludePatterns, registration.generation().getCollectionName(),
+                            excludePatterns, prepared.collectionTarget(),
                             false, false)
                     : pipelineClient.indexRepository(
                             snapshot.toString(), project.getWorkspace().getName(),
                             project.getNamespace(), branch, revision, includePatterns,
-                            excludePatterns, registration.generation().getCollectionName(),
-                            false, false,
+                            excludePatterns, prepared.collectionTarget(),
+                            false, false, true,
+                            () -> snapshotOwnershipTransferred.set(true),
                             progressEvents);
             Object manifest = result.get("generation_manifest_sha256");
             if (!(manifest instanceof String digest) || digest.isBlank()) {
                 throw new IOException("RAG full branch generation has no manifest digest");
             }
+            if (lockLease != null && !lockLease.confirmOwnership()) {
+                throw new IOException(
+                        "RAG indexing lock ownership was lost before generation publication");
+            }
             var published = registryService.publish(
-                    registration.operation().getId(),
+                    prepared.operationId(),
                     digest,
                     number(result.get("document_count")),
                     number(result.get("chunk_count")));
             publishReadableAliasesIfActive(
-                    project, branch, revision, registration.generation().getCollectionName(),
+                    project, branch, revision, prepared.collectionTarget(),
                     published, publishBranchAlias, publishLegacyProjectAlias);
             return result;
         } catch (Throwable failure) {
             registryService.fail(
-                    registration.operation().getId(),
+                    prepared.operationId(),
                     failure.getMessage() != null
                             ? failure.getMessage()
                             : failure.getClass().getSimpleName());
@@ -238,11 +311,56 @@ public class BranchIndexGenerationBuildService {
             }
             throw new IOException("Failed to build exact branch generation", failure);
         } finally {
-            heartbeat.cancel(false);
-            if (snapshot != null) {
+            if (lockLease != null) {
+                lockLease.close();
+            }
+            if (heartbeat != null) {
+                heartbeat.close();
+            }
+            if (snapshot != null && !snapshotOwnershipTransferred.get()) {
                 deleteTree(snapshot);
             }
         }
+    }
+
+    /** Maps a managed registration to the scalar post-transaction boundary. */
+    public static PreparedBuild prepare(
+            RagBranchIndexRegistryService.BuildRegistration registration) {
+        return prepare(registration, null);
+    }
+
+    public static PreparedBuild prepare(
+            RagBranchIndexRegistryService.BuildRegistration registration,
+            String analysisLockKey) {
+        if (registration == null || registration.operation() == null
+                || registration.generation() == null) {
+            throw new IllegalArgumentException("A complete build registration is required");
+        }
+        boolean succeeded = registration.existingOperation()
+                && registration.operation().getStatus() == RagIndexOperationStatus.SUCCEEDED;
+        return new PreparedBuild(
+                registration.operation().getId(),
+                registration.generation().getCollectionName(),
+                succeeded,
+                registration.generation().getManifestDigest(),
+                analysisLockKey);
+    }
+
+    private AnalysisLockService.LockLease startAnalysisLockLease(PreparedBuild prepared)
+            throws IOException {
+        if (prepared.analysisLockKey() == null || prepared.analysisLockKey().isBlank()) {
+            return null;
+        }
+        if (analysisLockService == null) {
+            throw new IOException("Analysis-lock lease service is unavailable for exact RAG build");
+        }
+        AnalysisLockService.LockLease lease = analysisLockService.maintainLockLease(
+                prepared.analysisLockKey(), ragLockLeaseMinutes);
+        if (lease.isOwnershipLost()) {
+            lease.close();
+            throw new IOException("RAG indexing lock ownership was lost before snapshot build");
+        }
+        return lease;
     }
 
     private void publishReadableAliasesIfActive(
@@ -262,11 +380,13 @@ public class BranchIndexGenerationBuildService {
             pipelineClient.publishGenerationAliases(
                     project.getWorkspace().getName(), project.getNamespace(),
                     branch, revision, collectionTarget,
+                    published.getManifestDigest(),
                     true, publishLegacyProjectAlias);
-        } catch (IOException aliasFailure) {
+        } catch (IOException | RuntimeException aliasFailure) {
             // Readable aliases are operator convenience. Exact retrieval uses
             // the registry target, and reconciliation repairs this alias later.
-            log.warn("Could not publish readable aliases for RAG generation {}: {}",
+            log.info("Readable aliases were not published for active RAG generation {}; "
+                            + "the reconciliation scheduler will retry: {}",
                     published.getId(), aliasFailure.getMessage());
         }
     }
@@ -280,24 +400,6 @@ public class BranchIndexGenerationBuildService {
             throw new IllegalArgumentException("An operator refresh requires a durable job id");
         }
         return jobId.toString();
-    }
-
-    private void heartbeat(long operationId) {
-        try {
-            registryService.heartbeatBuild(operationId);
-        } catch (Exception ignored) {
-            // A later heartbeat may still succeed. If the producer actually
-            // stops, recovery turns the durable operation into a failure.
-        }
-    }
-
-    private static final class HeartbeatThreadFactory implements ThreadFactory {
-        @Override
-        public Thread newThread(Runnable runnable) {
-            Thread thread = new Thread(runnable, "rag-generation-heartbeat");
-            thread.setDaemon(true);
-            return thread;
-        }
     }
 
     private static void deleteTree(Path root) {

@@ -7,7 +7,15 @@ from llama_index.core.schema import TextNode
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 
-from codecrow_plugins import FileArtifact, PluginRuntime, ProjectSelector, build_repository_facts
+from codecrow_plugins import (
+    FileArtifact,
+    FileDisposition,
+    PluginRuntime,
+    ProjectSelector,
+    RepositoryAnalysis,
+    RepositorySnapshot,
+    build_repository_facts,
+)
 from codecrow_plugins.bootstrap import discover_builtin_plugins
 from rag_pipeline.core.index_manager.collection_manager import CollectionManager
 from rag_pipeline.core.index_manager.indexer import FileOperations, RepositoryIndexer
@@ -684,6 +692,100 @@ def test_incremental_update_rejects_missing_repository_analysis_snapshots(
         )
 
     point_ops.prepare_chunks_for_embedding.assert_not_called()
+
+
+def test_excluded_composer_lock_update_is_quarantined_not_deleted(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    """A present excluded lockfile must not become a plugin tombstone."""
+    _write_repository(tmp_path, "Acme\\Checkout\\Model\\Cart")
+    lock_path = tmp_path / "composer.lock"
+    lock_path.write_text('{"packages": []}', encoding="utf-8")
+    catalog = discover_builtin_plugins()
+    selector = ProjectSelector(catalog.registry)
+    facts = _repository_facts(tmp_path, "base", catalog)
+    capabilities = selector.select(facts)
+    implementation_fingerprint = catalog.implementation_fingerprint(
+        capabilities.repository_plugins
+    )
+
+    from rag_pipeline.core import repository_overlay
+
+    monkeypatch.setattr(
+        repository_overlay,
+        "load_repository_facts",
+        lambda *_args: (
+            facts,
+            capabilities.repository_plugins,
+            capabilities.fingerprint,
+            capabilities.descriptor_fingerprint,
+            implementation_fingerprint,
+        ),
+    )
+    monkeypatch.setattr(
+        repository_overlay,
+        "load_repository_snapshots",
+        lambda *_args: (
+            (RepositorySnapshot("magento", "state", "{}"),),
+            capabilities.repository_plugins,
+            capabilities.fingerprint,
+            capabilities.descriptor_fingerprint,
+            implementation_fingerprint,
+        ),
+    )
+    monkeypatch.setattr(
+        "rag_pipeline.core.index_manager.indexer.observe_branch_representation",
+        lambda *_args, **_kwargs: None,
+    )
+
+    handle = MagicMock()
+    handle.finish.return_value = (RepositoryAnalysis(), ())
+    runtime = MagicMock()
+    runtime.repository_analysis_plugins.return_value = ("magento",)
+    runtime.file_disposition.return_value = FileDisposition.FULL
+    runtime.start_repository_analysis.return_value = handle
+    client = MagicMock()
+    client.scroll.return_value = ([], None)
+    operations = FileOperations(
+        client,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        DocumentLoader(SimpleNamespace(
+            excluded_patterns=("*.lock",),
+            max_file_size_bytes=1_000_000,
+        )),
+        plugin_catalog=catalog,
+        plugin_runtime=runtime,
+        plugin_selector=selector,
+    )
+    operations._records_for_values = MagicMock(return_value=[])
+    operations._replace_points = MagicMock(return_value=1)
+
+    operations.apply_changes(
+        ["composer.lock"],
+        [],
+        str(tmp_path),
+        "ws",
+        "project",
+        "main",
+        "changed",
+        "repository",
+    )
+
+    handle.ingest.assert_called_once_with(())
+    assert all(
+        "composer.lock" not in set(call.args[3])
+        for call in operations._records_for_values.call_args_list
+    )
+    operations._replace_points.assert_called_once()
+    assert not any(
+        record.levelno >= 30 and "composer.lock" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_generic_change_set_accepts_older_build_and_updates_one_generation(

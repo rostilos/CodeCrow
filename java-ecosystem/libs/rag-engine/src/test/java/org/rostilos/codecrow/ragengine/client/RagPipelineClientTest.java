@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -99,6 +100,29 @@ class RagPipelineClientTest {
         Map<String, Object> result = client.deleteFiles(files, "workspace", "project", "main");
 
         assertThat(result).containsEntry("status", "success");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void publishGenerationAliasesIncludesExpectedManifestDigest() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setBody("{\"status\":\"published\"}")
+                .addHeader("Content-Type", "application/json"));
+
+        client.publishGenerationAliases(
+                "ws", "proj", "main", "commit", "physical-target",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                true, true);
+
+        RecordedRequest request = mockWebServer.takeRequest();
+        assertThat(request.getPath()).isEqualTo("/index/generation-aliases");
+        Map<String, Object> payload = objectMapper.readValue(
+                request.getBody().readUtf8(), Map.class);
+        assertThat(payload)
+                .containsEntry("collection_target", "physical-target")
+                .containsEntry(
+                        "generation_manifest_sha256",
+                        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     }
 
     @Test
@@ -482,6 +506,27 @@ class RagPipelineClientTest {
         assertThat(request.getHeader("Accept")).isEqualTo("text/event-stream");
     }
 
+    @Test
+    void testIndexRepository_StreamAcknowledgesSnapshotOwnershipTransfer() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setBody("data: {\"type\":\"admitted\",\"repositoryOwnershipTransferred\":true}\n\n"
+                        + "data: {\"type\":\"complete\",\"result\":{\"document_count\":2,\"chunk_count\":5}}\n\n")
+                .addHeader("Content-Type", "text/event-stream"));
+        AtomicBoolean admitted = new AtomicBoolean(false);
+
+        Map<String, Object> result = client.indexRepository(
+                repositoryPath.toString(), "ws", "proj", "develop", "abc123",
+                List.of("src/**"), List.of("vendor/**"), "generation-target",
+                false, false, true, () -> admitted.set(true), ignored -> { });
+
+        assertThat(admitted).isTrue();
+        assertThat(result).containsEntry("chunk_count", 5);
+        RecordedRequest request = mockWebServer.takeRequest();
+        Map<String, Object> payload = objectMapper.readValue(
+                request.getBody().readUtf8(), Map.class);
+        assertThat(payload).containsEntry("transfer_repo_ownership", true);
+    }
+
     // ── deleteBranch tests ───────────────────────────────────────────────────
 
     @Test
@@ -525,6 +570,30 @@ class RagPipelineClientTest {
         assertThat(result).isTrue();
         RecordedRequest request = mockWebServer.takeRequest();
         assertThat(request.getPath()).contains("feature%2Fxyz");
+    }
+
+    @Test
+    void testDeleteBranchStructuredOutcomeClassifiesServiceFailureAndNamesTarget()
+            throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(503)
+                .setBody("{\"detail\":\"unavailable\"}"));
+
+        RagPipelineClient.BranchDeletionOutcome outcome =
+                client.deleteBranchWithOutcome(
+                        "ws", "proj", "feature", "physical target/1",
+                        "revision/abc", "manifest+digest");
+
+        assertThat(outcome.successful()).isFalse();
+        assertThat(outcome.failure())
+                .isEqualTo(RagPipelineClient.BranchDeletionFailure.SERVICE);
+        assertThat(outcome.shouldStopRemainingTargets()).isTrue();
+        assertThat(outcome.targetLabel()).isEqualTo("physical target/1");
+        assertThat(outcome.statusCode()).isEqualTo(503);
+        assertThat(mockWebServer.takeRequest().getPath())
+                .contains("collection_target=physical%20target%2F1")
+                .contains("generation_revision=revision%2Fabc")
+                .contains("generation_manifest_sha256=manifest%2Bdigest");
     }
 
     // ── getIndexedBranches tests ─────────────────────────────────────────────
@@ -750,14 +819,48 @@ class RagPipelineClientTest {
     }
 
     @Test
+    void deletePrFilesTargetsExactGenerationAndEncodesQueryParameter() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setBody("{\"deleted_count\": 1}"));
+
+        boolean result = client.deletePrFiles(
+                "ws", "proj", 42, "project-generation/with space");
+
+        assertThat(result).isTrue();
+        RecordedRequest request = mockWebServer.takeRequest();
+        assertThat(request.getRequestUrl().queryParameter("collection_target"))
+                .isEqualTo("project-generation/with space");
+    }
+
+    @Test
     void testDeletePrFiles_ServerError_ReturnsFalse() throws Exception {
         mockWebServer.enqueue(new MockResponse()
                 .setResponseCode(500)
                 .setBody("{\"error\": \"internal\"}"));
 
-        boolean result = client.deletePrFiles("ws", "proj", 42);
+        RagPipelineClient.PrFilesDeletionOutcome result = client.deletePrFilesWithOutcome(
+                "ws", "proj", 42, "generation-a");
 
-        assertThat(result).isFalse();
+        assertThat(result.successful()).isFalse();
+        assertThat(result.targetLabel()).isEqualTo("generation-a");
+        assertThat(result.statusCode()).isEqualTo(500);
+        assertThat(result.failure()).isEqualTo(RagPipelineClient.PrFilesDeletionFailure.SERVICE);
+        assertThat(result.shouldStopRemainingTargets()).isTrue();
+    }
+
+    @Test
+    void deletePrFilesLeaseConflictStopsRemainingTargets() {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(409)
+                .setBody("{\"error\": \"mutation lease unavailable\"}"));
+
+        RagPipelineClient.PrFilesDeletionOutcome result = client.deletePrFilesWithOutcome(
+                "ws", "proj", 42, "generation-a");
+
+        assertThat(result.statusCode()).isEqualTo(409);
+        assertThat(result.failure()).isEqualTo(RagPipelineClient.PrFilesDeletionFailure.SERVICE);
+        assertThat(result.shouldStopRemainingTargets()).isTrue();
     }
 
     @Test
@@ -786,8 +889,12 @@ class RagPipelineClientTest {
     void testDeletePrFiles_NetworkError_ReturnsFalse() throws IOException {
         mockWebServer.shutdown();
 
-        boolean result = client.deletePrFiles("ws", "proj", 42);
+        RagPipelineClient.PrFilesDeletionOutcome result = client.deletePrFilesWithOutcome(
+                "ws", "proj", 42, "generation-a");
 
-        assertThat(result).isFalse();
+        assertThat(result.successful()).isFalse();
+        assertThat(result.targetLabel()).isEqualTo("generation-a");
+        assertThat(result.failure()).isEqualTo(RagPipelineClient.PrFilesDeletionFailure.TRANSPORT);
+        assertThat(result.shouldStopRemainingTargets()).isTrue();
     }
 }

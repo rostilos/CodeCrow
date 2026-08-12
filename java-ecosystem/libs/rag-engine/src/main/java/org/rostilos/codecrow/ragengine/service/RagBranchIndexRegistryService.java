@@ -14,6 +14,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -63,8 +64,17 @@ public class RagBranchIndexRegistryService {
                 .findByProjectIdAndOperationKey(project.getId(), operationKey);
         if (existing.isPresent()) {
             RagIndexOperation operation = existing.get();
+            Long branchIndexId = operation.getGeneration().getBranchIndex().getId();
+            RagBranchIndex branchIndex = branchIndexRepository
+                    .findByIdForPublication(branchIndexId)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "RAG branch index not found: " + branchIndexId));
+            rejectCleanupClaim(branchIndex);
+            branchIndex.markAccessed();
+            branchIndexRepository.save(branchIndex);
+            operation.getGeneration().setBranchIndex(branchIndex);
             return new BuildRegistration(
-                    operation.getGeneration().getBranchIndex(),
+                    branchIndex,
                     operation.getGeneration(),
                     operation,
                     true);
@@ -73,6 +83,7 @@ public class RagBranchIndexRegistryService {
         RagBranchIndex branchIndex = branchIndexRepository
                 .findByProjectIdAndBranchNameForUpdate(project.getId(), branch)
                 .orElseGet(() -> new RagBranchIndex(project, branch, kind));
+        rejectCleanupClaim(branchIndex);
         if (branchIndex.getIndexKind() == RagBranchIndexKind.LEGACY
                 || kind == RagBranchIndexKind.PRIMARY
                 || (branchIndex.getIndexKind() == RagBranchIndexKind.TRANSIENT
@@ -112,12 +123,20 @@ public class RagBranchIndexRegistryService {
         if (operation.getStatus() == RagIndexOperationStatus.SUCCEEDED) {
             return;
         }
+        String normalizedLockKey = normalizeOptional(analysisLockKey);
+        if (operation.getStatus() == RagIndexOperationStatus.RUNNING
+                && Objects.equals(operation.getJobId(), jobId)
+                && Objects.equals(operation.getAnalysisLockKey(), normalizedLockKey)) {
+            operation.heartbeat();
+            operationRepository.save(operation);
+            return;
+        }
         if (operation.getStatus() == RagIndexOperationStatus.FAILED) {
             operation.getGeneration().retry();
             generationRepository.save(operation.getGeneration());
         }
         operation.setJobId(jobId);
-        operation.setAnalysisLockKey(normalizeOptional(analysisLockKey));
+        operation.setAnalysisLockKey(normalizedLockKey);
         operation.start();
         operationRepository.save(operation);
     }
@@ -143,6 +162,7 @@ public class RagBranchIndexRegistryService {
                 .orElseThrow(() -> new IllegalStateException(
                         "RAG branch index not found: " + branchIndexId));
         generation.setBranchIndex(branchIndex);
+        rejectCleanupClaim(branchIndex);
 
         String digest = requireText(manifestDigest, "manifestDigest");
         if (!generation.getRevision().equals(branchIndex.getDesiredCommitHash())) {
@@ -196,7 +216,8 @@ public class RagBranchIndexRegistryService {
     }
 
     private boolean failOperation(RagIndexOperation operation, String errorMessage) {
-        if (operation.getStatus() == RagIndexOperationStatus.SUCCEEDED) {
+        if (operation.getStatus() == RagIndexOperationStatus.SUCCEEDED
+                || operation.getStatus() == RagIndexOperationStatus.FAILED) {
             return false;
         }
         String failure = requireText(errorMessage, "errorMessage");
@@ -224,11 +245,17 @@ public class RagBranchIndexRegistryService {
             String branchName,
             String revision) {
         Optional<RagBranchIndex> branchIndex = branchIndexRepository
-                .findByProjectIdAndBranchName(projectId, requireText(branchName, "branchName"));
+                .findByProjectIdAndBranchNameForUpdate(
+                        projectId, requireText(branchName, "branchName"));
         if (branchIndex.isEmpty()) {
             return Optional.empty();
         }
         RagBranchIndex index = branchIndex.get();
+        if (index.getCleanupClaimToken() != null) {
+            // Cleanup has a durable claim. Returning a generation here would
+            // expose a physical target that may already have been deleted.
+            return Optional.empty();
+        }
         index.markAccessed();
         branchIndexRepository.save(index);
         if (index.getActiveGeneration() != null
@@ -249,14 +276,21 @@ public class RagBranchIndexRegistryService {
         operationRepository.save(operation);
     }
 
-    public List<RagIndexOperation> findRecoverableOperations(OffsetDateTime updatedBefore) {
-        return operationRepository.findByStatusInAndUpdatedAtBefore(
+    public List<RagIndexOperationRepository.RecoveryOperationProjection>
+            findRecoverableOperations(OffsetDateTime updatedBefore) {
+        return operationRepository.findRecoverableOperationProjections(
                 List.of(RagIndexOperationStatus.PENDING, RagIndexOperationStatus.RUNNING),
                 updatedBefore);
     }
 
-    public List<RagIndexOperation> findFailedOperationsWithActiveProjections() {
+    public List<RagIndexOperationRepository.RecoveryOperationProjection>
+            findFailedOperationsWithActiveProjections() {
         return operationRepository.findFailedOperationsWithActiveProjections();
+    }
+
+    public List<RagIndexOperationRepository.SucceededOperationProjection>
+            findSucceededOperationsWithActiveProjections() {
+        return operationRepository.findSucceededOperationsWithActiveProjections();
     }
 
     public boolean hasLiveOperation(long projectId, String branchName) {
@@ -314,6 +348,13 @@ public class RagBranchIndexRegistryService {
 
     private static String normalizeOptional(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static void rejectCleanupClaim(RagBranchIndex branchIndex) {
+        if (branchIndex.getCleanupClaimToken() != null) {
+            throw new IllegalStateException(
+                    "RAG branch index cleanup owns this transient branch; retry later");
+        }
     }
 
     private static String nullToEmpty(String value) {

@@ -85,9 +85,12 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
         vcsAiClientService = mock(VcsAiClientService.class);
         vcsReportingService = mock(VcsReportingService.class);
         vcsClient = mock(VcsClient.class);
+        AnalysisLockService.LockLease lockLease = mock(AnalysisLockService.LockLease.class);
 
         when(analysisLockService.acquireLockWithWait(any(Project.class), anyString(), any(), anyString(), any(), any()))
                 .thenReturn(Optional.of("it-lock"));
+        when(analysisLockService.maintainLockLease(anyString(), anyInt())).thenReturn(lockLease);
+        when(lockLease.confirmOwnership()).thenReturn(true);
         when(analysisLockService.isLocked(anyLong(), anyString(), any())).thenReturn(false);
 
         when(vcsServiceFactory.getAiClientService(EVcsProvider.GITHUB)).thenReturn(vcsAiClientService);

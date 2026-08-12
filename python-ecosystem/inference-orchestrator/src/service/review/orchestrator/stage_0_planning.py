@@ -141,7 +141,7 @@ async def execute_stage_0_planning(
                 logger.info("Stage 0 planning completed with structured output")
                 return result
         except Exception as e:
-            logger.warning(f"Structured output failed for Stage 0: {e}")
+            logger.debug("Structured output failed for Stage 0: %s", e)
     else:
         logger.info("Structured output skipped for Stage 0; using prompt JSON parsing")
 
@@ -150,7 +150,7 @@ async def execute_stage_0_planning(
         content = extract_llm_response_text(response)
         return await parse_llm_response(content, ReviewPlan, llm)
     except Exception as e:
-        logger.error(f"Stage 0 planning failed, using local fallback plan: {e}")
+        logger.info("Stage 0 planning unavailable; using local fallback plan: %s", e)
         return _build_fallback_review_plan(request, processed_diff)
 
 
