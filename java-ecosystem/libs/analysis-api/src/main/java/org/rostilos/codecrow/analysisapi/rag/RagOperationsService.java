@@ -118,6 +118,20 @@ public interface RagOperationsService {
             : null;
         return config.ragConfig().shouldHaveBranchIndex(branchName, branchPushPatterns);
     }
+
+    /**
+     * Whether an eligible PR target that is not retained may receive a temporary,
+     * revision-pinned branch snapshot. This never makes branch pushes retain data.
+     */
+    default boolean shouldCreateTransientBranchIndex(Project project, String branchName) {
+        var config = project.getConfiguration();
+        if (config == null || config.ragConfig() == null || branchName == null) {
+            return false;
+        }
+        return config.ragConfig().isTransientBranchIndexesEnabled()
+                && !branchName.equals(getBaseBranch(project))
+                && !shouldHaveBranchIndex(project, branchName);
+    }
     
     /**
      * Get the authoritative base branch for RAG indexing.
@@ -203,11 +217,9 @@ public interface RagOperationsService {
     }
     
     /**
-     * Update branch index by calculating diff between base branch and target branch.
-     * 
-     * This method always recalculates the full diff between the base branch (e.g., "master")
-     * and the target branch (e.g., "release/1.0"), then indexes all changed files with
-     * the target branch in their metadata.
+     * Update an already retained branch from its completed checkpoint. A first
+     * legacy branch seed may still compare it with the primary branch; exact
+     * generation implementations replace that seed path with a complete snapshot.
      * 
      * Use this when a push happens to a non-main branch and you need to update
      * the RAG index to reflect the current state of that branch.

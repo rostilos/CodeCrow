@@ -125,10 +125,12 @@ import uvicorn
 from rag_pipeline.api.api import app
 
 if __name__ == "__main__":
-    # Use multiple workers to allow concurrent indexing requests
-    # Each worker can handle one long-running indexing task
-    workers = int(os.environ.get("UVICORN_WORKERS", "4"))
-    logger.info(f"Starting Uvicorn with {workers} workers for concurrent request handling")
+    # Keep one process by default. Each worker initializes its own embedding and
+    # indexing state, so multiplying Uvicorn workers multiplies the memory cost
+    # of concurrent branch snapshots. Branch-level parallelism is bounded by
+    # the Java maintenance executor instead.
+    workers = int(os.environ.get("UVICORN_WORKERS", "1"))
+    logger.info(f"Starting Uvicorn with {workers} worker process(es)")
     uvicorn.run(
         "rag_pipeline.api.api:app",
         host="0.0.0.0",

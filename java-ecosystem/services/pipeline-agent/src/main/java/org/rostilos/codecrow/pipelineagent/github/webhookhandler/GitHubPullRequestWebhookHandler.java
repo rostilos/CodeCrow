@@ -370,7 +370,8 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
                 }
             };
             
-            Map<String, Object> result = branchAnalysisProcessor.process(request, processorConsumer);
+            Map<String, Object> result = branchAnalysisProcessor.processAfterDependencyGate(
+                    request, processorConsumer);
             
             return WebhookResult.success("Branch reconciliation completed after PR #" + prNumber + " merge", result);
             

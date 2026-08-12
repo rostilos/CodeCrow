@@ -7,6 +7,7 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
+import org.rostilos.codecrow.ragengine.source.RepositorySourceTreeIdentity;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
@@ -95,6 +96,51 @@ public class IncrementalRagUpdateService {
             Set<String> addedFiles,
             Set<String> modifiedFiles,
             Set<String> deletedFiles) throws IOException {
+        return performIncrementalUpdate(
+                project, vcsConnection, workspaceSlug, repoSlug, branch,
+                commitHash, addedFiles, modifiedFiles, deletedFiles,
+                null, null, null, false, false);
+    }
+
+    public Map<String, Object> performIncrementalUpdate(
+            Project project,
+            VcsConnection vcsConnection,
+            String workspaceSlug,
+            String repoSlug,
+            String branch,
+            String commitHash,
+            Set<String> addedFiles,
+            Set<String> modifiedFiles,
+            Set<String> deletedFiles,
+            String sourceRevision,
+            String sourceCollectionTarget,
+            String targetCollectionTarget) throws IOException {
+        return performIncrementalUpdate(
+                project, vcsConnection, workspaceSlug, repoSlug, branch,
+                commitHash, addedFiles, modifiedFiles, deletedFiles,
+                sourceRevision, sourceCollectionTarget, targetCollectionTarget,
+                false, false);
+    }
+
+    /**
+     * Advances an immutable generation. The registry owner publishes readable
+     * aliases only after it has accepted this generation as the current head.
+     */
+    public Map<String, Object> performIncrementalUpdate(
+            Project project,
+            VcsConnection vcsConnection,
+            String workspaceSlug,
+            String repoSlug,
+            String branch,
+            String commitHash,
+            Set<String> addedFiles,
+            Set<String> modifiedFiles,
+            Set<String> deletedFiles,
+            String sourceRevision,
+            String sourceCollectionTarget,
+            String targetCollectionTarget,
+            boolean publishBranchAlias,
+            boolean publishLegacyProjectAlias) throws IOException {
         Set<String> skippedNonTextFiles = new LinkedHashSet<>();
         Set<String> indexableAddedFiles = filterTextCandidates(addedFiles, skippedNonTextFiles);
         Set<String> indexableModifiedFiles = filterTextCandidates(modifiedFiles, skippedNonTextFiles);
@@ -119,7 +165,11 @@ public class IncrementalRagUpdateService {
         List<String> orderedAddedOrModifiedFiles =
                 new ArrayList<>(sortedList(addedOrModifiedFiles));
         List<String> orderedDeletedFiles = sortedList(deletedFiles);
-        if (orderedAddedOrModifiedFiles.isEmpty() && orderedDeletedFiles.isEmpty()) {
+        boolean generationAdvanceRequested = sourceRevision != null
+                && sourceCollectionTarget != null
+                && targetCollectionTarget != null;
+        if (orderedAddedOrModifiedFiles.isEmpty() && orderedDeletedFiles.isEmpty()
+                && !generationAdvanceRequested) {
             result.put("status", "completed");
             return result;
         }
@@ -128,31 +178,37 @@ public class IncrementalRagUpdateService {
         try {
             String revision = commitHash != null && !commitHash.isBlank() ? commitHash : branch;
             String repoBase = null;
-            if (!orderedAddedOrModifiedFiles.isEmpty()) {
+            String sourceTreeSha256 = null;
+            if (!orderedAddedOrModifiedFiles.isEmpty() || generationAdvanceRequested) {
                 tempDir = Files.createTempDirectory("codecrow-rag-incremental-",
                     PosixFilePermissions.asFileAttribute(
                             PosixFilePermissions.fromString("rwxrwxrwx")));
                 int effectiveArchiveFileThreshold = fileRetrievalPolicy.archiveFileThreshold();
-                boolean useArchive =
-                        fileRetrievalPolicy.shouldUseArchive(orderedAddedOrModifiedFiles.size());
+                boolean useArchive = generationAdvanceRequested
+                        || fileRetrievalPolicy.shouldUseArchive(orderedAddedOrModifiedFiles.size());
                 Set<String> fetchedFilePaths;
                 Set<String> presentFilePaths = Collections.emptySet();
                 String fileFetchMode;
                 if (useArchive) {
                     log.info("Using one repository archive at revision {} for {} incremental RAG files "
-                                    + "(threshold: {})",
-                            revision, orderedAddedOrModifiedFiles.size(), effectiveArchiveFileThreshold);
+                                    + "(threshold: {}, exact generation: {})",
+                            revision, orderedAddedOrModifiedFiles.size(), effectiveArchiveFileThreshold,
+                            generationAdvanceRequested);
                     BranchArchiveService.ArchiveDirectorySnapshot archiveSnapshot =
                             branchArchiveService.downloadAndExtractSnapshotToDirectory(
                             vcsConnection,
                             workspaceSlug,
                             repoSlug,
                             revision,
-                            new LinkedHashSet<>(orderedAddedOrModifiedFiles),
+                            generationAdvanceRequested
+                                    ? null
+                                    : new LinkedHashSet<>(orderedAddedOrModifiedFiles),
                             tempDir);
                     fetchedFilePaths = archiveSnapshot.extractedFiles();
                     presentFilePaths = archiveSnapshot.presentFiles();
-                    fileFetchMode = "archive";
+                    fileFetchMode = generationAdvanceRequested
+                            ? "exact-generation-archive"
+                            : "archive";
                 } else {
                     log.info("Using per-file VCS retrieval for {} incremental RAG files (threshold: {})",
                             orderedAddedOrModifiedFiles.size(), effectiveArchiveFileThreshold);
@@ -209,6 +265,10 @@ public class IncrementalRagUpdateService {
                                     + revision + ": " + String.join(", ", missingFiles));
                 }
                 repoBase = tempDir.toString();
+                if (generationAdvanceRequested) {
+                    sourceTreeSha256 = RepositorySourceTreeIdentity.sha256(tempDir);
+                    result.put("sourceTreeSha256", sourceTreeSha256);
+                }
                 result.put("updatedFiles", orderedAddedOrModifiedFiles.size());
                 int appliedAddedFiles = (int) orderedAddedOrModifiedFiles.stream()
                         .filter(indexableAddedFiles::contains)
@@ -219,17 +279,36 @@ public class IncrementalRagUpdateService {
             }
 
             String changeSetRepoBase = repoBase;
+            String targetSourceTreeSha256 = sourceTreeSha256;
             List<String> filesToUpdate = List.copyOf(orderedAddedOrModifiedFiles);
+            boolean generationAdvance = generationAdvanceRequested;
             Map<String, Object> updateResult = executeWithRetry(
-                    "apply incremental RAG change set",
-                    () -> ragPipelineClient.applyChanges(
-                            filesToUpdate,
-                            orderedDeletedFiles,
-                            changeSetRepoBase,
-                            projectWorkspace,
-                            projectNamespace,
-                            branch,
-                            revision));
+                    generationAdvance
+                            ? "advance immutable RAG generation"
+                            : "apply incremental RAG change set",
+                    () -> generationAdvance
+                            ? ragPipelineClient.advanceGeneration(
+                                    filesToUpdate,
+                                    orderedDeletedFiles,
+                                    changeSetRepoBase,
+                                    projectWorkspace,
+                                    projectNamespace,
+                                    branch,
+                                    sourceRevision,
+                                    revision,
+                                    targetSourceTreeSha256,
+                                    sourceCollectionTarget,
+                                    targetCollectionTarget,
+                                    publishBranchAlias,
+                                    publishLegacyProjectAlias)
+                            : ragPipelineClient.applyChanges(
+                                    filesToUpdate,
+                                    orderedDeletedFiles,
+                                    changeSetRepoBase,
+                                    projectWorkspace,
+                                    projectNamespace,
+                                    branch,
+                                    revision));
             result.put("deletedFiles", orderedDeletedFiles.size());
             result.putAll(updateResult);
             log.info(

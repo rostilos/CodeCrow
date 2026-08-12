@@ -320,3 +320,16 @@ class TestBuildStage3:
         )
         assert "PROJ-3" in result
         assert "task-coverage" in result
+
+    def test_mcp_verification_uses_reviewed_revision_and_verification_ids(self):
+        result = PromptBuilder.build_stage_3_aggregation_prompt(
+            repo_slug="r", pr_id="7", author="d", pr_title="T",
+            total_files=1, additions=1, deletions=0,
+            stage_0_plan="p", stage_1_issues_json="[]",
+            stage_2_findings_json="[]", recommendation="APPROVE",
+            use_mcp_tools=True, review_revision="commit-abc",
+        )
+
+        assert "REVIEWED REVISION: commit-abc" in result
+        assert "Verification ID" in result
+        assert 'DISMISSED_ISSUES: ["issue_0", "issue_3"]' in result

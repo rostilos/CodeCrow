@@ -13,6 +13,7 @@ import org.rostilos.codecrow.vcsclient.bitbucket.model.report.AnalysisSummary;
 import org.rostilos.codecrow.vcsclient.bitbucket.service.ReportGenerator;
 import org.rostilos.codecrow.vcsclient.github.actions.CheckRunAction;
 import org.rostilos.codecrow.vcsclient.github.actions.CommentOnPullRequestAction;
+import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestDiffAction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -103,22 +104,28 @@ public class GitHubReportingService implements VcsReportingService {
             pullRequestNumber, placeholderCommentId);
 
         AnalysisSummary summary = reportGenerator.createAnalysisSummary(codeAnalysis, platformPrEntityId);
+        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+        OkHttpClient httpClient = vcsClientProvider.getHttpClient(
+                vcsRepoInfo.getVcsConnection()
+        );
+        GitHubReviewFormatter.ReviewPlan reviewPlan = createReviewPlan(
+                httpClient, vcsRepoInfo, pullRequestNumber, summary);
+
         // Use GitHub-specific markdown with collapsible spoilers for suggested fixes
         String markdownSummary = reportGenerator.createMarkdownSummary(codeAnalysis, summary, true);
+        String nonInlineFindingsMarkdown = reviewFormatter.formatNonInlineFindings(
+                reviewPlan.nonInlineFindings());
         String detailedIssuesMarkdown = reportGenerator.createDetailedIssuesMarkdown(summary, true);
         
         // GitHub doesn't support threaded replies for issue comments like Bitbucket does.
         // So we combine summary and detailed issues into ONE comment.
         String fullComment = markdownSummary;
-        if (detailedIssuesMarkdown != null && !detailedIssuesMarkdown.isEmpty()) {
-            fullComment = markdownSummary + "\n\n---\n\n" + detailedIssuesMarkdown;
+        if (!nonInlineFindingsMarkdown.isEmpty()) {
+            fullComment += "\n\n---\n\n" + nonInlineFindingsMarkdown;
         }
-
-        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
-
-        OkHttpClient httpClient = vcsClientProvider.getHttpClient(
-                vcsRepoInfo.getVcsConnection()
-        );
+        if (detailedIssuesMarkdown != null && !detailedIssuesMarkdown.isEmpty()) {
+            fullComment += "\n\n---\n\n" + detailedIssuesMarkdown;
+        }
 
         // Post or update comment with full content (summary + issues)
         if (placeholderCommentId != null) {
@@ -129,12 +136,43 @@ public class GitHubReportingService implements VcsReportingService {
 
         // Publish findings as a submitted COMMENT review so they appear inline in
         // "Files changed" and as grouped reviewer comments in the PR conversation.
-        postInlineReviewComments(httpClient, vcsRepoInfo, pullRequestNumber, codeAnalysis, summary);
+        postInlineReviewComments(
+                httpClient, vcsRepoInfo, pullRequestNumber, codeAnalysis, reviewPlan);
         
         // Create Check Run for the commit
         createCheckRun(httpClient, vcsRepoInfo, codeAnalysis, summary);
 
         log.info("Successfully posted analysis results to GitHub");
+    }
+
+    private GitHubReviewFormatter.ReviewPlan createReviewPlan(
+            OkHttpClient httpClient,
+            VcsRepoInfo vcsRepoInfo,
+            Long pullRequestNumber,
+            AnalysisSummary summary
+    ) {
+        try {
+            List<GetPullRequestDiffAction.PullRequestFilePatch> filePatches =
+                    new GetPullRequestDiffAction(httpClient).getPullRequestFilePatches(
+                            vcsRepoInfo.getRepoWorkspace(),
+                            vcsRepoInfo.getRepoSlug(),
+                            pullRequestNumber.intValue());
+            GitHubReviewFormatter.ReviewPlan plan = reviewFormatter.planComments(
+                    summary.getIssues(), CODECROW_REVIEW_MARKER, filePatches);
+            log.info("Prepared GitHub review plan for PR {}: {} inline, {} not inline",
+                    pullRequestNumber,
+                    plan.inlineComments().size(),
+                    plan.nonInlineFindings().size());
+            return plan;
+        } catch (Exception e) {
+            // Diff enrichment is supplemental. Publishing an unverified anchor can
+            // make GitHub reject the whole review, so retain every finding in the
+            // aggregate comment instead of guessing.
+            log.warn("Could not load GitHub PR diff for inline comment planning on PR {}: {}. "
+                            + "Findings will remain in the aggregate comment.",
+                    pullRequestNumber, e.getMessage());
+            return reviewFormatter.planWithoutDiff(summary.getIssues());
+        }
     }
     
     /**
@@ -201,15 +239,14 @@ public class GitHubReportingService implements VcsReportingService {
             VcsRepoInfo vcsRepoInfo,
             Long pullRequestNumber,
             CodeAnalysis codeAnalysis,
-            AnalysisSummary summary
+            GitHubReviewFormatter.ReviewPlan reviewPlan
     ) {
         CommentOnPullRequestAction commentAction = new CommentOnPullRequestAction(httpClient);
-        cleanupPreviousInlineReviewComments(commentAction, vcsRepoInfo, pullRequestNumber);
-
-        List<Map<String, Object>> comments = reviewFormatter.formatComments(
-                summary.getIssues(), CODECROW_REVIEW_MARKER);
+        List<Map<String, Object>> comments = reviewPlan.inlineComments();
         if (comments.isEmpty()) {
-            log.debug("No confidently anchored issues to post as GitHub review comments");
+            cleanupPreviousInlineReviewComments(
+                    commentAction, vcsRepoInfo, pullRequestNumber, null);
+            log.debug("No diff-verified issues to post as GitHub review comments");
             return;
         }
 
@@ -221,7 +258,7 @@ public class GitHubReportingService implements VcsReportingService {
         }
 
         try {
-            commentAction.createPullRequestReview(
+            String reviewId = commentAction.createPullRequestReview(
                     vcsRepoInfo.getRepoWorkspace(),
                     vcsRepoInfo.getRepoSlug(),
                     pullRequestNumber.intValue(),
@@ -232,27 +269,53 @@ public class GitHubReportingService implements VcsReportingService {
             );
             log.info("Posted GitHub review with {} inline comment(s) on PR {}",
                     comments.size(), pullRequestNumber);
+            Long preservedReviewId = parseReviewId(reviewId);
+            if (preservedReviewId == null) {
+                log.warn("GitHub created the replacement review for PR {} without a usable ID; "
+                                + "leaving previous review artifacts intact",
+                        pullRequestNumber);
+            } else {
+                cleanupPreviousInlineReviewComments(
+                        commentAction,
+                        vcsRepoInfo,
+                        pullRequestNumber,
+                        preservedReviewId);
+            }
         } catch (Exception e) {
             // Inline review publishing is supplemental. The aggregate comment
-            // still contains the complete result, and the Check Run still carries
-            // the quality status when GitHub rejects a stale or non-diff anchor.
+            // still contains the complete result. Cleanup deliberately happens
+            // only after a replacement succeeds, so a rejected review does not
+            // erase the last successfully published inline comments.
             log.warn("Failed to post inline GitHub review comments on PR {}: {}. "
                             + "Issues remain available in the summary comment.",
                     pullRequestNumber, e.getMessage());
         }
     }
 
+    private Long parseReviewId(String reviewId) {
+        if (reviewId == null || reviewId.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(reviewId);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     private void cleanupPreviousInlineReviewComments(
             CommentOnPullRequestAction commentAction,
             VcsRepoInfo vcsRepoInfo,
-            Long pullRequestNumber
+            Long pullRequestNumber,
+            Long preservedReviewId
     ) {
         try {
             int deleted = commentAction.deletePreviousReviewComments(
                     vcsRepoInfo.getRepoWorkspace(),
                     vcsRepoInfo.getRepoSlug(),
                     pullRequestNumber.intValue(),
-                    CODECROW_REVIEW_MARKER
+                    CODECROW_REVIEW_MARKER,
+                    preservedReviewId
             );
             if (deleted > 0) {
                 log.info("Deleted {} previous CodeCrow inline review comment(s) from PR {}",
@@ -271,7 +334,8 @@ public class GitHubReportingService implements VcsReportingService {
                     vcsRepoInfo.getRepoSlug(),
                     pullRequestNumber.intValue(),
                     CODECROW_REVIEW_MARKER,
-                    CODECROW_CLEARED_REVIEW_MARKER
+                    CODECROW_CLEARED_REVIEW_MARKER,
+                    preservedReviewId
             );
             if (cleared > 0) {
                 log.info("Cleared {} previous CodeCrow review summary body/bodies from PR {}",

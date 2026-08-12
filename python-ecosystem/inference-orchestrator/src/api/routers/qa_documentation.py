@@ -9,7 +9,7 @@ pipeline (large PRs with enrichment data).
 """
 import logging
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any, List, Literal
 
 from model.enrichment import PrEnrichmentDataDto
@@ -70,6 +70,17 @@ class QaDocumentationRequest(BaseModel):
     oauth_key: Optional[str] = None
     oauth_secret: Optional[str] = None
     bearer_token: Optional[str] = None
+
+    @field_validator("task_context", mode="before")
+    @classmethod
+    def normalize_task_context_values(cls, value):
+        """Keep nullable provider fields compatible with the string prompt contract."""
+        if value is None or not isinstance(value, dict):
+            return value
+        return {
+            key: "" if item is None else str(item)
+            for key, item in value.items()
+        }
 
 
 class QaDocumentationResponse(BaseModel):

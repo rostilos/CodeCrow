@@ -153,13 +153,33 @@ public class BranchAnalysisProcessor {
 	public Map<String, Object> process(
 			BranchProcessRequest request,
 			Consumer<Map<String, Object>> consumer) throws IOException {
+		return process(request, consumer, false);
+	}
+
+	/**
+	 * Execute a branch job whose persisted cross-analysis dependencies were
+	 * already resolved by the dispatcher.
+	 */
+	public Map<String, Object> processAfterDependencyGate(
+			BranchProcessRequest request,
+			Consumer<Map<String, Object>> consumer) throws IOException {
+		return process(request, consumer, true);
+	}
+
+	private Map<String, Object> process(
+			BranchProcessRequest request,
+			Consumer<Map<String, Object>> consumer,
+			boolean dependencyGateSatisfied) throws IOException {
 		Project project = projectService.getProjectWithConnections(request.getProjectId());
 
-		// PR jobs are registered before async processing starts and remain active
-		// until their source-branch lock is released and analysis is persisted.
-		branchAnalysisGateService.awaitPrAnalysis(
-				project.getId(), request.getTargetBranchName(),
-				request.getSourcePrNumber(), consumer);
+		if (!dependencyGateSatisfied) {
+			// Scheduled/direct callers without a durable dispatch job retain the
+			// broad compatibility barrier. Webhook and pipeline dispatchers use the
+			// job-id snapshot barrier before calling processAfterDependencyGate().
+			branchAnalysisGateService.awaitPrAnalysis(
+					project.getId(), request.getTargetBranchName(),
+					request.getSourcePrNumber(), consumer);
+		}
 		refreshMergedBranchHead(project, request);
 
 		Optional<String> lockKey = analysisLockService.acquireLockWithWait(
@@ -724,8 +744,12 @@ public class BranchAnalysisProcessor {
 		}
 
 		// Check commit coverage by open/merged PRs
+		boolean exactTargetBranchCoverage = project.getConfiguration() != null
+				&& project.getConfiguration().ragConfig() != null
+				&& project.getConfiguration().ragConfig().isMultiBranchEnabled();
 		CommitCoverageService.CoverageResult coverage = commitCoverageService.checkCoverage(
-				project.getId(), request.getTargetBranchName(), unanalyzedCommits);
+				project.getId(), request.getTargetBranchName(), unanalyzedCommits,
+				exactTargetBranchCoverage);
 
 		switch (coverage.status()) {
 			case FULLY_COVERED:
@@ -858,10 +882,19 @@ public class BranchAnalysisProcessor {
 				return;
 			}
 
-			String targetBranch = request.getTargetBranchName();
-			String baseBranch = ragOperationsService.getBaseBranch(project);
+				String targetBranch = request.getTargetBranchName();
+				String baseBranch = ragOperationsService.getBaseBranch(project);
 
-			// Health check: verify RAG pipeline is reachable before starting
+				if (!targetBranch.equals(baseBranch)
+						&& !ragOperationsService.shouldHaveBranchIndex(project, targetBranch)) {
+					log.info("Skipping RAG update for non-retained branch: project={}, branch={}",
+							project.getId(), targetBranch);
+					EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
+							"Branch is analyzed but is not configured as a retained RAG branch");
+					return;
+				}
+
+				// Health check: verify RAG pipeline is reachable before starting
 			if (!ragOperationsService.isRagPipelineHealthy()) {
 				log.warn("RAG pipeline is not reachable — skipping incremental update for project={}",
 						project.getId());

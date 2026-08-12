@@ -1,11 +1,16 @@
 from pathlib import Path
-from typing import List, Optional, Generator
+from typing import List, Optional, Generator, Mapping
 import logging
 import re
 
 from llama_index.core.schema import Document
-from ..utils.utils import detect_language_from_path, should_exclude_file, should_include_file, is_binary_file, clean_archive_path
+from ..utils.utils import detect_language_from_path, should_exclude_file, should_include_file, clean_archive_path
 from ..models.config import RAGConfig
+from .source_tree import (
+    RepositorySourceTreeError,
+    iter_repository_regular_file_paths,
+    read_repository_file_bytes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +41,15 @@ def _is_generated_asset(filename: str) -> bool:
     return has_letter and has_digit
 
 
+def _decode_text(content: bytes) -> str | None:
+    if b"\0" in content:
+        return None
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 class DocumentLoader:
     """Load repository files as documents"""
 
@@ -46,7 +60,8 @@ class DocumentLoader:
         self,
         repo_path: Path,
         extra_include_patterns: Optional[List[str]] = None,
-        extra_exclude_patterns: Optional[List[str]] = None
+        extra_exclude_patterns: Optional[List[str]] = None,
+        expected_file_sha256: Optional[Mapping[str, str]] = None,
     ) -> Generator[Path, None, None]:
         """Iterate over repository files without loading them into memory.
         
@@ -78,15 +93,20 @@ class DocumentLoader:
         # Include patterns (project-specific only, no defaults)
         include_patterns = extra_include_patterns if extra_include_patterns else []
 
+        candidates = (
+            (repo_path / Path(path) for path in sorted(expected_file_sha256))
+            if expected_file_sha256 is not None
+            else (
+                repo_path / path
+                for path in iter_repository_regular_file_paths(repo_path)
+            )
+        )
         total_entries = 0
         yielded_count = 0
-        for file_path in repo_path.rglob("*"):
+        for file_path in candidates:
             total_entries += 1
-            if not file_path.is_file():
-                continue
-
             relative_path = file_path.relative_to(repo_path)
-            relative_path_str = str(relative_path)
+            relative_path_str = relative_path.as_posix()
 
             # Step 1: Apply inclusion filter first
             # If include patterns are specified, only files matching at least one pattern pass
@@ -97,10 +117,30 @@ class DocumentLoader:
             if should_exclude_file(relative_path_str, exclude_patterns):
                 continue
 
-            if file_path.stat().st_size > self.config.max_file_size_bytes:
+            expected_digest = (
+                expected_file_sha256.get(relative_path_str)
+                if expected_file_sha256 is not None
+                else None
+            )
+            try:
+                content = read_repository_file_bytes(
+                    repo_path,
+                    relative_path,
+                    expected_sha256=expected_digest,
+                )
+            except RepositorySourceTreeError:
+                if expected_file_sha256 is not None:
+                    raise
+                logger.warning(
+                    "Cannot safely inspect repository file, skipping: %s",
+                    relative_path_str,
+                )
                 continue
 
-            if is_binary_file(file_path):
+            if len(content) > self.config.max_file_size_bytes:
+                continue
+
+            if _decode_text(content) is None:
                 continue
 
             # Skip build-tool-generated assets with content hashes
@@ -121,6 +161,7 @@ class DocumentLoader:
         branch: str,
         commit: str,
         strict: bool = False,
+        expected_file_sha256: Optional[Mapping[str, str]] = None,
     ) -> List[Document]:
         """Load a batch of files as Documents.
         
@@ -149,7 +190,22 @@ class DocumentLoader:
                 continue
 
             try:
-                text = full_path.read_text(encoding="utf-8")
+                expected_digest = None
+                if expected_file_sha256 is not None:
+                    expected_digest = expected_file_sha256.get(
+                        Path(relative_path).as_posix()
+                    )
+                    if expected_digest is None:
+                        raise RepositorySourceTreeError(
+                            "repository source file was not present in the "
+                            f"attested tree: {relative_path_str}"
+                        )
+                content = read_repository_file_bytes(
+                    repo_base,
+                    relative_path,
+                    expected_sha256=expected_digest,
+                )
+                text = content.decode("utf-8")
 
                 if not text or not text.strip():
                     continue
@@ -209,85 +265,20 @@ class DocumentLoader:
             commit: Commit hash
             extra_exclude_patterns: Additional patterns to exclude (from project config)
         """
-        documents = []
-
-        if not repo_path.exists():
-            logger.error(f"Repository path does not exist: {repo_path}")
-            return documents
-
-        # Combine default exclude patterns with project-specific ones
-        exclude_patterns = list(self.config.excluded_patterns)
-        if extra_exclude_patterns:
-            exclude_patterns.extend(extra_exclude_patterns)
-            logger.info(f"Using {len(extra_exclude_patterns)} additional exclude patterns from project config: {extra_exclude_patterns}")
-
-        excluded_count = 0
-        for file_path in repo_path.rglob("*"):
-            if not file_path.is_file():
-                continue
-
-            relative_path = str(file_path.relative_to(repo_path))
-
-            if should_exclude_file(relative_path, exclude_patterns):
-                logger.debug(f"Excluding file: {relative_path}")
-                excluded_count += 1
-                continue
-
-            if file_path.stat().st_size > self.config.max_file_size_bytes:
-                logger.warning(f"File too large, skipping: {relative_path}")
-                continue
-
-            if is_binary_file(file_path):
-                logger.debug(f"Binary file, skipping: {relative_path}")
-                continue
-
-            if _is_generated_asset(file_path.name):
-                logger.debug(f"Generated asset, skipping: {relative_path}")
-                excluded_count += 1
-                continue
-
-            try:
-                text = file_path.read_text(encoding="utf-8")
-
-                # Skip empty files
-                if not text or not text.strip():
-                    logger.debug(f"Empty file, skipping: {relative_path}")
-                    continue
-
-            except UnicodeDecodeError:
-                logger.warning(f"Cannot decode file, skipping: {relative_path}")
-                continue
-            except Exception as e:
-                logger.error(f"Error reading file {relative_path}: {e}")
-                continue
-
-            language = detect_language_from_path(str(file_path))
-            filetype = file_path.suffix.lstrip('.')
-
-            # Clean archive root prefix from path
-            clean_path = clean_archive_path(relative_path)
-
-            metadata = {
-                "workspace": workspace,
-                "project": project,
-                "branch": branch,
-                "path": clean_path,
-                "commit": commit,
-                "language": language,
-                "filetype": filetype,
-            }
-
-            doc = Document(
-                text=text,
-                metadata=metadata
-                # Don't set id_ - let LlamaIndex/Qdrant generate it automatically
+        file_paths = list(
+            self.iter_repository_files(
+                repo_path,
+                extra_exclude_patterns=extra_exclude_patterns,
             )
-
-            documents.append(doc)
-            logger.debug(f"Loaded document: {clean_path} ({language})")
-
-        logger.info(f"Loaded {len(documents)} documents from {repo_path} (excluded {excluded_count} files by patterns)")
-        return documents
+        )
+        return self.load_file_batch(
+            file_paths,
+            repo_path,
+            workspace,
+            project,
+            branch,
+            commit,
+        )
 
     def load_specific_files(
         self,
@@ -306,23 +297,8 @@ class DocumentLoader:
             full_path = repo_base / relative_file_path
             relative_path = str(relative_file_path)
             
-            if not full_path.exists():
-                logger.warning(f"File does not exist: {full_path} (relative: {relative_path})")
-                continue
-
-            if not full_path.is_file():
-                continue
-
             if should_exclude_file(relative_path, self.config.excluded_patterns):
                 logger.debug(f"Excluding file: {relative_path}")
-                continue
-
-            if full_path.stat().st_size > self.config.max_file_size_bytes:
-                logger.warning(f"File too large, skipping: {relative_path}")
-                continue
-
-            if is_binary_file(full_path):
-                logger.debug(f"Binary file, skipping: {relative_path}")
                 continue
 
             if _is_generated_asset(full_path.name):
@@ -330,7 +306,17 @@ class DocumentLoader:
                 continue
 
             try:
-                text = full_path.read_text(encoding="utf-8")
+                content = read_repository_file_bytes(
+                    repo_base,
+                    relative_file_path,
+                )
+                if len(content) > self.config.max_file_size_bytes:
+                    logger.warning(f"File too large, skipping: {relative_path}")
+                    continue
+                text = _decode_text(content)
+                if text is None:
+                    logger.debug(f"Binary file, skipping: {relative_path}")
+                    continue
             except Exception as e:
                 logger.error(f"Error reading file {relative_path}: {e}")
                 continue

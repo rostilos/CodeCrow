@@ -10,6 +10,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.rostilos.codecrow.queue.RedisQueueService;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus;
+import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexGenerationRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -34,6 +36,9 @@ public class AiAnalysisClient {
 
     private final RedisQueueService queueService;
     private final ObjectMapper objectMapper;
+
+    @Autowired(required = false)
+    private RagBranchIndexGenerationRepository branchGenerationRepository;
 
     static final String INACTIVITY_TIMEOUT_MINUTES_KEY =
             "ANALYSIS_QUEUE_INACTIVITY_TIMEOUT_MINUTES";
@@ -348,6 +353,25 @@ public class AiAnalysisClient {
         payload.put("previousCommitHash", request.getPreviousCommitHash());
         payload.put("currentCommitHash", request.getCurrentCommitHash());
         payload.put("baseCommitHash", request.getBaseCommitHash());
+        if (branchGenerationRepository != null
+                && request.getProjectId() != null
+                && request.getTargetBranchName() != null
+                && request.getBaseCommitHash() != null) {
+            branchGenerationRepository.findAvailableExactGeneration(
+                            request.getProjectId(),
+                            request.getTargetBranchName(),
+                            request.getBaseCommitHash(),
+                            List.of(
+                                    RagBranchIndexGenerationStatus.ACTIVE,
+                                    RagBranchIndexGenerationStatus.SUPERSEDED))
+                    .stream()
+                    .findFirst()
+                    .ifPresent(generation -> {
+                        payload.put("ragCollectionTarget", generation.getCollectionName());
+                        payload.put("ragBaseGenerationManifestSha256",
+                                generation.getManifestDigest());
+                    });
+        }
         payload.put("previousCodeAnalysisIssues", request.getPreviousCodeAnalysisIssues());
         payload.put("reconciliationFileContents", request.getReconciliationFileContents());
         payload.put("projectCapabilities", request.getProjectCapabilities());

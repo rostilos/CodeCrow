@@ -12,6 +12,7 @@ from llama_index.core.vector_stores import MetadataFilters, MetadataFilter, Filt
 from qdrant_client.http.models import FieldCondition, MatchValue, MatchAny
 
 from .base import RAGQueryBase
+from ..core.repository_overlay import IncrementalIndexPreconditionError
 from ..models.instructions import InstructionType, format_query
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,9 @@ class SemanticSearchMixin:
             branch: str,
             top_k: int = 10,
             filter_language: Optional[str] = None,
-            instruction_type: InstructionType = InstructionType.GENERAL
+            instruction_type: InstructionType = InstructionType.GENERAL,
+            expected_revision: Optional[str] = None,
+            collection_target: Optional[str] = None,
     ) -> List[Dict]:
         """Perform semantic search in the repository for a single branch."""
         return self.semantic_search_multi_branch(
@@ -46,7 +49,11 @@ class SemanticSearchMixin:
             branches=[branch],
             top_k=top_k,
             filter_language=filter_language,
-            instruction_type=instruction_type
+            instruction_type=instruction_type,
+            expected_revisions=(
+                {branch: expected_revision} if expected_revision else None
+            ),
+            collection_target=collection_target,
         )
 
     def semantic_search_multi_branch(
@@ -58,7 +65,9 @@ class SemanticSearchMixin:
             top_k: int = 10,
             filter_language: Optional[str] = None,
             instruction_type: InstructionType = InstructionType.GENERAL,
-            excluded_paths: Optional[List[str]] = None
+            excluded_paths: Optional[List[str]] = None,
+            expected_revisions: Optional[Dict[str, str]] = None,
+            collection_target: Optional[str] = None,
     ) -> List[Dict]:
         """Perform semantic search across multiple branches with filtering.
 
@@ -66,7 +75,10 @@ class SemanticSearchMixin:
             branches: List of branches to search (e.g., ['feature/xyz', 'main'])
             excluded_paths: Files to exclude from results (e.g., deleted files)
         """
-        collection_name = self._get_project_collection_name(workspace, project)
+        collection_name = (
+            collection_target
+            or self._get_project_collection_name(workspace, project)
+        )
         excluded_paths = excluded_paths or []
 
         logger.info(f"Multi-branch search in {collection_name} branches={branches} for: {query[:50]}...")
@@ -74,21 +86,42 @@ class SemanticSearchMixin:
         try:
             if not self._collection_or_alias_exists(collection_name):
                 logger.warning(f"Collection {collection_name} does not exist")
+                if expected_revisions is not None:
+                    raise IncrementalIndexPreconditionError(
+                        "revision-bound semantic-search collection is unavailable"
+                    )
                 return []
 
-            self._observe_branches(collection_name, branches)
+            observer = getattr(self, "_observe_branches", None)
+            if callable(observer):
+                observer(collection_name, branches)
+            else:
+                self._require_compatible_branches(collection_name, branches)
 
             # Get or create cached VectorStoreIndex
             index = self._get_or_create_index(collection_name)
 
             # Create retriever with branch filter
+            if expected_revisions and len(branches) != 1:
+                raise ValueError(
+                    "revision-bound semantic search requires one authoritative branch"
+                )
             filters = []
             for branch in branches:
                 filters.append(MetadataFilter(key="branch", value=branch, operator=FilterOperator.EQ))
+                if expected_revisions and branch in expected_revisions:
+                    filters.append(MetadataFilter(
+                        key="commit",
+                        value=expected_revisions[branch],
+                        operator=FilterOperator.EQ,
+                    ))
 
             branch_filters = MetadataFilters(
                 filters=filters,
-                condition="or" if len(filters) > 1 else "and"
+                condition=(
+                    "and" if expected_revisions
+                    else ("or" if len(filters) > 1 else "and")
+                )
             )
             # LlamaIndex's strict MetadataFilter value model does not accept
             # booleans even though Qdrant payloads do. Retrieve a bounded
@@ -118,6 +151,7 @@ class SemanticSearchMixin:
                         "repository_snapshot",
                         "repository_facts_state",
                         "architecture_source",
+                        "repository_generation_manifest",
                     )
                 ):
                     continue
@@ -143,6 +177,8 @@ class SemanticSearchMixin:
 
         except Exception as e:
             logger.error(f"Error during multi-branch semantic search: {e}")
+            if expected_revisions is not None:
+                raise
             return []
 
     def _dedupe_by_branch_priority(

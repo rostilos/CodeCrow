@@ -4,11 +4,16 @@ Issue reconciliation and deduplication logic for incremental reviews.
 import logging
 import difflib
 import asyncio
+import json
 import os
+import re
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
-from model.output_schemas import CodeReviewIssue, DeduplicatedIssueList
+from model.output_schemas import (
+    CodeReviewIssue,
+    SemanticDeduplicationDecision,
+)
 from service.review.candidate_ledger import CandidateEvidenceLedger
 from utils.llm_response import extract_llm_response_text
 from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
@@ -159,6 +164,263 @@ def _issue_payload(issue: Any) -> Dict[str, Any]:
     return vars(issue) if hasattr(issue, "__dict__") else {}
 
 
+_TEXT_TOKEN_RE = re.compile(r"[A-Za-z0-9_$]+")
+_ROOT_STOP_WORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "because", "by", "can",
+    "could", "for", "from", "has", "have", "if", "in", "into", "is", "it",
+    "may", "of", "on", "or", "that", "the", "their", "this", "to", "was",
+    "were", "will", "with", "would",
+}
+_SEVERITY_RANK = {
+    "CRITICAL": 5,
+    "HIGH": 4,
+    "MEDIUM": 3,
+    "LOW": 2,
+    "INFO": 1,
+}
+
+
+def _normalized_file(data: Dict[str, Any]) -> str:
+    value = str(data.get("file") or data.get("filePath") or "").strip()
+    normalized = value.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.lstrip("/")
+
+
+def _split_reason_locations(value: Any) -> tuple[str, set[str]]:
+    """Separate root-cause prose from host-generated affected locations."""
+    body: List[str] = []
+    locations: set[str] = set()
+    for line in str(value or "").splitlines():
+        stripped = line.strip()
+        if stripped.casefold().startswith("also affects:"):
+            raw_locations = stripped.split(":", 1)[1]
+            locations.update(
+                item.strip()
+                for item in raw_locations.split(",")
+                if item.strip()
+            )
+        else:
+            body.append(line)
+    return "\n".join(body).strip(), locations
+
+
+def _normalized_text(value: Any) -> str:
+    body, _ = _split_reason_locations(value)
+    return " ".join(token.casefold() for token in _TEXT_TOKEN_RE.findall(body))
+
+
+def _meaningful_tokens(value: Any) -> set[str]:
+    return {
+        token
+        for token in _normalized_text(value).split()
+        if token not in _ROOT_STOP_WORDS and len(token) > 1
+    }
+
+
+def _text_similarity(left: Any, right: Any) -> float:
+    normalized_left = _normalized_text(left)
+    normalized_right = _normalized_text(right)
+    if not normalized_left or not normalized_right:
+        return 0.0
+    if normalized_left == normalized_right:
+        return 1.0
+    return difflib.SequenceMatcher(
+        None,
+        normalized_left,
+        normalized_right,
+    ).ratio()
+
+
+def _token_overlap(left: Any, right: Any) -> tuple[int, float, float]:
+    left_tokens = _meaningful_tokens(left)
+    right_tokens = _meaningful_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0, 0.0, 0.0
+    overlap = len(left_tokens & right_tokens)
+    containment = overlap / min(len(left_tokens), len(right_tokens))
+    union = len(left_tokens | right_tokens)
+    return overlap, containment, overlap / union if union else 0.0
+
+
+def _line_number(data: Dict[str, Any]) -> int:
+    try:
+        return int(data.get("line") or data.get("lineNumber") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _issue_id(issue: Any) -> str:
+    return str(_issue_payload(issue).get("id") or "").strip()
+
+
+def _issue_location(issue: Any) -> str:
+    data = _issue_payload(issue)
+    file_path = _normalized_file(data)
+    line = _line_number(data)
+    return f"{file_path}:{line}" if line > 0 else file_path
+
+
+def _history_identity_rank(issue: Any) -> tuple[int, int, str]:
+    issue_id = _issue_id(issue)
+    if not issue_id:
+        return 0, 0, ""
+    try:
+        # Prefer the oldest numeric identity when historical duplicates already
+        # exist, preserving the longest-lived review/comment lineage.
+        return 1, -int(issue_id), issue_id
+    except ValueError:
+        return 1, 0, issue_id
+
+
+def _representation_rank(issue: Any) -> tuple[int, int, int, int]:
+    data = _issue_payload(issue)
+    line = _line_number(data)
+    snippet = str(data.get("codeSnippet") or data.get("code_snippet") or "").strip()
+    reason, _ = _split_reason_locations(data.get("reason") or "")
+    fix = str(data.get("suggestedFixDescription") or "").strip()
+    return (
+        1 if snippet else 0,
+        1 if line > 1 else 0,
+        len(reason),
+        len(fix),
+    )
+
+
+def _set_issue_field(issue: Any, name: str, value: Any) -> None:
+    if hasattr(issue, name):
+        setattr(issue, name, value)
+
+
+def _merge_duplicate_issues(
+    left: Any,
+    right: Any,
+    *,
+    prefer_left: bool = False,
+) -> Any:
+    """Merge two proven root-cause duplicates without losing locations.
+
+    A persisted identity wins over a fresh object, while a fresh exact anchor
+    refreshes a stale historical location. The function mutates and returns one
+    input object so candidate-ledger provenance remains attached.
+    """
+    left_history = _history_identity_rank(left)
+    right_history = _history_identity_rank(right)
+    if left_history != right_history:
+        canonical = left if left_history > right_history else right
+    elif prefer_left:
+        canonical = left
+    else:
+        canonical = (
+            left
+            if _representation_rank(left) >= _representation_rank(right)
+            else right
+        )
+    other = right if canonical is left else left
+
+    canonical_data = _issue_payload(canonical)
+    other_data = _issue_payload(other)
+    left_location_before_merge = _issue_location(left)
+    right_location_before_merge = _issue_location(right)
+    same_file = _normalized_file(canonical_data) == _normalized_file(other_data)
+
+    # A current fresh anchor is stronger than a carried historical hint. For two
+    # fresh findings, prefer the representation with the stronger concrete anchor.
+    if same_file:
+        if bool(_issue_id(canonical)) != bool(_issue_id(other)):
+            anchor_source = other if not _issue_id(other) else canonical
+        elif prefer_left:
+            anchor_source = canonical
+        else:
+            anchor_source = (
+                canonical
+                if _representation_rank(canonical) >= _representation_rank(other)
+                else other
+            )
+        anchor_data = _issue_payload(anchor_source)
+        for field in ("file", "line", "scope", "codeSnippet"):
+            value = anchor_data.get(field)
+            if value not in (None, ""):
+                _set_issue_field(canonical, field, value)
+
+    canonical_reason, canonical_locations = _split_reason_locations(
+        canonical_data.get("reason")
+    )
+    other_reason, other_locations = _split_reason_locations(other_data.get("reason"))
+    detail_source = canonical if len(canonical_reason) >= len(other_reason) else other
+    base_reason = canonical_reason if detail_source is canonical else other_reason
+
+    locations = set(canonical_locations) | set(other_locations)
+    for value in canonical_data.get("relatedLocations") or []:
+        if str(value).strip():
+            locations.add(str(value).strip())
+    for value in other_data.get("relatedLocations") or []:
+        if str(value).strip():
+            locations.add(str(value).strip())
+
+    primary_location = _issue_location(canonical)
+    if not same_file:
+        locations.update({
+            left_location_before_merge,
+            right_location_before_merge,
+        })
+    elif (
+        (not _issue_id(left) and not _issue_id(right))
+        or (
+            _issue_id(left)
+            and _issue_id(right)
+            and _issue_id(left) != _issue_id(right)
+        )
+    ):
+        # Distinct occurrences of one root cause remain visible after merging.
+        # A history/current pair is excluded because its line difference usually
+        # represents a refreshed anchor for the same persisted occurrence.
+        locations.update({
+            left_location_before_merge,
+            right_location_before_merge,
+        })
+    locations.discard("")
+    locations.discard(primary_location)
+    sorted_locations = sorted(locations)
+    merged_reason = base_reason
+    if sorted_locations:
+        merged_reason = (
+            f"{base_reason}\n\nAlso affects: {', '.join(sorted_locations)}"
+        ).strip()
+    _set_issue_field(canonical, "reason", merged_reason)
+    _set_issue_field(canonical, "relatedLocations", sorted_locations)
+
+    for field in ("title", "suggestedFixDescription", "suggestedFixDiff"):
+        current = canonical_data.get(field)
+        alternative = other_data.get(field)
+        best = max(
+            (current, alternative),
+            key=lambda value: len(str(value)) if value else 0,
+        )
+        if best and best != current:
+            _set_issue_field(canonical, field, best)
+
+    left_severity = str(_issue_payload(left).get("severity") or "").upper()
+    right_severity = str(_issue_payload(right).get("severity") or "").upper()
+    highest = max(
+        (left_severity, right_severity),
+        key=lambda value: _SEVERITY_RANK.get(value, 0),
+    )
+    if highest:
+        _set_issue_field(canonical, "severity", highest)
+
+    evidence_refs = sorted({
+        str(value).strip()
+        for issue in (left, right)
+        for value in (_issue_payload(issue).get("evidenceRefs") or [])
+        if str(value).strip()
+    })
+    if evidence_refs:
+        _set_issue_field(canonical, "evidenceRefs", evidence_refs)
+    return canonical
+
+
 def _normalized_anchor(value: Any) -> str:
     return " ".join(str(value or "").split())
 
@@ -191,7 +453,7 @@ def _issues_share_exact_plugin_proof(
     left: Dict[str, Any],
     right: Dict[str, Any],
 ) -> bool:
-    """Use plugin proof identity as a prose-independent root-cause key."""
+    """Use shared plugin proof to nominate a semantic duplicate candidate."""
     left_kind = str(
         left.get("claimKind") or left.get("claim_kind") or ""
     ).strip()
@@ -222,44 +484,177 @@ def issues_are_conservative_duplicates(
     left: Any,
     right: Any,
 ) -> bool:
-    """Require location, category, anchor, and root-cause agreement.
+    """Return true only for deterministic, effectively exact root identities.
 
-    Similar prose alone is not an issue identity. Repeated guard/validation
-    defects in different files or at different lines remain separate findings.
+    Category and severity drift do not make a real duplicate independent. At
+    this tier, however, prose similarity alone is insufficient: uncertain pairs
+    are delegated to the grouped semantic pass and retained if that pass fails.
     """
     left_data = _issue_payload(left)
     right_data = _issue_payload(right)
-    left_file = str(
-        left_data.get("file") or left_data.get("filePath") or ""
-    ).replace("\\", "/")
-    right_file = str(
-        right_data.get("file") or right_data.get("filePath") or ""
-    ).replace("\\", "/")
+    left_file = _normalized_file(left_data)
+    right_file = _normalized_file(right_data)
     if not left_file or left_file != right_file:
         return False
 
-    # Selected plugins supply stable proof identities. An exact match ties both
-    # candidates to the same framework/language relationship even when model
-    # prose, category, or the chosen line anchor differs across batches.
+    left_title = _normalized_text(left_data.get("title") or "")
+    right_title = _normalized_text(right_data.get("title") or "")
+    left_reason = _normalized_text(
+        left_data.get("reason") or left_data.get("description") or ""
+    )
+    right_reason = _normalized_text(
+        right_data.get("reason") or right_data.get("description") or ""
+    )
+    exact_narrative = bool(
+        left_title
+        and left_title == right_title
+        and left_reason
+        and left_reason == right_reason
+    )
+    if exact_narrative:
+        return True
+
+    if not _issues_share_exact_anchor(left_data, right_data):
+        return False
+    if left_reason and left_reason == right_reason:
+        return True
+    if (
+        left_reason
+        and right_reason
+        and _text_similarity(left_reason, right_reason) >= 0.88
+    ):
+        return True
+    return bool(
+        left_title
+        and left_title == right_title
+        and _text_similarity(left_reason, right_reason) >= 0.94
+    )
+
+
+def issues_are_semantic_dedup_candidates(left: Any, right: Any) -> bool:
+    """Select plausible duplicate pairs for semantic comparison.
+
+    This is a candidate-recall operation, not a deletion decision. It is broad
+    enough to include anchor/category wording drift, while cross-file grouping
+    requires a shared non-generic title and substantial technical-token overlap.
+    """
+    if issues_are_conservative_duplicates(left, right):
+        return True
+
+    left_data = _issue_payload(left)
+    right_data = _issue_payload(right)
+    left_file = _normalized_file(left_data)
+    right_file = _normalized_file(right_data)
+    if not left_file or not right_file:
+        return False
+
+    # A stable plugin fact is strong enough to justify semantic comparison, but
+    # not deterministic deletion: one structural relationship can support more
+    # than one genuinely distinct defect claim.
     if _issues_share_exact_plugin_proof(left_data, right_data):
         return True
 
-    left_category = str(left_data.get("category") or "").upper()
-    right_category = str(right_data.get("category") or "").upper()
-    if not left_category or left_category != right_category:
-        return False
-    if not _issues_share_exact_anchor(left_data, right_data):
-        return False
-
+    left_title = left_data.get("title") or ""
+    right_title = right_data.get("title") or ""
     left_reason = left_data.get("reason") or left_data.get("description") or ""
-    right_reason = (
-        right_data.get("reason") or right_data.get("description") or ""
+    right_reason = right_data.get("reason") or right_data.get("description") or ""
+    title_similarity = _text_similarity(left_title, right_title)
+    reason_similarity = _text_similarity(left_reason, right_reason)
+    title_overlap, title_containment, title_jaccard = _token_overlap(
+        left_title,
+        right_title,
     )
-    return is_semantically_similar(
-        str(left_reason),
-        str(right_reason),
-        threshold=0.82,
+    reason_overlap, reason_containment, reason_jaccard = _token_overlap(
+        left_reason,
+        right_reason,
     )
+
+    if left_file != right_file:
+        exact_title = bool(
+            _normalized_text(left_title)
+            and _normalized_text(left_title) == _normalized_text(right_title)
+        )
+        # Cross-file occurrences are candidates only for a distinctive shared
+        # root signature. Generic repeated warnings remain independent.
+        return bool(
+            exact_title
+            and len(_meaningful_tokens(left_title)) >= 4
+            and reason_overlap >= 4
+            and reason_containment >= 0.50
+            and reason_jaccard >= 0.25
+        )
+
+    left_line = _line_number(left_data)
+    right_line = _line_number(right_data)
+    near_line = bool(
+        left_line > 0
+        and right_line > 0
+        and abs(left_line - right_line) <= 3
+    )
+    exact_anchor = _issues_share_exact_anchor(left_data, right_data)
+    exact_title = bool(
+        _normalized_text(left_title)
+        and _normalized_text(left_title) == _normalized_text(right_title)
+    )
+
+    if exact_title and (
+        reason_similarity >= 0.50
+        or (reason_overlap >= 3 and reason_containment >= 0.45)
+    ):
+        return True
+
+    anchor_related = exact_anchor or near_line
+    title_related = bool(
+        title_similarity >= 0.48
+        or (title_overlap >= 3 and title_containment >= 0.55)
+        or title_jaccard >= 0.42
+    )
+    reason_related = bool(
+        reason_similarity >= 0.46
+        or (reason_overlap >= 4 and reason_containment >= 0.50)
+        or reason_jaccard >= 0.36
+    )
+    if title_related and (
+        reason_similarity >= 0.70
+        or (reason_overlap >= 5 and reason_containment >= 0.65)
+    ):
+        # Strong same-file narrative identity can drift to a nearby helper or
+        # call site. Send it for semantic judgment without deleting locally.
+        return True
+    return anchor_related and title_related and reason_related
+
+
+def _semantic_candidate_groups(
+    issues: Sequence[CodeReviewIssue],
+) -> List[List[CodeReviewIssue]]:
+    """Build connected candidate components; singleton findings cost no tokens."""
+    count = len(issues)
+    parents = list(range(count))
+
+    def find(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def union(left_index: int, right_index: int) -> None:
+        left_root = find(left_index)
+        right_root = find(right_index)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    for left_index in range(count):
+        for right_index in range(left_index + 1, count):
+            if issues_are_semantic_dedup_candidates(
+                issues[left_index],
+                issues[right_index],
+            ):
+                union(left_index, right_index)
+
+    groups: Dict[int, List[CodeReviewIssue]] = defaultdict(list)
+    for index, issue in enumerate(issues):
+        groups[find(index)].append(issue)
+    return [group for group in groups.values() if len(group) > 1]
 
 
 def deduplicate_issues(issues: List[Any]) -> List[dict]:
@@ -369,28 +764,33 @@ def deduplicate_final_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIs
     Final deduplication pass after ALL issue-finding stages complete
     (Stage 1, Reconciliation, Verification, Stage 2 cross-file).
 
-    Conservative deterministic dedup requires the same normalized file,
-    category, exact line or exact current-source snippet, and closely matching
-    root-cause text. Similar prose by itself never suppresses another finding.
+    The deterministic tier merges only effectively exact root identities. It
+    preserves the best anchor, highest severity, historical identity, and all
+    additional affected locations. Ambiguous semantic pairs remain untouched
+    for the grouped LLM pass.
     """
     if not issues:
         return []
 
     deduped: List[CodeReviewIssue] = []
     for issue in issues:
-        if any(
-            issues_are_conservative_duplicates(issue, existing)
-            for existing in deduped
-        ):
-            data = _issue_payload(issue)
-            logger.info(
-                "Final deterministic dedup: suppressed anchored duplicate at "
-                "%s:%s",
-                data.get("file", ""),
-                data.get("line", ""),
-            )
+        duplicate_index = next((
+            index
+            for index, existing in enumerate(deduped)
+            if issues_are_conservative_duplicates(issue, existing)
+        ), None)
+        if duplicate_index is None:
+            deduped.append(issue)
             continue
-        deduped.append(issue)
+        existing = deduped[duplicate_index]
+        merged = _merge_duplicate_issues(existing, issue)
+        deduped[duplicate_index] = merged
+        data = _issue_payload(issue)
+        logger.info(
+            "Final deterministic dedup: merged exact root identity at %s:%s",
+            data.get("file", ""),
+            data.get("line", ""),
+        )
 
     original = len(issues)
     final = len(deduped)
@@ -405,22 +805,27 @@ def deduplicate_final_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIs
 
 _DEDUP_BATCH_SIZE = 50
 _DEDUP_MAX_PARALLEL = max(1, _env_int("REVIEW_DEDUP_MAX_PARALLEL", 4))
+_DEDUP_BATCH_CHAR_BUDGET = max(
+    8_000,
+    _env_int("REVIEW_DEDUP_BATCH_CHAR_BUDGET", 48_000),
+)
 
 _DEDUP_SYSTEM_PROMPT = (
-    "You are a code review deduplication assistant.  You will receive a list of "
-    "code-review issues (each with an index, file, line, severity, category, and "
-    "reason).  Your task is to identify **semantic duplicates** — issues that "
-    "describe the same underlying problem even if they use different wording, "
-    "slightly different line numbers in the same file, or were found by different "
-    "analysis stages.\n\n"
+    "You are a code-review root-cause deduplication assistant. You receive only "
+    "host-selected candidate groups; findings outside these groups are never sent "
+    "and are automatically retained. Identify only HIGH-confidence duplicate "
+    "occurrences that describe one actionable root cause.\n\n"
     "Rules:\n"
-    "1. Two issues are duplicates if they point to the SAME root cause in the "
-    "SAME file (small line-number differences are OK).\n"
-    "2. When you find duplicates, KEEP the one with the most detailed/useful "
-    "reason text and DROP the rest.\n"
-    "3. Issues in DIFFERENT files are NEVER duplicates of each other.\n"
-    "4. Return ONLY the 0-based indices of the issues you decide to KEEP.\n"
-    "5. If there are no duplicates at all, return every index."
+    "1. Compare findings only inside the same candidate_group.\n"
+    "2. Duplicate means the same causal defect, not merely the same rule, pattern, "
+    "category, or suggested fix. Independent occurrences must remain separate.\n"
+    "3. Category, severity, stage, and small anchor differences do not make the "
+    "same root cause independent.\n"
+    "4. Cross-file findings may be duplicates only when one shared defect causes "
+    "the reported failures; repeated independent defects in different files are not.\n"
+    "5. Select the most current, concrete, and useful representative as keeper.\n"
+    "6. Emit a duplicate group only at HIGH confidence. Omit uncertain pairs; "
+    "omitted findings are retained. Never return a kept-index allowlist."
 )
 
 
@@ -441,6 +846,97 @@ def _format_issues_for_prompt(issues: List[CodeReviewIssue]) -> str:
             f"    Reason: {reason}"
         )
     return "\n".join(lines)
+
+
+def _semantic_issue_payload(
+    issue: CodeReviewIssue,
+    index: int,
+    group_id: str,
+) -> Dict[str, Any]:
+    data = _issue_payload(issue)
+    reason, generated_locations = _split_reason_locations(
+        data.get("reason") or data.get("description") or ""
+    )
+    related_locations = sorted({
+        str(value).strip()
+        for value in (
+            list(data.get("relatedLocations") or [])
+            + list(generated_locations)
+        )
+        if str(value).strip()
+    })
+    return {
+        "index": index,
+        "candidate_group": group_id,
+        "existing_issue_id": str(data.get("id") or ""),
+        "file": _normalized_file(data),
+        "line": _line_number(data),
+        "severity": str(data.get("severity") or ""),
+        "category": str(data.get("category") or ""),
+        "title": str(data.get("title") or ""),
+        # Candidate grouping keeps the request small enough to preserve complete
+        # root-cause prose. No field-level character clipping is performed here.
+        "reason": reason,
+        "suggested_fix": str(data.get("suggestedFixDescription") or ""),
+        "exact_source_anchor": str(
+            data.get("codeSnippet") or data.get("code_snippet") or ""
+        ),
+        "related_locations": related_locations,
+    }
+
+
+def _format_semantic_batch(
+    issues: Sequence[CodeReviewIssue],
+    group_by_index: Dict[int, str],
+) -> str:
+    return json.dumps(
+        [
+            _semantic_issue_payload(issue, index, group_by_index[index])
+            for index, issue in enumerate(issues)
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _build_semantic_dedup_batches(
+    groups: Sequence[Sequence[CodeReviewIssue]],
+) -> List[tuple[List[CodeReviewIssue], Dict[int, str]]]:
+    """Pack whole candidate groups by rendered size without clipping content."""
+    batches: List[tuple[List[CodeReviewIssue], Dict[int, str]]] = []
+    current_groups: List[Sequence[CodeReviewIssue]] = []
+    current_chars = 0
+
+    def group_size(group: Sequence[CodeReviewIssue], group_index: int) -> int:
+        mapping = {index: f"candidate_{group_index}" for index in range(len(group))}
+        return len(_format_semantic_batch(group, mapping))
+
+    def flush() -> None:
+        nonlocal current_groups, current_chars
+        if not current_groups:
+            return
+        issues: List[CodeReviewIssue] = []
+        mapping: Dict[int, str] = {}
+        for local_group_index, group in enumerate(current_groups):
+            group_id = f"candidate_{local_group_index}"
+            for issue in group:
+                mapping[len(issues)] = group_id
+                issues.append(issue)
+        batches.append((issues, mapping))
+        current_groups = []
+        current_chars = 0
+
+    for group_index, group in enumerate(groups):
+        rendered_chars = group_size(group, group_index)
+        if current_groups and current_chars + rendered_chars > _DEDUP_BATCH_CHAR_BUDGET:
+            flush()
+        current_groups.append(group)
+        current_chars += rendered_chars
+        # An unusually detailed group is sent alone with its evidence intact.
+        if rendered_chars > _DEDUP_BATCH_CHAR_BUDGET:
+            flush()
+    flush()
+    return batches
 
 
 def _build_batches(issues: List[CodeReviewIssue],
@@ -477,45 +973,111 @@ def _build_batches(issues: List[CodeReviewIssue],
 async def _dedup_batch_with_llm(
     llm,
     batch: List[CodeReviewIssue],
+    group_by_index: Optional[Dict[int, str]] = None,
 ) -> List[CodeReviewIssue]:
-    """Send one batch to the LLM and return the kept issues."""
-    issues_text = _format_issues_for_prompt(batch)
+    """Merge only validated high-confidence duplicate groups from one batch."""
+    groups = group_by_index or {index: "candidate_0" for index in range(len(batch))}
+    issues_text = _format_semantic_batch(batch, groups)
     prompt = (
         f"{_DEDUP_SYSTEM_PROMPT}\n\n"
-        f"Here are the issues to deduplicate:\n\n{issues_text}\n\n"
-        "Return the kept_indices list."
+        f"Candidate findings JSON:\n{issues_text}\n\n"
+        "Return duplicate_groups only."
     )
 
     try:
         if supports_structured_output(llm):
-            structured_llm = llm.with_structured_output(DeduplicatedIssueList)
-            result: DeduplicatedIssueList = await structured_llm.ainvoke(prompt)
+            structured_llm = llm.with_structured_output(
+                SemanticDeduplicationDecision
+            )
+            result: SemanticDeduplicationDecision = await structured_llm.ainvoke(
+                prompt
+            )
         else:
             logger.info("Structured output skipped for LLM dedup batch; using prompt JSON parsing")
             response = await llm.ainvoke(prompt)
             result = await parse_llm_response(
                 extract_llm_response_text(response),
-                DeduplicatedIssueList,
+                SemanticDeduplicationDecision,
                 llm,
             )
 
-        kept_indices = set(result.kept_indices)
-        # Sanity-check: indices must be within range
-        valid = {i for i in kept_indices if 0 <= i < len(batch)}
-        if not valid:
-            logger.warning(
-                "LLM dedup returned no valid indices — keeping all issues in batch"
-            )
-            return batch
+        removed_indices: set[int] = set()
+        replacements: Dict[int, CodeReviewIssue] = {}
+        accepted_groups = 0
+        for decision in result.duplicate_groups:
+            if str(decision.confidence or "").strip().upper() != "HIGH":
+                continue
+            keeper_index = decision.keeper_index
+            duplicate_indices = list(dict.fromkeys(decision.duplicate_indices))
+            all_indices = [keeper_index, *duplicate_indices]
+            if (
+                keeper_index < 0
+                or keeper_index >= len(batch)
+                or not duplicate_indices
+                or any(index < 0 or index >= len(batch) for index in all_indices)
+                or keeper_index in duplicate_indices
+                or any(index in removed_indices for index in all_indices)
+                or any(
+                    index in replacements and index != keeper_index
+                    for index in duplicate_indices
+                )
+                or len({groups.get(index) for index in all_indices}) != 1
+            ):
+                logger.warning(
+                    "LLM dedup rejected malformed or cross-group decision: %s",
+                    decision.model_dump(),
+                )
+                continue
+            keeper = replacements.get(keeper_index, batch[keeper_index])
+            if not all(
+                issues_are_semantic_dedup_candidates(
+                    keeper,
+                    batch[duplicate_index],
+                )
+                for duplicate_index in duplicate_indices
+            ):
+                logger.warning(
+                    "LLM dedup rejected decision without host candidate evidence: %s",
+                    decision.model_dump(),
+                )
+                continue
+            for duplicate_index in duplicate_indices:
+                keeper = _merge_duplicate_issues(
+                    keeper,
+                    batch[duplicate_index],
+                    prefer_left=True,
+                )
+                removed_indices.add(duplicate_index)
+            replacements[keeper_index] = keeper
+            accepted_groups += 1
 
-        kept = [batch[i] for i in sorted(valid)]
-        dropped = len(batch) - len(kept)
-        if dropped:
-            logger.info(f"LLM dedup batch: kept {len(kept)}/{len(batch)} issues (dropped {dropped})")
+        if not removed_indices:
+            return batch
+        kept: List[CodeReviewIssue] = []
+        emitted_replacements: set[int] = set()
+        for index, issue in enumerate(batch):
+            if index in removed_indices:
+                continue
+            replacement = replacements.get(index, issue)
+            replacement_id = id(replacement)
+            if replacement_id in emitted_replacements:
+                continue
+            emitted_replacements.add(replacement_id)
+            kept.append(replacement)
+        logger.info(
+            "LLM semantic dedup accepted %d group(s): %d → %d candidate issues",
+            accepted_groups,
+            len(batch),
+            len(kept),
+        )
         return kept
 
     except Exception as exc:
-        logger.warning(f"LLM dedup batch failed ({exc}); falling back to algorithmic dedup")
+        logger.warning(
+            "LLM dedup batch failed (%s); retaining ambiguous findings after "
+            "exact deterministic dedup",
+            exc,
+        )
         return deduplicate_final_issues(batch)
 
 
@@ -523,52 +1085,86 @@ async def deduplicate_final_issues_llm(
     llm,
     issues: List[CodeReviewIssue],
 ) -> List[CodeReviewIssue]:
-    """Primary LLM-driven deduplication.
+    """Recall-safe semantic dedup over host-selected candidate components.
 
-    1. Groups issues by filepath.
-    2. Packs filepath-groups into batches of ≤ 50 issues.
-    3. Sends each batch to the LLM to identify semantic duplicates.
-    4. Returns the union of kept issues from all batches.
-
-    Falls back to ``deduplicate_final_issues`` (algorithmic) for any batch
-    where the LLM call fails.
+    Exact identities merge locally first. Only ambiguous components with two or
+    more plausible duplicates consume model tokens, and a failed/incomplete LLM
+    decision retains every ambiguous finding.
     """
     if not issues:
         return []
 
-    if len(issues) <= 1:
-        return issues
+    exact_deduped = deduplicate_final_issues(issues)
+    if len(exact_deduped) <= 1:
+        return exact_deduped
 
-    batches = _build_batches(issues, max_batch_size=_DEDUP_BATCH_SIZE)
+    candidate_groups = _semantic_candidate_groups(exact_deduped)
+    if not candidate_groups:
+        logger.info(
+            "LLM semantic dedup skipped: %d findings produced no ambiguous "
+            "candidate group",
+            len(exact_deduped),
+        )
+        return exact_deduped
+
+    batches = _build_semantic_dedup_batches(candidate_groups)
+    rendered_chars = sum(
+        len(_format_semantic_batch(batch, mapping))
+        for batch, mapping in batches
+    )
+    candidate_count = sum(len(group) for group in candidate_groups)
     logger.info(
-        f"LLM dedup: {len(issues)} issues split into {len(batches)} batch(es) "
-        f"(sizes: {[len(b) for b in batches]}, concurrency={_DEDUP_MAX_PARALLEL})"
+        "LLM semantic dedup: %d/%d findings in %d candidate group(s), "
+        "%d batch(es), input≈%d tokens, concurrency=%d",
+        candidate_count,
+        len(exact_deduped),
+        len(candidate_groups),
+        len(batches),
+        rendered_chars // 4,
+        _DEDUP_MAX_PARALLEL,
     )
 
     semaphore = asyncio.Semaphore(_DEDUP_MAX_PARALLEL)
     batch_results: Dict[int, List[CodeReviewIssue]] = {}
 
-    async def _run_batch(batch_idx: int, batch: List[CodeReviewIssue]) -> tuple[int, List[CodeReviewIssue]]:
+    async def _run_batch(
+        batch_idx: int,
+        batch: List[CodeReviewIssue],
+        mapping: Dict[int, str],
+    ) -> tuple[int, List[CodeReviewIssue]]:
         async with semaphore:
             logger.info(
                 f"LLM dedup: processing batch {batch_idx + 1}/{len(batches)} "
                 f"({len(batch)} issues)"
             )
-            kept = await _dedup_batch_with_llm(llm, batch)
+            kept = await _dedup_batch_with_llm(llm, batch, mapping)
             return batch_idx, kept
 
     tasks = [
-        asyncio.create_task(_run_batch(batch_idx, batch))
-        for batch_idx, batch in enumerate(batches)
+        asyncio.create_task(_run_batch(batch_idx, batch, mapping))
+        for batch_idx, (batch, mapping) in enumerate(batches)
     ]
 
     for completed_task in asyncio.as_completed(tasks):
         batch_idx, kept = await completed_task
         batch_results[batch_idx] = kept
 
-    kept_issues: List[CodeReviewIssue] = []
-    for batch_idx in range(len(batches)):
-        kept_issues.extend(batch_results.get(batch_idx, []))
+    candidate_object_ids = {
+        id(issue)
+        for group in candidate_groups
+        for issue in group
+    }
+    retained_candidate_ids = {
+        id(issue)
+        for kept in batch_results.values()
+        for issue in kept
+    }
+    removed_candidate_ids = candidate_object_ids - retained_candidate_ids
+    kept_issues = [
+        issue
+        for issue in exact_deduped
+        if id(issue) not in removed_candidate_ids
+    ]
 
     original = len(issues)
     final = len(kept_issues)
@@ -592,19 +1188,25 @@ def deduplicate_cross_batch_issues(issues: List[CodeReviewIssue]) -> List[CodeRe
         
     deduped = []
     for issue in issues:
-        if any(
-            issues_are_conservative_duplicates(issue, existing)
-            for existing in deduped
-        ):
-            issue_data = _issue_payload(issue)
-            logger.info(
-                "Cross-batch dedup: suppressed anchored duplicate at %s:%s",
-                issue_data.get("file", ""),
-                issue_data.get("line", ""),
-            )
+        duplicate_index = next((
+            index
+            for index, existing in enumerate(deduped)
+            if issues_are_conservative_duplicates(issue, existing)
+        ), None)
+        if duplicate_index is None:
+            deduped.append(issue)
             continue
-        deduped.append(issue)
-            
+        deduped[duplicate_index] = _merge_duplicate_issues(
+            deduped[duplicate_index],
+            issue,
+        )
+        issue_data = _issue_payload(issue)
+        logger.info(
+            "Cross-batch dedup: merged exact root identity at %s:%s",
+            issue_data.get("file", ""),
+            issue_data.get("line", ""),
+        )
+
     return deduped
 
 async def reconcile_previous_issues(

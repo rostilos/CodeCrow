@@ -72,11 +72,9 @@ class WebhookAsyncProcessorBranchGateTest {
                 "41", "feature/one", "main", "merge-1", null);
 
         when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
-        when(branchAnalysisGateService.awaitTurn(
+        when(branchAnalysisGateService.awaitDependencies(
                 org.mockito.ArgumentMatchers.eq(1L),
-                org.mockito.ArgumentMatchers.eq("main"),
-                org.mockito.ArgumentMatchers.eq(101L),
-                org.mockito.ArgumentMatchers.eq(41L),
+                org.mockito.ArgumentMatchers.eq(branchJob),
                 any()))
                 .thenReturn(BranchAnalysisGateService.GateResult.SUPERSEDED);
 
@@ -90,6 +88,39 @@ class WebhookAsyncProcessorBranchGateTest {
         verify(handler, never()).handle(any(), any(), any());
         verify(jobService, never()).completeJob(any(Job.class));
         verify(ragOperationsService).deletePrFiles(project, 41);
+    }
+
+    @Test
+    void prJobPassesTargetBranchDependencyGateBeforeProviderHandler() {
+        Job prJob = new Job();
+        ReflectionTestUtils.setField(prJob, "id", 102L);
+        prJob.setProject(project);
+        prJob.setJobType(JobType.PR_ANALYSIS);
+        prJob.setBranchName("main");
+        prJob.setPrNumber(42L);
+
+        WebhookPayload payload = new WebhookPayload(
+                EVcsProvider.GITHUB, "pull_request", "repo-id", "repo", "owner",
+                "42", "feature/two", "main", "head-2", null);
+        WebhookHandler.WebhookResult success = WebhookHandler.WebhookResult.ignored(
+                "test dependency ordering");
+
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(branchAnalysisGateService.awaitDependencies(
+                org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(prJob),
+                any())).thenReturn(BranchAnalysisGateService.GateResult.READY);
+        when(handler.handle(any(), any(), any())).thenReturn(success);
+
+        processor.processWebhookInTransaction(
+                EVcsProvider.GITHUB, 1L, payload, handler, prJob);
+
+        var ordered = org.mockito.Mockito.inOrder(branchAnalysisGateService, handler);
+        ordered.verify(branchAnalysisGateService).awaitDependencies(
+                org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(prJob),
+                any());
+        ordered.verify(handler).handle(any(), any(), any());
     }
 
     @Test

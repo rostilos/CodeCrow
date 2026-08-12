@@ -299,6 +299,87 @@ class IssueDeduplicationServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("Exact narrative safety net")
+    class ExactNarrativeDedup {
+
+        @Test
+        @DisplayName("should collapse recreated history despite anchor and category drift")
+        void shouldCollapseRecreatedHistoryWithCurrentAnchor() {
+            CodeAnalysisIssue staleHistory = createIssue(
+                    "src/RetryService.java", 1, IssueCategory.CODE_QUALITY,
+                    IssueSeverity.MEDIUM, "Unbounded retry loop can exhaust workers");
+            staleHistory.setReason("The retry loop has no terminal attempt limit.");
+            staleHistory.setCodeSnippet("public class RetryService {");
+            staleHistory.setIssueFingerprint(null);
+            staleHistory.setContentFingerprint(null);
+
+            CodeAnalysisIssue current = createIssue(
+                    "src/RetryService.java", 1233, IssueCategory.BUG_RISK,
+                    IssueSeverity.HIGH, "Unbounded retry loop can exhaust workers");
+            current.setReason("The retry loop has no terminal attempt limit.");
+            current.setCodeSnippet("while (shouldRetry(response)) {");
+            current.setIssueFingerprint(null);
+            current.setContentFingerprint(null);
+
+            List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(
+                    new ArrayList<>(List.of(staleHistory, current)));
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).getLineNumber()).isEqualTo(1233);
+            assertThat(result.get(0).getCodeSnippet())
+                    .isEqualTo("while (shouldRetry(response)) {");
+            assertThat(result.get(0).getSeverity()).isEqualTo(IssueSeverity.HIGH);
+            assertThat(result.get(0).getReason()).doesNotContain("RetryService.java:1");
+        }
+
+        @Test
+        @DisplayName("should retain every concrete occurrence location")
+        void shouldRetainAdditionalOccurrenceLocation() {
+            CodeAnalysisIssue first = createIssue(
+                    "src/Policy.java", 10, IssueCategory.SECURITY,
+                    IssueSeverity.HIGH, "Authorization check is missing");
+            CodeAnalysisIssue second = createIssue(
+                    "src/Policy.java", 20, IssueCategory.BUG_RISK,
+                    IssueSeverity.MEDIUM, "Authorization check is missing");
+            first.setReason("The update executes without checking workspace ownership.");
+            second.setReason("The update executes without checking workspace ownership.");
+            first.setIssueFingerprint(null);
+            first.setContentFingerprint(null);
+            second.setIssueFingerprint(null);
+            second.setContentFingerprint(null);
+
+            List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(
+                    new ArrayList<>(List.of(first, second)));
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).getReason())
+                    .contains("Also affects: src/Policy.java:20");
+        }
+
+        @Test
+        @DisplayName("should keep independent root causes at one anchor")
+        void shouldKeepIndependentRootCausesAtOneAnchor() {
+            CodeAnalysisIssue authorization = createIssue(
+                    "src/Policy.java", 25, IssueCategory.BUG_RISK,
+                    IssueSeverity.HIGH, "Request processing defect");
+            CodeAnalysisIssue transaction = createIssue(
+                    "src/Policy.java", 25, IssueCategory.BUG_RISK,
+                    IssueSeverity.HIGH, "Request processing defect");
+            authorization.setReason("Workspace ownership is never checked.");
+            transaction.setReason("The database transaction commits too early.");
+            authorization.setIssueFingerprint(null);
+            authorization.setContentFingerprint(null);
+            transaction.setIssueFingerprint(null);
+            transaction.setContentFingerprint(null);
+
+            List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(
+                    new ArrayList<>(List.of(authorization, transaction)));
+
+            assertThat(result).hasSize(2);
+        }
+    }
+
     // ── Resolved issues ──────────────────────────────────────────────────
 
     @Nested

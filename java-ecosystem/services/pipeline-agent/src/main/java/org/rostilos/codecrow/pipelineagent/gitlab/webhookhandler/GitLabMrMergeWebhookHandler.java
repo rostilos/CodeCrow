@@ -161,7 +161,8 @@ public class GitLabMrMergeWebhookHandler extends AbstractWebhookHandler implemen
                 }
             };
             
-            Map<String, Object> result = branchAnalysisProcessor.process(request, processorConsumer);
+            Map<String, Object> result = branchAnalysisProcessor.processAfterDependencyGate(
+                    request, processorConsumer);
             
             return WebhookResult.success("Branch reconciliation completed after MR !" + mrNumber + " merge", result);
             

@@ -19,6 +19,11 @@ from llama_index.core.schema import TextNode
 from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct
 
+from ..generation_manifest import (
+    GENERATION_MEMBER_DIGEST_PAYLOAD_KEY,
+    compute_generation_member_digest,
+)
+
 logger = logging.getLogger(__name__)
 
 EMBEDDING_INPUT_HASH_PAYLOAD_KEY = "embedding_input_sha256"
@@ -108,6 +113,8 @@ class PointOperations:
             or chunk.metadata.get("architecture_source")
             or chunk.metadata.get("repository_snapshot")
             or chunk.metadata.get("repository_facts_state")
+            or chunk.metadata.get("repository_generation_manifest")
+            or chunk.metadata.get("pr_overlay_generation_manifest")
         )
 
     @staticmethod
@@ -196,7 +203,7 @@ class PointOperations:
                 continue
             reusable[point_id] = vector
         return reusable
-    
+
     @staticmethod
     def generate_point_id(
         workspace: str,
@@ -297,7 +304,7 @@ class PointOperations:
                 metrics["embedded"] = metrics.get("embedded", 0) + len(
                     embedded_by_id
                 )
-        
+
         # Build points with embeddings
         points = []
         for point_id, chunk in chunk_data:
@@ -330,6 +337,9 @@ class PointOperations:
                 or chunk.metadata.get("repository_facts_state")
             ):
                 payload["_node_content"] = chunk.text
+            payload[GENERATION_MEMBER_DIGEST_PAYLOAD_KEY] = (
+                compute_generation_member_digest(point_id, payload, embedding)
+            )
             points.append(PointStruct(
                 id=point_id,
                 vector=embedding,
@@ -350,6 +360,44 @@ class PointOperations:
         """
         result = self.upsert_points_detailed(collection_name, points)
         return result.successful, result.failed
+
+    def _seal_persisted_point_digests(
+        self,
+        collection_name: str,
+        points: List[PointStruct],
+    ) -> list[tuple[object, str]]:
+        """Bind digests to the vectors exactly as persisted by Qdrant."""
+        if not points:
+            return []
+        expected = {str(point.id): point for point in points}
+        records = self.client.retrieve(
+            collection_name=collection_name,
+            ids=[point.id for point in points],
+            with_payload=True,
+            with_vectors=True,
+        )
+        if {str(record.id) for record in records} != set(expected):
+            raise RuntimeError("persisted point set is incomplete before sealing")
+        sealed = []
+        replacements = []
+        for record in records:
+            payload = dict(record.payload or {})
+            digest = compute_generation_member_digest(
+                record.id, payload, record.vector
+            )
+            payload[GENERATION_MEMBER_DIGEST_PAYLOAD_KEY] = digest
+            replacements.append(PointStruct(
+                id=record.id,
+                vector=record.vector,
+                payload=payload,
+            ))
+            sealed.append((record.id, digest))
+        self.client.upsert(
+            collection_name=collection_name,
+            points=replacements,
+            wait=True,
+        )
+        return sealed
 
     def upsert_points_detailed(
         self,

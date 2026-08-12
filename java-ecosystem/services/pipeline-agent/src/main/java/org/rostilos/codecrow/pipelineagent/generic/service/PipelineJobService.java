@@ -126,6 +126,26 @@ public class PipelineJobService implements AnalysisJobService {
         );
     }
 
+    @Override
+    public Job createRagIndexJob(
+            Project project,
+            boolean isInitial,
+            JobTriggerSource triggerSource,
+            String branchName,
+            String commitHash) {
+        log.info("Creating branch-bound RAG {} job for project: {}, branch: {} (trigger: {})",
+                isInitial ? "initial indexing" : "incremental update",
+                project.getName(), branchName, triggerSource);
+        return jobService.createRagIndexJob(
+                project,
+                isInitial,
+                triggerSource,
+                null,
+                branchName,
+                commitHash
+        );
+    }
+
     /**
      * Alias for createRagIndexJob for backward compatibility.
      * Used by pipeline processors for RAG jobs triggered by webhooks.

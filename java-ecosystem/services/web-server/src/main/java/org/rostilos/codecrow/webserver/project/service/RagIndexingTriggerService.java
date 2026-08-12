@@ -117,6 +117,7 @@ public class RagIndexingTriggerService {
             Long projectId,
             Long userId,
             String branch,
+            boolean allConfiguredBranches,
             SseEmitter emitter
     ) {
         try {
@@ -148,7 +149,7 @@ public class RagIndexingTriggerService {
             String projectJwt = generateShortLivedProjectJwt(projectId, userId);
 
             // Start indexing via pipeline-agent
-            proxyToPipelineAgent(projectJwt, branch, emitter);
+            proxyToPipelineAgent(projectJwt, branch, allConfiguredBranches, emitter);
 
         } catch (NoSuchElementException e) {
             sendError(emitter, e.getMessage());
@@ -169,16 +170,24 @@ public class RagIndexingTriggerService {
         );
     }
 
-    private void proxyToPipelineAgent(String projectJwt, String branch, SseEmitter emitter) {
+    private void proxyToPipelineAgent(
+            String projectJwt,
+            String branch,
+            boolean allConfiguredBranches,
+            SseEmitter emitter) {
         String pipelineUrl = getPipelineAgentBaseUrl();
         String indexUrl = pipelineUrl + "/api/rag/index";
 
         Response response = null;
         try {
             // Build request body
-            Map<String, Object> requestBody = branch != null && !branch.isBlank()
-                    ? Map.of("branch", branch)
-                    : Map.of();
+            Map<String, Object> requestBody = new java.util.LinkedHashMap<>();
+            if (branch != null && !branch.isBlank()) {
+                requestBody.put("branch", branch.trim());
+            }
+            if (allConfiguredBranches) {
+                requestBody.put("allConfiguredBranches", true);
+            }
 
             RequestBody body = RequestBody.create(
                     objectMapper.writeValueAsString(requestBody),

@@ -158,6 +158,7 @@ class RAGQueueConsumer:
             # index_manager.index_repository is synchronous, so we run it in an executor
             loop = asyncio.get_running_loop()
             progress_delivery_available = True
+            progress_futures = []
 
             def publish_progress(event: Dict[str, Any]) -> None:
                 nonlocal progress_delivery_available
@@ -168,17 +169,10 @@ class RAGQueueConsumer:
                     self._publish_event(event_queue_key, payload),
                     loop,
                 )
-                # Surface Redis publication failures promptly without coupling
-                # indexing correctness to progress delivery.
-                try:
-                    future.result(timeout=5)
-                except Exception as exception:
-                    progress_delivery_available = False
-                    logger.warning(
-                        "Could not publish RAG progress for job %s: %s",
-                        job_id,
-                        exception,
-                    )
+                # Never block the indexing executor waiting for its own event
+                # loop. Drain these publications before the terminal event so
+                # ordering is retained and delivery remains fail-open.
+                progress_futures.append(future)
 
             indexing_future = loop.run_in_executor(
                 None,
@@ -188,9 +182,11 @@ class RAGQueueConsumer:
                     project=request_dto.project,
                     branch=request_dto.branch,
                     commit=request_dto.commit,
+                    source_tree_sha256=request_dto.source_tree_sha256,
                     preserve_other_branches=request_dto.preserve_other_branches,
                     include_patterns=request_dto.include_patterns,
                     exclude_patterns=request_dto.exclude_patterns,
+                    collection_target=request_dto.collection_target,
                     progress_callback=publish_progress,
                 )
             )
@@ -209,6 +205,16 @@ class RAGQueueConsumer:
                 })
 
             result_obj = await indexing_future
+            for progress_future in progress_futures:
+                try:
+                    await asyncio.wrap_future(progress_future)
+                except Exception as exception:
+                    progress_delivery_available = False
+                    logger.warning(
+                        "Could not publish RAG progress for job %s: %s",
+                        job_id,
+                        exception,
+                    )
             
             # Serialize the IndexStats result to a dictionary
             result = result_obj.dict() if hasattr(result_obj, "dict") else result_obj.model_dump()

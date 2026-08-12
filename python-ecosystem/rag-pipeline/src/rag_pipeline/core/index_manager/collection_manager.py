@@ -9,7 +9,7 @@ import os
 import re
 import time
 import uuid
-from typing import Callable, Optional, List
+from typing import Callable, Mapping, Optional, List
 
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
@@ -187,6 +187,30 @@ class CollectionManager:
         except Exception as e:
             logger.debug(f"Error resolving alias {alias_name}: {e}")
         return None
+
+    def resolve_collection_target(self, collection_name: str) -> Optional[str]:
+        """Resolve an alias or direct collection without hiding backend errors.
+
+        Mutation leases use this strict resolver so a transient alias lookup
+        failure cannot be mistaken for a direct collection.
+        """
+        aliases = self.client.get_aliases().aliases
+        matching_aliases = [
+            alias.collection_name
+            for alias in aliases
+            if alias.alias_name == collection_name
+        ]
+        if len(matching_aliases) > 1:
+            raise RuntimeError(
+                f"collection alias '{collection_name}' has multiple targets"
+            )
+        if matching_aliases:
+            return matching_aliases[0]
+
+        collections = self.client.get_collections().collections
+        if collection_name in {collection.name for collection in collections}:
+            return collection_name
+        return None
     
     def atomic_alias_swap(
         self,
@@ -213,6 +237,63 @@ class CollectionManager:
             change_aliases_operations=alias_operations
         )
         logger.info(f"Alias swap completed: {alias_name} -> {new_collection}")
+
+    def read_alias_targets(self, alias_names: List[str]) -> dict[str, Optional[str]]:
+        """Read several alias targets from one consistent Qdrant response."""
+        requested = list(dict.fromkeys(name for name in alias_names if name))
+        aliases = {
+            alias.alias_name: alias.collection_name
+            for alias in self.client.get_aliases().aliases
+        }
+        return {name: aliases.get(name) for name in requested}
+
+    def atomic_assign_aliases(
+        self,
+        assignments: Mapping[str, Optional[str]],
+    ) -> None:
+        """Atomically point a set of aliases at already-validated collections.
+
+        An immutable generation alias and its human-facing aliases must move in
+        the same Qdrant transaction.  Reads that bind analysis to a historical
+        generation keep using the immutable alias; readable aliases are solely
+        the current branch and legacy-project pointers.
+        """
+        desired = {
+            alias_name: collection_name
+            for alias_name, collection_name in assignments.items()
+            if alias_name
+        }
+        if not desired:
+            return
+        current = self.read_alias_targets(list(desired))
+        operations = []
+        for alias_name, collection_name in desired.items():
+            if current.get(alias_name) == collection_name:
+                continue
+            if current.get(alias_name) is not None:
+                operations.append(
+                    DeleteAliasOperation(
+                        delete_alias=DeleteAlias(alias_name=alias_name)
+                    )
+                )
+            if collection_name is not None:
+                operations.append(
+                    CreateAliasOperation(
+                        create_alias=CreateAlias(
+                            alias_name=alias_name,
+                            collection_name=collection_name,
+                        )
+                    )
+                )
+        if not operations:
+            return
+        self.client.update_collection_aliases(
+            change_aliases_operations=operations
+        )
+        logger.info(
+            "Atomically assigned Qdrant aliases: %s",
+            ", ".join(sorted(desired)),
+        )
     
     def delete_alias(self, alias_name: str) -> bool:
         """Delete an alias."""

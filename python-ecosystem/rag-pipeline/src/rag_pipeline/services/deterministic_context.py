@@ -12,6 +12,8 @@ import logging
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny
 
 from .base import RAGQueryBase
+from ..core.pr_overlay_manifest import PR_OVERLAY_MANIFEST_PAYLOAD_KEY
+from ..core.repository_overlay import IncrementalIndexPreconditionError
 from rag_pipeline.utils.path_identity import (
     normalize_repository_path,
     repository_path_suffix_candidates,
@@ -235,7 +237,13 @@ class DeterministicContextMixin:
             limit_per_file: int = 10,
             pr_number: Optional[int] = None,
             pr_changed_files: Optional[List[str]] = None,
-            additional_identifiers: Optional[List[str]] = None
+            additional_identifiers: Optional[List[str]] = None,
+            expected_revisions: Optional[Dict[str, str]] = None,
+            pr_source_revision: Optional[str] = None,
+            pr_base_revision: Optional[str] = None,
+            pr_base_generation_manifest_sha256: Optional[str] = None,
+            pr_generation_fingerprint: Optional[str] = None,
+            collection_target: Optional[str] = None,
     ) -> Dict:
         """
         Get context using DETERMINISTIC metadata-based retrieval.
@@ -271,7 +279,28 @@ class DeterministicContextMixin:
         Returns:
             Dict with chunks grouped by retrieval type and rich metadata
         """
-        collection_name = self._get_project_collection_name(workspace, project)
+        if pr_generation_fingerprint and not all((
+            pr_number,
+            pr_source_revision,
+            pr_base_revision,
+            pr_base_generation_manifest_sha256,
+        )):
+            raise IncrementalIndexPreconditionError(
+                "PR generation fingerprint requires PR number and complete "
+                "source/base generation identity"
+            )
+        if pr_generation_fingerprint and len([
+            branch for branch in branches if branch
+        ]) != 1:
+            raise IncrementalIndexPreconditionError(
+                "revision-bound deterministic context requires exactly one "
+                "authoritative branch"
+            )
+
+        collection_name = (
+            collection_target
+            or self._get_project_collection_name(workspace, project)
+        )
 
         if not self._collection_or_alias_exists(collection_name):
             logger.warning(f"Collection {collection_name} does not exist")
@@ -288,6 +317,11 @@ class DeterministicContextMixin:
                     }}
 
         file_paths = sorted({path.lstrip("/") for path in file_paths if path})
+        pr_changed_path_set = {
+            normalize_repository_path(path)
+            for path in (pr_changed_files or [])
+            if normalize_repository_path(path)
+        }
         branches = list(dict.fromkeys(branch for branch in branches if branch))
         self._observe_branches(collection_name, branches)
         logger.info(f"Deterministic context: files={file_paths[:5]}, branches={branches}")
@@ -295,19 +329,80 @@ class DeterministicContextMixin:
         # ── Build branch filter ──
         target_branch = branches[0] if branches else None
 
+        repository_branch_filters = []
+        for branch in branches:
+            conditions = [
+                FieldCondition(
+                    key="branch",
+                    match=MatchValue(value=branch),
+                ),
+            ]
+            if expected_revisions and branch in expected_revisions:
+                conditions.append(FieldCondition(
+                    key="commit",
+                    match=MatchValue(value=expected_revisions[branch]),
+                ))
+            repository_branch_filters.append(Filter(must=conditions))
         base_branch_condition = (
-            FieldCondition(key="branch", match=MatchValue(value=branches[0]))
-            if len(branches) == 1
-            else FieldCondition(key="branch", match=MatchAny(any=branches))
+            repository_branch_filters[0]
+            if len(repository_branch_filters) == 1
+            else Filter(should=repository_branch_filters)
         )
 
         if pr_number:
-            branch_filter = Filter(should=[
-                Filter(must=[base_branch_condition]),
-                Filter(must=[
-                    FieldCondition(key="pr", match=MatchValue(value=True)),
-                    FieldCondition(key="pr_number", match=MatchValue(value=pr_number))
+            pr_conditions = [
+                FieldCondition(key="pr", match=MatchValue(value=True)),
+                FieldCondition(
+                    key="pr_number",
+                    match=MatchValue(value=pr_number),
+                ),
+            ]
+            if pr_generation_fingerprint:
+                pr_conditions.extend([
+                    FieldCondition(
+                        key="pr_source_revision",
+                        match=MatchValue(value=pr_source_revision),
+                    ),
+                    FieldCondition(
+                        key="pr_base_revision",
+                        match=MatchValue(value=pr_base_revision),
+                    ),
+                    FieldCondition(
+                        key="pr_base_generation_manifest_sha256",
+                        match=MatchValue(
+                            value=pr_base_generation_manifest_sha256
+                        ),
+                    ),
+                    FieldCondition(
+                        key="pr_generation_fingerprint",
+                        match=MatchValue(value=pr_generation_fingerprint),
+                    ),
                 ])
+            base_conditions = [base_branch_condition]
+            base_exclusions = (
+                [
+                    FieldCondition(
+                        key="path",
+                        match=MatchAny(any=sorted(pr_changed_path_set)),
+                    ),
+                ]
+                if pr_changed_path_set
+                else []
+            )
+            branch_filter = Filter(should=[
+                Filter(
+                    must=base_conditions,
+                    must_not=base_exclusions,
+                ),
+                Filter(
+                    must=pr_conditions,
+                    must_not=[
+                        FieldCondition(
+                            key=PR_OVERLAY_MANIFEST_PAYLOAD_KEY,
+                            match=MatchValue(value=True),
+                        ),
+                    ],
+                ),
             ])
             logger.info(f"Deterministic hybrid mode: also searching PR-indexed data (pr_number={pr_number})")
         else:
@@ -333,9 +428,7 @@ class DeterministicContextMixin:
         # The request is the authority for invalidating materialized branch
         # context.  Do not rely on finding a PR-indexed chunk: deleted files and
         # architecture-only files legitimately have no replacement code chunk.
-        changed_file_paths = {
-            path.lstrip("/") for path in (pr_changed_files or []) if path
-        }
+        changed_file_paths = set(pr_changed_path_set)
         seen_texts = set()
         target_branch_paths = set()
 
@@ -475,6 +568,38 @@ class DeterministicContextMixin:
                    f"definitions: {sum(len(v) for v in related_definitions.values())}, "
                    f"class_ctx: {sum(len(v) for v in class_context.values())}, "
                    f"ns_ctx: {sum(len(v) for v in namespace_context.values())})")
+
+        for chunk in all_chunks:
+            metadata = chunk.get("metadata") or {}
+            if metadata.get("pr") is True:
+                if pr_generation_fingerprint and (
+                    metadata.get("pr_generation_fingerprint")
+                    != pr_generation_fingerprint
+                    or metadata.get("pr_source_revision")
+                    != pr_source_revision
+                    or metadata.get("pr_base_revision") != pr_base_revision
+                    or metadata.get(
+                        "pr_base_generation_manifest_sha256"
+                    ) != pr_base_generation_manifest_sha256
+                ):
+                    raise IncrementalIndexPreconditionError(
+                        "deterministic retrieval returned a PR point outside "
+                        "the requested overlay generation"
+                    )
+                continue
+            expected_revision = (
+                expected_revisions.get(metadata.get("branch"))
+                if expected_revisions
+                else None
+            )
+            if (
+                expected_revision is not None
+                and metadata.get("commit") != expected_revision
+            ):
+                raise IncrementalIndexPreconditionError(
+                    "deterministic retrieval returned a repository point "
+                    "outside the requested immutable revision"
+                )
 
         return {
             "chunks": all_chunks,
@@ -838,6 +963,20 @@ class DeterministicContextMixin:
             self._accept_stored_points(results),
             key=_point_sort_key,
         )
+
+        # A revision-bound PR request's changed-path manifest is authoritative.
+        # Modified paths may have an exact overlay member; deleted and
+        # architecture-only paths legitimately may not. In either case, never
+        # fall back to the pre-PR target-branch source for that path.
+        if any(
+            repository_paths_match(normalized_path, changed_path)
+            for changed_path in changed_file_paths
+        ):
+            results = [
+                point
+                for point in results
+                if (point.payload or {}).get("pr") is True
+            ]
 
         # Apply branch priority
         if target_branch and len(branches) > 1:

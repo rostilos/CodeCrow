@@ -333,12 +333,31 @@ public class CommentOnPullRequestAction {
             int pullRequestNumber,
             String markerText
     ) throws IOException {
+        return deletePreviousReviewComments(
+                owner, repo, pullRequestNumber, markerText, null);
+    }
+
+    /**
+     * Delete earlier generated review comments while preserving one newly
+     * submitted replacement review.
+     */
+    public int deletePreviousReviewComments(
+            String owner,
+            String repo,
+            int pullRequestNumber,
+            String markerText,
+            Long preservedReviewId
+    ) throws IOException {
         int deleted = 0;
         for (Map<String, Object> comment : listReviewComments(
                 owner, repo, pullRequestNumber)) {
             String body = (String) comment.get("body");
             Number id = (Number) comment.get("id");
-            if (body != null && body.contains(markerText) && id != null) {
+            Number reviewId = (Number) comment.get("pull_request_review_id");
+            boolean preserved = preservedReviewId != null
+                    && reviewId != null
+                    && preservedReviewId.longValue() == reviewId.longValue();
+            if (!preserved && body != null && body.contains(markerText) && id != null) {
                 deleteReviewComment(owner, repo, id.longValue());
                 deleted++;
             }
@@ -358,11 +377,30 @@ public class CommentOnPullRequestAction {
             String markerText,
             String clearedBody
     ) throws IOException {
+        return clearPreviousReviewBodies(
+                owner, repo, pullRequestNumber, markerText, clearedBody, null);
+    }
+
+    /**
+     * Clear earlier generated review summaries while preserving one newly
+     * submitted replacement review.
+     */
+    public int clearPreviousReviewBodies(
+            String owner,
+            String repo,
+            int pullRequestNumber,
+            String markerText,
+            String clearedBody,
+            Long preservedReviewId
+    ) throws IOException {
         int cleared = 0;
         for (Map<String, Object> review : listReviews(owner, repo, pullRequestNumber)) {
             String body = (String) review.get("body");
             Number id = (Number) review.get("id");
-            if (body != null && body.contains(markerText) && id != null) {
+            boolean preserved = preservedReviewId != null
+                    && id != null
+                    && preservedReviewId.longValue() == id.longValue();
+            if (!preserved && body != null && body.contains(markerText) && id != null) {
                 updateReviewBody(
                         owner,
                         repo,

@@ -46,8 +46,38 @@ public record IssueDTO (
     String issueScope,
     Integer endLineNumber,
     // Origin issue – the CodeAnalysisIssue this branch issue was cloned from (null for PR-level issues)
-    Long originIssueId
+    Long originIssueId,
+    // Deterministic introducing-commit provenance (distinct from PR/comment author)
+    String introducingCommitHash,
+    String introducingAuthorName,
+    String introducingAuthorEmail,
+    String authorProvenanceConfidence
 ) {
+
+    /** Backward-compatible constructor for callers predating SCM provenance. */
+    public IssueDTO(
+            String id, String type, String severity, String title,
+            String description, String suggestedFixDescription,
+            String suggestedFixDiff, String file, Integer line,
+            Integer column, String rule, String branch,
+            String pullRequestId, String status, OffsetDateTime createdAt,
+            String issueCategory, Long analysisId, Long prNumber,
+            String commitHash, OffsetDateTime detectedAt,
+            String resolvedDescription, Long resolvedByPr,
+            String resolvedCommitHash, Long resolvedAnalysisId,
+            OffsetDateTime resolvedAt, String resolvedBy,
+            String vcsAuthorId, String vcsAuthorUsername,
+            String detectionSource, String issueScope,
+            Integer endLineNumber, Long originIssueId) {
+        this(id, type, severity, title, description,
+                suggestedFixDescription, suggestedFixDiff, file, line,
+                column, rule, branch, pullRequestId, status, createdAt,
+                issueCategory, analysisId, prNumber, commitHash, detectedAt,
+                resolvedDescription, resolvedByPr, resolvedCommitHash,
+                resolvedAnalysisId, resolvedAt, resolvedBy, vcsAuthorId,
+                vcsAuthorUsername, detectionSource, issueScope,
+                endLineNumber, originIssueId, null, null, null, null);
+    }
 
     /**
      * Create an IssueDTO from an independent {@link BranchIssue}.
@@ -108,7 +138,11 @@ public record IssueDTO (
                 bi.getIssueScope() != null ? bi.getIssueScope().name() : null,
                 bi.getCurrentEndLineNumber() != null ? bi.getCurrentEndLineNumber()
                         : bi.getEndLineNumber(),
-                bi.getOriginIssue() != null ? bi.getOriginIssue().getId() : null
+                bi.getOriginIssue() != null ? bi.getOriginIssue().getId() : null,
+                bi.getIntroducingCommitHash(),
+                bi.getIntroducingAuthorName(),
+                bi.getIntroducingAuthorEmail(),
+                bi.getAuthorProvenanceConfidence()
         );
     }
 
@@ -162,7 +196,11 @@ public record IssueDTO (
                 issue.getDetectionSource() != null ? issue.getDetectionSource().name() : null,
                 issue.getIssueScope() != null ? issue.getIssueScope().name() : null,
                 issue.getEndLineNumber(),
-                null // CodeAnalysisIssue has no origin
+                null, // CodeAnalysisIssue has no origin
+                issue.getIntroducingCommitHash(),
+                issue.getIntroducingAuthorName(),
+                issue.getIntroducingAuthorEmail(),
+                issue.getAuthorProvenanceConfidence()
         );
     }
 }

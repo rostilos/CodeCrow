@@ -2,6 +2,7 @@ package org.rostilos.codecrow.pipelineagent.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -42,10 +43,12 @@ public class AsyncConfig {
      * Sized for concurrent webhook handling from VCS providers.
      */
     @Bean(name = "webhookExecutor")
-    public Executor webhookExecutor() {
+    public Executor webhookExecutor(
+            @Value("${webhook.executor.core-pool-size:8}") int corePoolSize,
+            @Value("${webhook.executor.max-pool-size:20}") int maxPoolSize) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(4);
-        executor.setMaxPoolSize(8);
+        executor.setCorePoolSize(corePoolSize);
+        executor.setMaxPoolSize(maxPoolSize);
         // Do not accept work into an ephemeral in-memory backlog. Saturated work
         // remains QUEUED in the database and is retried by the recovery scheduler.
         executor.setQueueCapacity(0);
@@ -55,7 +58,7 @@ public class AsyncConfig {
         executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
         executor.initialize();
         log.info("Webhook executor initialized with core={}, max={}, durable database backlog enabled",
-                4, 8);
+                corePoolSize, maxPoolSize);
         return executor;
     }
 

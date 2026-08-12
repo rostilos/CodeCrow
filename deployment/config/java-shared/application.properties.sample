@@ -181,6 +181,17 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 #codecrow.rag.api.timeout.read=120
 # RAG indexing timeout - 4 hours for large repositories
 #codecrow.rag.api.timeout.indexing=14400
+# Per-project fan-out for an explicit Refresh all. Two independent branch
+# snapshots (for example main and develop) run in parallel without allowing a
+# project with many retained branches to occupy all service slots.
+#codecrow.rag.branch-build.parallelism=2
+# Dedicated service-wide capacity for full branch snapshot builds. This pool is
+# separate from PR, branch-analysis, webhook and inference executors. Size it to
+# the available RAG replicas and memory; it does not cap ordinary analyses.
+#codecrow.rag.branch-build.global-parallelism=4
+# Repair interval for readable Qdrant current-branch aliases of active generations.
+#codecrow.rag.operator-alias.reconcile-interval-ms=300000
+#codecrow.rag.operator-alias.reconcile-initial-delay-ms=15000
 # Shared VCS acquisition threshold for incremental RAG and reconciliation
 # fallback. The legacy codecrow.rag.incremental.archive-file-threshold property
 # remains a fallback when this property is not set.
@@ -201,6 +212,11 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 #analysis.branch.pr-wait.poll-interval.millis=1000
 # Lock cleanup interval - how often to clean up expired locks (in milliseconds)
 #analysis.lock.cleanup.interval.ms=300000
+
+# Durable webhook execution. The executor has no in-memory queue: accepted work
+# beyond max capacity stays QUEUED in PostgreSQL and is recovered later.
+#webhook.executor.core-pool-size=8
+#webhook.executor.max-pool-size=20
 
 # Hard PR-wide spending limits are supplied to pipeline-agent through deployment/.env:
 # ANALYSIS_MAX_FILES=150

@@ -78,13 +78,30 @@ public class CommitCoverageService {
      */
     public CoverageResult checkCoverage(Long projectId, String targetBranchName,
                                          List<String> unanalyzedCommits) {
+        return checkCoverage(projectId, targetBranchName, unanalyzedCommits, false);
+    }
+
+    /**
+     * Check coverage while optionally limiting durable receipts to the exact
+     * target branch. This prevents an analysis on {@code develop} from
+     * suppressing analysis of the same commits in a different {@code master}
+     * context.
+     */
+    public CoverageResult checkCoverage(Long projectId, String targetBranchName,
+                                         List<String> unanalyzedCommits,
+                                         boolean exactTargetBranch) {
         if (unanalyzedCommits == null || unanalyzedCommits.isEmpty()) {
             return new CoverageResult(CoverageStatus.FULLY_COVERED, Collections.emptyList());
         }
 
         // Tier 1: Check the analyzed_commit table directly (covers both branch & PR analyses)
-        Set<String> alreadyRecorded = analyzedCommitRepository
-                .findAnalyzedHashesByProjectIdAndCommitHashIn(projectId, unanalyzedCommits);
+        Set<String> alreadyRecorded = exactTargetBranch
+                ? analyzedCommitRepository
+                        .findAnalyzedHashesByProjectIdAndTargetBranchAndCommitHashIn(
+                                projectId, targetBranchName, unanalyzedCommits)
+                : analyzedCommitRepository
+                        .findAnalyzedHashesByProjectIdAndCommitHashIn(
+                                projectId, unanalyzedCommits);
 
         List<String> notInTable = unanalyzedCommits.stream()
                 .filter(h -> !alreadyRecorded.contains(h))

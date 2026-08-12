@@ -8,6 +8,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -100,6 +101,44 @@ class GetPullRequestDiffActionTest {
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("404");
 
+        verify(response).close();
+    }
+
+    @Test
+    void getPullRequestFilePatchesReturnsStructuredDestinationPaths() throws IOException {
+        String filesJson = """
+                [
+                  {
+                    "filename": "src/New Name.java",
+                    "previous_filename": "src/Old Name.java",
+                    "status": "renamed",
+                    "patch": "@@ -1 +1 @@\\n-old\\n+new"
+                  },
+                  {
+                    "filename": "assets/logo.png",
+                    "status": "modified"
+                  }
+                ]
+                """;
+
+        when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
+        when(call.execute()).thenReturn(response);
+        when(response.isSuccessful()).thenReturn(true);
+        when(response.body()).thenReturn(responseBody);
+        when(responseBody.string()).thenReturn(filesJson);
+        when(response.header("Link")).thenReturn(null);
+
+        List<GetPullRequestDiffAction.PullRequestFilePatch> patches =
+                action.getPullRequestFilePatches("owner", "repo", 123);
+
+        assertThat(patches).containsExactly(
+                new GetPullRequestDiffAction.PullRequestFilePatch(
+                        "src/New Name.java",
+                        "src/Old Name.java",
+                        "renamed",
+                        "@@ -1 +1 @@\n-old\n+new"),
+                new GetPullRequestDiffAction.PullRequestFilePatch(
+                        "assets/logo.png", "", "modified", ""));
         verify(response).close();
     }
 }
