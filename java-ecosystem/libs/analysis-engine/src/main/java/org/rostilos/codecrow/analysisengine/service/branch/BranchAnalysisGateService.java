@@ -29,6 +29,7 @@ import java.util.function.Consumer;
 public class BranchAnalysisGateService {
 
     private static final Logger log = LoggerFactory.getLogger(BranchAnalysisGateService.class);
+    private static final long WAIT_STATUS_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(60);
 
     private final JobRepository jobRepository;
 
@@ -90,6 +91,7 @@ public class BranchAnalysisGateService {
             Consumer<Map<String, Object>> consumer) {
         long timeoutNanos = TimeUnit.MINUTES.toNanos(Math.max(1, waitTimeoutMinutes));
         long startedAt = System.nanoTime();
+        long nextStatusAt = startedAt;
 
         while (true) {
             if (currentBranchJobId != null && jobRepository.existsNewerBranchAnalysisJob(
@@ -113,7 +115,11 @@ public class BranchAnalysisGateService {
                         AnalysisLockType.PR_ANALYSIS.name(), branchName, projectId);
             }
 
-            emitWait(consumer, branchName, sourcePrNumber, waitedNanos);
+            long now = System.nanoTime();
+            if (now >= nextStatusAt) {
+                emitWait(consumer, branchName, sourcePrNumber, waitedNanos);
+                nextStatusAt = now + WAIT_STATUS_INTERVAL_NANOS;
+            }
             if (!pause()) {
                 throw new AnalysisLockedException(
                         AnalysisLockType.PR_ANALYSIS.name(), branchName, projectId);
@@ -158,6 +164,7 @@ public class BranchAnalysisGateService {
 
         long timeoutNanos = TimeUnit.MINUTES.toNanos(Math.max(1, waitTimeoutMinutes));
         long startedAt = System.nanoTime();
+        long nextStatusAt = startedAt;
         while (jobRepository.existsActiveBranchAnalysisJobBefore(
                 projectId, branchName, currentPrJobId)) {
             long waitedNanos = System.nanoTime() - startedAt;
@@ -169,7 +176,11 @@ public class BranchAnalysisGateService {
                         AnalysisLockType.BRANCH_ANALYSIS.name(), branchName, projectId);
             }
 
-            emitBranchWait(consumer, branchName, waitedNanos);
+            long now = System.nanoTime();
+            if (now >= nextStatusAt) {
+                emitBranchWait(consumer, branchName, waitedNanos);
+                nextStatusAt = now + WAIT_STATUS_INTERVAL_NANOS;
+            }
             if (!pause()) {
                 throw new AnalysisLockedException(
                         AnalysisLockType.BRANCH_ANALYSIS.name(), branchName, projectId);
@@ -212,9 +223,13 @@ public class BranchAnalysisGateService {
             event.put("type", "pr_analysis_wait");
             event.put("state", "waiting_for_pr_analysis");
             event.put("message", sourcePrNumber == null
-                    ? "Waiting for earlier PR analyses targeting " + branchName + " to finish"
-                    : "Waiting for PR #" + sourcePrNumber + " analysis targeting "
-                            + branchName + " to finish");
+                    ? "Branch analysis for " + branchName
+                            + " is waiting for earlier PR analyses targeting that branch"
+                    : "Post-merge branch analysis for " + branchName
+                            + " is waiting for PR #" + sourcePrNumber
+                            + " analysis to finish");
+            event.put("waitingJobType", JobType.BRANCH_ANALYSIS.name());
+            event.put("blockingJobType", JobType.PR_ANALYSIS.name());
             event.put("branchName", branchName);
             event.put("waitedSeconds", TimeUnit.NANOSECONDS.toSeconds(waitedNanos));
             if (sourcePrNumber != null) {
@@ -237,8 +252,10 @@ public class BranchAnalysisGateService {
             consumer.accept(Map.of(
                     "type", "branch_analysis_wait",
                     "state", "waiting_for_target_branch",
-                    "message", "Waiting for the earlier " + branchName
-                            + " update and its RAG publication to finish",
+                    "message", "PR analysis targeting " + branchName
+                            + " is waiting for the earlier branch update and its RAG publication",
+                    "waitingJobType", JobType.PR_ANALYSIS.name(),
+                    "blockingJobType", JobType.BRANCH_ANALYSIS.name(),
                     "branchName", branchName,
                     "waitedSeconds", TimeUnit.NANOSECONDS.toSeconds(waitedNanos)));
         } catch (Exception e) {

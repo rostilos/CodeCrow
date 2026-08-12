@@ -51,7 +51,18 @@ public class BranchIndexGenerationBuildService {
             String collectionTarget,
             boolean alreadySucceeded,
             String manifestDigest,
-            String analysisLockKey) {
+            String analysisLockKey,
+            String sourceCollectionTarget) {
+
+        public PreparedBuild(
+                long operationId,
+                String collectionTarget,
+                boolean alreadySucceeded,
+                String manifestDigest,
+                String analysisLockKey) {
+            this(operationId, collectionTarget, alreadySucceeded, manifestDigest,
+                    analysisLockKey, null);
+        }
 
         public PreparedBuild {
             if (operationId <= 0) {
@@ -267,19 +278,36 @@ public class BranchIndexGenerationBuildService {
             boolean publishBranchAlias = kind == RagBranchIndexKind.PRIMARY
                     || kind == RagBranchIndexKind.DURABLE;
             boolean publishLegacyProjectAlias = kind == RagBranchIndexKind.PRIMARY;
-            Map<String, Object> result = progressEvents == null
-                    ? pipelineClient.indexRepository(
-                            snapshot.toString(), project.getWorkspace().getName(),
-                            project.getNamespace(), branch, revision, includePatterns,
-                            excludePatterns, prepared.collectionTarget(),
-                            false, false)
-                    : pipelineClient.indexRepository(
-                            snapshot.toString(), project.getWorkspace().getName(),
-                            project.getNamespace(), branch, revision, includePatterns,
-                            excludePatterns, prepared.collectionTarget(),
-                            false, false, true,
-                            () -> snapshotOwnershipTransferred.set(true),
-                            progressEvents);
+            Map<String, Object> result;
+            if (progressEvents == null) {
+                result = prepared.sourceCollectionTarget() == null
+                        ? pipelineClient.indexRepository(
+                                snapshot.toString(), project.getWorkspace().getName(),
+                                project.getNamespace(), branch, revision, includePatterns,
+                                excludePatterns, prepared.collectionTarget(),
+                                false, false)
+                        : pipelineClient.indexRepository(
+                                snapshot.toString(), project.getWorkspace().getName(),
+                                project.getNamespace(), branch, revision, includePatterns,
+                                excludePatterns, prepared.collectionTarget(),
+                                false, false, prepared.sourceCollectionTarget());
+            } else {
+                result = prepared.sourceCollectionTarget() == null
+                        ? pipelineClient.indexRepository(
+                                snapshot.toString(), project.getWorkspace().getName(),
+                                project.getNamespace(), branch, revision, includePatterns,
+                                excludePatterns, prepared.collectionTarget(),
+                                false, false, true,
+                                () -> snapshotOwnershipTransferred.set(true),
+                                progressEvents)
+                        : pipelineClient.indexRepository(
+                                snapshot.toString(), project.getWorkspace().getName(),
+                                project.getNamespace(), branch, revision, includePatterns,
+                                excludePatterns, prepared.collectionTarget(),
+                                false, false, true, prepared.sourceCollectionTarget(),
+                                () -> snapshotOwnershipTransferred.set(true),
+                                progressEvents);
+            }
             Object manifest = result.get("generation_manifest_sha256");
             if (!(manifest instanceof String digest) || digest.isBlank()) {
                 throw new IOException("RAG full branch generation has no manifest digest");
@@ -343,7 +371,8 @@ public class BranchIndexGenerationBuildService {
                 registration.generation().getCollectionName(),
                 succeeded,
                 registration.generation().getManifestDigest(),
-                analysisLockKey);
+                analysisLockKey,
+                registration.sourceCollectionTarget());
     }
 
     private AnalysisLockService.LockLease startAnalysisLockLease(PreparedBuild prepared)

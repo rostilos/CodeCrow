@@ -63,7 +63,7 @@ class BranchAnalysisGateServiceTest {
 
         assertThat(result).isEqualTo(BranchAnalysisGateService.GateResult.READY);
         verify(jobRepository, times(4)).existsActivePrAnalysisJobBefore(1L, "main", 103L);
-        verify(consumer, times(3)).accept(org.mockito.ArgumentMatchers.argThat(
+        verify(consumer).accept(org.mockito.ArgumentMatchers.argThat(
                 event -> "pr_analysis_wait".equals(event.get("type"))));
 
         var ordered = inOrder(jobRepository);
@@ -111,7 +111,11 @@ class BranchAnalysisGateServiceTest {
         assertThat(result).isEqualTo(BranchAnalysisGateService.GateResult.READY);
         verify(consumer).accept(org.mockito.ArgumentMatchers.argThat(
                 event -> Long.valueOf(41L).equals(event.get("prNumber"))
-                        && event.get("message").toString().contains("PR #41")));
+                        && event.get("message").toString().contains("PR #41")
+                        && JobType.BRANCH_ANALYSIS.name().equals(
+                                event.get("waitingJobType"))
+                        && JobType.PR_ANALYSIS.name().equals(
+                                event.get("blockingJobType"))));
         verify(jobRepository, times(0)).existsActivePrAnalysisJobBefore(1L, "main", 103L);
     }
 
@@ -164,9 +168,33 @@ class BranchAnalysisGateServiceTest {
         assertThat(result).isEqualTo(BranchAnalysisGateService.GateResult.READY);
         verify(jobRepository, times(3))
                 .existsActiveBranchAnalysisJobBefore(1L, "main", 104L);
-        verify(consumer, times(2)).accept(org.mockito.ArgumentMatchers.argThat(
+        verify(consumer).accept(org.mockito.ArgumentMatchers.argThat(
                 event -> "branch_analysis_wait".equals(event.get("type"))
-                        && "main".equals(event.get("branchName"))));
+                        && "main".equals(event.get("branchName"))
+                        && JobType.PR_ANALYSIS.name().equals(
+                                event.get("waitingJobType"))
+                        && JobType.BRANCH_ANALYSIS.name().equals(
+                                event.get("blockingJobType"))));
+    }
+
+    @Test
+    void prDoesNotWaitForBranchWorkOnItsSourceOrAnotherTarget() {
+        Job prJob = job(JobStatus.RUNNING);
+        ReflectionTestUtils.setField(prJob, "id", 104L);
+        prJob.setBranchName("main");
+
+        when(jobRepository.existsActiveBranchAnalysisJobBefore(1L, "main", 104L))
+                .thenReturn(false);
+
+        BranchAnalysisGateService.GateResult result = service.awaitDependencies(
+                1L, prJob, event -> { });
+
+        assertThat(result).isEqualTo(BranchAnalysisGateService.GateResult.READY);
+        verify(jobRepository).existsActiveBranchAnalysisJobBefore(1L, "main", 104L);
+        verify(jobRepository, times(0))
+                .existsActiveBranchAnalysisJobBefore(1L, "1.8.1-rc", 104L);
+        verify(jobRepository, times(0))
+                .existsActiveBranchAnalysisJobBefore(1L, "feature/public-share-links", 104L);
     }
 
     private static Job job(JobStatus status) {

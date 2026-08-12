@@ -432,7 +432,11 @@ class RepositoryIndexer:
                     ) is FileDisposition.FULL
                 ]
         file_count = len(file_list)
-        logger.info(f"Found {file_count} files for estimation")
+        logger.info(
+            "RAG capacity scan found %s repository files "
+            "(this is not the LLM review scope)",
+            file_count,
+        )
 
         if file_count == 0:
             return 0, 0
@@ -497,6 +501,7 @@ class RepositoryIndexer:
         source_tree=None,
         seal_generation: bool = False,
         publication_aliases: Optional[List[str]] = None,
+        reuse_collection_name: Optional[str] = None,
         operation_id: Optional[str] = None,
         activation_guard: Optional[Callable[[], None]] = None,
         progress_callback: Optional[Callable[[dict], None]] = None,
@@ -571,6 +576,7 @@ class RepositoryIndexer:
         actual_old_collection = None
         if old_collection_exists:
             actual_old_collection = self.collection_manager.resolve_alias(alias_name) or alias_name
+        vector_reuse_collection = reuse_collection_name or actual_old_collection
         
         # Get file list
         repository_file_list = list(
@@ -851,7 +857,7 @@ class RepositoryIndexer:
                     workspace,
                     project,
                     branch,
-                    reuse_collection_name=actual_old_collection,
+                    reuse_collection_name=vector_reuse_collection,
                     operation_id=operation_id,
                     metrics=embedding_metrics,
                 )
@@ -996,7 +1002,7 @@ class RepositoryIndexer:
                     workspace,
                     project,
                     branch,
-                    reuse_collection_name=actual_old_collection,
+                    reuse_collection_name=vector_reuse_collection,
                     operation_id=operation_id,
                     metrics=embedding_metrics,
                 )

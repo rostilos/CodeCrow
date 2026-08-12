@@ -55,7 +55,7 @@ class BranchIndexBuildAdmissionServiceTest {
         operation.setId(30L);
         operation.setGeneration(generation);
         registration = new RagBranchIndexRegistryService.BuildRegistration(
-                branchIndex, generation, operation, false);
+                branchIndex, generation, operation, false, "source-target");
     }
 
     @Test
@@ -81,6 +81,8 @@ class BranchIndexBuildAdmissionServiceTest {
                 .isEqualTo("physical-target");
         assertThat(admitted.preparedBuild().analysisLockKey())
                 .isEqualTo("lock-owner-123");
+        assertThat(admitted.preparedBuild().sourceCollectionTarget())
+                .isEqualTo("source-target");
         assertThat(admitted.statusAdmission()).isEqualTo(
                 BranchIndexBuildAdmissionService.ProjectStatusAdmission.UPDATING);
         InOrder order = inOrder(registryService, jobService, trackingService);

@@ -42,7 +42,16 @@ public class RagBranchIndexRegistryService {
             RagBranchIndex branchIndex,
             RagBranchIndexGeneration generation,
             RagIndexOperation operation,
-            boolean existingOperation) {
+            boolean existingOperation,
+            String sourceCollectionTarget) {
+
+        public BuildRegistration(
+                RagBranchIndex branchIndex,
+                RagBranchIndexGeneration generation,
+                RagIndexOperation operation,
+                boolean existingOperation) {
+            this(branchIndex, generation, operation, existingOperation, null);
+        }
     }
 
     @Transactional
@@ -77,7 +86,8 @@ public class RagBranchIndexRegistryService {
                     branchIndex,
                     operation.getGeneration(),
                     operation,
-                    true);
+                    true,
+                    sourceCollectionTarget(operation.getGeneration()));
         }
 
         RagBranchIndex branchIndex = branchIndexRepository
@@ -109,7 +119,18 @@ public class RagBranchIndexRegistryService {
         operation.setGeneration(generation);
         operation = operationRepository.save(operation);
 
-        return new BuildRegistration(branchIndex, generation, operation, false);
+        return new BuildRegistration(
+                branchIndex,
+                generation,
+                operation,
+                false,
+                sourceCollectionTarget(generation));
+    }
+
+    private static String sourceCollectionTarget(
+            RagBranchIndexGeneration generation) {
+        RagBranchIndexGeneration parent = generation.getParentGeneration();
+        return parent != null ? parent.getCollectionName() : null;
     }
 
     @Transactional
