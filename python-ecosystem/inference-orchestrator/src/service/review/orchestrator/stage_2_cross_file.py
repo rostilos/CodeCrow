@@ -136,7 +136,7 @@ async def execute_stage_2_cross_file(
         return result
 
     if fallback_llm is not None and fallback_llm is not llm:
-        logger.warning("Stage 2 failed with capped LLM; retrying without output cap")
+        logger.info("Stage 2 failed with capped LLM; retrying without output cap")
         result = await _invoke_stage_2_llm(fallback_llm, prompt, label="uncapped retry")
         if result is not None:
             return result
@@ -168,9 +168,9 @@ async def _invoke_stage_2_llm(llm, prompt: str, label: str) -> Optional[CrossFil
             if result:
                 logger.info("Stage 2 cross-file analysis completed with structured output (%s)", label)
                 return result
-            logger.warning("Structured output returned empty Stage 2 result (%s)", label)
+            logger.debug("Structured output returned empty Stage 2 result (%s)", label)
         except Exception as e:
-            logger.warning("Structured output failed for Stage 2 (%s): %s", label, e)
+            logger.debug("Structured output failed for Stage 2 (%s): %s", label, e)
     else:
         logger.info("Structured output skipped for Stage 2 (%s); using prompt JSON parsing", label)
 
@@ -179,7 +179,7 @@ async def _invoke_stage_2_llm(llm, prompt: str, label: str) -> Optional[CrossFil
         content = extract_llm_response_text(response)
         return await parse_llm_response(content, CrossFileAnalysisResult, llm)
     except Exception as e:
-        logger.warning("Stage 2 cross-file analysis failed (%s): %s", label, e)
+        logger.debug("Stage 2 cross-file analysis failed (%s): %s", label, e)
         return None
 
 
@@ -711,7 +711,7 @@ async def _fetch_cross_module_context(
         )
         return ""
     if not base_revision or not base_generation_receipt:
-        logger.warning(
+        logger.info(
             "Stage 2 cross-module RAG requires both immutable target revision "
             "and generation receipt"
         )
@@ -721,7 +721,7 @@ async def _fetch_cross_module_context(
         rag_branch = request.get_rag_branch()
         base_branch = request.get_rag_base_branch()
         if not rag_branch:
-            logger.warning(
+            logger.info(
                 "Stage 2 cross-module RAG skipped: missing authoritative target branch"
             )
             return ""
@@ -788,7 +788,7 @@ async def _fetch_cross_module_context(
         return formatted
 
     except Exception as e:
-        logger.warning(
+        logger.info(
             "Revision-bound cross-module context unavailable for Stage 2: %s: %s",
             type(e).__name__,
             e,

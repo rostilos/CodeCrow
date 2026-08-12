@@ -1,6 +1,11 @@
 package org.rostilos.codecrow.analysisengine.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -13,11 +18,14 @@ import org.rostilos.codecrow.core.persistence.repository.analysis.AnalysisLockRe
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
 import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -48,6 +56,11 @@ class AnalysisLockServiceTest {
         // Set timeout values via reflection
         setField(lockService, "lockTimeoutMinutes", 30);
         setField(lockService, "ragLockTimeoutMinutes", 360);
+    }
+
+    @AfterEach
+    void tearDown() {
+        lockService.shutdownLeaseHeartbeatExecutor();
     }
 
     private void setId(Object obj, Long id) throws Exception {
@@ -354,31 +367,149 @@ class AnalysisLockServiceTest {
     @Test
     void testRenewLock_UsesLeaseFromCurrentTime() {
         String lockKey = "lock-1-main-RAG_INDEXING";
-        AnalysisLock lock = mock(AnalysisLock.class);
-        when(lock.isExpired()).thenReturn(false);
-        when(lockRepository.findByLockKey(lockKey)).thenReturn(Optional.of(lock));
+        when(lockRepository.renewActiveLock(eq(lockKey), any(), any())).thenReturn(1);
         OffsetDateTime before = OffsetDateTime.now().plusMinutes(29);
 
         boolean result = lockService.renewLock(lockKey, 30);
 
         assertThat(result).isTrue();
+        ArgumentCaptor<OffsetDateTime> now = ArgumentCaptor.forClass(OffsetDateTime.class);
         ArgumentCaptor<OffsetDateTime> expiry = ArgumentCaptor.forClass(OffsetDateTime.class);
-        verify(lock).setExpiresAt(expiry.capture());
+        verify(lockRepository).renewActiveLock(eq(lockKey), now.capture(), expiry.capture());
         assertThat(expiry.getValue()).isAfter(before);
         assertThat(expiry.getValue()).isBefore(OffsetDateTime.now().plusMinutes(31));
-        verify(lockRepository).save(lock);
+        assertThat(expiry.getValue()).isAfter(now.getValue());
     }
 
     @Test
     void testRenewLock_RefusesMissingOrExpiredOwnership() {
-        AnalysisLock expiredLock = mock(AnalysisLock.class);
-        when(expiredLock.isExpired()).thenReturn(true);
-        when(lockRepository.findByLockKey("missing")).thenReturn(Optional.empty());
-        when(lockRepository.findByLockKey("expired")).thenReturn(Optional.of(expiredLock));
+        when(lockRepository.renewActiveLock(eq("missing"), any(), any())).thenReturn(0);
+        when(lockRepository.renewActiveLock(eq("expired"), any(), any())).thenReturn(0);
 
         assertThat(lockService.renewLock("missing", 30)).isFalse();
         assertThat(lockService.renewLock("expired", 30)).isFalse();
         verify(lockRepository, never()).save(any());
+    }
+
+    @Test
+    void lockLeaseHeartbeatRenewsWithoutWorkerProgressAndStopsWhenClosed() throws Exception {
+        setField(lockService, "lockHeartbeatIntervalSeconds", 1);
+        AtomicInteger renewals = new AtomicInteger();
+        when(lockRepository.renewActiveLock(eq("quiet-review"), any(), any()))
+                .thenAnswer(invocation -> {
+                    renewals.incrementAndGet();
+                    return 1;
+                });
+
+        AnalysisLockService.LockLease lease = lockService.maintainLockLease("quiet-review", 1);
+
+        verify(lockRepository, timeout(2500).atLeast(2))
+                .renewActiveLock(eq("quiet-review"), any(), any());
+        assertThat(lease.isOwnershipLost()).isFalse();
+        lease.close();
+        int afterClose = renewals.get();
+        Thread.sleep(1200);
+        assertThat(renewals).hasValue(afterClose);
+    }
+
+    @Test
+    void blockedHeartbeatDoesNotStarveOtherActiveLeases() throws Exception {
+        setField(lockService, "lockHeartbeatIntervalSeconds", 1);
+        AtomicInteger blockedRenewals = new AtomicInteger();
+        CountDownLatch blockedHeartbeatEntered = new CountDownLatch(1);
+        CountDownLatch releaseBlockedHeartbeat = new CountDownLatch(1);
+        when(lockRepository.renewActiveLock(anyString(), any(), any()))
+                .thenAnswer(invocation -> {
+                    String key = invocation.getArgument(0);
+                    if ("blocked-review".equals(key)
+                            && blockedRenewals.incrementAndGet() > 1) {
+                        blockedHeartbeatEntered.countDown();
+                        releaseBlockedHeartbeat.await(5, TimeUnit.SECONDS);
+                    }
+                    return 1;
+                });
+
+        AnalysisLockService.LockLease blocked =
+                lockService.maintainLockLease("blocked-review", 1);
+        AnalysisLockService.LockLease independent =
+                lockService.maintainLockLease("independent-review", 1);
+        try {
+            assertThat(blockedHeartbeatEntered.await(2500, TimeUnit.MILLISECONDS)).isTrue();
+            verify(lockRepository, timeout(1500).atLeast(2))
+                    .renewActiveLock(eq("independent-review"), any(), any());
+        } finally {
+            releaseBlockedHeartbeat.countDown();
+            blocked.close();
+            independent.close();
+        }
+    }
+
+    @Test
+    void transientRenewalExceptionDoesNotProveOwnershipLossAfterSuccessfulRenewal() {
+        when(lockRepository.renewActiveLock(eq("db-blip"), any(), any()))
+                .thenReturn(1)
+                .thenThrow(new RuntimeException("temporary database timeout"));
+
+        AnalysisLockService.LockLease lease = lockService.maintainLockLease("db-blip", 30);
+
+        assertThat(lease.isOwnershipLost()).isFalse();
+        assertThat(lease.confirmOwnership()).isTrue();
+        lease.close();
+    }
+
+    @Test
+    void repeatedTransientRenewalFailuresWarnOnceUntilRecovery() {
+        when(lockRepository.renewActiveLock(eq("db-outage"), any(), any()))
+                .thenReturn(1)
+                .thenThrow(new RuntimeException("database unavailable"))
+                .thenThrow(new RuntimeException("database unavailable"))
+                .thenReturn(1);
+        Logger logger = (Logger) LoggerFactory.getLogger(AnalysisLockService.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try (AnalysisLockService.LockLease lease =
+                     lockService.maintainLockLease("db-outage", 30)) {
+            assertThat(lease.confirmOwnership()).isTrue();
+            assertThat(lease.confirmOwnership()).isTrue();
+            assertThat(lease.confirmOwnership()).isTrue();
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+
+        assertThat(appender.list.stream()
+                .filter(event -> event.getLevel() == Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage))
+                .containsExactly("Analysis lock renewal failed; the prior lease is still active "
+                        + "and renewal will retry: db-outage");
+        assertThat(appender.list.stream()
+                .filter(event -> event.getLevel() == Level.INFO)
+                .map(ILoggingEvent::getFormattedMessage))
+                .contains("Analysis lock heartbeat recovered: db-outage");
+    }
+
+    @Test
+    void initialRenewalExceptionCannotAssumeAFullLeaseForPreAcquiredLock() {
+        when(lockRepository.renewActiveLock(eq("unknown-age"), any(), any()))
+                .thenThrow(new RuntimeException("database unavailable"));
+
+        AnalysisLockService.LockLease lease = lockService.maintainLockLease("unknown-age", 30);
+
+        assertThat(lease.isOwnershipLost()).isTrue();
+        assertThat(lease.confirmOwnership()).isFalse();
+        lease.close();
+    }
+
+    @Test
+    void atomicRenewalMissProvesLeaseOwnershipWasLost() {
+        when(lockRepository.renewActiveLock(eq("replaced"), any(), any())).thenReturn(0);
+
+        AnalysisLockService.LockLease lease = lockService.maintainLockLease("replaced", 30);
+
+        assertThat(lease.isOwnershipLost()).isTrue();
+        assertThat(lease.confirmOwnership()).isFalse();
+        lease.close();
     }
 
     @Test

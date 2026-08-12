@@ -3,12 +3,12 @@ Tests for LLMFactory and QaDocumentationService.
 
 Covers: LLMFactory._normalize_provider, get_supported_providers,
         _check_unsupported_gemini_model, create_llm (all providers),
-        QaDocumentationService._create_llm, _create_rag_client
+        QaDocumentationService._create_llm and QA orchestration wiring
 """
 import asyncio
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -488,19 +488,35 @@ class TestQaDocumentationService:
         "QA_DOC_AI_API_KEY": "test",
         "RAG_PIPELINE_URL": "http://rag:8020",
     })
-    def test_create_rag_client(self):
+    def test_does_not_configure_rag_mutation_client(self):
         svc = QaDocumentationService()
-        client = svc._create_rag_client()
-        # Should not be None when URL is configured
-        assert client is not None
+        assert not hasattr(svc, "_rag_pipeline_url")
+        assert not hasattr(svc, "_create_rag_client")
 
-    @patch.dict("os.environ", {
-        "QA_DOC_AI_PROVIDER": "openai",
-        "QA_DOC_AI_MODEL": "gpt-4o",
-        "QA_DOC_AI_API_KEY": "test",
-        "RAG_PIPELINE_URL": "",
-    })
-    def test_create_rag_client_no_url(self):
+    @pytest.mark.asyncio(loop_scope="function")
+    @patch("service.qa_documentation.qa_doc_service.QaDocOrchestrator")
+    async def test_generate_never_wires_a_rag_mutation_client(
+        self,
+        orchestrator_type,
+    ):
         svc = QaDocumentationService()
-        client = svc._create_rag_client()
-        assert client is None
+        llm = MagicMock()
+        svc._create_llm = MagicMock(return_value=llm)
+        orchestrator_type.return_value.run = AsyncMock(return_value={
+            "documentation_needed": False,
+            "documentation": None,
+        })
+
+        await svc.generate(
+            project_id=1,
+            project_name="project",
+            pr_number=17,
+            issues_found=0,
+            files_analyzed=1,
+            pr_metadata={},
+            template_mode="BASE",
+            custom_template=None,
+            task_context=None,
+        )
+
+        orchestrator_type.assert_called_once_with(llm=llm)

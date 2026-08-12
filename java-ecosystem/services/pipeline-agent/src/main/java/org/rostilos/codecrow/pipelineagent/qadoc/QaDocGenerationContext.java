@@ -49,15 +49,7 @@ public record QaDocGenerationContext(
         /** Source branch of the PR. May be null. */
         String sourceBranch,
         /** Target branch of the PR. May be null. */
-        String targetBranch,
-
-        // ── VCS credentials (for Python-side RAG deterministic API) ──
-        /** OAuth consumer key (Bitbucket). May be null. */
-        String oauthKey,
-        /** OAuth consumer secret (Bitbucket). May be null. */
-        String oauthSecret,
-        /** Bearer / PAT token (GitHub, GitLab, Bitbucket APP). May be null. */
-        String bearerToken
+        String targetBranch
 ) {
     /**
      * Builder for constructing a context step-by-step as data becomes available.
@@ -81,9 +73,6 @@ public record QaDocGenerationContext(
         private String repoSlug;
         private String sourceBranch;
         private String targetBranch;
-        private String oauthKey;
-        private String oauthSecret;
-        private String bearerToken;
 
         private Builder() {}
 
@@ -101,9 +90,6 @@ public record QaDocGenerationContext(
         public Builder repoSlug(String v) { this.repoSlug = v; return this; }
         public Builder sourceBranch(String v) { this.sourceBranch = v; return this; }
         public Builder targetBranch(String v) { this.targetBranch = v; return this; }
-        public Builder oauthKey(String v) { this.oauthKey = v; return this; }
-        public Builder oauthSecret(String v) { this.oauthSecret = v; return this; }
-        public Builder bearerToken(String v) { this.bearerToken = v; return this; }
 
         public QaDocGenerationContext build() {
             return new QaDocGenerationContext(
@@ -111,8 +97,7 @@ public record QaDocGenerationContext(
                     diff, deltaDiff,
                     enrichmentData, changedFilePaths,
                     previousDocumentation, isSamePrRerun,
-                    vcsProvider, workspaceSlug, repoSlug, sourceBranch, targetBranch,
-                    oauthKey, oauthSecret, bearerToken);
+                    vcsProvider, workspaceSlug, repoSlug, sourceBranch, targetBranch);
         }
     }
 }

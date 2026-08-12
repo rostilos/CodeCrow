@@ -36,6 +36,19 @@ public interface AnalysisLockRepository extends JpaRepository<AnalysisLock, Long
     @Query("DELETE FROM AnalysisLock l WHERE l.lockKey = :lockKey")
     int deleteByLockKey(@Param("lockKey") String lockKey);
 
+    /**
+     * Atomically renews an owned, unexpired lease.  A read/check/save sequence can
+     * race the scheduled expired-lock delete at the lease boundary; the guarded
+     * update makes the winner explicit to the caller.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE AnalysisLock l SET l.expiresAt = :expiresAt "
+            + "WHERE l.lockKey = :lockKey AND l.expiresAt >= :now")
+    int renewActiveLock(
+            @Param("lockKey") String lockKey,
+            @Param("now") OffsetDateTime now,
+            @Param("expiresAt") OffsetDateTime expiresAt);
+
     @Query("SELECT CASE WHEN COUNT(l) > 0 THEN true ELSE false END FROM AnalysisLock l " +
            "WHERE l.project.id = :projectId AND l.branchName = :branchName " +
            "AND l.analysisType = :analysisType AND l.expiresAt > :now")

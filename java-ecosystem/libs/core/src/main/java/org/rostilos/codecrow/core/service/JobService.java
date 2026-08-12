@@ -359,6 +359,53 @@ public class JobService {
     }
 
     /**
+     * Record and announce a successful terminal transition performed by an
+     * atomic repository CAS. This never changes job status, so a stale caller
+     * cannot overwrite a recovery outcome. Repeated calls reuse the durable
+     * terminal log and still release local streaming subscribers.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    public void recordExternallyCompletedJob(
+            Job job,
+            String step,
+            String message) {
+        if (job == null || job.getId() == null) {
+            return;
+        }
+        Job persisted = jobRepository.findByIdForUpdate(job.getId()).orElse(null);
+        if (persisted == null || persisted.getStatus() != JobStatus.COMPLETED) {
+            log.info("Ignoring terminal success notification for non-completed job {}",
+                    job.getId());
+            return;
+        }
+        if (!jobLogRepository.existsByJobIdAndStep(persisted.getId(), step)) {
+            addLog(persisted, JobLogLevel.INFO, step, message);
+        }
+        notifyJobComplete(persisted);
+    }
+
+    /** Record a failure already committed by an atomic recovery CAS. */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    public void recordExternallyFailedJob(
+            Job job,
+            String step,
+            String message) {
+        if (job == null || job.getId() == null) {
+            return;
+        }
+        Job persisted = jobRepository.findByIdForUpdate(job.getId()).orElse(null);
+        if (persisted == null || persisted.getStatus() != JobStatus.FAILED) {
+            log.info("Ignoring terminal failure notification for non-failed job {}",
+                    job.getId());
+            return;
+        }
+        if (!jobLogRepository.existsByJobIdAndStep(persisted.getId(), step)) {
+            addLog(persisted, JobLogLevel.ERROR, step, message);
+        }
+        notifyJobComplete(persisted);
+    }
+
+    /**
      * Complete a job and link it to a code analysis.
      */
     @Transactional
@@ -752,6 +799,41 @@ public class JobService {
     public boolean claimAbandonedRunningWebhookJob(Long jobId, OffsetDateTime threshold) {
         return jobRepository.claimAbandonedRunningWebhookJob(
                 jobId, threshold, OffsetDateTime.now()) == 1;
+    }
+
+    /** Renew the database-backed lease for one live legacy RAG producer. */
+    @Transactional
+    public boolean renewLegacyRagJobLease(
+            Long jobId,
+            OffsetDateTime validAfter,
+            OffsetDateTime renewedAt) {
+        return jobRepository.renewLegacyRagJobLease(
+                jobId, validAfter, renewedAt) == 1;
+    }
+
+    public List<JobRepository.LegacyRagJobRecoveryCoordinates>
+            findAbandonedLegacyRagJobs(OffsetDateTime threshold, int limit) {
+        return jobRepository.findAbandonedLegacyRagJobs(
+                threshold, PageRequest.of(0, Math.max(1, limit)));
+    }
+
+    /**
+     * Atomically terminalize an abandoned legacy RAG job only while its lease
+     * is still stale and no exact-generation operation owns it.
+     */
+    @Transactional
+    public boolean failAbandonedLegacyRagJob(
+            Long jobId,
+            OffsetDateTime threshold,
+            String diagnostic) {
+        return jobRepository.failAbandonedLegacyRagJob(
+                jobId, threshold, OffsetDateTime.now(), diagnostic) == 1;
+    }
+
+    public List<JobRepository.LegacyRagJobRecoveryCoordinates>
+            findFailedLegacyRagJobsWithActiveStatus(int limit) {
+        return jobRepository.findFailedLegacyRagJobsWithActiveStatus(
+                PageRequest.of(0, Math.max(1, limit)));
     }
 
     private void touchJobActivity(Job job) {

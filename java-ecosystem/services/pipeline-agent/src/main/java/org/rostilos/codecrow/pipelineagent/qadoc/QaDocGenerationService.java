@@ -67,6 +67,9 @@ public class QaDocGenerationService {
         this.tokenEncryptionService = tokenEncryptionService;
         this.objectMapper = new ObjectMapper();
         this.httpClient = HttpClient.newBuilder()
+                // Uvicorn serves HTTP/1.1 on the internal clear-text endpoint.
+                // Prevent the JDK client from attempting an h2c upgrade.
+                .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(Duration.ofSeconds(30))
                 .build();
     }
@@ -252,7 +255,7 @@ public class QaDocGenerationService {
             payload.put("changed_file_paths", ctx.changedFilePaths());
         }
 
-        // ── VCS connection info (for Python-side RAG queries) ──
+        // ── Non-secret VCS identifiers used in the generated document ──
         if (ctx.vcsProvider() != null) {
             payload.put("vcs_provider", ctx.vcsProvider());
         }
@@ -267,17 +270,6 @@ public class QaDocGenerationService {
         }
         if (ctx.targetBranch() != null) {
             payload.put("target_branch", ctx.targetBranch());
-        }
-
-        // ── OAuth credentials (for Python-side VCS/RAG access) ──
-        if (ctx.oauthKey() != null) {
-            payload.put("oauth_key", ctx.oauthKey());
-        }
-        if (ctx.oauthSecret() != null) {
-            payload.put("oauth_secret", ctx.oauthSecret());
-        }
-        if (ctx.bearerToken() != null) {
-            payload.put("bearer_token", ctx.bearerToken());
         }
 
         // ── PR metadata enriched with analysis summary ──

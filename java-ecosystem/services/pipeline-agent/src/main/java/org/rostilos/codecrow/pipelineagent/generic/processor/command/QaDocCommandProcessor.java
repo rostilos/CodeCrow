@@ -36,9 +36,7 @@ import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibility;
 import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
-import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
-import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -75,7 +73,6 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
     private final QaDocDocumentService qaDocDocumentService;
     private final QaDocPublicPreviewService qaDocPublicPreviewService;
     private final PrFileEnrichmentService enrichmentService;
-    private final VcsConnectionCredentialsExtractor credentialsExtractor;
 
     public QaDocCommandProcessor(
             TaskManagementConnectionRepository connectionRepository,
@@ -86,8 +83,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             QaDocStateRepository qaDocStateRepository,
             QaDocDocumentService qaDocDocumentService,
             QaDocPublicPreviewService qaDocPublicPreviewService,
-            PrFileEnrichmentService enrichmentService,
-            TokenEncryptionService tokenEncryptionService
+            PrFileEnrichmentService enrichmentService
     ) {
         this.connectionRepository = connectionRepository;
         this.clientFactory = clientFactory;
@@ -98,7 +94,6 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
         this.qaDocDocumentService = qaDocDocumentService;
         this.qaDocPublicPreviewService = qaDocPublicPreviewService;
         this.enrichmentService = enrichmentService;
-        this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
     }
 
     @Override
@@ -276,22 +271,11 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                         vcsConnection, workspace, repoSlug, commitHash, changedFilePaths);
             }
 
-            // 5e. Extract VCS credentials for Python-side RAG access
-            String oauthKey = null;
-            String oauthSecret = null;
-            String bearerToken = null;
-            String vcsProviderStr = null;
-            if (vcsConnection != null) {
-                try {
-                    VcsConnectionCredentials creds = credentialsExtractor.extractCredentials(vcsConnection);
-                    oauthKey = creds.oAuthClient();
-                    oauthSecret = creds.oAuthSecret();
-                    bearerToken = creds.accessToken();
-                    vcsProviderStr = creds.vcsProviderString();
-                } catch (Exception e) {
-                    log.warn("qa-doc command: failed to extract VCS credentials: {}", e.getMessage());
-                }
-            }
+            // 5e. Keep only the non-secret provider identifier used by the prompt.
+            String vcsProviderStr = vcsConnection == null
+                    ? null
+                    : VcsConnectionCredentialsExtractor.getVcsProviderString(
+                            vcsConnection.getProviderType());
 
             // 6. Load server-side state and check for existing Jira comment
             QaDocState state = (prNumber != null)
@@ -377,9 +361,6 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                     .repoSlug(repoSlug)
                     .sourceBranch(sourceBranch)
                     .targetBranch(targetBranch)
-                    .oauthKey(oauthKey)
-                    .oauthSecret(oauthSecret)
-                    .bearerToken(bearerToken)
                     .build();
 
             String qaDocument;

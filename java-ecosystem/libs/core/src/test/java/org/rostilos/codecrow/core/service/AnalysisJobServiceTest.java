@@ -51,6 +51,34 @@ class AnalysisJobServiceTest {
             verify(service).logToJob(job, JobLogLevel.ERROR, "test-state", "error message");
         }
 
+        @Test
+        @DisplayName("skipJob() should complete compatibility implementations without failing")
+        void skipJobShouldUseNonFailureCompletionResult() {
+            TestAnalysisJobService service = spy(new TestAnalysisJobService());
+            Job job = new Job();
+
+            service.skipJob(job, "deferred until a later trigger");
+
+            verify(service).completeJob(job, Map.of(
+                    "status", "skipped",
+                    "reason", "deferred until a later trigger"));
+            verify(service, never()).failJob(any(), anyString());
+        }
+
+        @Test
+        void externallyCompletedJobDefaultsToNotificationOnly() {
+            TestAnalysisJobService service = spy(new TestAnalysisJobService());
+            Job job = new Job();
+
+            service.recordExternallyCompletedJob(
+                    job, "rag_complete", "RAG index updated");
+
+            verify(service).logToJob(
+                    job, JobLogLevel.INFO, "rag_complete", "RAG index updated");
+            verify(service, never()).completeJob(any(), any());
+            verify(service, never()).failJob(any(), anyString());
+        }
+
 
     }
 

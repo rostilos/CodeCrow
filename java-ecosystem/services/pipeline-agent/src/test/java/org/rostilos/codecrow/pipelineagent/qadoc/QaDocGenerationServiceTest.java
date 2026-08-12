@@ -17,6 +17,7 @@ import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
+import java.net.http.HttpClient;
 import java.time.OffsetDateTime;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -86,6 +87,14 @@ class QaDocGenerationServiceTest {
         );
     }
 
+    @Test
+    void internalInferenceClientUsesHttp11WithoutH2cUpgrade() {
+        HttpClient configuredClient = (HttpClient) ReflectionTestUtils.getField(service, "httpClient");
+
+        assertThat(configuredClient).isNotNull();
+        assertThat(configuredClient.version()).isEqualTo(HttpClient.Version.HTTP_1_1);
+    }
+
     private TaskDetails sampleTaskDetails() {
         return new TaskDetails(
                 "PROJ-123", "Implement feature", "Full description",
@@ -150,6 +159,9 @@ class QaDocGenerationServiceTest {
             assertThat(body.get("template_mode").asText()).isEqualTo("BASE");
             assertThat(body.has("pr_metadata")).isTrue();
             assertThat(body.get("pr_metadata").get("sourceBranch").asText()).isEqualTo("feature/PROJ-123");
+            assertThat(body.has("oauth_key")).isFalse();
+            assertThat(body.has("oauth_secret")).isFalse();
+            assertThat(body.has("bearer_token")).isFalse();
 
             // Verify task context (keys must match Python placeholder names)
             JsonNode taskContext = body.get("task_context");

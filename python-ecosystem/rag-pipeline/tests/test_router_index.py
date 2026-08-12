@@ -13,6 +13,12 @@ Covers:
 """
 import asyncio
 import json
+import logging
+import os
+import shutil
+import threading
+from pathlib import Path
+from queue import Queue
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi import HTTPException
@@ -241,6 +247,282 @@ class TestIndexRepository:
         assert events[1]["type"] == "complete"
         assert events[1]["result"]["chunk_count"] == 50
 
+    def test_stream_progress_is_bounded_and_keeps_latest_event(self):
+        from rag_pipeline.api.routers.index import _coalesce_stream_progress
+
+        events = Queue(maxsize=1)
+        for batch in range(100):
+            _coalesce_stream_progress(events, {"completedBatches": batch})
+
+        assert events.qsize() == 1
+        assert events.get_nowait() == {"completedBatches": 99}
+
+    def test_orphan_cleanup_removes_only_old_owned_stream_directories(
+        self,
+        tmp_path,
+    ):
+        from rag_pipeline.api.routers.index import (
+            _remove_owned_stream_repository,
+            _take_stream_repository_ownership,
+            cleanup_orphaned_index_repository_stream_workspaces,
+        )
+
+        old_owned = tmp_path / "codecrow-rag-owned-stream-old"
+        old_owned.mkdir()
+        (old_owned / "source.py").write_text("old", encoding="utf-8")
+        active_source = (
+            tmp_path / "codecrow-rag-branch-generation-active"
+        )
+        active_source.mkdir()
+        unrelated = tmp_path / "codecrow-rag-branch-generation-old"
+        unrelated.mkdir()
+        old_mtime = 1_000_000
+        os.utime(old_owned, (old_mtime, old_mtime))
+        os.utime(unrelated, (old_mtime, old_mtime))
+
+        with patch.dict(
+            "os.environ", {"ALLOWED_REPO_ROOT": str(tmp_path)}
+        ):
+            active_owned, active_lock = _take_stream_repository_ownership(
+                str(active_source)
+            )
+            os.utime(active_owned, (old_mtime, old_mtime))
+            try:
+                cleaned = (
+                    cleanup_orphaned_index_repository_stream_workspaces(
+                        max_age_seconds=3600
+                    )
+                )
+                active_survived_cleanup = active_owned.exists()
+            finally:
+                _remove_owned_stream_repository(active_owned, active_lock)
+
+        assert cleaned == 1
+        assert not old_owned.exists()
+        assert active_survived_cleanup
+        assert not active_owned.exists()
+        assert unrelated.exists()
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_stream_cancellation_waits_for_admitted_index_worker(
+        self,
+        mock_get,
+    ):
+        _, im = _mock_singletons()
+        started = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        stats = IndexStats(
+            namespace="ns", document_count=10, chunk_count=50,
+            last_updated="2024-01-01", workspace="ws", project="proj",
+            branch="main",
+        )
+
+        def blocking_index(**_kwargs):
+            started.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("test did not release indexing worker")
+            finished.set()
+            return stats
+
+        im.index_repository.side_effect = blocking_index
+        mock_get.return_value = (_, im)
+        from rag_pipeline.api.routers.index import (
+            _index_stream_workers,
+            index_repository_stream,
+        )
+
+        req = MagicMock()
+        req.repo_path = "/tmp/repo"
+        req.workspace = "ws"
+        req.project = "proj"
+        req.branch = "main"
+        req.commit = "abc"
+        req.preserve_other_branches = False
+        req.include_patterns = None
+        req.exclude_patterns = None
+        req.source_tree_sha256 = None
+        req.collection_target = "target"
+        response = index_repository_stream(req)
+
+        async def scenario():
+            consumer_started = asyncio.Event()
+
+            async def consume():
+                consumer_started.set()
+                async for _item in response.body_iterator:
+                    pass
+
+            consumer = asyncio.create_task(consume())
+            await consumer_started.wait()
+            for _ in range(100):
+                if started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert started.is_set()
+            assert _index_stream_workers.active_count == 1
+
+            consumer.cancel()
+            await asyncio.sleep(0.1)
+            assert not consumer.done()
+
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await consumer
+
+            assert finished.is_set()
+            assert _index_stream_workers.active_count == 0
+
+        try:
+            asyncio.run(scenario())
+        finally:
+            release.set()
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_disconnect_cannot_delete_transferred_snapshot_under_active_worker(
+        self,
+        mock_get,
+        tmp_path,
+    ):
+        _, im = _mock_singletons()
+        source = tmp_path / "codecrow-rag-branch-generation-disconnect"
+        source.mkdir()
+        (source / "source.py").write_text("value = 1", encoding="utf-8")
+        started = threading.Event()
+        release = threading.Event()
+        worker_path: list[Path] = []
+        stats = IndexStats(
+            namespace="ns", document_count=1, chunk_count=1,
+            last_updated="2024-01-01", workspace="ws", project="proj",
+            branch="main",
+        )
+
+        def blocking_index(**kwargs):
+            owned_path = Path(kwargs["repo_path"])
+            worker_path.append(owned_path)
+            assert owned_path != source
+            assert owned_path.exists()
+            started.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("test did not release indexing worker")
+            # Java may clean its original path after the stream disconnects,
+            # but the atomically moved RAG-owned path remains valid.
+            assert owned_path.exists()
+            return stats
+
+        im.index_repository.side_effect = blocking_index
+        mock_get.return_value = (_, im)
+        from rag_pipeline.api.models import IndexRequest
+        from rag_pipeline.api.routers.index import (
+            _index_stream_workers,
+            index_repository_stream,
+        )
+
+        request = IndexRequest(
+            repo_path=str(source),
+            workspace="ws",
+            project="proj",
+            branch="main",
+            commit="abc",
+            collection_target="target",
+            transfer_repo_ownership=True,
+        )
+
+        async def scenario():
+            response = index_repository_stream(request)
+            admitted = asyncio.Event()
+
+            async def consume():
+                async for item in response.body_iterator:
+                    event = json.loads(
+                        (item.decode() if isinstance(item, bytes) else item)
+                        .removeprefix("data: ").strip()
+                    )
+                    if event["type"] == "admitted":
+                        admitted.set()
+
+            consumer = asyncio.create_task(consume())
+            await asyncio.wait_for(admitted.wait(), timeout=1)
+            for _ in range(100):
+                if started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert started.is_set()
+            assert not source.exists()
+
+            consumer.cancel()
+            # Simulate the Java pre-admission fallback after a lost stream.
+            # It targets only the old path, which no longer backs the worker.
+            shutil.rmtree(source, ignore_errors=True)
+            await asyncio.sleep(0.1)
+            assert not consumer.done()
+            assert worker_path[0].exists()
+
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await consumer
+
+            assert not worker_path[0].exists()
+            assert _index_stream_workers.active_count == 0
+
+        try:
+            with patch.dict(
+                "os.environ", {"ALLOWED_REPO_ROOT": str(tmp_path)}
+            ):
+                asyncio.run(scenario())
+        finally:
+            release.set()
+            for path in worker_path:
+                shutil.rmtree(path, ignore_errors=True)
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_stream_worker_failure_is_terminal_without_duplicate_error_log(
+        self,
+        mock_get,
+        caplog,
+    ):
+        _, im = _mock_singletons()
+        im.index_repository.side_effect = RuntimeError("qdrant unavailable")
+        mock_get.return_value = (_, im)
+        from rag_pipeline.api.routers.index import index_repository_stream
+
+        req = MagicMock()
+        req.repo_path = "/tmp/repo"
+        req.workspace = "ws"
+        req.project = "proj"
+        req.branch = "main"
+        req.commit = "abc"
+        req.preserve_other_branches = False
+        req.include_patterns = None
+        req.exclude_patterns = None
+        req.source_tree_sha256 = None
+        req.collection_target = "target"
+        req.transfer_repo_ownership = False
+
+        response = index_repository_stream(req)
+
+        async def consume():
+            return [item async for item in response.body_iterator]
+
+        with caplog.at_level(logging.DEBUG):
+            events = [
+                json.loads(
+                    (item.decode() if isinstance(item, bytes) else item)
+                    .removeprefix("data: ").strip()
+                )
+                for item in asyncio.run(consume())
+            ]
+
+        assert events[-1] == {
+            "type": "error",
+            "message": "qdrant unavailable",
+        }
+        assert not any(
+            record.levelno >= logging.ERROR
+            and "qdrant unavailable" in record.getMessage()
+            for record in caplog.records
+        )
+
     @patch("rag_pipeline.api.routers.index._get_singletons")
     def test_exact_index_forwards_readable_alias_publication(self, mock_get):
         _, im = _mock_singletons()
@@ -294,6 +576,65 @@ class TestAdvanceGeneration:
         advance_generation(request)
 
         assert im.advance_generation.call_args.kwargs["publish_branch_alias"] is True
+
+
+class TestGenerationAliasPublication:
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_forwards_registry_manifest_receipt(self, mock_get):
+        _, im = _mock_singletons()
+        im.publish_generation_aliases.return_value = ["readable-main"]
+        mock_get.return_value = (_, im)
+
+        from rag_pipeline.api.models import GenerationAliasPublicationRequest
+        from rag_pipeline.api.routers.index import publish_generation_aliases
+
+        request = GenerationAliasPublicationRequest(
+            workspace="ws",
+            project="project",
+            branch="main",
+            commit="a" * 40,
+            collection_target="exact-target",
+            generation_manifest_sha256="b" * 64,
+        )
+
+        result = publish_generation_aliases(request)
+
+        assert result["status"] == "published"
+        assert im.publish_generation_aliases.call_args.kwargs[
+            "generation_manifest_sha256"
+        ] == "b" * 64
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_retryable_failure_does_not_emit_server_error_log(
+        self,
+        mock_get,
+        caplog,
+    ):
+        _, im = _mock_singletons()
+        im.publish_generation_aliases.side_effect = RuntimeError("timed out")
+        mock_get.return_value = (_, im)
+
+        from rag_pipeline.api.models import GenerationAliasPublicationRequest
+        from rag_pipeline.api.routers.index import publish_generation_aliases
+
+        request = GenerationAliasPublicationRequest(
+            workspace="ws",
+            project="project",
+            branch="main",
+            commit="a" * 40,
+            collection_target="exact-target",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            publish_generation_aliases(request)
+
+        assert exc_info.value.status_code == 500
+        assert not any(
+            record.levelname == "ERROR"
+            and "alias" in record.getMessage().lower()
+            for record in caplog.records
+        )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -493,6 +834,28 @@ class TestBranchEndpoints:
         from rag_pipeline.api.routers.index import delete_branch
         result = delete_branch("ws", "proj", "feat")
         assert result["status"] == "not_found"
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_delete_exact_generation_forwards_registry_receipt(self, mock_get):
+        _, im = _mock_singletons()
+        im.delete_branch.return_value = True
+        mock_get.return_value = (_, im)
+
+        from rag_pipeline.api.routers.index import delete_branch
+        digest = "a" * 64
+        result = delete_branch(
+            "ws", "proj", "develop", "target", "revision", digest
+        )
+
+        assert result["status"] == "success"
+        im.delete_branch.assert_called_once_with(
+            "ws",
+            "proj",
+            "develop",
+            collection_target="target",
+            generation_revision="revision",
+            generation_manifest_sha256=digest,
+        )
 
     @patch("rag_pipeline.api.routers.index._get_singletons")
     def test_list_branches(self, mock_get):

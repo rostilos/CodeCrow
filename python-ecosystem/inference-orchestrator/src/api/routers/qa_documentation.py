@@ -59,17 +59,12 @@ class QaDocumentationRequest(BaseModel):
     # Changed file paths extracted from diff
     changed_file_paths: Optional[List[str]] = None
 
-    # VCS connection info (for RAG queries)
+    # Non-secret VCS identifiers used in document context
     vcs_provider: Optional[str] = None
     workspace_slug: Optional[str] = None
     repo_slug: Optional[str] = None
     source_branch: Optional[str] = None
     target_branch: Optional[str] = None
-
-    # OAuth credentials (for Python-side RAG/VCS access)
-    oauth_key: Optional[str] = None
-    oauth_secret: Optional[str] = None
-    bearer_token: Optional[str] = None
 
     @field_validator("task_context", mode="before")
     @classmethod

@@ -993,6 +993,69 @@ async def test_project_disabled_rag_skips_pr_overlay():
 
 
 @pytest.mark.asyncio
+async def test_project_disabled_rag_clears_bindings_and_never_queries_client():
+    request = _request().model_copy(update={
+        "ragEnabled": False,
+        "ragPrGenerationFingerprint": "sha256:" + "a" * 64,
+        "ragPrOverlayGenerationManifestSha256": "b" * 64,
+        "ragBasePluginFingerprint": "sha256:" + "c" * 64,
+        "ragBasePluginDescriptorFingerprint": "sha256:" + "d" * 64,
+        "ragBasePluginImplementationFingerprint": "sha256:" + "e" * 64,
+        "ragBaseIndexRepresentationFingerprint": "sha256:" + "f" * 64,
+        # Force Stage 2 even for the small neutral fixture.
+        "taskContext": {"task_key": "SHOP-42"},
+    })
+    rag = DeterministicRagSpy()
+    rag.index_pr_files = AsyncMock(
+        side_effect=AssertionError("disabled RAG must not index")
+    )
+    rag.get_deterministic_context = AsyncMock(
+        side_effect=AssertionError("disabled RAG must not retrieve")
+    )
+    rag.get_pr_context = AsyncMock(
+        side_effect=AssertionError("disabled RAG must not retrieve")
+    )
+    rag.search_for_duplicates = AsyncMock(
+        side_effect=AssertionError("disabled RAG must not query duplicates")
+    )
+    session = PromptCaptureSession(request=request)
+    orchestrator = MultiStageReviewOrchestrator(
+        llm=PromptCaptureLLM(session),
+        mcp_client=None,
+        rag_client=rag,
+    )
+
+    result = await orchestrator.orchestrate_review(
+        request,
+        rag_context={"relevant_code": ["DISABLED_GLOBAL_RAG_SENTINEL"]},
+        processed_diff=DiffProcessor().process(request.rawDiff),
+    )
+
+    assert result["issues"] == []
+    rag.index_pr_files.assert_not_awaited()
+    rag.get_deterministic_context.assert_not_awaited()
+    rag.get_pr_context.assert_not_awaited()
+    rag.search_for_duplicates.assert_not_awaited()
+    assert all(
+        getattr(request, field_name) is None
+        for field_name in (
+            "ragCollectionTarget",
+            "ragBaseGenerationManifestSha256",
+            "ragPrGenerationFingerprint",
+            "ragPrOverlayGenerationManifestSha256",
+            "ragBasePluginFingerprint",
+            "ragBasePluginDescriptorFingerprint",
+            "ragBasePluginImplementationFingerprint",
+            "ragBaseIndexRepresentationFingerprint",
+        )
+    )
+    assert all(
+        "DISABLED_GLOBAL_RAG_SENTINEL" not in prompt["renderedPrompt"]
+        for prompt in session.prompts
+    )
+
+
+@pytest.mark.asyncio
 async def test_pr_overlay_receives_one_exact_snapshot_identity():
     rag = DeterministicRagSpy()
     request = _request()
@@ -1044,6 +1107,42 @@ async def test_pr_index_failure_is_optional_for_normal_review():
 
     assert rag.index_requests
     assert orchestrator._pr_indexed is False
+    assert request.ragCollectionTarget == "cc_workspace_project_main_generation"
+    assert request.ragBaseGenerationManifestSha256 == "3" * 64
+    assert request.ragPrGenerationFingerprint is None
+    assert request.ragPrOverlayGenerationManifestSha256 is None
+
+
+@pytest.mark.asyncio
+async def test_incomplete_pr_overlay_receipt_degrades_to_exact_base_binding():
+    rag = DeterministicRagSpy()
+    complete_index = rag.index_pr_files
+
+    async def omit_overlay_manifest(**kwargs):
+        result = await complete_index(**kwargs)
+        result.pop("overlay_generation_manifest_sha256")
+        result["review_groups"] = [["src/file_0.py"]]
+        return result
+
+    rag.index_pr_files = omit_overlay_manifest
+    request = _request()
+    orchestrator = MultiStageReviewOrchestrator(
+        llm=object(),
+        mcp_client=None,
+        rag_client=rag,
+    )
+
+    await orchestrator._index_pr_files(
+        request,
+        DiffProcessor().process(request.rawDiff),
+    )
+
+    assert orchestrator._pr_indexed is False
+    assert orchestrator._repository_review_groups == ()
+    assert request.ragCollectionTarget == "cc_workspace_project_main_generation"
+    assert request.ragBaseGenerationManifestSha256 == "3" * 64
+    assert request.ragPrGenerationFingerprint is None
+    assert request.ragPrOverlayGenerationManifestSha256 is None
 
 
 @pytest.mark.asyncio

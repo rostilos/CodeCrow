@@ -63,6 +63,10 @@ class RAGConfig(BaseModel):
     qdrant_url: str = Field(default_factory=lambda: os.getenv("QDRANT_URL", "http://qdrant:6333"))
     qdrant_api_key: str = Field(default_factory=lambda: os.getenv("QDRANT_API_KEY", ""))
     qdrant_collection_prefix: str = Field(default_factory=lambda: os.getenv("QDRANT_COLLECTION_PREFIX", "codecrow"))
+    qdrant_timeout_seconds: int = Field(
+        default_factory=lambda: int(os.getenv("QDRANT_TIMEOUT_SECONDS", "30")),
+        ge=1,
+    )
 
     # Embedding provider selection: "ollama" (local) or "openrouter" (cloud)
     embedding_provider: str = Field(default_factory=lambda: os.getenv("EMBEDDING_PROVIDER", "ollama"))

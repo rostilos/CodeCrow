@@ -1,9 +1,11 @@
 """
 Tests for rag_pipeline.api.api — App creation, middleware, lifespan.
 """
+import asyncio
 import logging
 import os
 import pytest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock
 
 
@@ -108,6 +110,62 @@ class TestAppCreation:
         assert app is not None
         assert app.title == "CodeCrow RAG API"
 
+    @pytest.mark.asyncio
+    async def test_shutdown_drains_http_index_workers_before_clients_close(self):
+        import rag_pipeline.api.api as api_module
+
+        order = []
+        manager = MagicMock()
+        manager.embed_model.close.side_effect = lambda: order.append(
+            "manager-embed-close"
+        )
+        manager.close.side_effect = lambda: order.append("manager-close")
+        query_service = MagicMock()
+        query_service.embed_model.close.side_effect = lambda: order.append(
+            "query-embed-close"
+        )
+        query_service.close.side_effect = lambda: order.append("query-close")
+        queue_consumer = MagicMock()
+        queue_consumer.start = AsyncMock()
+        queue_consumer.stop = AsyncMock()
+        drain_workers = AsyncMock(side_effect=lambda: order.append("drain"))
+        test_app = SimpleNamespace(state=SimpleNamespace())
+
+        with (
+            patch.object(api_module, "RAGConfig", return_value=MagicMock()),
+            patch.object(
+                api_module,
+                "RAGIndexManager",
+                return_value=manager,
+            ),
+            patch.object(
+                api_module,
+                "RAGQueryService",
+                return_value=query_service,
+            ),
+            patch(
+                "rag_pipeline.server.rag_queue_consumer.RAGQueueConsumer",
+                return_value=queue_consumer,
+            ),
+            patch(
+                "rag_pipeline.api.routers.index."
+                "drain_index_repository_stream_workers",
+                drain_workers,
+            ),
+        ):
+            async with api_module.lifespan(test_app):
+                pass
+
+        queue_consumer.stop.assert_awaited_once()
+        drain_workers.assert_awaited_once()
+        assert order == [
+            "drain",
+            "manager-embed-close",
+            "query-embed-close",
+            "query-close",
+            "manager-close",
+        ]
+
 
 class TestPendingCollectionJanitor:
 
@@ -137,3 +195,42 @@ class TestPendingCollectionJanitor:
             assert _pending_janitor_interval_seconds() == 3600
 
         assert "Invalid RAG_PENDING_JANITOR_INTERVAL_SECONDS" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_outage_logs_once_and_reports_recovery(self, caplog):
+        from rag_pipeline.api.api import _pending_collection_janitor
+
+        cleanup_attempt = AsyncMock(side_effect=[
+            RuntimeError("qdrant unavailable"),
+            RuntimeError("qdrant unavailable"),
+            0,
+            asyncio.CancelledError(),
+        ])
+        with (
+            patch(
+                "rag_pipeline.api.api.asyncio.to_thread",
+                cleanup_attempt,
+            ),
+            patch(
+                "rag_pipeline.api.api.asyncio.sleep",
+                AsyncMock(return_value=None),
+            ),
+            caplog.at_level(logging.DEBUG),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await _pending_collection_janitor(MagicMock())
+
+        janitor_records = [
+            record
+            for record in caplog.records
+            if "Pending collection janitor" in record.getMessage()
+        ]
+        assert sum(
+            record.levelno == logging.WARNING for record in janitor_records
+        ) == 1
+        assert not any(
+            record.levelno >= logging.ERROR for record in janitor_records
+        )
+        assert any(
+            "recovered" in record.getMessage() for record in janitor_records
+        )

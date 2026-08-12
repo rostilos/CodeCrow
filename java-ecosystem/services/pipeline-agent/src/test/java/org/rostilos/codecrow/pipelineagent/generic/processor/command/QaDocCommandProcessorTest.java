@@ -32,7 +32,6 @@ import org.rostilos.codecrow.pipelineagent.qadoc.QaDocGenerationService;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocPublicPreviewService;
 import org.rostilos.codecrow.core.persistence.repository.qadoc.QaDocStateRepository;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
-import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.taskmanagement.ETaskManagementPlatform;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClient;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClientFactory;
@@ -65,7 +64,6 @@ class QaDocCommandProcessorTest {
     @Mock private QaDocDocumentService qaDocDocumentService;
     @Mock private QaDocPublicPreviewService qaDocPublicPreviewService;
     @Mock private PrFileEnrichmentService enrichmentService;
-    @Mock private TokenEncryptionService tokenEncryptionService;
 
     private QaDocCommandProcessor processor;
     private Project project;
@@ -107,8 +105,7 @@ class QaDocCommandProcessorTest {
                 qaDocStateRepository,
                 qaDocDocumentService,
                 qaDocPublicPreviewService,
-                enrichmentService,
-                tokenEncryptionService
+                enrichmentService
         );
 
         project = new Project();

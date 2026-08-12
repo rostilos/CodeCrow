@@ -3,6 +3,7 @@ Command API endpoints (summarize, ask).
 """
 import json
 import asyncio
+import logging
 from typing import Dict, Any
 from fastapi import APIRouter, Request
 from starlette.responses import StreamingResponse
@@ -14,6 +15,7 @@ from model.dtos import (
 from service.command.command_service import CommandService
 
 router = APIRouter(tags=["commands"])
+logger = logging.getLogger(__name__)
 
 
 def get_command_service(request: Request) -> CommandService:
@@ -50,29 +52,52 @@ async def summarize_endpoint(req: SummarizeRequestDto, request: Request):
         # Streaming behavior
         async def event_stream():
             queue = asyncio.Queue()
+            task = None
+            terminal_event_type = None
 
-            yield _json_event({"type": "status", "state": "queued", "message": "summarize request received"})
+            try:
+                yield _json_event({"type": "status", "state": "queued", "message": "summarize request received"})
 
-            def event_callback(event: Dict[str, Any]):
-                try:
-                    queue.put_nowait(event)
-                except asyncio.QueueFull:
-                    pass
+                def event_callback(event: Dict[str, Any]):
+                    nonlocal terminal_event_type
+                    event_type = event.get("type")
+                    if terminal_event_type is not None:
+                        logger.debug(
+                            "Ignoring streamed summarize event type=%s after "
+                            "terminal type=%s",
+                            event_type,
+                            terminal_event_type,
+                        )
+                        return
+                    if event_type in {"final", "error"}:
+                        terminal_event_type = event_type
+                    try:
+                        queue.put_nowait(event)
+                    except asyncio.QueueFull:
+                        pass
 
-            async def runner():
-                try:
-                    result = await command_service.process_summarize(req, event_callback=event_callback)
-                    await queue.put({
-                        "type": "final",
-                        "result": result
-                    })
-                except Exception as e:
-                    await queue.put({"type": "error", "message": str(e)})
+                async def runner():
+                    try:
+                        result = await command_service.process_summarize(req, event_callback=event_callback)
+                        event_callback({
+                            "type": "final",
+                            "result": result
+                        })
+                    except Exception as e:
+                        event_callback({"type": "error", "message": str(e)})
 
-            task = asyncio.create_task(runner())
+                task = asyncio.create_task(runner())
 
-            async for event in _drain_queue_until_final(queue, task):
-                yield _json_event(event)
+                async for event in _drain_queue_until_final(queue, task):
+                    yield _json_event(event)
+            finally:
+                if task is not None:
+                    if not task.done():
+                        task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
         return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
@@ -107,29 +132,52 @@ async def ask_endpoint(req: AskRequestDto, request: Request):
         # Streaming behavior
         async def event_stream():
             queue = asyncio.Queue()
+            task = None
+            terminal_event_type = None
 
-            yield _json_event({"type": "status", "state": "queued", "message": "ask request received"})
+            try:
+                yield _json_event({"type": "status", "state": "queued", "message": "ask request received"})
 
-            def event_callback(event: Dict[str, Any]):
-                try:
-                    queue.put_nowait(event)
-                except asyncio.QueueFull:
-                    pass
+                def event_callback(event: Dict[str, Any]):
+                    nonlocal terminal_event_type
+                    event_type = event.get("type")
+                    if terminal_event_type is not None:
+                        logger.debug(
+                            "Ignoring streamed ask event type=%s after terminal "
+                            "type=%s",
+                            event_type,
+                            terminal_event_type,
+                        )
+                        return
+                    if event_type in {"final", "error"}:
+                        terminal_event_type = event_type
+                    try:
+                        queue.put_nowait(event)
+                    except asyncio.QueueFull:
+                        pass
 
-            async def runner():
-                try:
-                    result = await command_service.process_ask(req, event_callback=event_callback)
-                    await queue.put({
-                        "type": "final",
-                        "result": result
-                    })
-                except Exception as e:
-                    await queue.put({"type": "error", "message": str(e)})
+                async def runner():
+                    try:
+                        result = await command_service.process_ask(req, event_callback=event_callback)
+                        event_callback({
+                            "type": "final",
+                            "result": result
+                        })
+                    except Exception as e:
+                        event_callback({"type": "error", "message": str(e)})
 
-            task = asyncio.create_task(runner())
+                task = asyncio.create_task(runner())
 
-            async for event in _drain_queue_until_final(queue, task):
-                yield _json_event(event)
+                async for event in _drain_queue_until_final(queue, task):
+                    yield _json_event(event)
+            finally:
+                if task is not None:
+                    if not task.done():
+                        task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
         return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 

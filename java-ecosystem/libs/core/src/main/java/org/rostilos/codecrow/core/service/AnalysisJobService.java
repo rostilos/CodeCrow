@@ -91,6 +91,22 @@ public interface AnalysisJobService {
      */
     void failJob(Job job, String errorMessage);
 
+    /** Finish an intentionally skipped job without representing it as a failure. */
+    default void skipJob(Job job, String reason) {
+        completeJob(job, Map.of("status", "skipped", "reason", reason));
+    }
+
+    /**
+     * Announce a success already committed by a fenced repository transition.
+     * Persistent hosts should override this without updating terminal status.
+     */
+    default void recordExternallyCompletedJob(
+            Job job,
+            String state,
+            String message) {
+        info(job, state, message);
+    }
+
     /**
      * Log an INFO level message to a job.
      * @param job The job to log to

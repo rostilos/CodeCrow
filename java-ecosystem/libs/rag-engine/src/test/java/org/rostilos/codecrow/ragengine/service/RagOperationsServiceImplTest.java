@@ -1,14 +1,20 @@
 package org.rostilos.codecrow.ragengine.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.hibernate.LazyInitializationException;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.core.model.analysis.RagIndexStatus;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.job.Job;
+import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
@@ -23,14 +29,19 @@ import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexGener
 import org.rostilos.codecrow.core.service.AnalysisJobService;
 import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
 import org.rostilos.codecrow.ragengine.branch.BranchIndexGenerationBuildService;
+import org.rostilos.codecrow.ragengine.branch.BranchIndexBuildAdmissionService;
+import org.rostilos.codecrow.ragengine.branch.LegacyRagJobLeaseService;
+import org.rostilos.codecrow.ragengine.branch.LegacyRagUpdateCompletionService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.slf4j.LoggerFactory;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -65,6 +76,21 @@ class RagOperationsServiceImplTest {
     @Mock
     private RagPipelineClient ragPipelineClient;
 
+    @Mock
+    private BranchIndexBuildAdmissionService branchIndexBuildAdmissionService;
+
+    @Mock
+    private LegacyRagJobLeaseService legacyRagJobLeaseService;
+
+    @Mock
+    private LegacyRagJobLeaseService.JobLease legacyJobLease;
+
+    @Mock
+    private AnalysisLockService.LockLease legacyLockLease;
+
+    @Mock
+    private LegacyRagUpdateCompletionService legacyRagUpdateCompletionService;
+
     private RagOperationsServiceImpl service;
     private Project testProject;
 
@@ -77,7 +103,21 @@ class RagOperationsServiceImplTest {
                 analysisJobService,
                 ragBranchIndexRepository,
                 vcsClientProvider,
-                ragPipelineClient);
+                ragPipelineClient,
+                null,
+                null,
+                null,
+                legacyRagJobLeaseService,
+                legacyRagUpdateCompletionService);
+        lenient().when(legacyRagJobLeaseService.start(anyLong()))
+                .thenReturn(legacyJobLease);
+        lenient().when(legacyJobLease.confirmOwnership()).thenReturn(true);
+        lenient().when(analysisLockService.maintainLockLease(anyString(), anyInt()))
+                .thenReturn(legacyLockLease);
+        lenient().when(legacyLockLease.confirmOwnership()).thenReturn(true);
+        lenient().when(legacyRagUpdateCompletionService.complete(
+                any(), anyString(), anyString(), anyLong(), any(), anyBoolean(),
+                anyInt(), anyInt(), any(), anySet())).thenReturn(true);
         ReflectionTestUtils.setField(
                 service, "branchGenerationRepository", branchGenerationRepository);
 
@@ -102,20 +142,23 @@ class RagOperationsServiceImplTest {
                 ragIndexTrackingService, incrementalRagUpdateService,
                 analysisLockService, analysisJobService,
                 ragBranchIndexRepository, vcsClientProvider,
-                ragPipelineClient, registry, builder);
+                ragPipelineClient, registry, builder, branchIndexBuildAdmissionService);
         setupRagEnabled();
         setupVcsBinding();
         ReflectionTestUtils.setField(service, "ragApiEnabled", true);
         when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
         when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
                 .thenReturn(true);
-        when(incrementalRagUpdateService.parseDiffForRag(""))
-                .thenReturn(new IncrementalRagUpdateService.DiffResult(
-                        Set.of(), Set.of(), Set.of()));
         Job job = mock(Job.class);
-        when(job.getId()).thenReturn(77L);
-        when(analysisJobService.createRagIndexJob(any(), eq(false), any()))
-                .thenReturn(job);
+        var prepared = new BranchIndexGenerationBuildService.PreparedBuild(
+                30L, "physical-target", false, null, "exact-feature-lock");
+        when(branchIndexBuildAdmissionService.admit(
+                testProject, "feature", "develop-400", RagBranchIndexKind.DURABLE,
+                JobTriggerSource.WEBHOOK, "exact-feature-lock",
+                BranchIndexBuildAdmissionService.BuildOrigin.AUTOMATIC))
+                .thenReturn(new BranchIndexBuildAdmissionService.AdmittedBuild(
+                        job, prepared,
+                        BranchIndexBuildAdmissionService.ProjectStatusAdmission.NONE));
         when(analysisLockService.acquireLock(
                 eq(testProject), eq("feature"), any(), eq("develop-400"), isNull()))
                 .thenReturn(Optional.of("exact-feature-lock"));
@@ -123,13 +166,11 @@ class RagOperationsServiceImplTest {
         when(vcsClientProvider.getClient(any())).thenReturn(vcs);
         when(vcs.getLatestCommitHash("my-workspace", "my-repo", "feature"))
                 .thenReturn("develop-400");
-        when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "feature"))
-                .thenReturn(Optional.empty());
-        when(builder.build(
+        when(builder.execute(
                 eq(testProject), any(), eq("my-workspace"), eq("my-repo"),
                 eq("feature"), eq("develop-400"),
                 eq(org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.DURABLE),
-                any(), any(), eq(77L), eq("exact-feature-lock"), isNull()))
+                nullable(List.class), nullable(List.class), eq(prepared), isNull()))
                 .thenReturn(Map.of(
                         "generation_manifest_sha256", "manifest-400",
                         "document_count", 231,
@@ -143,11 +184,434 @@ class RagOperationsServiceImplTest {
 
         assertThat(ready).isTrue();
         verify(vcs, never()).getBranchDiff(anyString(), anyString(), anyString(), anyString());
-        verify(builder).build(
+        verify(builder).execute(
                 eq(testProject), any(), eq("my-workspace"), eq("my-repo"),
                 eq("feature"), eq("develop-400"),
                 eq(org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.DURABLE),
-                any(), any(), eq(77L), eq("exact-feature-lock"), isNull());
+                nullable(List.class), nullable(List.class), eq(prepared), isNull());
+        verify(branchIndexBuildAdmissionService).admit(
+                testProject, "feature", "develop-400", RagBranchIndexKind.DURABLE,
+                JobTriggerSource.WEBHOOK, "exact-feature-lock",
+                BranchIndexBuildAdmissionService.BuildOrigin.AUTOMATIC);
+        verifyNoInteractions(registry);
+    }
+
+    @Test
+    void exactMismatchUsesScalarProjectionWithoutTouchingDetachedActiveGenerationProxy()
+            throws Exception {
+        RagBranchIndexRegistryService registry = mock(RagBranchIndexRegistryService.class);
+        BranchIndexGenerationBuildService builder = mock(BranchIndexGenerationBuildService.class);
+        service = new RagOperationsServiceImpl(
+                ragIndexTrackingService, incrementalRagUpdateService,
+                analysisLockService, analysisJobService,
+                ragBranchIndexRepository, vcsClientProvider,
+                ragPipelineClient, registry, builder, branchIndexBuildAdmissionService);
+        setupRagEnabled();
+        setupVcsBinding();
+        setupProjectWithWorkspaceAndNamespace();
+
+        when(ragBranchIndexRepository.existsByProjectIdAndBranchName(100L, "main"))
+                .thenReturn(true);
+        RagBranchIndex detachedIndex = mock(RagBranchIndex.class);
+        RagBranchIndexGeneration detachedGeneration = mock(
+                RagBranchIndexGeneration.class);
+        lenient().when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "main"))
+                .thenReturn(Optional.of(detachedIndex));
+        lenient().when(detachedIndex.getActiveGeneration()).thenReturn(detachedGeneration);
+        lenient().when(detachedGeneration.getRevision()).thenThrow(
+                new LazyInitializationException("no Session"));
+        when(ragBranchIndexRepository.markAccessedIfUnclaimed(
+                eq(100L), eq("main"), any()))
+                .thenReturn(1);
+        RagBranchIndexRepository.ActiveGenerationCoordinates source =
+                mock(RagBranchIndexRepository.ActiveGenerationCoordinates.class);
+        // Simulate returning A after B became active. An older successful A
+        // operation may exist, so automatic reconciliation must force a fresh
+        // generation instead of reusing the superseded one.
+        when(source.getRevision()).thenReturn("revision-b");
+        AtomicBoolean lockAcquired = new AtomicBoolean();
+        when(ragBranchIndexRepository.findActiveGenerationCoordinates(100L, "main"))
+                .thenAnswer(ignored -> {
+                    assertThat(lockAcquired.get()).isTrue();
+                    return Optional.of(source);
+                });
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
+                .thenReturn(true);
+        Job job = mock(Job.class);
+        when(job.getId()).thenReturn(77L);
+        var prepared = new BranchIndexGenerationBuildService.PreparedBuild(
+                31L, "target-generation", false, null, "rag-lock");
+        when(branchIndexBuildAdmissionService.admit(
+                testProject, "main", "revision-a", RagBranchIndexKind.PRIMARY,
+                JobTriggerSource.WEBHOOK, "rag-lock",
+                BranchIndexBuildAdmissionService.BuildOrigin.AUTOMATIC))
+                .thenReturn(new BranchIndexBuildAdmissionService.AdmittedBuild(
+                        job, prepared,
+                        BranchIndexBuildAdmissionService.ProjectStatusAdmission.UPDATING));
+        when(analysisLockService.acquireLock(
+                eq(testProject), eq("main"), any(), eq("revision-a"), isNull()))
+                .thenAnswer(ignored -> {
+                    lockAcquired.set(true);
+                    return Optional.of("rag-lock");
+                });
+
+        when(builder.execute(
+                eq(testProject), any(VcsConnection.class), eq("my-workspace"), eq("my-repo"),
+                eq("main"), eq("revision-a"), eq(RagBranchIndexKind.PRIMARY),
+                nullable(List.class), nullable(List.class), eq(prepared), isNull()))
+                .thenReturn(Map.of(
+                        "generation_manifest_sha256", "target-manifest",
+                        "document_count", 214,
+                        "chunk_count", 642,
+                        "deletedFiles", 0));
+
+        boolean result = service.triggerIncrementalUpdate(
+                testProject, "main", "revision-a", "caller diff", ignored -> { });
+
+        assertThat(result).isTrue();
+        var sourceBindingOrder = inOrder(
+                analysisLockService, ragBranchIndexRepository, builder);
+        sourceBindingOrder.verify(analysisLockService).acquireLock(
+                eq(testProject), eq("main"), any(), eq("revision-a"), isNull());
+        sourceBindingOrder.verify(ragBranchIndexRepository)
+                .findActiveGenerationCoordinates(100L, "main");
+        sourceBindingOrder.verify(builder).execute(
+                eq(testProject), any(VcsConnection.class), eq("my-workspace"), eq("my-repo"),
+                eq("main"), eq("revision-a"), eq(RagBranchIndexKind.PRIMARY),
+                nullable(List.class), nullable(List.class), eq(prepared), isNull());
+        verifyNoInteractions(vcsClientProvider, registry);
+        verify(incrementalRagUpdateService, never()).parseDiffForRag("caller diff");
+        verify(analysisJobService).info(eq(job), eq("rag_init"),
+                contains("Starting exact RAG generation rebuild"));
+        verify(analysisJobService).info(eq(job), eq("rag_complete"),
+                contains("214 documents, 642 chunks"));
+        verify(branchIndexBuildAdmissionService).admit(
+                testProject, "main", "revision-a", RagBranchIndexKind.PRIMARY,
+                JobTriggerSource.WEBHOOK, "rag-lock",
+                BranchIndexBuildAdmissionService.BuildOrigin.AUTOMATIC);
+        verify(ragBranchIndexRepository, never())
+                .findByProjectIdAndBranchName(anyLong(), anyString());
+        verify(detachedIndex, never()).getActiveGeneration();
+        verify(detachedGeneration, never()).getRevision();
+        verify(ragBranchIndexRepository, never()).save(any());
+    }
+
+    @Test
+    void exactPublicationProjectionFailureLeavesSucceededOperationOwnedForRecovery()
+            throws Exception {
+        BranchIndexGenerationBuildService builder = mock(
+                BranchIndexGenerationBuildService.class);
+        service = new RagOperationsServiceImpl(
+                ragIndexTrackingService, incrementalRagUpdateService,
+                analysisLockService, analysisJobService,
+                ragBranchIndexRepository, vcsClientProvider,
+                ragPipelineClient, mock(RagBranchIndexRegistryService.class),
+                builder, branchIndexBuildAdmissionService);
+        setupRagEnabled();
+        setupVcsBinding();
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
+                .thenReturn(true);
+        when(analysisLockService.acquireLock(
+                eq(testProject), eq("main"), any(), eq("revision-published"), isNull()))
+                .thenReturn(Optional.of("rag-lock"));
+        Job job = mock(Job.class);
+        when(job.getId()).thenReturn(91L);
+        var prepared = new BranchIndexGenerationBuildService.PreparedBuild(
+                81L, "physical-generation", false, null, "rag-lock");
+        when(branchIndexBuildAdmissionService.admit(
+                testProject, "main", "revision-published", RagBranchIndexKind.PRIMARY,
+                JobTriggerSource.WEBHOOK, "rag-lock",
+                BranchIndexBuildAdmissionService.BuildOrigin.AUTOMATIC))
+                .thenReturn(new BranchIndexBuildAdmissionService.AdmittedBuild(
+                        job, prepared,
+                        BranchIndexBuildAdmissionService.ProjectStatusAdmission.INDEXING));
+        when(builder.execute(
+                eq(testProject), any(VcsConnection.class), eq("my-workspace"), eq("my-repo"),
+                eq("main"), eq("revision-published"), eq(RagBranchIndexKind.PRIMARY),
+                nullable(List.class), nullable(List.class), eq(prepared), isNull()))
+                .thenReturn(Map.of("document_count", 12, "chunk_count", 34));
+        when(ragIndexTrackingService.reconcilePublishedGeneration(
+                testProject, "main", "revision-published", 12, 34, 91L))
+                .thenThrow(new IllegalStateException("status database unavailable"));
+
+        boolean result = service.triggerIncrementalUpdate(
+                testProject, "main", "revision-published", "ignored", ignored -> { });
+
+        assertThat(result).isFalse();
+        verify(builder).execute(
+                eq(testProject), any(VcsConnection.class), eq("my-workspace"), eq("my-repo"),
+                eq("main"), eq("revision-published"), eq(RagBranchIndexKind.PRIMARY),
+                nullable(List.class), nullable(List.class), eq(prepared), isNull());
+        verify(branchIndexBuildAdmissionService, never()).abortOperation(any(), anyString());
+        verify(analysisJobService, never()).failJob(any(), anyString());
+        verify(ragIndexTrackingService, never()).markIndexingFailed(any(), anyString(), any());
+        verify(ragIndexTrackingService, never()).markIncrementalUpdateFailed(
+                any(), anyString(), any());
+        verify(analysisLockService).releaseLock("rag-lock");
+    }
+
+    @Test
+    void exactLockCleanupFailureCannotReverseSuccessfulPublicationAndJob()
+            throws Exception {
+        BranchIndexGenerationBuildService builder = mock(
+                BranchIndexGenerationBuildService.class);
+        service = new RagOperationsServiceImpl(
+                ragIndexTrackingService, incrementalRagUpdateService,
+                analysisLockService, analysisJobService,
+                ragBranchIndexRepository, vcsClientProvider,
+                ragPipelineClient, mock(RagBranchIndexRegistryService.class),
+                builder, branchIndexBuildAdmissionService);
+        setupRagEnabled();
+        setupVcsBinding();
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
+                .thenReturn(true);
+        when(analysisLockService.acquireLock(
+                eq(testProject), eq("main"), any(), eq("revision-complete"), isNull()))
+                .thenReturn(Optional.of("rag-lock"));
+        Job job = mock(Job.class);
+        when(job.getId()).thenReturn(91L);
+        var prepared = new BranchIndexGenerationBuildService.PreparedBuild(
+                81L, "physical-generation", false, null, "rag-lock");
+        when(branchIndexBuildAdmissionService.admit(
+                testProject, "main", "revision-complete", RagBranchIndexKind.PRIMARY,
+                JobTriggerSource.WEBHOOK, "rag-lock",
+                BranchIndexBuildAdmissionService.BuildOrigin.AUTOMATIC))
+                .thenReturn(new BranchIndexBuildAdmissionService.AdmittedBuild(
+                        job, prepared,
+                        BranchIndexBuildAdmissionService.ProjectStatusAdmission.INDEXING));
+        when(builder.execute(
+                eq(testProject), any(VcsConnection.class), eq("my-workspace"), eq("my-repo"),
+                eq("main"), eq("revision-complete"), eq(RagBranchIndexKind.PRIMARY),
+                nullable(List.class), nullable(List.class), eq(prepared), isNull()))
+                .thenReturn(Map.of("document_count", 12, "chunk_count", 34));
+        doThrow(new IllegalStateException("lock database unavailable"))
+                .when(analysisLockService).releaseLock("rag-lock");
+
+        boolean result = service.triggerIncrementalUpdate(
+                testProject, "main", "revision-complete", "ignored", ignored -> { });
+
+        assertThat(result).isTrue();
+        verify(ragIndexTrackingService).reconcilePublishedGeneration(
+                testProject, "main", "revision-complete", 12, 34, 91L);
+        verify(analysisJobService).completeJob(job, null);
+        verify(analysisJobService, never()).failJob(any(), anyString());
+        verify(analysisLockService).releaseLock("rag-lock");
+    }
+
+    @Test
+    void exactIncrementalLockContentionSkipsBeforeBindingSource() {
+        service = new RagOperationsServiceImpl(
+                ragIndexTrackingService, incrementalRagUpdateService,
+                analysisLockService, analysisJobService,
+                ragBranchIndexRepository, vcsClientProvider,
+                ragPipelineClient, mock(RagBranchIndexRegistryService.class),
+                mock(BranchIndexGenerationBuildService.class));
+        setupRagEnabled();
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
+                .thenReturn(true);
+        when(analysisLockService.acquireLock(
+                eq(testProject), eq("main"), any(), eq("target-revision"), isNull()))
+                .thenReturn(Optional.empty());
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+
+        boolean result = service.triggerIncrementalUpdate(
+                testProject, "main", "target-revision", "caller diff", eventConsumer);
+
+        assertThat(result).isFalse();
+        verifyNoInteractions(analysisJobService);
+        verify(ragBranchIndexRepository, never())
+                .findActiveGenerationCoordinates(anyLong(), anyString());
+        verify(incrementalRagUpdateService, never()).parseDiffForRag(anyString());
+        verify(eventConsumer).accept(argThat(event -> "rag_skip".equals(event.get("state"))));
+    }
+
+    @Test
+    void exactIncrementalCleanupClaimSkipsWithoutReadingOrMutatingGeneration() {
+        service = new RagOperationsServiceImpl(
+                ragIndexTrackingService, incrementalRagUpdateService,
+                analysisLockService, analysisJobService,
+                ragBranchIndexRepository, vcsClientProvider,
+                ragPipelineClient, mock(RagBranchIndexRegistryService.class),
+                mock(BranchIndexGenerationBuildService.class));
+        setupRagEnabled();
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
+                .thenReturn(true);
+        when(analysisLockService.acquireLock(
+                eq(testProject), eq("feature"), any(), eq("target-revision"), isNull()))
+                .thenReturn(Optional.of("rag-lock"));
+        when(ragBranchIndexRepository.existsByProjectIdAndBranchName(100L, "feature"))
+                .thenReturn(true);
+        when(ragBranchIndexRepository.markAccessedIfUnclaimed(
+                eq(100L), eq("feature"), any()))
+                .thenReturn(0);
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+
+        boolean result = service.triggerIncrementalUpdate(
+                testProject, "feature", "target-revision", "caller diff", eventConsumer);
+
+        assertThat(result).isFalse();
+        verifyNoInteractions(analysisJobService);
+        verify(ragBranchIndexRepository, never())
+                .findActiveGenerationCoordinates(anyLong(), anyString());
+        verify(incrementalRagUpdateService, never()).parseDiffForRag(anyString());
+        verify(analysisLockService).releaseLock("rag-lock");
+        verify(eventConsumer).accept(argThat(event -> "rag_skipped".equals(event.get("state"))));
+    }
+
+    @Test
+    void exactIncrementalAlreadyAtTargetCompletesJobAndRepairsPrimaryCheckpoint()
+            throws Exception {
+        RagBranchIndexRegistryService registry = mock(RagBranchIndexRegistryService.class);
+        BranchIndexGenerationBuildService builder = mock(BranchIndexGenerationBuildService.class);
+        service = new RagOperationsServiceImpl(
+                ragIndexTrackingService, incrementalRagUpdateService,
+                analysisLockService, analysisJobService,
+                ragBranchIndexRepository, vcsClientProvider,
+                ragPipelineClient, registry, builder);
+        setupRagEnabled();
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
+                .thenReturn(true);
+        when(analysisLockService.acquireLock(
+                eq(testProject), eq("main"), any(), eq("target-revision"), isNull()))
+                .thenReturn(Optional.of("rag-lock"));
+        when(ragBranchIndexRepository.existsByProjectIdAndBranchName(100L, "main"))
+                .thenReturn(true);
+        when(ragBranchIndexRepository.markAccessedIfUnclaimed(
+                eq(100L), eq("main"), any()))
+                .thenReturn(1);
+        RagBranchIndexRepository.ActiveGenerationCoordinates source =
+                mock(RagBranchIndexRepository.ActiveGenerationCoordinates.class);
+        when(source.getRevision()).thenReturn("target-revision");
+        when(ragBranchIndexRepository.findActiveGenerationCoordinates(100L, "main"))
+                .thenReturn(Optional.of(source));
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+
+        boolean result = service.triggerIncrementalUpdate(
+                testProject, "main", "target-revision", "stale caller diff", eventConsumer);
+
+        assertThat(result).isTrue();
+        verify(ragIndexTrackingService).preparePublishedGenerationForUpdate(
+                testProject, "main", "target-revision", 0, 0);
+        verifyNoInteractions(analysisJobService);
+        verify(analysisLockService).releaseLock("rag-lock");
+        verifyNoInteractions(vcsClientProvider, registry, builder);
+        verify(incrementalRagUpdateService, never()).parseDiffForRag(anyString());
+        verify(incrementalRagUpdateService, never()).performIncrementalUpdate(
+                any(), any(), anyString(), anyString(), anyString(), anyString(),
+                anySet(), anySet(), anySet(), anyString(), anyString(), anyString(),
+                anyBoolean(), anyBoolean());
+        verify(eventConsumer).accept(argThat(event ->
+                "rag_complete".equals(event.get("state"))));
+    }
+
+    @Test
+    void ensureExactMainAlwaysDelegatesToLockedTriggerWithoutPrediff() throws Exception {
+        service = spy(new RagOperationsServiceImpl(
+                ragIndexTrackingService, incrementalRagUpdateService,
+                analysisLockService, analysisJobService,
+                ragBranchIndexRepository, vcsClientProvider,
+                ragPipelineClient, mock(RagBranchIndexRegistryService.class),
+                mock(BranchIndexGenerationBuildService.class)));
+        setupRagEnabled();
+        setupVcsBinding();
+        when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
+        VcsClient vcsClient = mock(VcsClient.class);
+        when(vcsClientProvider.getClient(any(VcsConnection.class))).thenReturn(vcsClient);
+        when(vcsClient.getLatestCommitHash("my-workspace", "my-repo", "main"))
+                .thenReturn("main-head");
+        doReturn(true).when(service).triggerIncrementalUpdate(
+                eq(testProject), eq("main"), eq("main-head"), eq(""), any());
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+
+        boolean result = service.ensureRagIndexUpToDate(testProject, "main", eventConsumer);
+
+        assertThat(result).isTrue();
+        verify(service).triggerIncrementalUpdate(
+                testProject, "main", "main-head", "", eventConsumer);
+        verify(ragIndexTrackingService, never()).getIndexStatus(testProject);
+        verify(vcsClient, never()).getBranchDiff(anyString(), anyString(), anyString(), anyString());
+        verify(ragBranchIndexRepository, never())
+                .findActiveGenerationCoordinates(anyLong(), anyString());
+        verify(ragBranchIndexRepository, never())
+                .findByProjectIdAndBranchName(anyLong(), anyString());
+    }
+
+    @Test
+    void ensureExactBranchDelegatesMainAndBranchToLockedTriggersWithoutPrediff()
+            throws Exception {
+        service = spy(new RagOperationsServiceImpl(
+                ragIndexTrackingService, incrementalRagUpdateService,
+                analysisLockService, analysisJobService,
+                ragBranchIndexRepository, vcsClientProvider,
+                ragPipelineClient, mock(RagBranchIndexRegistryService.class),
+                mock(BranchIndexGenerationBuildService.class)));
+        setupRagEnabled();
+        setupVcsBinding();
+        when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
+        VcsClient vcsClient = mock(VcsClient.class);
+        when(vcsClientProvider.getClient(any(VcsConnection.class))).thenReturn(vcsClient);
+        when(vcsClient.getLatestCommitHash("my-workspace", "my-repo", "main"))
+                .thenReturn("main-head");
+        when(vcsClient.getLatestCommitHash("my-workspace", "my-repo", "feature"))
+                .thenReturn("feature-head");
+        doReturn(true).when(service).triggerIncrementalUpdate(
+                eq(testProject), eq("main"), eq("main-head"), eq(""), any());
+        doReturn(true).when(service).triggerIncrementalUpdate(
+                eq(testProject), eq("feature"), eq("feature-head"), eq(""), any());
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+
+        boolean result = service.ensureRagIndexUpToDate(testProject, "feature", eventConsumer);
+
+        assertThat(result).isTrue();
+        verify(service).triggerIncrementalUpdate(
+                testProject, "feature", "feature-head", "", eventConsumer);
+        verify(service).triggerIncrementalUpdate(
+                testProject, "main", "main-head", "", eventConsumer);
+        verify(ragIndexTrackingService, never()).getIndexStatus(testProject);
+        verify(vcsClient, never()).getBranchDiff(anyString(), anyString(), anyString(), anyString());
+        verify(ragBranchIndexRepository, never())
+                .findActiveGenerationCoordinates(anyLong(), anyString());
+        verify(ragBranchIndexRepository, never())
+                .findByProjectIdAndBranchName(anyLong(), anyString());
+        verify(ragBranchIndexRepository, never()).save(any());
+    }
+
+    @Test
+    void updateExactBranchDelegatesToLockedTriggerWithoutTrustingMutableCheckpoint()
+            throws Exception {
+        service = spy(new RagOperationsServiceImpl(
+                ragIndexTrackingService, incrementalRagUpdateService,
+                analysisLockService, analysisJobService,
+                ragBranchIndexRepository, vcsClientProvider,
+                ragPipelineClient, mock(RagBranchIndexRegistryService.class),
+                mock(BranchIndexGenerationBuildService.class)));
+        setupRagEnabled();
+        setupVcsBinding();
+        when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
+        VcsClient vcsClient = mock(VcsClient.class);
+        when(vcsClientProvider.getClient(any(VcsConnection.class))).thenReturn(vcsClient);
+        when(vcsClient.getLatestCommitHash("my-workspace", "my-repo", "feature"))
+                .thenReturn("feature-head");
+        doReturn(true).when(service).triggerIncrementalUpdate(
+                eq(testProject), eq("feature"), eq("feature-head"), eq(""), any());
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+
+        boolean result = service.updateBranchIndex(testProject, "feature", eventConsumer);
+
+        assertThat(result).isTrue();
+        verify(service).triggerIncrementalUpdate(
+                testProject, "feature", "feature-head", "", eventConsumer);
+        verify(ragBranchIndexRepository, never())
+                .findByProjectIdAndBranchName(anyLong(), anyString());
+        verify(ragBranchIndexRepository, never())
+                .findActiveGenerationCoordinates(anyLong(), anyString());
+        verify(vcsClient, never()).getBranchDiff(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -398,7 +862,9 @@ class RagOperationsServiceImplTest {
     void testDeleteBranchIndex_Success() throws Exception {
         setupRagEnabled();
         setupVcsBinding();
-        when(ragPipelineClient.deleteBranch("my-workspace", "my-repo", "feature")).thenReturn(true);
+        when(ragPipelineClient.deleteBranchWithOutcome(
+                "my-workspace", "my-repo", "feature", null))
+                .thenReturn(RagPipelineClient.BranchDeletionOutcome.success("legacy-alias"));
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
@@ -412,7 +878,11 @@ class RagOperationsServiceImplTest {
     void testDeleteBranchIndex_PipelineFailure() throws Exception {
         setupRagEnabled();
         setupVcsBinding();
-        when(ragPipelineClient.deleteBranch("my-workspace", "my-repo", "feature")).thenReturn(false);
+        when(ragPipelineClient.deleteBranchWithOutcome(
+                "my-workspace", "my-repo", "feature", null))
+                .thenReturn(RagPipelineClient.BranchDeletionOutcome.failure(
+                        "legacy-alias", RagPipelineClient.BranchDeletionFailure.TARGET,
+                        404, "not found"));
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
@@ -423,10 +893,85 @@ class RagOperationsServiceImplTest {
     }
 
     @Test
+    void globalRagDisablementRetainsBranchWithoutCleanupWarning() {
+        setupRagEnabled();
+        setupVcsBinding();
+        when(ragPipelineClient.deleteBranchWithOutcome(
+                "my-workspace", "my-repo", "feature", null))
+                .thenReturn(RagPipelineClient.BranchDeletionOutcome.failure(
+                        "legacy-alias",
+                        RagPipelineClient.BranchDeletionFailure.TARGET,
+                        null,
+                        "RAG disabled"));
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+        Logger logger = (Logger) LoggerFactory.getLogger(RagOperationsServiceImpl.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        boolean result;
+        try {
+            result = service.deleteBranchIndex(testProject, "feature", eventConsumer);
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        assertThat(result).isFalse();
+        verify(ragBranchIndexRepository, never())
+                .deleteByProjectIdAndBranchName(anyLong(), anyString());
+        assertThat(appender.list).noneMatch(event -> event.getLevel() == Level.WARN
+                && event.getFormattedMessage().contains("delete branch RAG generation"));
+    }
+
+    @Test
+    void exactDeletionKeepsActiveTargetWhenOlderTargetIsRejected() {
+        setupRagEnabled();
+        setupVcsBinding();
+        setupProjectWithWorkspaceAndNamespace();
+        RagBranchIndex branchIndex = new RagBranchIndex(
+                testProject, "feature", RagBranchIndexKind.DURABLE);
+        branchIndex.setId(501L);
+        RagBranchIndexGeneration rejected = new RagBranchIndexGeneration();
+        rejected.setCollectionName("superseded-target");
+        rejected.setRevision("revision-1");
+        rejected.activate("manifest-1", 1, 1);
+        rejected.supersede();
+        RagBranchIndexGeneration active = new RagBranchIndexGeneration();
+        active.setCollectionName("active-target");
+        active.setRevision("revision-2");
+        active.activate("manifest-2", 1, 1);
+        when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "feature"))
+                .thenReturn(Optional.of(branchIndex));
+        when(branchGenerationRepository.findByBranchIndexIdOrderByCreatedAtDesc(501L))
+                .thenReturn(List.of(active, rejected));
+        when(ragPipelineClient.deleteBranchWithOutcome(
+                "test-ws", "test-ns", "feature", "superseded-target",
+                "revision-1", "manifest-1"))
+                .thenReturn(RagPipelineClient.BranchDeletionOutcome.failure(
+                        "superseded-target",
+                        RagPipelineClient.BranchDeletionFailure.TARGET,
+                        422,
+                        "manifest receipt rejected"));
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+
+        boolean result = service.deleteBranchIndex(testProject, "feature", eventConsumer);
+
+        assertThat(result).isFalse();
+        verify(ragPipelineClient, never()).deleteBranchWithOutcome(
+                "test-ws", "test-ns", "feature", "active-target",
+                "revision-2", "manifest-2");
+        verify(ragBranchIndexRepository, never())
+                .deleteByProjectIdAndBranchName(anyLong(), anyString());
+    }
+
+    @Test
     void testDeleteBranchIndex_PipelineException() throws Exception {
         setupRagEnabled();
         setupVcsBinding();
-        when(ragPipelineClient.deleteBranch("my-workspace", "my-repo", "feature"))
+        when(ragPipelineClient.deleteBranchWithOutcome(
+                "my-workspace", "my-repo", "feature", null))
                 .thenThrow(new RuntimeException("Connection timeout"));
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
@@ -482,7 +1027,9 @@ class RagOperationsServiceImplTest {
         setupVcsBinding();
         when(ragPipelineClient.getIndexedBranches("my-workspace", "my-repo"))
                 .thenReturn(java.util.List.of("main", "feature", "stale-branch"));
-        when(ragPipelineClient.deleteBranch("my-workspace", "my-repo", "stale-branch")).thenReturn(true);
+        when(ragPipelineClient.deleteBranchWithOutcome(
+                "my-workspace", "my-repo", "stale-branch", null))
+                .thenReturn(RagPipelineClient.BranchDeletionOutcome.success("legacy-alias"));
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
@@ -508,18 +1055,24 @@ class RagOperationsServiceImplTest {
         branchIndex.setId(501L);
         RagBranchIndexGeneration first = new RagBranchIndexGeneration();
         first.setCollectionName("cc_generation_1");
+        first.setRevision("revision-1");
+        first.setManifestDigest("manifest-1");
         RagBranchIndexGeneration second = new RagBranchIndexGeneration();
         second.setCollectionName("cc_generation_2");
+        second.setRevision("revision-2");
+        second.setManifestDigest("manifest-2");
         when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "stale-exact"))
                 .thenReturn(Optional.of(branchIndex));
         when(branchGenerationRepository.findByBranchIndexIdOrderByCreatedAtDesc(501L))
                 .thenReturn(List.of(first, second));
-        when(ragPipelineClient.deleteBranch(
-                "test-ws", "test-ns", "stale-exact", "cc_generation_1"))
-                .thenReturn(true);
-        when(ragPipelineClient.deleteBranch(
-                "test-ws", "test-ns", "stale-exact", "cc_generation_2"))
-                .thenReturn(true);
+        when(ragPipelineClient.deleteBranchWithOutcome(
+                "test-ws", "test-ns", "stale-exact", "cc_generation_1",
+                "revision-1", "manifest-1"))
+                .thenReturn(RagPipelineClient.BranchDeletionOutcome.success("cc_generation_1"));
+        when(ragPipelineClient.deleteBranchWithOutcome(
+                "test-ws", "test-ns", "stale-exact", "cc_generation_2",
+                "revision-2", "manifest-2"))
+                .thenReturn(RagPipelineClient.BranchDeletionOutcome.success("cc_generation_2"));
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
@@ -529,14 +1082,16 @@ class RagOperationsServiceImplTest {
         assertThat(result).containsEntry("status", "success");
         assertThat(result).containsEntry("total_deleted", 1);
         assertThat(result.get("deleted_branches")).isEqualTo(List.of("stale-exact"));
-        verify(ragPipelineClient).deleteBranch(
-                "test-ws", "test-ns", "stale-exact", "cc_generation_1");
-        verify(ragPipelineClient).deleteBranch(
-                "test-ws", "test-ns", "stale-exact", "cc_generation_2");
+        verify(ragPipelineClient).deleteBranchWithOutcome(
+                "test-ws", "test-ns", "stale-exact", "cc_generation_1",
+                "revision-1", "manifest-1");
+        verify(ragPipelineClient).deleteBranchWithOutcome(
+                "test-ws", "test-ns", "stale-exact", "cc_generation_2",
+                "revision-2", "manifest-2");
         verify(ragBranchIndexRepository)
                 .deleteByProjectIdAndBranchName(100L, "stale-exact");
-        verify(ragPipelineClient, never())
-                .deleteBranch("my-workspace", "my-repo", "stale-exact");
+        verify(ragPipelineClient, never()).deleteBranchWithOutcome(
+                "my-workspace", "my-repo", "stale-exact", null);
     }
 
     @Test
@@ -656,12 +1211,14 @@ class RagOperationsServiceImplTest {
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
         Job mockJob = mock(Job.class);
+        when(mockJob.getId()).thenReturn(77L);
 
         when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(true);
         when(incrementalRagUpdateService.parseDiffForRag("diff content"))
                 .thenReturn(new IncrementalRagUpdateService.DiffResult(Set.of("src/A.java"),
                         java.util.Collections.<String>emptySet(), Set.of("src/B.java")));
-        when(analysisJobService.createRagIndexJob(any(), anyBoolean(), any())).thenReturn(mockJob);
+        when(analysisJobService.createRagIndexJob(
+                any(), anyBoolean(), any(), anyString(), anyString())).thenReturn(mockJob);
         when(analysisLockService.acquireLock(any(), eq("feature"), any(), eq("commit1"), isNull()))
                 .thenReturn(Optional.of("lock-key"));
         when(incrementalRagUpdateService.performIncrementalUpdate(
@@ -677,8 +1234,103 @@ class RagOperationsServiceImplTest {
         assertThat(result).isTrue();
         verifyNoInteractions(ragIndexTrackingService);
         verify(analysisLockService).releaseLock("lock-key");
-        verify(analysisJobService).completeJob(eq(mockJob), isNull());
-        verify(ragBranchIndexRepository).save(any(RagBranchIndex.class));
+        verify(analysisJobService, never()).completeJob(eq(mockJob), isNull());
+        verify(analysisJobService).recordExternallyCompletedJob(
+                eq(mockJob), eq("rag_complete"), contains("RAG index updated"));
+        verify(legacyRagUpdateCompletionService).complete(
+                eq(testProject), eq("feature"), eq("commit1"), eq(77L),
+                any(), eq(false), eq(0), eq(1), isNull(), eq(Set.of("src/B.java")));
+        verify(legacyRagJobLeaseService).start(mockJob.getId());
+        verify(analysisLockService).maintainLockLease("lock-key", 360);
+        verify(legacyJobLease).confirmOwnership();
+        verify(legacyLockLease).confirmOwnership();
+        verify(legacyJobLease).close();
+        verify(legacyLockLease).close();
+    }
+
+    @Test
+    void legacyOwnershipLossBeforeRemoteWorkDoesNotMutateOrOverwriteRecovery()
+            throws Exception {
+        setupRagEnabled();
+        Job job = mock(Job.class);
+        when(job.getId()).thenReturn(77L);
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
+                .thenReturn(true);
+        when(incrementalRagUpdateService.parseDiffForRag("diff"))
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(
+                        Set.of("src/A.java"), Set.of(), Set.of()));
+        when(analysisJobService.createRagIndexJob(
+                any(), anyBoolean(), any(), anyString(), anyString()))
+                .thenReturn(job);
+        when(analysisLockService.acquireLock(
+                any(), eq("feature"), any(), eq("commit1"), isNull()))
+                .thenReturn(Optional.of("lock-key"));
+        when(legacyJobLease.isOwnershipLost()).thenReturn(true);
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> events = mock(Consumer.class);
+
+        boolean result = service.triggerIncrementalUpdate(
+                testProject, "feature", "commit1", "diff", events);
+
+        assertThat(result).isFalse();
+        verify(incrementalRagUpdateService, never()).performIncrementalUpdate(
+                any(), any(), anyString(), anyString(), anyString(), anyString(),
+                any(), any(), any());
+        verify(analysisJobService, never()).failJob(any(), anyString());
+        verifyNoInteractions(ragIndexTrackingService);
+        verify(legacyJobLease).close();
+        verify(legacyLockLease).close();
+        verify(analysisLockService).releaseLock("lock-key");
+        verify(events).accept(argThat(event ->
+                "rag_error".equals(event.get("state"))
+                        && String.valueOf(event.get("message"))
+                            .contains("lost durable ownership")));
+    }
+
+    @Test
+    void legacyOwnershipIsReconfirmedBeforeCheckpointAndJobCompletion()
+            throws Exception {
+        setupRagEnabled();
+        setupVcsBinding();
+        Job job = mock(Job.class);
+        when(job.getId()).thenReturn(77L);
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
+                .thenReturn(true);
+        when(incrementalRagUpdateService.parseDiffForRag("diff"))
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(
+                        Set.of("src/A.java"), Set.of(), Set.of()));
+        when(analysisJobService.createRagIndexJob(
+                any(), anyBoolean(), any(), anyString(), anyString()))
+                .thenReturn(job);
+        when(analysisLockService.acquireLock(
+                any(), eq("main"), any(), eq("commit1"), isNull()))
+                .thenReturn(Optional.of("lock-key"));
+        when(incrementalRagUpdateService.performIncrementalUpdate(
+                any(), any(), anyString(), anyString(), anyString(), anyString(),
+                any(), any(), any()))
+                .thenReturn(Map.of("updatedFiles", 1, "deletedFiles", 0));
+        when(legacyLockLease.confirmOwnership()).thenReturn(false);
+
+        boolean result = service.triggerIncrementalUpdate(
+                testProject, "main", "commit1", "diff", ignored -> { });
+
+        assertThat(result).isFalse();
+        verify(incrementalRagUpdateService).performIncrementalUpdate(
+                any(), any(), anyString(), anyString(), eq("main"), eq("commit1"),
+                any(), any(), any());
+        verify(legacyJobLease).confirmOwnership();
+        verify(legacyLockLease).confirmOwnership();
+        verify(ragIndexTrackingService, never()).markUpdatingCompleted(
+                any(), anyString(), anyString(), any(), any(), any(), any());
+        verify(legacyRagUpdateCompletionService, never()).complete(
+                any(), anyString(), anyString(), anyLong(), any(), anyBoolean(),
+                anyInt(), anyInt(), any(), anySet());
+        verify(analysisJobService, never()).completeJob(any(), any());
+        verify(analysisJobService, never()).failJob(any(), anyString());
+        verify(ragIndexTrackingService, never()).markIncrementalUpdateFailed(
+                any(), anyString(), any());
+        verify(legacyJobLease).close();
+        verify(legacyLockLease).close();
     }
 
     @Test
@@ -710,7 +1362,8 @@ class RagOperationsServiceImplTest {
         when(incrementalRagUpdateService.parseDiffForRag(anyString()))
                 .thenReturn(new IncrementalRagUpdateService.DiffResult(Set.of("a.java"),
                         java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet()));
-        when(analysisJobService.createRagIndexJob(any(), anyBoolean(), any())).thenReturn(mockJob);
+        when(analysisJobService.createRagIndexJob(
+                any(), anyBoolean(), any(), anyString(), anyString())).thenReturn(mockJob);
         when(analysisLockService.acquireLock(any(), anyString(), any(), anyString(), isNull()))
                 .thenReturn(Optional.empty());
 
@@ -718,8 +1371,38 @@ class RagOperationsServiceImplTest {
                 service.triggerIncrementalUpdate(testProject, "feature", "c1", "diff", eventConsumer);
 
         assertThat(result).isFalse();
-        verify(analysisJobService).failJob(eq(mockJob), anyString());
+        verify(analysisJobService).skipJob(
+                eq(mockJob), contains("previous checkpoint is retained for the next trigger"));
+        verify(analysisJobService, never()).failJob(any(), anyString());
+        verify(eventConsumer).accept(argThat(event ->
+                "rag_skip".equals(event.get("state"))
+                        && String.valueOf(event.get("message")).contains("next trigger")));
         verifyNoInteractions(ragIndexTrackingService);
+    }
+
+    @Test
+    void lockContentionObserverFailureCannotChangeSkippedTerminalState() {
+        setupRagEnabled();
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+        Job mockJob = mock(Job.class);
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(true);
+        when(incrementalRagUpdateService.parseDiffForRag(anyString()))
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(
+                        Set.of("a.java"), Set.of(), Set.of()));
+        when(analysisJobService.createRagIndexJob(
+                any(), anyBoolean(), any(), anyString(), anyString())).thenReturn(mockJob);
+        when(analysisLockService.acquireLock(any(), anyString(), any(), anyString(), isNull()))
+                .thenReturn(Optional.empty());
+        doThrow(new IllegalStateException("observer disconnected"))
+                .when(eventConsumer).accept(anyMap());
+
+        boolean result = service.triggerIncrementalUpdate(
+                testProject, "feature", "c1", "diff", eventConsumer);
+
+        assertThat(result).isFalse();
+        verify(analysisJobService).skipJob(eq(mockJob), anyString());
+        verify(analysisJobService, never()).failJob(any(), anyString());
     }
 
     @Test
@@ -729,12 +1412,14 @@ class RagOperationsServiceImplTest {
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
         Job mockJob = mock(Job.class);
+        when(mockJob.getId()).thenReturn(78L);
 
         when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(true);
         when(incrementalRagUpdateService.parseDiffForRag(anyString()))
                 .thenReturn(new IncrementalRagUpdateService.DiffResult(Set.of("a.java"),
                         java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet()));
-        when(analysisJobService.createRagIndexJob(any(), anyBoolean(), any())).thenReturn(mockJob);
+        when(analysisJobService.createRagIndexJob(
+                any(), anyBoolean(), any(), anyString(), anyString())).thenReturn(mockJob);
         when(analysisLockService.acquireLock(any(), anyString(), any(), anyString(), isNull()))
                 .thenReturn(Optional.of("lock-key"));
         when(incrementalRagUpdateService.performIncrementalUpdate(
@@ -749,6 +1434,12 @@ class RagOperationsServiceImplTest {
         // A retained branch has its own durable operation state and cannot
         // overwrite the primary branch's project-level status.
         verifyNoInteractions(ragIndexTrackingService);
+        verify(analysisJobService).failJob(
+                eq(mockJob), contains("RAG incremental update failed: Pipeline down"));
+        verify(analysisJobService, never()).error(eq(mockJob), eq("rag_error"), anyString());
+        verify(eventConsumer).accept(argThat(event ->
+                "rag_error".equals(event.get("state"))
+                        && "warning".equals(event.get("type"))));
         verify(analysisLockService).releaseLock("lock-key");
     }
 
@@ -760,6 +1451,7 @@ class RagOperationsServiceImplTest {
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
         Job mockJob = mock(Job.class);
+        when(mockJob.getId()).thenReturn(79L);
         VcsClient vcsClient = mock(VcsClient.class);
         RagIndexStatus completedStatus = new RagIndexStatus();
         completedStatus.setIndexedBranch("main");
@@ -778,7 +1470,8 @@ class RagOperationsServiceImplTest {
         when(incrementalRagUpdateService.parseDiffForRag(catchUpDiff))
                 .thenReturn(new IncrementalRagUpdateService.DiffResult(
                         Set.of("src/Recovered.java"), Set.of(), Set.of()));
-        when(analysisJobService.createRagIndexJob(any(), anyBoolean(), any()))
+        when(analysisJobService.createRagIndexJob(
+                any(), anyBoolean(), any(), anyString(), anyString()))
                 .thenReturn(mockJob);
         when(analysisLockService.acquireLock(
                 any(), eq("main"), any(), eq("current-head"), isNull()))
@@ -787,9 +1480,6 @@ class RagOperationsServiceImplTest {
                 any(), any(), anyString(), anyString(), anyString(), anyString(), any(),
                 any(), any()))
                 .thenReturn(Map.of("updatedFiles", 1, "deletedFiles", 0));
-        when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "main"))
-                .thenReturn(Optional.empty());
-
         boolean result = service.triggerIncrementalUpdate(
                 testProject, "main", "current-head",
                 "diff --git a/src/OnlyLatest.java b/src/OnlyLatest.java\n+latest\n",
@@ -801,8 +1491,9 @@ class RagOperationsServiceImplTest {
                 eq(testProject), any(VcsConnection.class), eq("my-workspace"), eq("my-repo"),
                 eq("main"), eq("current-head"), eq(Set.of("src/Recovered.java")),
                 eq(Set.of()), eq(Set.of()));
-        verify(ragIndexTrackingService).markUpdatingCompleted(
-                testProject, "main", "current-head", 0, 0, null, 0L);
+        verify(legacyRagUpdateCompletionService).complete(
+                eq(testProject), eq("main"), eq("current-head"), eq(79L),
+                any(), eq(true), eq(0), eq(0), isNull(), eq(Set.of()));
     }
 
     @Test
@@ -812,12 +1503,14 @@ class RagOperationsServiceImplTest {
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
         Job mockJob = mock(Job.class);
+        when(mockJob.getId()).thenReturn(80L);
 
         when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(true);
         when(incrementalRagUpdateService.parseDiffForRag(anyString()))
                 .thenReturn(new IncrementalRagUpdateService.DiffResult(java.util.Collections.<String>emptySet(),
                         java.util.Collections.<String>emptySet(), Set.of("old.java")));
-        when(analysisJobService.createRagIndexJob(any(), anyBoolean(), any())).thenReturn(mockJob);
+        when(analysisJobService.createRagIndexJob(
+                any(), anyBoolean(), any(), anyString(), anyString())).thenReturn(mockJob);
         when(analysisLockService.acquireLock(any(), anyString(), any(), anyString(), isNull()))
                 .thenReturn(Optional.of("lock-key"));
         when(incrementalRagUpdateService.performIncrementalUpdate(
@@ -833,8 +1526,9 @@ class RagOperationsServiceImplTest {
 
         service.triggerIncrementalUpdate(testProject, "feature", "c1", "diff", eventConsumer);
 
-        verify(ragBranchIndexRepository).save(argThat(
-                idx -> idx.getDeletedFiles().contains("old.java") && idx.getDeletedFiles().contains("prev.java")));
+        verify(legacyRagUpdateCompletionService).complete(
+                eq(testProject), eq("feature"), eq("c1"), eq(80L),
+                any(), eq(false), eq(0), eq(1), isNull(), eq(Set.of("old.java")));
     }
 
     // ── updateBranchIndex full-flow tests ───────────────────────────────
@@ -868,7 +1562,8 @@ class RagOperationsServiceImplTest {
         when(incrementalRagUpdateService.parseDiffForRag("checkpoint diff"))
                 .thenReturn(new IncrementalRagUpdateService.DiffResult(
                         Set.of(), Set.of("src/Changed.java"), Set.of()));
-        when(analysisJobService.createRagIndexJob(eq(testProject), eq(false), any())).thenReturn(mock(Job.class));
+        when(analysisJobService.createRagIndexJob(
+                eq(testProject), eq(false), any(), anyString(), anyString())).thenReturn(mock(Job.class));
         when(analysisLockService.acquireLock(any(), anyString(), any(), anyString(), isNull()))
                 .thenReturn(Optional.of("lock"));
         when(incrementalRagUpdateService.performIncrementalUpdate(
@@ -924,7 +1619,6 @@ class RagOperationsServiceImplTest {
         when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
         VcsClient mockVcs = mock(VcsClient.class);
         when(vcsClientProvider.getClient(any(VcsConnection.class))).thenReturn(mockVcs);
-        when(mockVcs.getBranchDiff("my-workspace", "my-repo", "main", "feature")).thenReturn("");
         when(mockVcs.getLatestCommitHash("my-workspace", "my-repo", "feature"))
                 .thenReturn("feature-head");
         doReturn(true).when(service).triggerIncrementalUpdate(
@@ -935,7 +1629,6 @@ class RagOperationsServiceImplTest {
         boolean result = service.updateBranchIndex(testProject, "feature", eventConsumer);
 
         assertThat(result).isTrue();
-        verify(eventConsumer).accept(argThat(m -> "info".equals(m.get("type"))));
         verify(service).triggerIncrementalUpdate(
                 testProject, "feature", "feature-head", "", eventConsumer);
     }
@@ -1119,12 +1812,14 @@ class RagOperationsServiceImplTest {
     private void stubSuccessfulIncrementalUpdate(String branchName, String commitHash)
             throws Exception {
         Job mockJob = mock(Job.class);
+        when(mockJob.getId()).thenReturn(81L);
         when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
                 .thenReturn(true);
         when(incrementalRagUpdateService.parseDiffForRag(anyString()))
                 .thenReturn(new IncrementalRagUpdateService.DiffResult(
                         Set.of("src/A.java"), Set.of(), Set.of()));
-        when(analysisJobService.createRagIndexJob(any(), anyBoolean(), any()))
+        when(analysisJobService.createRagIndexJob(
+                any(), anyBoolean(), any(), anyString(), anyString()))
                 .thenReturn(mockJob);
         when(analysisLockService.acquireLock(
                 any(), eq(branchName), any(), eq(commitHash), isNull()))
@@ -1258,8 +1953,14 @@ class RagOperationsServiceImplTest {
         setupVcsBinding();
         when(ragPipelineClient.getIndexedBranches("my-workspace", "my-repo"))
                 .thenReturn(List.of("main", "stale1", "stale2"));
-        when(ragPipelineClient.deleteBranch("my-workspace", "my-repo", "stale1")).thenReturn(true);
-        when(ragPipelineClient.deleteBranch("my-workspace", "my-repo", "stale2")).thenReturn(false);
+        when(ragPipelineClient.deleteBranchWithOutcome(
+                "my-workspace", "my-repo", "stale1", null))
+                .thenReturn(RagPipelineClient.BranchDeletionOutcome.success("legacy-alias"));
+        when(ragPipelineClient.deleteBranchWithOutcome(
+                "my-workspace", "my-repo", "stale2", null))
+                .thenReturn(RagPipelineClient.BranchDeletionOutcome.failure(
+                        "legacy-alias", RagPipelineClient.BranchDeletionFailure.TARGET,
+                        404, "not found"));
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
@@ -1279,7 +1980,8 @@ class RagOperationsServiceImplTest {
         setupVcsBinding();
         when(ragPipelineClient.getIndexedBranches("my-workspace", "my-repo"))
                 .thenReturn(List.of("main", "stale1"));
-        when(ragPipelineClient.deleteBranch("my-workspace", "my-repo", "stale1"))
+        when(ragPipelineClient.deleteBranchWithOutcome(
+                "my-workspace", "my-repo", "stale1", null))
                 .thenThrow(new RuntimeException("Connection error"));
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
@@ -1325,19 +2027,119 @@ class RagOperationsServiceImplTest {
     void testDeletePrFiles_Success() {
         ReflectionTestUtils.setField(service, "ragApiEnabled", true);
         setupProjectWithWorkspaceAndNamespace();
-        when(ragPipelineClient.deletePrFiles("test-ws", "test-ns", 42)).thenReturn(true);
+        when(ragPipelineClient.deletePrFilesWithOutcome("test-ws", "test-ns", 42, null))
+                .thenReturn(RagPipelineClient.PrFilesDeletionOutcome.success("legacy-alias"));
 
         boolean result = service.deletePrFiles(testProject, 42);
 
         assertThat(result).isTrue();
-        verify(ragPipelineClient).deletePrFiles("test-ws", "test-ns", 42);
+        verify(ragPipelineClient).deletePrFilesWithOutcome("test-ws", "test-ns", 42, null);
+    }
+
+    @Test
+    void deletePrFilesCleansEveryPublishedGenerationAndDeduplicatesTargets() {
+        ReflectionTestUtils.setField(service, "ragApiEnabled", true);
+        setupProjectWithWorkspaceAndNamespace();
+        when(branchGenerationRepository.findCollectionNamesByProjectIdAndStatusIn(
+                eq(100L),
+                eq(List.of(
+                        org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus.ACTIVE,
+                        org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus.SUPERSEDED))))
+                .thenReturn(List.of("generation-a", "generation-a", "  ", "generation-b"));
+        when(ragPipelineClient.deletePrFilesWithOutcome(
+                "test-ws", "test-ns", 42, "generation-a"))
+                .thenReturn(RagPipelineClient.PrFilesDeletionOutcome.success("generation-a"));
+        when(ragPipelineClient.deletePrFilesWithOutcome(
+                "test-ws", "test-ns", 42, "generation-b"))
+                .thenReturn(RagPipelineClient.PrFilesDeletionOutcome.success("generation-b"));
+
+        boolean result = service.deletePrFiles(testProject, 42);
+
+        assertThat(result).isTrue();
+        verify(ragPipelineClient).deletePrFilesWithOutcome(
+                "test-ws", "test-ns", 42, "generation-a");
+        verify(ragPipelineClient).deletePrFilesWithOutcome(
+                "test-ws", "test-ns", 42, "generation-b");
+        verify(ragPipelineClient, never()).deletePrFilesWithOutcome(
+                "test-ws", "test-ns", 42, null);
+    }
+
+    @Test
+    void deletePrFilesContinuesAfterOneTargetSpecificRejection() {
+        ReflectionTestUtils.setField(service, "ragApiEnabled", true);
+        setupProjectWithWorkspaceAndNamespace();
+        when(branchGenerationRepository.findCollectionNamesByProjectIdAndStatusIn(
+                eq(100L), anyList()))
+                .thenReturn(List.of("generation-a", "generation-b"));
+        when(ragPipelineClient.deletePrFilesWithOutcome(
+                "test-ws", "test-ns", 42, "generation-a"))
+                .thenReturn(RagPipelineClient.PrFilesDeletionOutcome.failure(
+                        "generation-a",
+                        RagPipelineClient.PrFilesDeletionFailure.TARGET,
+                        404,
+                        "collection missing"));
+        when(ragPipelineClient.deletePrFilesWithOutcome(
+                "test-ws", "test-ns", 42, "generation-b"))
+                .thenReturn(RagPipelineClient.PrFilesDeletionOutcome.success("generation-b"));
+
+        boolean result = service.deletePrFiles(testProject, 42);
+
+        assertThat(result).isFalse();
+        verify(ragPipelineClient).deletePrFilesWithOutcome(
+                "test-ws", "test-ns", 42, "generation-a");
+        verify(ragPipelineClient).deletePrFilesWithOutcome(
+                "test-ws", "test-ns", 42, "generation-b");
+    }
+
+    @Test
+    void deletePrFilesStopsAfterServiceFailureAndNamesFailingTarget() {
+        ReflectionTestUtils.setField(service, "ragApiEnabled", true);
+        setupProjectWithWorkspaceAndNamespace();
+        when(branchGenerationRepository.findCollectionNamesByProjectIdAndStatusIn(
+                eq(100L), anyList()))
+                .thenReturn(List.of("generation-a", "generation-b"));
+        when(ragPipelineClient.deletePrFilesWithOutcome(
+                "test-ws", "test-ns", 42, "generation-a"))
+                .thenReturn(RagPipelineClient.PrFilesDeletionOutcome.failure(
+                        "generation-a",
+                        RagPipelineClient.PrFilesDeletionFailure.SERVICE,
+                        409,
+                        "mutation lease unavailable"));
+
+        Logger logger = (Logger) LoggerFactory.getLogger(RagOperationsServiceImpl.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        boolean result;
+        try {
+            result = service.deletePrFiles(testProject, 42);
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+
+        assertThat(result).isFalse();
+        verify(ragPipelineClient).deletePrFilesWithOutcome(
+                "test-ws", "test-ns", 42, "generation-a");
+        verify(ragPipelineClient, never()).deletePrFilesWithOutcome(
+                "test-ws", "test-ns", 42, "generation-b");
+        assertThat(appender.list.stream()
+                .filter(event -> event.getLevel() == Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage))
+                .containsExactly("Failed to delete PR #42 files for project=100 "
+                        + "target=generation-a: status=409 detail=mutation lease unavailable");
     }
 
     @Test
     void testDeletePrFiles_PipelineReturnsFalse() {
         ReflectionTestUtils.setField(service, "ragApiEnabled", true);
         setupProjectWithWorkspaceAndNamespace();
-        when(ragPipelineClient.deletePrFiles("test-ws", "test-ns", 42)).thenReturn(false);
+        when(ragPipelineClient.deletePrFilesWithOutcome("test-ws", "test-ns", 42, null))
+                .thenReturn(RagPipelineClient.PrFilesDeletionOutcome.failure(
+                        "legacy-alias",
+                        RagPipelineClient.PrFilesDeletionFailure.TARGET,
+                        404,
+                        "not found"));
 
         boolean result = service.deletePrFiles(testProject, 42);
 
@@ -1348,7 +2150,7 @@ class RagOperationsServiceImplTest {
     void testDeletePrFiles_PipelineThrowsException() {
         ReflectionTestUtils.setField(service, "ragApiEnabled", true);
         setupProjectWithWorkspaceAndNamespace();
-        when(ragPipelineClient.deletePrFiles("test-ws", "test-ns", 42))
+        when(ragPipelineClient.deletePrFilesWithOutcome("test-ws", "test-ns", 42, null))
                 .thenThrow(new RuntimeException("Connection timeout"));
 
         boolean result = service.deletePrFiles(testProject, 42);

@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import traceback
 from typing import Dict, Any, Optional
 import redis.asyncio as redis
 from pydantic import ValidationError
@@ -31,6 +30,8 @@ class RedisQueueConsumer:
         self._redis: Optional[redis.Redis] = None
         self._task: Optional[asyncio.Task] = None
         self._consumer_heartbeat_task: Optional[asyncio.Task] = None
+        self._job_tasks: set[asyncio.Task] = set()
+        self._redis_outage_channels: set[str] = set()
         self.consumer_heartbeat_key = "codecrow:analysis:consumer:heartbeat"
         self.consumer_heartbeat_seconds = max(
             1.0,
@@ -86,6 +87,16 @@ class RedisQueueConsumer:
                 await self._consumer_heartbeat_task
             except asyncio.CancelledError:
                 pass
+
+        # Removing a job from Redis admits durable work. Keep its shared
+        # Redis/RAG clients alive until every admitted review has finished.
+        active_jobs = tuple(self._job_tasks)
+        if active_jobs:
+            logger.info(
+                "Waiting for %s admitted review jobs before shutdown",
+                len(active_jobs),
+            )
+            await asyncio.gather(*active_jobs, return_exceptions=True)
         
         if self._redis:
             await self._redis.aclose()
@@ -93,11 +104,19 @@ class RedisQueueConsumer:
 
     async def _publish_consumer_heartbeat(self):
         if self._redis:
-            await self._redis.set(
-                self.consumer_heartbeat_key,
-                "alive",
-                ex=self.consumer_heartbeat_ttl_seconds,
-            )
+            try:
+                await self._redis.set(
+                    self.consumer_heartbeat_key,
+                    "alive",
+                    ex=self.consumer_heartbeat_ttl_seconds,
+                )
+                self._record_redis_success("review consumer heartbeat")
+            except Exception as error:
+                self._record_redis_failure(
+                    "review consumer heartbeat",
+                    error,
+                )
+                raise
 
     async def _consumer_heartbeat_loop(self):
         while self.is_running:
@@ -106,7 +125,9 @@ class RedisQueueConsumer:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("Failed to publish review consumer heartbeat")
+                # The transition diagnostic is owned by
+                # _publish_consumer_heartbeat; keep the loop alive quietly.
+                pass
             await asyncio.sleep(self.consumer_heartbeat_seconds)
 
     async def is_healthy(self) -> bool:
@@ -143,6 +164,7 @@ class RedisQueueConsumer:
 
                 # Block until a job is available or timeout (1 second for graceful shutdown check)
                 result = await self._redis.brpop([self.job_queue_key], timeout=1)
+                self._record_redis_success("review queue read")
                 
                 if not result:
                     continue
@@ -151,16 +173,20 @@ class RedisQueueConsumer:
                 logger.debug(f"Received raw job payload from {queue_name}")
                 
                 # Transfer ownership of the reserved permit to the job task.
-                asyncio.create_task(self._handle_admitted_job(payload_str))
+                job_task = asyncio.create_task(
+                    self._handle_admitted_job(payload_str)
+                )
+                self._job_tasks.add(job_task)
+                job_task.add_done_callback(self._job_tasks.discard)
                 permit_acquired = False
                 
             except asyncio.CancelledError:
                 break
             except RedisTimeoutError as error:
-                logger.warning("Redis review queue read timed out; retrying: %s", error)
+                self._record_redis_failure("review queue read", error)
                 await asyncio.sleep(1)
             except Exception as e:
-                logger.error(f"Error in Redis consume loop: {e}", exc_info=True)
+                self._record_redis_failure("review queue read", e)
                 await asyncio.sleep(2)  # Backoff on error
             finally:
                 if permit_acquired:
@@ -183,6 +209,7 @@ class RedisQueueConsumer:
         job_id = "UNKNOWN"
         event_queue_key = None
         publish_tail: Optional[asyncio.Future] = None
+        terminal_event_type: Optional[str] = None
         
         try:
             payload = json.loads(payload_str)
@@ -216,7 +243,19 @@ class RedisQueueConsumer:
             publish_tail.set_result(None)
 
             def event_callback(event: Dict[str, Any]):
-                nonlocal publish_tail
+                nonlocal publish_tail, terminal_event_type
+                event_type = event.get("type")
+                if terminal_event_type is not None:
+                    logger.debug(
+                        "Ignoring review event type=%s after terminal type=%s "
+                        "for job=%s",
+                        event_type,
+                        terminal_event_type,
+                        job_id,
+                    )
+                    return
+                if event_type in {"final", "error"}:
+                    terminal_event_type = event_type
                 previous = publish_tail
 
                 async def publish_after_previous():
@@ -300,5 +339,37 @@ class RedisQueueConsumer:
             pipeline.lpush(key, event_str)
             pipeline.expire(key, 3600)
             await pipeline.execute()
+            self._record_redis_success("review event publication")
         except Exception as e:
-            logger.error(f"Failed to publish event to {key}: {e}")
+            self._record_redis_failure("review event publication", e)
+
+    def _record_redis_failure(self, operation: str, error: Exception) -> None:
+        """Emit one actionable diagnostic per continuous Redis outage."""
+        channel = self._redis_diagnostic_channel(operation)
+        if channel not in self._redis_outage_channels:
+            self._redis_outage_channels.add(channel)
+            logger.warning(
+                "Redis unavailable during %s; queue/event delivery is "
+                "degraded: %s",
+                operation,
+                error,
+            )
+            return
+        logger.debug(
+            "Redis remains unavailable during %s: %s",
+            operation,
+            error,
+        )
+
+    def _record_redis_success(self, operation: str) -> None:
+        channel = self._redis_diagnostic_channel(operation)
+        if channel not in self._redis_outage_channels:
+            return
+        self._redis_outage_channels.discard(channel)
+        logger.info("Redis connectivity restored during %s", operation)
+
+    @staticmethod
+    def _redis_diagnostic_channel(operation: str) -> str:
+        # A successful blocking read does not prove that Redis accepts event
+        # writes (for example during READONLY/OOM states).
+        return "read" if operation.endswith("queue read") else "write"

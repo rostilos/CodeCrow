@@ -64,6 +64,11 @@ class TestRAGConfig:
         assert config.retrieval_top_k == 10
         assert config.similarity_threshold == 0.7
         assert config.max_file_size_bytes == 1024 * 1024
+        assert config.qdrant_timeout_seconds == 30
+
+    def test_qdrant_timeout_is_configurable(self):
+        with patch.dict(os.environ, {"QDRANT_TIMEOUT_SECONDS": "45"}):
+            assert RAGConfig().qdrant_timeout_seconds == 45
 
     def test_auto_detect_embedding_dim_ollama(self):
         config = RAGConfig(embedding_provider="ollama", ollama_model="all-minilm", embedding_dim=0)

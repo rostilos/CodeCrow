@@ -47,18 +47,34 @@ def _pending_janitor_interval_seconds() -> int:
 async def _pending_collection_janitor(manager: RAGIndexManager) -> None:
     """Periodically remove only expired, unowned pending collections."""
     interval = _pending_janitor_interval_seconds()
+    unavailable = False
     while True:
         try:
             cleaned = await asyncio.to_thread(
                 manager.cleanup_expired_pending_collections
             )
+            if unavailable:
+                logger.info("Pending collection janitor recovered")
+                unavailable = False
             if cleaned:
                 logger.info("Pending collection janitor removed %s collections", cleaned)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exception:
             # Cleanup is auxiliary: retain uncertain collections and keep serving.
-            logger.exception("Pending collection janitor failed")
+            if not unavailable:
+                logger.warning(
+                    "Pending collection janitor unavailable; retaining "
+                    "uncertain collections: %s",
+                    exception,
+                    exc_info=True,
+                )
+                unavailable = True
+            else:
+                logger.debug(
+                    "Pending collection janitor still unavailable: %s",
+                    exception,
+                )
         await asyncio.sleep(interval)
 
 
@@ -77,6 +93,17 @@ async def lifespan(app: FastAPI):
         config,
         plugin_catalog=index_manager.plugin_catalog,
     )
+    from .routers.index import (
+        cleanup_orphaned_index_repository_stream_workspaces,
+    )
+    cleaned_stream_workspaces = (
+        cleanup_orphaned_index_repository_stream_workspaces()
+    )
+    if cleaned_stream_workspaces:
+        logger.info(
+            "Removed %s orphaned RAG HTTP index workspaces",
+            cleaned_stream_workspaces,
+        )
 
     # Initialize and start the Redis Queue Consumer
     from ..server.rag_queue_consumer import RAGQueueConsumer
@@ -98,10 +125,18 @@ async def lifespan(app: FastAPI):
             pass
     if hasattr(app.state, 'rag_queue_consumer'):
         await app.state.rag_queue_consumer.stop()
+    # HTTP streaming requests run synchronous indexing in dedicated workers.
+    # A disconnected response task can be gone before that call returns, so
+    # drain the independently tracked workers before closing shared embedding
+    # and Qdrant clients.
+    from .routers.index import drain_index_repository_stream_workers
+    await drain_index_repository_stream_workers()
     if hasattr(index_manager, 'embed_model') and hasattr(index_manager.embed_model, 'close'):
         index_manager.embed_model.close()
     if hasattr(query_service, 'embed_model') and hasattr(query_service.embed_model, 'close'):
         query_service.embed_model.close()
+    if query_service is not None:
+        query_service.close()
     if index_manager is not None:
         index_manager.close()
     logger.info("RAG Pipeline API shutdown complete")

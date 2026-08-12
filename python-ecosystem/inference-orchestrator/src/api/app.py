@@ -4,6 +4,7 @@ FastAPI Application Factory.
 Creates and configures the FastAPI application with all routers.
 Uses lifespan context manager for proper startup/shutdown of shared resources.
 """
+import asyncio
 import os
 import logging
 from contextlib import asynccontextmanager
@@ -48,11 +49,22 @@ async def lifespan(app: FastAPI):
 
     # --- Shutdown ---
     logger.info("Shutting down application services...")
+    consumer_stops = []
     if hasattr(app.state, "queue_consumer"):
-        await app.state.queue_consumer.stop()
-    
+        consumer_stops.append(app.state.queue_consumer.stop())
     if hasattr(app.state, "command_queue_consumer"):
-        await app.state.command_queue_consumer.stop()
+        consumer_stops.append(app.state.command_queue_consumer.stop())
+    if consumer_stops:
+        # Stop both intake loops immediately. A sequential drain could let the
+        # second consumer keep admitting work for the full duration of a long
+        # review shutdown.
+        stop_results = await asyncio.gather(
+            *consumer_stops,
+            return_exceptions=True,
+        )
+        for stop_result in stop_results:
+            if isinstance(stop_result, BaseException):
+                logger.warning("Error stopping queue consumer: %s", stop_result)
         
     # Close the RagClient HTTP pools owned by each service
     try:

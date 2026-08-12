@@ -3,16 +3,15 @@ Base Multi-Stage Orchestrator.
 
 Provides shared infrastructure for multi-stage LLM pipelines:
 - LLM instance management
-- RAG indexing / cleanup lifecycle
 - Smart dependency-aware batching via DependencyGraphBuilder
 - Diff filtering for per-batch file subsets
 - Event emission helpers
 
-Subclasses: MultiStageReviewOrchestrator, QaDocOrchestrator
+Subclass: QaDocOrchestrator
 """
 import re
 import logging
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Dict, Any, List, Optional, Callable, Set
 
 from model.enrichment import PrEnrichmentDataDto
@@ -55,9 +54,7 @@ class BaseOrchestrator(ABC):
 
     Provides:
     - ``self.llm`` — the LangChain LLM instance
-    - ``self.rag_client`` — optional RAG client for hybrid queries
     - ``self.event_callback`` — optional SSE/WS event emitter
-    - ``index_pr_files()`` / ``cleanup_pr_files()`` — RAG lifecycle
     - ``build_dependency_batches()`` — smart batching from enrichment data
     - ``filter_diff_for_files()`` — per-batch diff slicing
     """
@@ -65,103 +62,10 @@ class BaseOrchestrator(ABC):
     def __init__(
         self,
         llm,
-        rag_client=None,
         event_callback: Optional[Callable[[Dict], None]] = None,
     ):
         self.llm = llm
-        self.rag_client = rag_client
         self.event_callback = event_callback
-        self._pr_number: Optional[int] = None
-        self._pr_indexed: bool = False
-
-    # ── RAG lifecycle ────────────────────────────────────────────────
-
-    async def index_pr_files(
-        self,
-        *,
-        workspace: str,
-        project: str,
-        pr_number: int,
-        branch: str,
-        enrichment_data: Optional[PrEnrichmentDataDto],
-        changed_file_paths: Optional[List[str]],
-        diff: Optional[str] = None,
-    ) -> None:
-        """
-        Index PR files into RAG for hybrid context queries.
-
-        Uses full file content from enrichment data when available;
-        falls back to diff hunks otherwise.
-        """
-        if not self.rag_client or not pr_number:
-            return
-
-        # Build enrichment lookup: path → full file content
-        enrichment_lookup: Dict[str, str] = {}
-        if enrichment_data and enrichment_data.fileContents:
-            for fc in enrichment_data.fileContents:
-                if fc.content and not fc.skipped:
-                    enrichment_lookup[fc.path] = fc.content
-                    parts = fc.path.split("/", 1)
-                    if len(parts) > 1:
-                        enrichment_lookup[parts[1]] = fc.content
-
-        # Build file list for indexing
-        files: List[Dict[str, str]] = []
-        paths_to_index = changed_file_paths or []
-        for path in paths_to_index:
-            content = enrichment_lookup.get(path, "")
-            if not content:
-                # Suffix matching for path variations
-                for ep, ec in enrichment_lookup.items():
-                    if path.endswith(ep) or ep.endswith(path):
-                        content = ec
-                        break
-            if content:
-                files.append({"path": path, "content": content, "change_type": "MODIFIED"})
-
-        if not files:
-            logger.info("No files to index for PR #%s", pr_number)
-            return
-
-        self._pr_number = pr_number
-        try:
-            result = await self.rag_client.index_pr_files(
-                workspace=workspace,
-                project=project,
-                pr_number=pr_number,
-                branch=branch,
-                files=files,
-            )
-            if result.get("status") in {"indexed", "reused"}:
-                self._pr_indexed = True
-                logger.info(
-                    "%s PR #%s overlay: %s chunks",
-                    "Reused" if result.get("status") == "reused" else "Indexed",
-                    pr_number,
-                    result.get("chunks_indexed", 0),
-                )
-            else:
-                logger.warning("Failed to index PR files: %s", result)
-        except Exception as e:
-            logger.warning("Error indexing PR files: %s", e)
-
-    async def cleanup_pr_files(self, workspace: str, project: str) -> None:
-        """Delete PR-indexed data (idempotent)."""
-        if not self._pr_number or not self.rag_client:
-            return
-        try:
-            await self.rag_client.delete_pr_files(
-                workspace=workspace,
-                project=project,
-                pr_number=self._pr_number,
-            )
-            logger.info("Cleaned up PR #%s indexed data", self._pr_number)
-        except Exception as e:
-            logger.warning("Failed to cleanup PR files: %s", e)
-        finally:
-            self._pr_number = None
-            self._pr_indexed = False
 
     # ── Smart batching ───────────────────────────────────────────────
 

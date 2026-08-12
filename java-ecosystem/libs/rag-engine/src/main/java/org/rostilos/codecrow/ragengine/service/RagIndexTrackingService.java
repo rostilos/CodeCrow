@@ -208,6 +208,122 @@ public class RagIndexTrackingService {
     }
 
     /**
+     * Atomically aligns the project checkpoint with an already-published exact
+     * generation. This is used by same-revision no-ops and post-publication
+     * recovery, neither of which needs a synthetic RUNNING status transition.
+     * A newer job owner is never overwritten.
+     */
+    @Transactional
+    public boolean reconcilePublishedGeneration(
+            Project project,
+            String branchName,
+            String commitHash,
+            Integer fileCount,
+            Integer chunkCount) {
+        return reconcilePublishedGeneration(
+                project, branchName, commitHash, fileCount, chunkCount, null);
+    }
+
+    @Transactional
+    public boolean reconcilePublishedGeneration(
+            Project project,
+            String branchName,
+            String commitHash,
+            Integer fileCount,
+            Integer chunkCount,
+            Long expectedActiveJobId) {
+        Optional<RagIndexStatus> existing =
+                ragIndexStatusRepository.findByProjectIdForUpdate(project.getId());
+        RagIndexStatus status;
+        if (existing.isPresent()) {
+            status = existing.get();
+            if (expectedActiveJobId != null
+                    && !Objects.equals(status.getActiveJobId(), expectedActiveJobId)) {
+                log.info(
+                        "Preserving RAG status owned by job {} while job {} reconciles "
+                                + "a published generation for project {}",
+                        status.getActiveJobId(), expectedActiveJobId, project.getId());
+                return false;
+            }
+            if (expectedActiveJobId == null && status.getActiveJobId() != null) {
+                log.info(
+                        "Preserving RAG status owned by live job {} while reconciling "
+                                + "published generation for project {}",
+                        status.getActiveJobId(), project.getId());
+                return false;
+            }
+        } else {
+            if (expectedActiveJobId != null) {
+                log.info(
+                        "Published generation for job {} has no owned RAG status to reconcile "
+                                + "for project {}",
+                        expectedActiveJobId, project.getId());
+                return false;
+            }
+            status = new RagIndexStatus();
+            status.setProject(project);
+            status.setWorkspaceName(project.getWorkspace().getName());
+            status.setProjectName(project.getName());
+            status.setCollectionName(generateCollectionName(project));
+        }
+
+        status.setStatus(RagIndexingStatus.INDEXED);
+        status.setIndexedBranch(branchName);
+        status.setIndexedCommitHash(commitHash);
+        if (fileCount != null) {
+            status.setTotalFilesIndexed(fileCount);
+        }
+        if (chunkCount != null) {
+            status.setChunkCount(chunkCount);
+        }
+        status.setLastIndexedAt(OffsetDateTime.now());
+        status.setErrorMessage(null);
+        status.setActiveJobId(null);
+        status.resetFailedIncrementalCount();
+        ragIndexStatusRepository.save(status);
+        return true;
+    }
+
+    /**
+     * Restores the active exact generation as the completed checkpoint while
+     * the caller owns the branch RAG lock. The caller immediately admits the
+     * replacement job in the same transaction, so an older status owner
+     * cannot later publish through the job-id ownership checks.
+     */
+    @Transactional
+    public void preparePublishedGenerationForUpdate(
+            Project project,
+            String branchName,
+            String commitHash,
+            Integer fileCount,
+            Integer chunkCount) {
+        RagIndexStatus status = ragIndexStatusRepository
+                .findByProjectIdForUpdate(project.getId())
+                .orElseGet(() -> {
+                    RagIndexStatus created = new RagIndexStatus();
+                    created.setProject(project);
+                    created.setWorkspaceName(project.getWorkspace().getName());
+                    created.setProjectName(project.getName());
+                    created.setCollectionName(generateCollectionName(project));
+                    return created;
+                });
+        status.setStatus(RagIndexingStatus.INDEXED);
+        status.setIndexedBranch(branchName);
+        status.setIndexedCommitHash(commitHash);
+        if (fileCount != null) {
+            status.setTotalFilesIndexed(fileCount);
+        }
+        if (chunkCount != null) {
+            status.setChunkCount(chunkCount);
+        }
+        status.setLastIndexedAt(OffsetDateTime.now());
+        status.setErrorMessage(null);
+        status.setActiveJobId(null);
+        status.resetFailedIncrementalCount();
+        ragIndexStatusRepository.save(status);
+    }
+
+    /**
      * Marks an incremental update as completed.
      * Updates totalFilesIndexed by adding addedFiles count and subtracting
      * deletedFiles count.
@@ -328,6 +444,20 @@ public class RagIndexTrackingService {
         log.warn("Marked RAG incremental update as FAILED for project {} (failure count: {}): {}",
                 project.getName(), status.getFailedIncrementalCount(), errorMessage);
         return status;
+    }
+
+    /**
+     * Quiet, owner-guarded repair used by the periodic legacy-job recovery
+     * scan. The scheduler owns degraded/recovered log transitions, preventing
+     * the same database outage from producing one warning per scan and job.
+     */
+    @Transactional
+    public boolean recoverAbandonedIncrementalUpdate(
+            Long projectId,
+            Long expectedActiveJobId,
+            String errorMessage) {
+        return ragIndexStatusRepository.recoverAbandonedIncrementalUpdate(
+                projectId, expectedActiveJobId, errorMessage) == 1;
     }
 
     @Transactional(readOnly = true)

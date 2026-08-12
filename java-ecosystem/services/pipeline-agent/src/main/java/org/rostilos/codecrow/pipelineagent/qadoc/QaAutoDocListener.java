@@ -30,9 +30,7 @@ import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibility;
 import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
-import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
-import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
@@ -76,7 +74,6 @@ public class QaAutoDocListener {
     private final QaDocDocumentService qaDocDocumentService;
     private final QaDocPublicPreviewService qaDocPublicPreviewService;
     private final PrFileEnrichmentService enrichmentService;
-    private final VcsConnectionCredentialsExtractor credentialsExtractor;
 
     public QaAutoDocListener(ProjectRepository projectRepository,
                               TaskManagementConnectionRepository connectionRepository,
@@ -87,8 +84,7 @@ public class QaAutoDocListener {
                               QaDocStateRepository qaDocStateRepository,
                               QaDocDocumentService qaDocDocumentService,
                               QaDocPublicPreviewService qaDocPublicPreviewService,
-                              PrFileEnrichmentService enrichmentService,
-                              TokenEncryptionService tokenEncryptionService) {
+                              PrFileEnrichmentService enrichmentService) {
         this.projectRepository = projectRepository;
         this.connectionRepository = connectionRepository;
         this.clientFactory = clientFactory;
@@ -99,7 +95,6 @@ public class QaAutoDocListener {
         this.qaDocDocumentService = qaDocDocumentService;
         this.qaDocPublicPreviewService = qaDocPublicPreviewService;
         this.enrichmentService = enrichmentService;
-        this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
     }
 
     @Async
@@ -265,22 +260,11 @@ public class QaAutoDocListener {
                     currentCommitHash, changedFilePaths);
         }
 
-        // 5e. Extract VCS credentials for Python-side RAG queries
-        String oauthKey = null;
-        String oauthSecret = null;
-        String bearerToken = null;
-        String vcsProviderStr = null;
-        if (vcsConnection != null) {
-            try {
-                VcsConnectionCredentials creds = credentialsExtractor.extractCredentials(vcsConnection);
-                oauthKey = creds.oAuthClient();
-                oauthSecret = creds.oAuthSecret();
-                bearerToken = creds.accessToken();
-                vcsProviderStr = creds.vcsProviderString();
-            } catch (Exception e) {
-                log.warn("QA auto-doc: failed to extract VCS credentials (non-critical): {}", e.getMessage());
-            }
-        }
+        // 5e. Keep only the non-secret provider identifier used by the prompt.
+        String vcsProviderStr = vcsConnection == null
+                ? null
+                : VcsConnectionCredentialsExtractor.getVcsProviderString(
+                        vcsConnection.getProviderType());
 
         // 6. Resolve task management connection + fetch task details
         TaskManagementConnection connection = connectionRepository
@@ -367,9 +351,6 @@ public class QaAutoDocListener {
                 .repoSlug(repoSlug)
                 .sourceBranch(sourceBranch)
                 .targetBranch(targetBranch)
-                .oauthKey(oauthKey)
-                .oauthSecret(oauthSecret)
-                .bearerToken(bearerToken)
                 .build();
 
         String qaDocument;

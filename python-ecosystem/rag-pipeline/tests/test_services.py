@@ -42,9 +42,16 @@ class TestRAGQueryBase:
         base = RAGQueryBase(config)
 
         assert base.config is config
-        MockQdrant.assert_called_once_with(url="http://localhost:6333", api_key=None)
+        MockQdrant.assert_called_once_with(
+            url="http://localhost:6333",
+            api_key=None,
+            timeout=30,
+        )
         assert base.qdrant_client is not None
         assert base.embed_model is not None
+
+        base.close()
+        MockQdrant.return_value.close.assert_called_once_with()
 
     @patch("rag_pipeline.services.base.create_embedding_model")
     @patch("rag_pipeline.services.base.get_embedding_model_info")

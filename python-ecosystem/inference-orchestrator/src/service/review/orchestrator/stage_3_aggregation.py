@@ -106,7 +106,7 @@ def _review_revision(request: ReviewRequestDto) -> str:
 async def _invoke_stage_3_report(llm, prompt: str, fallback_llm=None) -> Dict[str, Any]:
     response = await llm.ainvoke(prompt)
     if _response_finished_by_length(response) and fallback_llm is not None and fallback_llm is not llm:
-        logger.warning("Stage 3 report hit output cap; retrying without output cap")
+        logger.info("Stage 3 report hit output cap; retrying without output cap")
         response = await fallback_llm.ainvoke(prompt)
     return {"report": extract_llm_response_text(response), "dismissed_issue_ids": []}
 
@@ -449,7 +449,7 @@ async def _stage_3_with_mcp(
             tool_calls = getattr(response, 'tool_calls', None)
             if not tool_calls:
                 if _response_finished_by_length(response) and fallback_llm is not None and fallback_llm is not llm:
-                    logger.warning("MCP Stage 3 report hit output cap; retrying without output cap")
+                    logger.info("MCP Stage 3 report hit output cap; retrying without output cap")
                     return await _stage_3_with_mcp(
                         fallback_llm,
                         request,
@@ -492,8 +492,8 @@ async def _stage_3_with_mcp(
                 })
 
         except Exception as e:
-            logger.warning(f"[MCP Stage 3] Iteration {iteration + 1} failed: {e}")
+            logger.info(f"[MCP Stage 3] Iteration {iteration + 1} failed: {e}")
             break
 
-    logger.warning("[MCP Stage 3] Agentic loop exhausted, falling back to plain call")
+    logger.info("[MCP Stage 3] Agentic loop exhausted, falling back to plain call")
     return await _invoke_stage_3_report(llm, prompt, fallback_llm=fallback_llm)

@@ -22,6 +22,7 @@ from rag_pipeline.api.models import (
     ApplyChangesRequest,
     UpdateFilesRequest,
     CleanupStaleBranchesRequest,
+    GenerationAliasPublicationRequest,
     VectorGraphRequest,
     VectorNodeRequest,
 )
@@ -41,6 +42,7 @@ class TestIndexRequest:
         assert req.workspace == "ws"
         assert req.preserve_other_branches is False
         assert req.cleanup_repo_path is False
+        assert req.transfer_repo_ownership is False
 
     @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
     def test_other_branch_preservation_requires_explicit_opt_in(self):
@@ -65,6 +67,18 @@ class TestIndexRequest:
             cleanup_repo_path=True,
         )
         assert req.cleanup_repo_path is True
+
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_stream_repository_ownership_requires_explicit_opt_in(self):
+        req = IndexRequest(
+            repo_path="/tmp/codecrow-rag-branch-generation-owned",
+            workspace="ws",
+            project="proj",
+            branch="main",
+            commit="abc123",
+            transfer_repo_ownership=True,
+        )
+        assert req.transfer_repo_ownership is True
 
     @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
     def test_path_traversal_rejected(self):
@@ -292,6 +306,39 @@ class TestDeleteBranchRequest:
     def test_construction(self):
         req = DeleteBranchRequest(workspace="ws", project="proj", branch="feature/old")
         assert req.branch == "feature/old"
+
+
+class TestGenerationAliasPublicationRequest:
+
+    def test_accepts_legacy_caller_without_registry_manifest_receipt(self):
+        legacy_request = GenerationAliasPublicationRequest(
+            workspace="ws",
+            project="project",
+            branch="main",
+            commit="a" * 40,
+            collection_target="target",
+        )
+        assert legacy_request.generation_manifest_sha256 is None
+
+        request = GenerationAliasPublicationRequest(
+            workspace="ws",
+            project="project",
+            branch="main",
+            commit="a" * 40,
+            collection_target="target",
+            generation_manifest_sha256="b" * 64,
+        )
+        assert request.generation_manifest_sha256 == "b" * 64
+
+        with pytest.raises(ValueError):
+            GenerationAliasPublicationRequest(
+                workspace="ws",
+                project="project",
+                branch="main",
+                commit="a" * 40,
+                collection_target="target",
+                generation_manifest_sha256="invalid",
+            )
 
 
 class TestCleanupStaleBranches:

@@ -129,6 +129,8 @@ class Stage1PreparedContext:
 @dataclass
 class Stage1RagState:
     """Per-review RAG state shared across Stage 1 batches."""
+    context_disabled: bool = False
+    context_disable_reason: str = ""
     semantic_disabled: bool = False
     semantic_failures: int = 0
     semantic_disable_reason: str = ""
@@ -1562,14 +1564,70 @@ def _is_exact_revision_bound(
     request: ReviewRequestDto,
     pr_indexed: bool,
 ) -> bool:
+    pr_number = getattr(request, "pullRequestId", None)
     return bool(
         pr_indexed
-        and (request.currentCommitHash or request.commitHash)
-        and request.baseCommitHash
-        and request.ragBaseGenerationManifestSha256
-        and request.ragPrGenerationFingerprint
-        and request.ragPrOverlayGenerationManifestSha256
+        and isinstance(pr_number, int)
+        and pr_number > 0
+        and all(
+            isinstance(value, str) and bool(value.strip())
+            for value in (
+                getattr(request, "currentCommitHash", None)
+                or getattr(request, "commitHash", None),
+                getattr(request, "baseCommitHash", None),
+                getattr(request, "ragCollectionTarget", None),
+                getattr(request, "ragBaseGenerationManifestSha256", None),
+                getattr(request, "ragPrGenerationFingerprint", None),
+                getattr(
+                    request,
+                    "ragPrOverlayGenerationManifestSha256",
+                    None,
+                ),
+            )
+        )
     )
+
+
+def _has_exact_base_binding(request: ReviewRequestDto) -> bool:
+    return all(
+        isinstance(value, str) and bool(value.strip())
+        for value in (
+            getattr(request, "baseCommitHash", None),
+            getattr(request, "ragCollectionTarget", None),
+            getattr(request, "ragBaseGenerationManifestSha256", None),
+        )
+    )
+
+
+def _disable_rag_context(
+    rag_state: Optional[Stage1RagState],
+    reason: str,
+) -> bool:
+    """Open the optional-context circuit once and report whether it changed."""
+    if rag_state is None:
+        return True
+    if rag_state.context_disabled:
+        return False
+    rag_state.context_disabled = True
+    rag_state.context_disable_reason = reason
+    rag_state.semantic_disabled = True
+    rag_state.semantic_disable_reason = reason
+    return True
+
+
+def _disable_semantic_rag(
+    rag_state: Optional[Stage1RagState],
+    reason: str,
+) -> bool:
+    """Open the semantic-filler circuit once across concurrent batches."""
+    if rag_state is None:
+        return True
+    if rag_state.semantic_disabled:
+        return False
+    rag_state.semantic_failures += 1
+    rag_state.semantic_disabled = True
+    rag_state.semantic_disable_reason = reason
+    return True
 
 
 async def fetch_batch_rag_context(
@@ -1586,10 +1644,23 @@ async def fetch_batch_rag_context(
     rag_state: Optional[Stage1RagState] = None,
 ) -> Optional[Dict[str, Any]]:
     exact_revision_bound = _is_exact_revision_bound(request, pr_indexed)
+    exact_base_bound = _has_exact_base_binding(request)
+    exact_context_bound = exact_revision_bound or exact_base_bound
+    if rag_state and rag_state.context_disabled:
+        logger.debug(
+            "Per-batch RAG context skipped after an earlier optional-context "
+            "failure: %s",
+            rag_state.context_disable_reason,
+        )
+        return None
     if not rag_client:
-        if exact_revision_bound:
-            raise RuntimeError(
-                "revision-bound Stage 1 retrieval requires a RAG client"
+        if exact_context_bound and _disable_rag_context(
+            rag_state,
+            "revision-bound Stage 1 retrieval has no RAG client",
+        ):
+            logger.info(
+                "Optional revision-bound RAG context is unavailable; "
+                "continuing with local review evidence"
             )
         return None
 
@@ -1600,13 +1671,16 @@ async def fetch_batch_rag_context(
         base_branch = request.get_rag_base_branch()
         if not rag_branch:
             message = "Missing authoritative target branch for Stage 1 RAG retrieval"
-            logger.warning(message)
             _capture_deterministic_retrieval_state(
                 {"status": "error", "error": message},
                 rag_state,
             )
-            if exact_revision_bound:
-                raise RuntimeError(message)
+            if _disable_rag_context(rag_state, message):
+                (logger.info if exact_context_bound else logger.warning)(
+                    "%s; disabling optional RAG context for the remaining "
+                    "Stage 1 batches",
+                    message,
+                )
             return None
 
         # Scale top_k based on batch priority to ensure adequate context
@@ -1616,28 +1690,33 @@ async def fetch_batch_rag_context(
         logger.info(f"Fetching per-batch RAG context for {len(batch_file_paths)} files "
                      f"(priority={priority_upper}, top_k={top_k})")
 
-        pr_number = request.pullRequestId if pr_indexed else None
-        all_pr_files = request.changedFiles if pr_indexed else None
+        pr_number = request.pullRequestId if exact_revision_bound else None
+        all_pr_files = request.changedFiles if exact_revision_bound else None
         source_revision = (
             request.currentCommitHash or request.commitHash
-            if pr_indexed
+            if exact_revision_bound
             else None
         )
-        base_revision = request.baseCommitHash if pr_indexed else None
+        base_revision = (
+            request.baseCommitHash if exact_context_bound else None
+        )
         base_generation_receipt = (
             request.ragBaseGenerationManifestSha256
-            if pr_indexed
+            if exact_context_bound
             else None
         )
         pr_generation_fingerprint = (
             request.ragPrGenerationFingerprint
-            if pr_indexed
+            if exact_revision_bound
             else None
         )
         pr_overlay_generation_manifest_sha256 = (
             request.ragPrOverlayGenerationManifestSha256
-            if pr_indexed
+            if exact_revision_bound
             else None
+        )
+        collection_target = (
+            request.ragCollectionTarget if exact_context_bound else None
         )
 
         context = None
@@ -1647,11 +1726,15 @@ async def fetch_batch_rag_context(
                 return await rag_client.get_deterministic_context(
                     workspace=request.projectWorkspace,
                     project=request.projectNamespace,
-                    branches=list(dict.fromkeys(
-                        branch
-                        for branch in (rag_branch, base_branch)
-                        if branch
-                    )),
+                    branches=(
+                        [rag_branch]
+                        if exact_context_bound
+                        else list(dict.fromkeys(
+                            branch
+                            for branch in (rag_branch, base_branch)
+                            if branch
+                        ))
+                    ),
                     file_paths=batch_file_paths,
                     limit_per_file=5,
                     pr_number=pr_number,
@@ -1666,11 +1749,13 @@ async def fetch_batch_rag_context(
                     pr_overlay_generation_manifest_sha256=(
                         pr_overlay_generation_manifest_sha256
                     ),
-                    collection_target=request.ragCollectionTarget,
+                    collection_target=collection_target,
                 )
             except Exception as det_err:
-                logger.warning("Deterministic RAG lookup failed: %s", det_err)
-                return {"status": "error", "error": str(det_err)}
+                return {
+                    "status": "error",
+                    "error": f"{type(det_err).__name__}: {det_err}",
+                }
 
         async def _fetch_semantic_context() -> Optional[Dict[str, Any]]:
             if not SEMANTIC_RAG_FILLER_ENABLED:
@@ -1691,10 +1776,10 @@ async def fetch_batch_rag_context(
                 pr_title=request.prTitle,
                 pr_description=request.prDescription,
                 top_k=semantic_top_k,
-                base_branch=base_branch,
+                base_branch=(base_branch if pr_number else None),
                 pr_number=pr_number,
                 all_pr_changed_files=all_pr_files,
-                deleted_files=request.deletedFiles or None,
+                deleted_files=(request.deletedFiles or None) if pr_number else None,
                 source_revision=source_revision,
                 base_revision=base_revision,
                 base_generation_manifest_sha256=base_generation_receipt,
@@ -1702,7 +1787,7 @@ async def fetch_batch_rag_context(
                 pr_overlay_generation_manifest_sha256=(
                     pr_overlay_generation_manifest_sha256
                 ),
-                collection_target=request.ragCollectionTarget,
+                collection_target=collection_target,
             )
 
         async def _fetch_duplication_context() -> Optional[List[Dict[str, Any]]]:
@@ -1743,12 +1828,10 @@ async def fetch_batch_rag_context(
                     repository_generation_manifest_sha256=(
                         base_generation_receipt
                     ),
-                    collection_target=request.ragCollectionTarget,
+                    collection_target=collection_target,
                 )
             except Exception as dup_err:
-                if base_revision or base_generation_receipt:
-                    raise
-                logger.debug(f"Duplication search skipped: {dup_err}")
+                logger.debug("Duplication search skipped: %s", dup_err)
                 return None
 
         deterministic_task = asyncio.create_task(_fetch_deterministic_context())
@@ -1757,32 +1840,37 @@ async def fetch_batch_rag_context(
         # 1. Deterministic lookup FIRST — structural deps are highest-value context
         deterministic_response = await deterministic_task
         deterministic_error = _rag_response_error(deterministic_response)
-        if deterministic_error:
-            logger.warning(
-                "Deterministic RAG lookup returned a failed state: %s",
-                deterministic_error,
-            )
         deterministic_chunks = _flatten_deterministic_context(deterministic_response)
         _capture_deterministic_retrieval_state(
             deterministic_response,
             rag_state,
         )
-        if deterministic_error and exact_revision_bound:
-            raise RuntimeError(
-                "revision-bound deterministic RAG retrieval failed: "
-                f"{deterministic_error}"
-            )
         deterministic_retrieval_state = _deterministic_retrieval_state(
             deterministic_response
         )
-        if (
-            exact_revision_bound
-            and deterministic_retrieval_state != "complete"
-        ):
-            raise RuntimeError(
-                "revision-bound deterministic RAG retrieval is not complete: "
-                f"{deterministic_retrieval_state}"
+        context_error = (
+            deterministic_error
+            or (
+                f"deterministic retrieval state is {deterministic_retrieval_state}"
+                if exact_context_bound
+                and deterministic_retrieval_state != "complete"
+                else None
             )
+        )
+        if context_error:
+            if duplication_task is not None and not duplication_task.done():
+                duplication_task.cancel()
+            if duplication_task is not None:
+                await asyncio.gather(duplication_task, return_exceptions=True)
+            if _disable_rag_context(rag_state, context_error):
+                (logger.info if exact_context_bound else logger.warning)(
+                    "Optional %sRAG context is unavailable; disabling it for "
+                    "the remaining Stage 1 batches and continuing with local "
+                    "review evidence: %s",
+                    "revision-bound " if exact_context_bound else "",
+                    context_error,
+                )
+            return None
         if deterministic_chunks:
             context = {"relevant_code": deterministic_chunks}
             logger.info(
@@ -1805,11 +1893,6 @@ async def fetch_batch_rag_context(
             )
         elif semantic_fill_enabled and rag_state and rag_state.semantic_disabled:
             logger.info("Semantic RAG filler skipped: %s", rag_state.semantic_disable_reason)
-            if exact_revision_bound:
-                raise RuntimeError(
-                    "revision-bound semantic RAG retrieval is disabled after "
-                    f"a prior failure: {rag_state.semantic_disable_reason}"
-                )
         elif semantic_fill_enabled:
             try:
                 rag_response = await asyncio.wait_for(
@@ -1821,38 +1904,21 @@ async def fetch_batch_rag_context(
                     raise RuntimeError(semantic_error)
             except asyncio.TimeoutError:
                 rag_response = None
-                if rag_state:
-                    rag_state.semantic_failures += 1
-                    rag_state.semantic_disabled = True
-                    rag_state.semantic_disable_reason = (
-                        f"timed out after {SEMANTIC_RAG_TIMEOUT_SECONDS}s"
-                    )
-                logger.warning(
-                    "Semantic RAG filler timed out after %ss; disabling for remaining Stage 1 batches",
-                    SEMANTIC_RAG_TIMEOUT_SECONDS,
-                )
-                if exact_revision_bound:
-                    raise RuntimeError(
-                        "revision-bound semantic RAG retrieval timed out"
+                reason = f"timed out after {SEMANTIC_RAG_TIMEOUT_SECONDS}s"
+                if _disable_semantic_rag(rag_state, reason):
+                    logger.warning(
+                        "Semantic RAG filler timed out after %ss; disabling "
+                        "for remaining Stage 1 batches",
+                        SEMANTIC_RAG_TIMEOUT_SECONDS,
                     )
             except Exception as sem_err:
                 rag_response = None
-                if rag_state:
-                    rag_state.semantic_failures += 1
-                    rag_state.semantic_disabled = True
-                    rag_state.semantic_disable_reason = str(sem_err)
-                logger.warning("Semantic RAG filler failed; disabling for remaining Stage 1 batches: %s", sem_err)
-                if exact_revision_bound:
-                    raise
-
-        if (
-            semantic_fill_enabled
-            and exact_revision_bound
-            and rag_response is None
-        ):
-            raise RuntimeError(
-                "revision-bound semantic RAG retrieval returned no response"
-            )
+                if _disable_semantic_rag(rag_state, str(sem_err)):
+                    logger.warning(
+                        "Semantic RAG filler failed; disabling for remaining "
+                        "Stage 1 batches: %s",
+                        sem_err,
+                    )
 
         if semantic_fill > 0 and rag_response:
             sem_context = _unwrap_rag_context(rag_response)
@@ -1945,7 +2011,7 @@ async def fetch_batch_rag_context(
                         f"{rerank_result.original_count}→{rerank_result.reranked_count} chunks)"
                     )
                 except Exception as rerank_err:
-                    logger.warning(f"Per-batch reranking failed (non-critical): {rerank_err}")
+                    logger.info(f"Per-batch reranking skipped (non-critical): {rerank_err}")
 
             return context
 
@@ -1956,9 +2022,12 @@ async def fetch_batch_rag_context(
             duplication_task.cancel()
         if duplication_task is not None:
             await asyncio.gather(duplication_task, return_exceptions=True)
-        logger.warning(f"Failed to fetch per-batch RAG context: {e}")
-        if exact_revision_bound:
-            raise
+        if _disable_rag_context(rag_state, str(e)):
+            logger.warning(
+                "Failed to fetch optional per-batch RAG context; disabling it "
+                "for the remaining Stage 1 batches: %s",
+                e,
+            )
         return None
 
 
@@ -2204,7 +2273,7 @@ async def execute_stage_1_file_reviews(
             else:
                 logger.info(f"Batch {batch_num} completed: no issues found")
         except Exception as exc:
-            logger.error(f"Error reviewing Stage 1 batch: {exc}")
+            logger.debug("Stage 1 batch failed; cancelling sibling batches: %s", exc)
             for task in tasks:
                 if not task.done():
                     task.cancel()
@@ -2268,7 +2337,7 @@ async def _review_batch_with_timing(
         return result
     except Exception as e:
         elapsed = time.time() - start_time
-        logger.error(f"[Batch {batch_idx}] FAILED after {elapsed:.2f}s: {e}")
+        logger.debug(f"[Batch {batch_idx}] FAILED after {elapsed:.2f}s: {e}")
         raise
 
 
@@ -2401,7 +2470,11 @@ async def review_file_batch(
         str, tuple[Dict[str, Any], ...]
     ] = {}
 
-    if rag_client or _is_exact_revision_bound(request, pr_indexed):
+    exact_context_bound = (
+        _is_exact_revision_bound(request, pr_indexed)
+        or _has_exact_base_binding(request)
+    )
+    if rag_client or exact_context_bound:
         batch_rag_context = await fetch_batch_rag_context(
             rag_client, request, batch_file_paths, batch_diff_snippets, pr_indexed,
             llm_reranker=llm_reranker,
@@ -2423,15 +2496,25 @@ async def review_file_batch(
             visible_evidence_by_id=batch_visible_evidence_by_id,
         )
     else:
-        resolved_fallback_rag_context = await _resolve_fallback_rag_context(
-            fallback_rag_context
+        fallback_context_allowed = not (
+            exact_context_bound
+            or (rag_state is not None and rag_state.context_disabled)
         )
-        if resolved_fallback_rag_context:
-            scoped_fallback_rag_context = _scope_fallback_rag_context_to_batch(
-                resolved_fallback_rag_context,
-                batch_file_paths,
+        if fallback_context_allowed:
+            resolved_fallback_rag_context = await _resolve_fallback_rag_context(
+                fallback_rag_context
             )
+            if resolved_fallback_rag_context:
+                scoped_fallback_rag_context = _scope_fallback_rag_context_to_batch(
+                    resolved_fallback_rag_context,
+                    batch_file_paths,
+                )
+            else:
+                scoped_fallback_rag_context = None
         else:
+            # Global fallback is alias/branch scoped and cannot satisfy an
+            # immutable generation receipt. It must not be awaited after an
+            # exact-context failure, because doing so could inject stale code.
             scoped_fallback_rag_context = None
 
         if scoped_fallback_rag_context:
@@ -2545,7 +2628,7 @@ async def review_file_batch(
         return issues
 
     if fallback_llm is not None and fallback_llm is not llm:
-        logger.warning(
+        logger.info(
             "Stage 1 batch failed with capped LLM for %s; retrying without output cap",
             batch_file_paths,
         )
@@ -2565,7 +2648,7 @@ async def review_file_batch(
             )
             return issues
 
-    logger.error(
+    logger.debug(
         "Batch review parse failure for %s after capped%s attempts. "
         "The batch will fail so missing results cannot be published as a clean review.",
         batch_file_paths,
@@ -2689,9 +2772,9 @@ async def _invoke_stage_1_batch_llm(
             result = await structured_llm.ainvoke(prompt)
             if result:
                 return _extract_calibrated_issues(result)
-            logger.warning("Structured output returned empty Stage 1 result for %s (%s)", batch_file_paths, label)
+            logger.debug("Structured output returned empty Stage 1 result for %s (%s)", batch_file_paths, label)
         except Exception as e:
-            logger.warning("Structured output failed for Stage 1 batch %s (%s): %s", batch_file_paths, label, e)
+            logger.debug("Structured output failed for Stage 1 batch %s (%s): %s", batch_file_paths, label, e)
     else:
         logger.info(
             "Structured output skipped for Stage 1 batch %s (%s); using prompt JSON parsing",
@@ -2705,7 +2788,7 @@ async def _invoke_stage_1_batch_llm(
         data = await parse_llm_response(content, FileReviewBatchOutput, llm)
         return _extract_calibrated_issues(data)
     except Exception as parse_err:
-        logger.warning("Stage 1 batch parse failed for %s (%s): %s", batch_file_paths, label, parse_err)
+        logger.debug("Stage 1 batch parse failed for %s (%s): %s", batch_file_paths, label, parse_err)
         return None
 
 

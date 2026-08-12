@@ -6,7 +6,7 @@ QA Documentation Orchestrator — Multi-Stage ULTRATHINKING Pipeline.
 - Stage 2: Cross-file impact analysis (how changes interact for testing)
 - Stage 3: Aggregation into polished QA document (or delta update for re-runs)
 
-Extends BaseOrchestrator for shared RAG, batching, and LLM infrastructure.
+Extends BaseOrchestrator for shared batching and LLM infrastructure.
 """
 import asyncio
 import json
@@ -57,10 +57,9 @@ class QaDocOrchestrator(BaseOrchestrator):
     def __init__(
         self,
         llm,
-        rag_client=None,
         event_callback: Optional[Callable[[Dict], None]] = None,
     ):
-        super().__init__(llm, rag_client, event_callback)
+        super().__init__(llm, event_callback)
 
     async def run(
         self,
@@ -132,10 +131,6 @@ class QaDocOrchestrator(BaseOrchestrator):
                 changed_file_paths=changed_file_paths or [],
                 previous_documentation=previous_documentation,
                 is_same_pr_rerun=is_same_pr_rerun,
-                workspace_slug=workspace_slug,
-                repo_slug=repo_slug,
-                pr_number=pr_number,
-                source_branch=source_branch,
             )
         else:
             logger.info(
@@ -188,25 +183,9 @@ class QaDocOrchestrator(BaseOrchestrator):
         changed_file_paths: List[str],
         previous_documentation: Optional[str],
         is_same_pr_rerun: bool,
-        workspace_slug: Optional[str],
-        repo_slug: Optional[str],
-        pr_number: Optional[int],
-        source_branch: Optional[str],
     ) -> str:
         """Execute the 3-stage ULTRATHINKING pipeline."""
         try:
-            # Index files into RAG if available
-            if self.rag_client and pr_number and workspace_slug and repo_slug:
-                await self.index_pr_files(
-                    workspace=workspace_slug,
-                    project=repo_slug,
-                    pr_number=pr_number,
-                    branch=source_branch or "unknown",
-                    enrichment_data=enrichment_data,
-                    changed_file_paths=changed_file_paths,
-                    diff=diff,
-                )
-
             # For same-PR re-runs, analyze the delta diff — but only if
             # it contains actual hunks (@@).  A delta that is truthy but
             # header-only (no @@) would starve the whole pipeline of context.
@@ -298,9 +277,6 @@ class QaDocOrchestrator(BaseOrchestrator):
                 placeholders=placeholders,
                 previous_documentation=previous_documentation,
             )
-        finally:
-            if workspace_slug and repo_slug:
-                await self.cleanup_pr_files(workspace_slug, repo_slug)
 
     # ── Stage 1: Batch Analysis ──────────────────────────────────────
 
