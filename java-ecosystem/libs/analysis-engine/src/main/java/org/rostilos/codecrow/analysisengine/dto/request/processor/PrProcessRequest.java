@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.analysisengine.dto.request.processor;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -53,6 +54,13 @@ public class PrProcessRequest implements AnalysisProcessRequest {
      */
     public String preAcquiredLockKey;
 
+    /**
+     * Server-owned identity of the accepted review attempt. It is intentionally
+     * excluded from ingress JSON and populated from the persisted outer Job.
+     */
+    @JsonIgnore
+    private String analysisRunKey;
+
 
     public Long getProjectId() {
         return projectId;
@@ -87,4 +95,13 @@ public class PrProcessRequest implements AnalysisProcessRequest {
     public String getPrDescription() { return prDescription; }
     
     public String getPreAcquiredLockKey() { return preAcquiredLockKey; }
+
+    @Override
+    public String getAnalysisRunKey() { return analysisRunKey; }
+
+    public void setAnalysisRunKey(String analysisRunKey) {
+        this.analysisRunKey = analysisRunKey == null || analysisRunKey.isBlank()
+                ? null
+                : analysisRunKey.trim();
+    }
 }

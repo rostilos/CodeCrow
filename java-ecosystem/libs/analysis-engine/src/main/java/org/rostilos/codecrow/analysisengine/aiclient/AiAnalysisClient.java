@@ -18,7 +18,12 @@ import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
+import java.util.HexFormat;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -227,7 +232,15 @@ public class AiAnalysisClient {
                             if (isPromptDryRunResult(finalResult)) {
                                 return finalResult;
                             }
-                            return extractAndValidateAnalysisData(finalResult);
+                            Map<String, Object> analysisData = new HashMap<>(
+                                    extractAndValidateAnalysisData(finalResult));
+                            // Persistence follows the durable accepted attempt, while the
+                            // fresh UUID remains local to this Redis delivery. Direct callers
+                            // without an outer Job retain the delivery UUID as a safe fallback.
+                            analysisData.put(
+                                    "analysisRunKey",
+                                    persistenceRunKey(request, jobId));
+                            return analysisData;
                         } else {
                             throw new IOException("AI service returned final event without a valid result payload");
                         }
@@ -281,6 +294,38 @@ public class AiAnalysisClient {
         } catch (Exception ex) {
             log.warn("Event handler threw exception: {}", ex.getMessage());
         }
+    }
+
+    /**
+     * Bind an accepted attempt to the provider-confirmed review snapshot. A
+     * recovered delivery of the same attempt and snapshot is idempotent; if the
+     * provider head moved before recovery, the newer snapshot cannot resolve to
+     * the older persisted result.
+     */
+    static String persistenceRunKey(AiAnalysisRequest request, String deliveryId) {
+        String acceptedAttempt = request.getAnalysisRunKey();
+        if (acceptedAttempt == null || acceptedAttempt.isBlank()) {
+            return deliveryId;
+        }
+        String identity = String.join(
+                "\0",
+                acceptedAttempt.trim(),
+                String.valueOf(request.getProjectId()),
+                String.valueOf(request.getPullRequestId()),
+                normalizedIdentityPart(request.getBaseCommitHash()),
+                normalizedIdentityPart(request.getCurrentCommitHash()),
+                normalizedIdentityPart(request.getAnalysisBehaviorDigest()));
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(identity.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
+    }
+
+    private static String normalizedIdentityPart(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private static long resolveInactivityTimeoutMillis() {
@@ -349,6 +394,11 @@ public class AiAnalysisClient {
         payload.put("taskHistoryContext", request.getTaskHistoryContext());
         payload.put("changedFiles", request.getChangedFiles());
         payload.put("deletedFiles", request.getDeletedFiles());
+        payload.put("fullPrChangedFiles", request.getFullPrChangedFiles());
+        payload.put("fullPrDeletedFiles", request.getFullPrDeletedFiles());
+        payload.put("pullRequestFileManifest", request.getPullRequestFileManifest());
+        payload.put("fullPrManifestComplete", request.getFullPrManifestComplete());
+        payload.put("prContextMaintenanceRequired", request.getPrContextMaintenanceRequired());
         payload.put("diffSnippets", request.getDiffSnippets());
         payload.put("targetBranchName", request.getTargetBranchName());
         payload.put("sourceBranchName", request.getSourceBranchName());

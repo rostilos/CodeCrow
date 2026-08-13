@@ -24,7 +24,9 @@ import java.util.Optional;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -85,7 +87,7 @@ class WebhookAsyncProcessorBranchGateTest {
         verify(jobService).skipJob(
                 org.mockito.ArgumentMatchers.eq(branchJob),
                 org.mockito.ArgumentMatchers.contains("Superseded"));
-        verify(handler, never()).handle(any(), any(), any());
+        verify(handler, never()).handle(any(), any(), any(), any());
         verify(jobService, never()).completeJob(any(Job.class));
         verify(ragOperationsService).deletePrFiles(project, 41);
     }
@@ -110,7 +112,7 @@ class WebhookAsyncProcessorBranchGateTest {
                 org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq(prJob),
                 any())).thenReturn(BranchAnalysisGateService.GateResult.READY);
-        when(handler.handle(any(), any(), any())).thenReturn(success);
+        when(handler.handle(any(), any(), any(), any())).thenReturn(success);
 
         processor.processWebhookInTransaction(
                 EVcsProvider.GITHUB, 1L, payload, handler, prJob);
@@ -120,7 +122,50 @@ class WebhookAsyncProcessorBranchGateTest {
                 org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq(prJob),
                 any());
-        ordered.verify(handler).handle(any(), any(), any());
+        ordered.verify(handler).handle(any(), any(), any(), any());
+    }
+
+    @Test
+    void persistedJobIdentityIsStableOnRecoveryAndDistinctForANewAttempt() {
+        Job recoveredJob = new Job();
+        ReflectionTestUtils.setField(recoveredJob, "id", 103L);
+        recoveredJob.setExternalId("accepted-attempt-1");
+        recoveredJob.setProject(project);
+        recoveredJob.setJobType(JobType.PR_ANALYSIS);
+        recoveredJob.setBranchName("main");
+
+        Job newAttempt = new Job();
+        ReflectionTestUtils.setField(newAttempt, "id", 104L);
+        newAttempt.setExternalId("accepted-attempt-2");
+        newAttempt.setProject(project);
+        newAttempt.setJobType(JobType.PR_ANALYSIS);
+        newAttempt.setBranchName("main");
+
+        WebhookPayload payload = new WebhookPayload(
+                EVcsProvider.GITHUB, "pull_request", "repo-id", "repo", "owner",
+                "42", "feature/two", "main", "head-2", null);
+        WebhookHandler.WebhookResult ignored = WebhookHandler.WebhookResult.ignored(
+                "identity captured");
+
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(branchAnalysisGateService.awaitDependencies(
+                org.mockito.ArgumentMatchers.eq(1L), any(Job.class), any()))
+                .thenReturn(BranchAnalysisGateService.GateResult.READY);
+        when(handler.handle(any(), any(), any(), any())).thenReturn(ignored);
+
+        // A recovery replays the same persisted Job; a new accepted request has
+        // a different Job and therefore a different analysis occurrence.
+        processor.processWebhookInTransaction(
+                EVcsProvider.GITHUB, 1L, payload, handler, recoveredJob);
+        processor.processWebhookInTransaction(
+                EVcsProvider.GITHUB, 1L, payload, handler, recoveredJob);
+        processor.processWebhookInTransaction(
+                EVcsProvider.GITHUB, 1L, payload, handler, newAttempt);
+
+        verify(handler, times(2)).handle(
+                eq(payload), eq(project), any(), eq("accepted-attempt-1"));
+        verify(handler).handle(
+                eq(payload), eq(project), any(), eq("accepted-attempt-2"));
     }
 
     @Test

@@ -55,19 +55,34 @@ def _log_plugin_diagnostics(scope: str, diagnostics: tuple[Any, ...]) -> None:
     )
 
 
+def _log_plugin_failure(scope: str, code: str, error: Exception) -> None:
+    """Record one fail-open plugin error without requiring plugin-owned types."""
+    record = {
+        "scope": scope,
+        "pluginId": "",
+        "code": code,
+        "message": f"{type(error).__name__}: {error}",
+    }
+    sink = _PLUGIN_DIAGNOSTIC_SINK.get()
+    if sink is not None:
+        sink(record)
+    logger.warning("Plugin %s failed open: %s", scope, record)
+
+
 def _require_complete_plugin_contribution(
     scope: str,
     diagnostics: tuple[Any, ...],
-) -> None:
-    """Stop prompt construction when selected plugin context is incomplete."""
+) -> bool:
+    """Report whether an optional plugin contribution is complete.
+
+    Review context and plan constraints enrich the host-owned review path.  A
+    plugin diagnostic must therefore omit only that contribution, rather than
+    aborting the complete diff review.
+    """
     if not diagnostics:
-        return
+        return True
     _log_plugin_diagnostics(scope, diagnostics)
-    summary = "; ".join(
-        f"{item.plugin_id or 'plugin'}:{item.code}: {item.message}"
-        for item in diagnostics[:10]
-    )
-    raise RuntimeError(f"Plugin {scope} contribution is incomplete: {summary}")
+    return False
 
 
 def _bounded_lines(lines: list[str], max_chars: int) -> str:
@@ -265,8 +280,16 @@ def apply_plugin_file_policy(
     """Apply selected neutral file-policy contributions to the hunk manifest."""
     if processed_diff is None:
         return None
-    host = _plugin_host()
-    capabilities = resolve_project_capabilities(request)
+    try:
+        host = _plugin_host()
+        capabilities = resolve_project_capabilities(request)
+    except Exception as error:
+        _log_plugin_failure(
+            "file policy",
+            "plugin-file-policy-setup-exception",
+            error,
+        )
+        return processed_diff
     if host is None or capabilities is None:
         return processed_diff
 
@@ -276,10 +299,20 @@ def apply_plugin_file_policy(
     _, runtime, _ = host
     newly_skipped = 0
     for diff_file in processed_diff.files:
-        disposition = runtime.file_disposition(
-            diff_file.path.lstrip("/"),
-            capabilities,
-        )
+        try:
+            disposition = runtime.file_disposition(
+                diff_file.path.lstrip("/"),
+                capabilities,
+            )
+        except Exception as error:
+            _log_plugin_failure(
+                "file policy",
+                "plugin-file-policy-exception",
+                error,
+            )
+            # Reviewing the file is the safe fallback: an optional plugin must
+            # never turn a valid source hunk into a failed or false-clean review.
+            continue
         diff_file.plugin_disposition = disposition.value
         if disposition not in {
             FileDisposition.EXCLUDED,
@@ -333,16 +366,25 @@ def review_plugin_context(
         Mapping[str, Sequence[Mapping[str, Any]]]
     ] = None,
 ) -> str:
-    host = _plugin_host()
-    capabilities = resolve_project_capabilities(request)
+    try:
+        host = _plugin_host()
+        capabilities = resolve_project_capabilities(request)
+    except Exception as error:
+        _log_plugin_failure("review", "plugin-review-setup-exception", error)
+        return ""
     if host is None or capabilities is None:
         return ""
     _, runtime, _ = host
-    contribution, diagnostics = runtime.review_contribution(
-        tuple(sorted({path.lstrip("/") for path in paths})),
-        capabilities,
-    )
-    _require_complete_plugin_contribution("review", diagnostics)
+    try:
+        contribution, diagnostics = runtime.review_contribution(
+            tuple(sorted({path.lstrip("/") for path in paths})),
+            capabilities,
+        )
+    except Exception as error:
+        _log_plugin_failure("review", "plugin-review-exception", error)
+        return ""
+    if not _require_complete_plugin_contribution("review", diagnostics):
+        return ""
     evidence_requests = contribution.evidence_requests
     hidden_request_count = 0
     if visible_evidence_by_id is not None and evidence_requests:
@@ -510,16 +552,33 @@ def apply_plugin_plan_constraints(
     request: ReviewRequestDto,
     repository_group_paths: Sequence[Sequence[str]] = (),
 ) -> Any:
-    host = _plugin_host()
-    capabilities = resolve_project_capabilities(request)
+    try:
+        host = _plugin_host()
+        capabilities = resolve_project_capabilities(request)
+    except Exception as error:
+        _log_plugin_failure(
+            "review planning",
+            "plugin-review-planning-setup-exception",
+            error,
+        )
+        return plan
     if host is None or capabilities is None:
         return plan
     _, runtime, _ = host
-    contribution, diagnostics = runtime.review_contribution(
-        tuple(sorted(set(request.changedFiles or []))),
-        capabilities,
-    )
-    _require_complete_plugin_contribution("review planning", diagnostics)
+    try:
+        contribution, diagnostics = runtime.review_contribution(
+            tuple(sorted(set(request.changedFiles or []))),
+            capabilities,
+        )
+    except Exception as error:
+        _log_plugin_failure(
+            "review planning",
+            "plugin-review-planning-exception",
+            error,
+        )
+        return plan
+    if not _require_complete_plugin_contribution("review planning", diagnostics):
+        return plan
     all_group_paths = (
         *contribution.group_paths,
         *tuple(tuple(paths) for paths in repository_group_paths),
@@ -571,8 +630,16 @@ def apply_plugin_validation_gate(
     deterministic_retrieval_states: Optional[Sequence[str]] = None,
     candidate_ledger: Optional[CandidateEvidenceLedger] = None,
 ) -> list[Any]:
-    host = _plugin_host()
-    capabilities = resolve_project_capabilities(request)
+    try:
+        host = _plugin_host()
+        capabilities = resolve_project_capabilities(request)
+    except Exception as error:
+        _log_plugin_failure(
+            "candidate validation",
+            "plugin-candidate-validation-setup-exception",
+            error,
+        )
+        return issues
     if host is None or capabilities is None or not issues:
         return issues
     _, runtime, _ = host
@@ -624,7 +691,12 @@ def apply_plugin_validation_gate(
             facts, diagnostics = runtime.graph_facts(artifact, capabilities)
             _log_plugin_diagnostics("validation graph facts", diagnostics)
             all_facts.update(facts)
-        except ValueError:
+        except Exception as error:
+            _log_plugin_failure(
+                "validation graph facts",
+                "plugin-graph-facts-exception",
+                error,
+            )
             continue
 
     revision = next(
@@ -637,14 +709,21 @@ def apply_plugin_validation_gate(
         ),
         "unresolved-revision",
     )
-    handle = runtime.start_repository_analysis(capabilities, revision)
-    if handle.active and artifacts:
-        handle.ingest(tuple(sorted(artifacts, key=lambda artifact: artifact.path)))
-        analysis, diagnostics = handle.finish()
-        all_facts.update(
-            fact for packet in analysis.packets for fact in packet.facts
+    try:
+        handle = runtime.start_repository_analysis(capabilities, revision)
+        if handle.active and artifacts:
+            handle.ingest(tuple(sorted(artifacts, key=lambda artifact: artifact.path)))
+            analysis, diagnostics = handle.finish()
+            all_facts.update(
+                fact for packet in analysis.packets for fact in packet.facts
+            )
+            _log_plugin_diagnostics("repository validation", diagnostics)
+    except Exception as error:
+        _log_plugin_failure(
+            "repository validation",
+            "plugin-repository-validation-exception",
+            error,
         )
-        _log_plugin_diagnostics("repository validation", diagnostics)
 
     previous_open_ids = set()
     for previous in getattr(request, "previousCodeAnalysisIssues", None) or []:
@@ -755,7 +834,19 @@ def apply_plugin_validation_gate(
             evidence=tuple(sorted(claim_facts)),
             claim_kind=claim_kind,
         )
-        results, diagnostics = runtime.validate_with_diagnostics(claim, capabilities)
+        try:
+            results, diagnostics = runtime.validate_with_diagnostics(
+                claim,
+                capabilities,
+            )
+        except Exception as error:
+            _log_plugin_failure(
+                f"validation:{claim.path}",
+                "plugin-candidate-validation-exception",
+                error,
+            )
+            kept.append(issue)
+            continue
         _log_plugin_diagnostics(
             f"validation:{claim.path}",
             diagnostics,
@@ -780,12 +871,20 @@ def apply_plugin_validation_gate(
                     )),
                     claim_kind=inferred_kind,
                 )
-                inferred_results, inferred_diagnostics = (
-                    runtime.validate_with_diagnostics(
-                        inferred_claim,
-                        capabilities,
+                try:
+                    inferred_results, inferred_diagnostics = (
+                        runtime.validate_with_diagnostics(
+                            inferred_claim,
+                            capabilities,
+                        )
                     )
-                )
+                except Exception as error:
+                    _log_plugin_failure(
+                        f"inferred validation:{claim.path}",
+                        "plugin-inferred-validation-exception",
+                        error,
+                    )
+                    continue
                 _log_plugin_diagnostics(
                     f"inferred validation:{claim.path}",
                     inferred_diagnostics,

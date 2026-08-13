@@ -71,6 +71,11 @@ public class PipelineActionProcessor {
     ) throws GeneralSecurityException {
 
         try {
+            if (request instanceof PrProcessRequest prRequest && job != null) {
+                // The persisted Job identifies the accepted analysis attempt across
+                // process recovery. Redis queue delivery gets its own transient UUID.
+                prRequest.setAnalysisRunKey(job.getExternalId());
+            }
             Project project = projectService.getProjectWithConnections(request.getProjectId());
             boolean dependenciesGated = job != null;
             if (dependenciesGated) {

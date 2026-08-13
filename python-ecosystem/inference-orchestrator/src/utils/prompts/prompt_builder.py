@@ -180,7 +180,8 @@ class PromptBuilder:
     ) -> str:
         """
         Build prompt for Stage 1: Batch File Review.
-        In incremental mode, includes previous issues context and focuses on delta changes.
+        In incremental mode, focuses on delta changes. Historical issue prose is
+        deliberately excluded from discovery and reconciled after verification.
         When use_mcp_tools=True, appends MCP tool instructions.
         """
         files_context = ""
@@ -206,7 +207,8 @@ Current File Content (post-change; may be bounded when explicitly labelled):
 ## INCREMENTAL REVIEW MODE
 This is a follow-up review after the PR was updated with new commits.
 The diff above shows ONLY the changes since the last review - focus on these NEW changes.
-For any previous issues listed below, check if they are RESOLVED in the new changes.
+Do not infer the current state of earlier findings; discovery receives no historical
+issue prose. Current-head history reconciliation runs after fresh verification.
 """
 
         # Add PR-wide file list for cross-batch awareness
@@ -248,7 +250,6 @@ These rules refine evidence collection only. Report a finding only when supplied
             files_context=files_context,
             rag_context=rag_context or "(No additional codebase context available)",
             incremental_instructions=incremental_instructions,
-            previous_issues=previous_issues,
             pr_files_context=pr_files_context,
             deleted_files_context=deleted_files_context,
             task_context=task_context or "No task context available.",

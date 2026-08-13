@@ -9,6 +9,7 @@ import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitDiffAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitRangeDiffAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestChangeManifestAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestDiffAction;
 import org.rostilos.codecrow.vcsclient.model.*;
 import org.slf4j.Logger;
@@ -912,6 +913,17 @@ public class BitbucketCloudClient implements VcsClient {
     }
 
     @Override
+    public VcsPullRequestChangeManifest getPullRequestChangeManifest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException {
+        return new GetPullRequestChangeManifestAction(httpClient)
+                .getPullRequestChangeManifest(
+                        workspaceId, repoIdOrSlug, pullRequestNumber);
+    }
+
+    @Override
     public String getCommitDiff(
             String workspaceId,
             String repoIdOrSlug,
@@ -1095,7 +1107,29 @@ public class BitbucketCloudClient implements VcsClient {
             String branchOrCommit,
             int maxFileSizeBytes
     ) throws IOException {
-        java.util.Map<String, String> results = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.Map<String, String> contents = new java.util.LinkedHashMap<>();
+        getFileContentResults(workspaceId, repoIdOrSlug, filePaths, branchOrCommit, maxFileSizeBytes)
+                .forEach((path, result) -> {
+                    if (result.available()) {
+                        contents.put(path, result.content());
+                    }
+                });
+        return contents;
+    }
+
+    @Override
+    public java.util.Map<String, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult> getFileContentResults(
+            String workspaceId,
+            String repoIdOrSlug,
+            java.util.List<String> filePaths,
+            String branchOrCommit,
+            int maxFileSizeBytes
+    ) throws IOException {
+        java.util.Map<String, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult> results =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        if (filePaths.isEmpty()) {
+            return results;
+        }
         
         // Use parallel stream with controlled concurrency
         int parallelism = Math.min(10, filePaths.size()); // Max 10 concurrent requests
@@ -1114,13 +1148,28 @@ public class BitbucketCloudClient implements VcsClient {
                             if (content != null) {
                                 int sizeBytes = content.getBytes(
                                         java.nio.charset.StandardCharsets.UTF_8).length;
-                                if (sizeBytes <= maxFileSizeBytes) {
-                                    results.put(path, content);
+                                if (content.indexOf('\0') >= 0) {
+                                    results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                                            path, sizeBytes,
+                                            org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.UNSUPPORTED,
+                                            "source contains binary data"));
+                                } else if (sizeBytes <= maxFileSizeBytes) {
+                                    results.put(path,
+                                            org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.available(path, content));
                                 } else {
                                     log.warn(
                                             "Full source for {} is {} bytes and exceeds the {} byte acquisition limit",
                                             path, sizeBytes, maxFileSizeBytes);
+                                    results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                                            path, sizeBytes,
+                                            org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.TOO_LARGE,
+                                            "source exceeds the acquisition limit"));
                                 }
+                            } else {
+                                results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                                        path, 0,
+                                        org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.FETCH_FAILED,
+                                        "provider returned no exact source"));
                             }
                             break; // Success, exit retry loop
                         } catch (IOException e) {
@@ -1137,6 +1186,10 @@ public class BitbucketCloudClient implements VcsClient {
                             } else if (retryCount >= maxRetries) {
                                 // Log and skip this file
                                 log.warn("Failed to fetch file {} after {} retries: {}", path, maxRetries, e.getMessage());
+                                results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                                        path, 0,
+                                        org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.FETCH_FAILED,
+                                        e.getMessage()));
                             }
                         }
                     }
@@ -1149,7 +1202,15 @@ public class BitbucketCloudClient implements VcsClient {
             customPool.shutdown();
         }
         
-        log.info("Batch fetched {}/{} files from Bitbucket", results.size(), filePaths.size());
+        filePaths.forEach(path -> results.putIfAbsent(path,
+                org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                        path, 0,
+                        org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.FETCH_FAILED,
+                        "exact source acquisition did not complete")));
+        long available = results.values().stream()
+                .filter(org.rostilos.codecrow.vcsclient.model.VcsFileContentResult::available)
+                .count();
+        log.info("Batch fetched {}/{} files from Bitbucket", available, filePaths.size());
         return results;
     }
 }

@@ -128,6 +128,17 @@ class TestBuildStage1:
         )
         assert "INCREMENTAL" in result
         assert "Delta Diff" in result
+        assert "Previous issue list" not in result
+        assert "discovery receives no historical" in result
+
+    def test_stage_1_does_not_force_duplicate_generation(self):
+        result = PromptBuilder.build_stage_1_batch_prompt(
+            files=[{"path": "a.py", "diff": "+x"}],
+            priority="MEDIUM",
+        )
+
+        assert "CROSS-MODULE / DUPLICATION CHECK" not in result
+        assert "repeated scheduled/background work" not in result
 
     def test_with_rag_context(self):
         files = [{"path": "a.py", "diff": "+x"}]
@@ -168,7 +179,7 @@ class TestBuildStage1:
             task_context="### Task: PROJ-1 — Add export",
         )
         assert "PROJ-1" in result
-        assert "Stage 2/Stage 3" in result
+        assert "Repository-level task coverage" in result
         assert "missing requirement" in result
 
     def test_stage_1_suppresses_pre_change_bug_already_fixed_by_diff(self):
@@ -186,23 +197,20 @@ class TestBuildStage1:
         assert "pre-change defect" in result
         assert "do not report that" in result
         assert "fix as an issue" in result
-        assert "must not say that the current diff already fixes" in result
-        assert "removed code alone does not qualify" in result
-        assert "only to an issue explicitly supplied" in result
-        assert "CURRENT-DEFECT CONTRACT FOR NEW FINDINGS" in result
-        assert "sole exception" in result
-        assert "historical codeSnippet" in result
-        assert "exempt from current-source snippet matching" in result
-        assert '"resolutionReason": null' in result
-        assert "INFO: do not create an issue" in result
-        assert "never create a new" in result
-        assert "informational issue" in result
+        assert "New discovery never resolves or" in result
+        assert '"isResolved": false' in result
+        assert "triggerCondition" in result
+        assert "causalPath" in result
+        assert "observableImpact" in result
+        assert "LOCAL_EXACT" in result
+        assert "contextRequests" in result
+        assert "previous OPEN issue" not in result
+        assert "resolutionReason" not in result
         assert '"claimKind"' in result
-        assert "exact plugin evidence class" in result
-        assert "exact bracketed fact kind" in result
-        assert "Anchor every new finding" in result
+        assert "plugin-governed claims" in result
+        assert "Anchor a local finding" in result
         assert "reviewable changed hunk" in result
-        assert "not a separate PR finding" in result
+        assert "not a replacement local anchor" in result
 
 
 class TestBuildStage2:

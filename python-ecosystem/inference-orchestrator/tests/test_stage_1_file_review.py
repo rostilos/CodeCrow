@@ -28,6 +28,7 @@ from service.review.orchestrator.stage_1_file_review import (
     _flatten_deterministic_context,
     _rag_context_has_chunks,
     Stage1RagState,
+    Stage1ContinuationAdmission,
     Stage1ReviewUnitState,
     fetch_batch_rag_context,
     execute_stage_1_file_reviews,
@@ -41,17 +42,87 @@ from service.review.orchestrator.stage_1_file_review import (
     _scope_deterministic_to_diff,
     _extract_calibrated_issues,
     _invoke_stage_1_batch_llm,
+    _bind_cross_file_request_origins,
+    _drop_matching_request_dependent_issues,
     create_smart_batches_wrapper,
 )
+from service.review.orchestrator.exact_context import ReviewFollowupBudget
 from model.multi_stage import (
     FileGroup,
     ReviewFile,
     FileReviewBatchOutput,
     FileReviewOutput,
+    ReviewContextRequest,
     ReviewPlan,
 )
 from model.output_schemas import CodeReviewIssue
 from utils.diff_processor import DiffChangeType, DiffFile, DiffProcessor, ProcessedDiff
+from utils.prompts.prompt_builder import PromptBuilder
+
+
+def _context_test_issue(path: str, title: str = "Candidate") -> CodeReviewIssue:
+    return CodeReviewIssue(
+        severity="MEDIUM",
+        category="BUG_RISK",
+        file=path,
+        line=1,
+        title=title,
+        reason="A concrete runtime failure remains.",
+        suggestedFixDescription="Correct the incompatible call.",
+        codeSnippet="changed_call()",
+    )
+
+
+@pytest.mark.asyncio
+async def test_continuation_admission_uses_batch_order_not_response_timing():
+    budget = ReviewFollowupBudget(max_calls=1)
+    admission = Stage1ContinuationAdmission(3, budget)
+
+    third = asyncio.create_task(admission.acquire(3, "batch-3"))
+    await asyncio.sleep(0)
+    second = asyncio.create_task(admission.acquire(2, "batch-2"))
+    await asyncio.sleep(0)
+    assert not second.done()
+    assert not third.done()
+
+    await admission.skip(1)
+    assert await asyncio.wait_for(second, timeout=1) is True
+    assert not third.done()
+
+    await admission.commit(2)
+    assert await asyncio.wait_for(third, timeout=1) is False
+    assert budget.summary()["entries"] == [{
+        "kind": "stage_1_exact_continuation",
+        "sourceKey": "batch-2",
+        "state": "committed",
+    }]
+
+
+def test_cross_file_request_keeps_host_bound_origin_after_candidate_withheld():
+    issue = _context_test_issue("src/api.py")
+    request = ReviewContextRequest(
+        requestId="ctx-1",
+        kind="CROSS_FILE",
+        question="Does src/client.py still call the changed API?",
+        targetPath="src/client.py",
+        relationship="src/api.py -> src/client.py call contract",
+        requiredEvidence="The exact current caller invocation.",
+        relatedIssueIndexes=[0],
+        originatingPaths=["untrusted/model/path.py"],
+    )
+
+    bound = _bind_cross_file_request_origins(
+        [request],
+        [issue],
+        ["src/api.py", "src/other.py"],
+    )
+
+    assert bound[0].originatingPaths == ["src/api.py"]
+    assert _drop_matching_request_dependent_issues(
+        [issue.model_copy()],
+        [issue],
+        bound,
+    ) == []
 
 
 # ── chunk_files ──────────────────────────────────────────────────
@@ -75,6 +146,35 @@ async def test_batch_llm_attempt_details_do_not_duplicate_owner_warning(caplog):
         record for record in caplog.records
         if record.levelno >= logging.WARNING
     ]
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_batch_output_cannot_omit_a_mandatory_file():
+    incomplete = FileReviewBatchOutput(reviews=[FileReviewOutput(
+        file="src/a.py",
+        analysis_summary="reviewed",
+        issues=[],
+        confidence="HIGH",
+    )])
+    llm = MagicMock()
+    structured = MagicMock()
+    structured.ainvoke = AsyncMock(return_value=incomplete)
+    llm.with_structured_output.return_value = structured
+
+    result = await _invoke_stage_1_batch_llm(
+        llm,
+        PromptBuilder.build_stage_1_batch_prompt(
+            files=[
+                {"path": "src/a.py", "diff": "+a"},
+                {"path": "src/b.py", "diff": "+b"},
+            ],
+            priority="MEDIUM",
+        ),
+        ["src/a.py", "src/b.py"],
+        "capped",
+    )
+
+    assert result is None
 
 
 class TestChunkFiles:
@@ -596,6 +696,12 @@ diff --git a/src/big.py b/src/big.py
         state.mark_completed(unit_ids[-1:])
         state.assert_complete()
         assert state.reviewed_hunk_ids == (diff_file.hunks[0].id,)
+        assert set(state.mandatory_unit_ids_by_hunk) == {
+            diff_file.hunks[0].id
+        }
+        assert state.mandatory_unit_ids_by_hunk[diff_file.hunks[0].id].startswith(
+            "sha256:"
+        )
 
     def test_duplicate_review_unit_assignment_fails_closed(self):
         file_info = ReviewFile(
@@ -1337,6 +1443,7 @@ class TestFetchBatchRagContext:
     async def test_semantic_timeout_disables_remaining_batches(self, monkeypatch):
         import service.review.orchestrator.stage_1_file_review as stage1
 
+        monkeypatch.setattr(stage1, "SEMANTIC_RAG_FILLER_ENABLED", True)
         monkeypatch.setattr(stage1, "SEMANTIC_RAG_TIMEOUT_SECONDS", 0.01)
 
         class Rag:
@@ -1380,7 +1487,14 @@ class TestFetchBatchRagContext:
         assert rag.semantic_calls == 1
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_semantic_transport_failure_disables_remaining_batches(self):
+    async def test_semantic_transport_failure_disables_remaining_batches(
+        self,
+        monkeypatch,
+    ):
+        import service.review.orchestrator.stage_1_file_review as stage1
+
+        monkeypatch.setattr(stage1, "SEMANTIC_RAG_FILLER_ENABLED", True)
+
         class Rag:
             def __init__(self):
                 self.semantic_calls = 0
@@ -1430,7 +1544,11 @@ class TestFetchBatchRagContext:
     async def test_concurrent_semantic_failures_emit_one_owner_warning(
         self,
         caplog,
+        monkeypatch,
     ):
+        import service.review.orchestrator.stage_1_file_review as stage1
+
+        monkeypatch.setattr(stage1, "SEMANTIC_RAG_FILLER_ENABLED", True)
         release = asyncio.Event()
 
         class Rag:
@@ -1720,7 +1838,14 @@ class TestFetchBatchRagContext:
         assert state.deterministic_retrieval_states == ["partial"]
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_exact_semantic_transport_failure_keeps_review_available(self):
+    async def test_exact_semantic_transport_failure_keeps_review_available(
+        self,
+        monkeypatch,
+    ):
+        import service.review.orchestrator.stage_1_file_review as stage1
+
+        monkeypatch.setattr(stage1, "SEMANTIC_RAG_FILLER_ENABLED", True)
+
         class Rag:
             async def get_deterministic_context(self, **kwargs):
                 return {

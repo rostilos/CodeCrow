@@ -24,7 +24,7 @@ from utils.diff_processor import (
     HunkDisposition,
     ProcessedDiff,
 )
-from utils.path_identity import repository_paths_match
+from utils.path_identity import normalize_repository_path, repository_paths_match
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -946,6 +946,48 @@ def _anchor_overlaps_reviewable_hunk(
     ))
 
 
+def is_summary_only_change_compatibility_candidate(
+    issue: CodeReviewIssue,
+    candidate_ledger: Optional[CandidateEvidenceLedger],
+) -> bool:
+    """Recognize the host-bound old-side exception to current-line anchoring."""
+    if candidate_ledger is None:
+        return False
+    record = candidate_ledger.record_for(issue)
+    if record is None or record.stage != "change_compatibility":
+        return False
+    try:
+        line = int(getattr(issue, "line", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    if line != 0 or str(getattr(issue, "scope", "") or "").upper() != "FILE":
+        return False
+    path = normalize_repository_path(_issue_field(issue, "file"))
+    anchor = _issue_field(issue, "codeSnippet")
+    anchor_facts = [
+        fact
+        for evidence_id in record.evidence_refs
+        for fact in record.visible_evidence_by_id.get(evidence_id, ())
+        if fact.get("kind") == "change_compatibility_anchor"
+    ]
+    if len(anchor_facts) != 1:
+        return False
+    fact = anchor_facts[0]
+    return bool(
+        path
+        and anchor
+        and path == normalize_repository_path(str(fact.get("path") or ""))
+        and anchor == str(fact.get("anchor") or "")
+        and tuple(sorted(fact.get("promptHunkIds") or ()))
+        == tuple(sorted(record.prompt_hunk_ids))
+        and any(
+            fact.get("kind") != "change_compatibility_anchor"
+            for evidence_id in record.evidence_refs
+            for fact in record.visible_evidence_by_id.get(evidence_id, ())
+        )
+    )
+
+
 def apply_candidate_provenance_gate(
     issues: List[CodeReviewIssue],
     request: ReviewRequestDto,
@@ -971,6 +1013,19 @@ def apply_candidate_provenance_gate(
                 "fresh review candidate has no generation provenance: "
                 f"{_issue_field(issue, 'file')}:{_issue_field(issue, 'line')}"
             )
+        if is_summary_only_change_compatibility_candidate(issue, candidate_ledger):
+            candidate_ledger.confirm_anchor_hunks(issue, record.prompt_hunk_ids)
+            if not set(record.evidence_refs).issubset(
+                record.visible_evidence_by_id
+            ):
+                candidate_ledger.reject(
+                    issue,
+                    gate="candidate_provenance",
+                    code="evidence_outside_generation_prompt",
+                )
+                continue
+            kept.append(issue)
+            continue
         if not record.review_unit_ids or not record.prompt_hunk_ids:
             candidate_ledger.reject(
                 issue,
@@ -1039,6 +1094,10 @@ def _drop_out_of_hunk_anchors(
         if (
             _issue_is_resolved(issue)
             or (issue_id and issue_id in historical_ids)
+            or is_summary_only_change_compatibility_candidate(
+                issue,
+                candidate_ledger,
+            )
             or _anchor_overlaps_reviewable_hunk(
                 issue,
                 processed_diff,
@@ -1074,6 +1133,12 @@ def _drop_unmatched_current_source_anchors(
     dropped_ids: List[str] = []
     for index, issue in enumerate(issues):
         if _issue_is_resolved(issue):
+            kept.append(issue)
+            continue
+        if is_summary_only_change_compatibility_candidate(
+            issue,
+            candidate_ledger,
+        ):
             kept.append(issue)
             continue
         issue_id = _issue_field(issue, "id").strip()

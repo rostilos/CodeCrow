@@ -34,11 +34,17 @@ class ProjectCapabilitySelectionServiceTest {
                 "workspace",
                 "repository",
                 "0123456789abcdef",
-                List.of("src/Thing.fixture", "generated/code/Proxy.fixture"));
+                List.of(
+                        "src/Thing.fixture",
+                        "generated/code/Proxy.fixture",
+                        "vendor/Legacy.fixture"));
 
         assertThat(plan.preliminaryCapabilities().repositoryPlugins())
                 .containsExactly("fixture-policy");
         assertThat(plan.enrichmentPaths()).containsExactly("src/Thing.fixture");
+        assertThat(plan.enrichmentDispositions()).containsExactlyInAnyOrderEntriesOf(Map.of(
+                "generated/code/Proxy.fixture", "generated",
+                "vendor/Legacy.fixture", "excluded"));
     }
 
     private static final class FixturePolicyPlugin implements FilePolicyPlugin {
@@ -61,7 +67,9 @@ class ProjectCapabilitySelectionServiceTest {
             return PluginOutcome.handled(
                     normalizedPath.startsWith("generated/")
                             ? FileDisposition.GENERATED
-                            : FileDisposition.FULL);
+                            : normalizedPath.startsWith("vendor/")
+                                    ? FileDisposition.EXCLUDED
+                                    : FileDisposition.FULL);
         }
     }
 }

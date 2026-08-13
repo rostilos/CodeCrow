@@ -4,7 +4,7 @@ from service.review.pr_evidence import (
     build_pr_evidence_ledger,
     gate_task_coverage_candidates,
 )
-from utils.diff_processor import DiffProcessor
+from utils.diff_processor import DiffChangeType, DiffFile, DiffProcessor, ProcessedDiff
 
 
 def _section(path: str, old: str, new: str) -> str:
@@ -304,6 +304,24 @@ def test_full_review_marks_a_truncated_hunk_excerpt_as_bounded():
     assert "Changed-line evidence status: BOUNDED" in ledger.full_pr_context
 
 
+def test_manifest_placeholder_without_patch_is_not_complete_evidence():
+    full_pr = ProcessedDiff(files=[DiffFile(
+        path="src/patchless.py",
+        change_type=DiffChangeType.MODIFIED,
+    )])
+
+    ledger = build_pr_evidence_ledger(
+        full_pr,
+        ProcessedDiff(files=[]),
+        incremental=False,
+        task_context={"task_summary": "Update patchless behavior"},
+    )
+
+    assert ledger.manifest_complete
+    assert not ledger.full_evidence_complete
+    assert "Changed-line evidence status: BOUNDED" in ledger.full_pr_context
+
+
 def test_full_review_allows_evidence_backed_gap_when_full_diff_fits():
     full_pr = DiffProcessor().process(
         _section(
@@ -335,6 +353,70 @@ def test_full_review_allows_evidence_backed_gap_when_full_diff_fits():
 
     assert ledger.full_evidence_complete
     assert result.kept == (issue,)
+
+
+def test_full_review_rejects_gap_when_provider_manifest_is_incomplete():
+    full_pr = DiffProcessor().process(
+        _section(
+            "app/Checkout/Config.php",
+            "enable_coupon_tracking();",
+            "disable_coupon_tracking();",
+        )
+    )
+    ledger = build_pr_evidence_ledger(
+        full_pr,
+        full_pr,
+        incremental=False,
+        provider_manifest_complete=False,
+        task_context={"task_summary": "Coupon tracking must remain enabled"},
+    )
+    issue = _coverage_issue(refs=[next(iter(ledger.evidence_by_ref))])
+
+    result = gate_task_coverage_candidates(
+        [issue],
+        incremental=False,
+        task_context={"task_summary": "Coupon tracking must remain enabled"},
+        previous_issue_ids=[],
+        ledger=ledger,
+    )
+
+    assert not ledger.manifest_complete
+    assert not ledger.full_evidence_complete
+    assert result.kept == ()
+    assert result.rejected[0][1] == "full_pr_manifest_incomplete"
+
+
+def test_incremental_review_rejects_regression_when_provider_manifest_is_incomplete():
+    removal_delta = DiffProcessor().process(
+        _section(
+            "app/Tracking/Coupon.php",
+            "record_coupon_tracking();",
+            "return;",
+        )
+    )
+    ledger = build_pr_evidence_ledger(
+        removal_delta,
+        removal_delta,
+        incremental=True,
+        provider_manifest_complete=False,
+        task_context={"task_summary": "Coupon tracking"},
+    )
+    issue = _coverage_issue(
+        refs=[next(iter(ledger.delta_removal_refs))],
+        regression=True,
+    )
+
+    result = gate_task_coverage_candidates(
+        [issue],
+        incremental=True,
+        task_context={"task_summary": "Coupon tracking"},
+        previous_issue_ids=[],
+        ledger=ledger,
+    )
+
+    assert not ledger.manifest_complete
+    assert result.kept == ()
+    assert result.rejected[0][1] == "full_pr_manifest_incomplete"
 
 
 def test_gate_is_independent_of_rag_and_suppresses_claim_without_task_context():

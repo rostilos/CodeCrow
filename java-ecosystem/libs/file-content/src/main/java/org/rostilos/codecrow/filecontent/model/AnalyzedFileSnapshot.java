@@ -10,9 +10,10 @@ import java.time.OffsetDateTime;
 /**
  * A snapshot linking a file to its content at a given commit.
  * <p>
- * For <b>PR analyses</b> the snapshot is keyed on {@code (pull_request_id, file_path)}
- * so that files accumulate across analysis iterations — the 2nd run adds/updates
- * only the changed files while all previously-seen files remain visible.
+ * For <b>PR analyses</b> the snapshot is keyed on {@code (pull_request_id, file_path)}.
+ * A provider-complete base-to-head manifest synchronizes the set on each run;
+ * degraded runs without a complete manifest retain the existing fail-open
+ * accumulation behavior.
  * <p>
  * For <b>branch analyses</b> the snapshot is keyed on {@code (branch_id, file_path)}
  * using the first-class Branch FK. This replaces the legacy approach that used
@@ -37,7 +38,7 @@ public class AnalyzedFileSnapshot {
     @JoinColumn(name = "analysis_id")
     private CodeAnalysis analysis;
 
-    /** Nullable — set for PR analyses. Files accumulate per PR across iterations. */
+    /** Nullable — set for PR analyses and synchronized per PR when the manifest is complete. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "pull_request_id")
     private PullRequest pullRequest;

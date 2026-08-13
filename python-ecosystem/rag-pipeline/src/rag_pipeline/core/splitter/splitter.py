@@ -12,6 +12,7 @@ This module provides true AST-aware code chunking that:
 
 import hashlib
 import logging
+import re
 from typing import List, Dict, Any, Optional, Set
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -1407,6 +1408,41 @@ class ASTCodeSplitter:
         
         if chunk.referenced_types:
             metadata['referenced_types'] = chunk.referenced_types
+
+        # Provider-neutral reverse navigation.  Store exact relationship
+        # values plus their identifier tokens so a later deletion/rename
+        # review can find current callers/importers without a semantic query.
+        # This remains navigation metadata only; callers must read source from
+        # the immutable reviewed revision before treating it as evidence.
+        relation_values = [
+            *chunk.imports,
+            *chunk.calls,
+            *chunk.extends,
+            *chunk.implements,
+            *chunk.referenced_types,
+        ]
+        reference_identifiers = []
+        for value in relation_values:
+            text = str(value or "").strip()
+            if not text:
+                continue
+            for candidate in (
+                text,
+                *re.findall(
+                    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+"
+                    r"[A-Za-z_$][A-Za-z0-9_$]*",
+                    text,
+                ),
+                *re.findall(r"[A-Za-z_$][A-Za-z0-9_$]*", text),
+            ):
+                if candidate not in reference_identifiers:
+                    reference_identifiers.append(candidate)
+                if len(reference_identifiers) >= 200:
+                    break
+            if len(reference_identifiers) >= 200:
+                break
+        if reference_identifiers:
+            metadata['reference_identifiers'] = reference_identifiers
         
         if chunk.variables:
             metadata['variables'] = chunk.variables

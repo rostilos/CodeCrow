@@ -49,6 +49,7 @@ import java.util.stream.Collectors;
 
 import org.rostilos.codecrow.analysisengine.util.DiffFingerprintUtil;
 import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
+import org.rostilos.codecrow.analysisengine.util.ReviewAnalysisBehavior;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.model.VcsCommit;
@@ -212,9 +213,10 @@ public class PullRequestAnalysisProcessor {
 
             AiAnalysisRequest aiRequest = aiRequests.get(0);
             String diffFingerprint = computeReviewIdentity(aiRequest);
+            String analysisBehaviorDigest = ReviewAnalysisBehavior.digestFor(aiRequest);
             boolean promptDryRun = PromptDryRunMode.isEnabledForProject(project.getId());
 
-            if (!promptDryRun) {
+            if (!promptDryRun && canReuseResultCache(aiRequest)) {
                 CacheHitType cacheHit = postAnalysisCacheIfExist(
                         project, pullRequest, request.getCommitHash(), request.getPullRequestId(),
                         reportingService, request.getPlaceholderCommentId(), request.getTargetBranchName(),
@@ -236,9 +238,13 @@ public class PullRequestAnalysisProcessor {
                             AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
                     return Map.of("status", "cached_by_fingerprint", "cached", true);
                 }
-            } else {
+            } else if (promptDryRun) {
                 log.warn(
                         "Prompt dry run bypassing analysis caches for project={}, PR={}",
+                        project.getId(), request.getPullRequestId());
+            } else {
+                log.debug(
+                        "Bypassing PR result caches for project={}, PR={} so full-head context maintenance runs",
                         project.getId(), request.getPullRequestId());
             }
 
@@ -263,15 +269,19 @@ public class PullRequestAnalysisProcessor {
 
             // === Extract file contents from enrichment data for line hash computation ===
             Map<String, String> fileContents = new java.util.HashMap<>(extractFileContents(aiRequest));
-            java.util.Set<String> allChangedFiles = new java.util.HashSet<>(aiRequest.getChangedFiles());
+            java.util.Set<String> allChangedFiles = new java.util.HashSet<>(
+                    aiRequest.getFullPrChangedFiles() != null
+                            ? aiRequest.getFullPrChangedFiles()
+                            : aiRequest.getChangedFiles());
 
             // === VCS fallback: when enrichment data is empty (disabled, failed, or
             // provider-specific),
             // fetch file contents directly from VCS to ensure source viewer always has data
             // ===
-            if (fileContents.isEmpty()) {
+            if (fileContents.isEmpty() && !aiRequest.getFullPrManifestComplete()) {
                 log.info(
-                        "Enrichment file contents empty — falling back to direct VCS file fetch for PR {} (project={})",
+                        "Enrichment file contents empty without a complete provider manifest — "
+                                + "falling back to direct VCS file fetch for PR {} (project={})",
                         request.getPullRequestId(), project.getId());
                 fileContents = fetchFileContentsFromVcs(project, new java.util.ArrayList<>(allChangedFiles),
                         request.getCommitHash());
@@ -292,7 +302,9 @@ public class PullRequestAnalysisProcessor {
                     diffFingerprint,
                     fileContents,
                     taskContextValue(aiRequest, "task_key", "taskKey", "key"),
-                    taskContextValue(aiRequest, "task_summary", "taskSummary", "summary"));
+                    taskContextValue(aiRequest, "task_summary", "taskSummary", "summary"),
+                    aiRequest.getBaseCommitHash(),
+                    analysisBehaviorDigest);
 
             persistTaskImplementationEvidence(newAnalysis, aiResponse.get("taskEvidence"));
 
@@ -308,32 +320,40 @@ public class PullRequestAnalysisProcessor {
             }
 
             // === Persist file snapshots at PR level for the source code viewer ===
-            // Accumulates across iterations: 2nd run adds new files, keeps old ones.
             try {
-                fileSnapshotService.persistSnapshotsForPr(pullRequest, newAnalysis, fileContents,
-                        request.getCommitHash());
+                if (aiRequest.getFullPrManifestComplete()) {
+                    fileSnapshotService.synchronizeSnapshotsForPr(
+                            pullRequest,
+                            newAnalysis,
+                            fileContents,
+                            request.getCommitHash(),
+                            aiRequest.getFullPrChangedFiles() != null
+                                    ? aiRequest.getFullPrChangedFiles()
+                                    : List.of());
+                } else {
+                    // Provider enrichment is optional. Without a complete
+                    // manifest, preserve accumulated snapshots rather than
+                    // treating missing paths as authoritative removals.
+                    fileSnapshotService.persistSnapshotsForPr(
+                            pullRequest, newAnalysis, fileContents, request.getCommitHash());
+                }
             } catch (Exception snapEx) {
                 log.warn("Failed to persist file snapshots (non-critical): {}", snapEx.getMessage());
             }
 
-            // === Deterministic PR issue tracking against previous iteration ===
+            // === Scoped all-run PR issue lineage after verified findings persist ===
             try {
-                if (previousAnalysis.isPresent()) {
-                    CodeAnalysis previous = previousAnalysis.get();
-                    boolean refreshedSameRecord = newAnalysis == previous
-                            || (newAnalysis.getId() != null && newAnalysis.getId().equals(previous.getId()));
-                    if (refreshedSameRecord) {
-                        log.debug("Skipping PR iteration tracking for refreshed analysis record {}",
-                                newAnalysis.getId());
-                    } else {
-                        Map<String, String> prevFileContents = fileSnapshotService.getFileContentsMap(
-                                previous.getId());
-                        prIssueTrackingService.trackPrIteration(
-                                newAnalysis, previous, fileContents, prevFileContents);
-                    }
+                CodeAnalysis previous = previousAnalysis.orElse(null);
+                boolean refreshedSameRecord = previous != null && (newAnalysis == previous
+                        || (newAnalysis.getId() != null && newAnalysis.getId().equals(previous.getId())));
+                if (refreshedSameRecord) {
+                    log.debug("Skipping PR lineage for refreshed analysis record {}", newAnalysis.getId());
+                } else {
+                    prIssueTrackingService.trackPrIteration(
+                            newAnalysis, previous, fileContents, Collections.emptyMap());
                 }
             } catch (Exception trackEx) {
-                log.warn("PR issue tracking failed (non-critical): {}", trackEx.getMessage());
+                log.warn("PR issue lineage failed (non-critical): {}", trackEx.getMessage());
             }
 
             // Ownership may have changed after persistence but before external
@@ -604,6 +624,7 @@ public class PullRequestAnalysisProcessor {
                 fingerprintHit.get(), project, request.getPullRequestId(),
                 request.getCommitHash(), request.getTargetBranchName(),
                 request.getSourceBranchName(), diffFingerprint);
+        reconcileCachedPrLineage(cloned);
         requireConfirmedLease(lockLease);
         copyTaskImplementationEvidence(fingerprintHit.get(), cloned);
         // Persist PR-level snapshots for the source code viewer
@@ -672,6 +693,7 @@ public class PullRequestAnalysisProcessor {
                     commitHashHit.get(), project, prId,
                     commitHash, targetBranch,
                     sourceBranch, commitHashHit.get().getDiffFingerprint());
+            reconcileCachedPrLineage(cloned);
             requireConfirmedLease(lockLease);
             copyTaskImplementationEvidence(commitHashHit.get(), cloned);
             // Persist PR-level snapshots for the source code viewer
@@ -692,6 +714,18 @@ public class PullRequestAnalysisProcessor {
             return CacheHitType.COMMIT_HASH;
         }
         return CacheHitType.NONE;
+    }
+
+    private void reconcileCachedPrLineage(CodeAnalysis cloned) {
+        try {
+            prIssueTrackingService.trackPrIteration(
+                    cloned, null, Collections.emptyMap(), Collections.emptyMap());
+        } catch (Exception e) {
+            // Lineage is presentation enrichment. A cache hit can still publish
+            // its verified current findings if history is temporarily unavailable.
+            log.warn("Cached PR lineage reconciliation failed for analysis {} (non-critical): {}",
+                    cloned.getId(), e.getMessage());
+        }
     }
 
     private void persistTaskImplementationEvidence(
@@ -744,6 +778,7 @@ public class PullRequestAnalysisProcessor {
 
     private Map<String, String> reviewIdentityInputs(AiAnalysisRequest request) {
         TreeMap<String, String> inputs = new TreeMap<>();
+        putIdentity(inputs, "analysisBehavior", ReviewAnalysisBehavior.digestFor(request));
         putIdentity(inputs, "baseCommit", request.getBaseCommitHash());
         putIdentity(inputs, "headCommit", request.getCurrentCommitHash());
         putIdentity(inputs, "previousCommit", request.getPreviousCommitHash());
@@ -786,6 +821,16 @@ public class PullRequestAnalysisProcessor {
 
     protected String computeReviewIdentity(AiAnalysisRequest request) {
         return DiffFingerprintUtil.compute(request.getRawDiff(), reviewIdentityInputs(request));
+    }
+
+    /**
+     * A cached result can only be published after the same execution has
+     * synchronized the provider-complete snapshot and Python current-head RAG
+     * overlay. Existing cache paths return before Python runs, so reuse remains
+     * disabled until those paths perform that maintenance themselves.
+     */
+    protected boolean canReuseResultCache(AiAnalysisRequest request) {
+        return false;
     }
 
     private static String sortedValues(List<String> values) {

@@ -359,7 +359,9 @@ class TestFormatDuplicationContext:
 
         evidence_id = rag_evidence_id(chunk)
         assert f"Evidence ID: {evidence_id}" in result
-        assert visible == {evidence_id: (visible_fact,)}
+        assert visible[evidence_id][0]["evidenceType"] == "prompt_code_chunk"
+        assert visible[evidence_id][0]["content"] == chunk["text"]
+        assert visible[evidence_id][1:] == (visible_fact,)
 
     def test_deduplication(self):
         results = [

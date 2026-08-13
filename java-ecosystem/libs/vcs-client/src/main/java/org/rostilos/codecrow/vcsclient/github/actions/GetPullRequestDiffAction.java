@@ -6,6 +6,7 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 import org.rostilos.codecrow.vcsclient.github.GitHubConfig;
+import org.rostilos.codecrow.vcsclient.model.VcsPullRequestChangeManifest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -103,9 +104,53 @@ public class GetPullRequestDiffAction {
             String repo,
             int pullRequestNumber
     ) throws IOException {
+        return fetchPullRequestFiles(owner, repo, pullRequestNumber).patches();
+    }
+
+    public VcsPullRequestChangeManifest getPullRequestChangeManifest(
+            String owner,
+            String repo,
+            int pullRequestNumber
+    ) throws IOException {
+        PullRequestFilesResult result = fetchPullRequestFiles(owner, repo, pullRequestNumber);
+        List<VcsPullRequestChangeManifest.Change> changes = new ArrayList<>();
+        boolean complete = result.paginationComplete();
+        for (PullRequestFilePatch patch : result.patches()) {
+            if (patch.filename().isBlank()) {
+                complete = false;
+                continue;
+            }
+            changes.add(new VcsPullRequestChangeManifest.Change(
+                    patch.filename(),
+                    patch.previousFilename(),
+                    changeKind(patch.status())));
+        }
+
+        // GitHub documents a hard ceiling of 3,000 entries for this endpoint.
+        // Reaching it is therefore ambiguous even when the final Link header is absent.
+        if (changes.size() >= 3_000) {
+            complete = false;
+        }
+        String receipt = "github:pull-files:pages=" + result.pages()
+                + ":entries=" + changes.size();
+        return new VcsPullRequestChangeManifest(
+                changes,
+                complete
+                        ? VcsPullRequestChangeManifest.Completeness.COMPLETE
+                        : VcsPullRequestChangeManifest.Completeness.INCOMPLETE,
+                receipt);
+    }
+
+    private PullRequestFilesResult fetchPullRequestFiles(
+            String owner,
+            String repo,
+            int pullRequestNumber
+    ) throws IOException {
         List<PullRequestFilePatch> patches = new ArrayList<>();
         String nextUrl = String.format("%s/repos/%s/%s/pulls/%d/files?per_page=100",
                 GitHubConfig.API_BASE, owner, repo, pullRequestNumber);
+        boolean paginationComplete = true;
+        int pages = 0;
 
         while (nextUrl != null) {
             Request req = new Request.Builder()
@@ -116,6 +161,7 @@ public class GetPullRequestDiffAction {
                     .build();
 
             try (Response resp = authorizedOkHttpClient.newCall(req).execute()) {
+                pages++;
                 if (!resp.isSuccessful()) {
                     String body = resp.body() != null ? resp.body().string() : "";
                     String msg = String.format("GitHub returned non-success response %d for files endpoint: %s", resp.code(), body);
@@ -125,6 +171,10 @@ public class GetPullRequestDiffAction {
 
                 String responseBody = resp.body() != null ? resp.body().string() : "[]";
                 JsonNode files = objectMapper.readTree(responseBody);
+                if (!files.isArray()) {
+                    paginationComplete = false;
+                    break;
+                }
 
                 for (JsonNode file : files) {
                     String filename = file.has("filename") ? file.get("filename").asText() : "";
@@ -142,13 +192,31 @@ public class GetPullRequestDiffAction {
                     Matcher matcher = LINK_NEXT_PATTERN.matcher(linkHeader);
                     if (matcher.find()) {
                         nextUrl = matcher.group(1);
+                    } else if (linkHeader.contains("rel=\"next\"")) {
+                        paginationComplete = false;
                     }
                 }
             }
         }
 
-        return List.copyOf(patches);
+        return new PullRequestFilesResult(List.copyOf(patches), paginationComplete, pages);
     }
+
+    private VcsPullRequestChangeManifest.ChangeKind changeKind(String status) {
+        return switch (status != null ? status.toLowerCase() : "") {
+            case "added" -> VcsPullRequestChangeManifest.ChangeKind.ADDED;
+            case "removed" -> VcsPullRequestChangeManifest.ChangeKind.DELETED;
+            case "renamed" -> VcsPullRequestChangeManifest.ChangeKind.RENAMED;
+            case "copied" -> VcsPullRequestChangeManifest.ChangeKind.COPIED;
+            case "modified", "changed" -> VcsPullRequestChangeManifest.ChangeKind.MODIFIED;
+            default -> VcsPullRequestChangeManifest.ChangeKind.UNKNOWN;
+        };
+    }
+
+    private record PullRequestFilesResult(
+            List<PullRequestFilePatch> patches,
+            boolean paginationComplete,
+            int pages) {}
 
     public record PullRequestFilePatch(
             String filename,

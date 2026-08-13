@@ -5,11 +5,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.service.PromptSanitizationService;
 import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
-import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
@@ -27,14 +28,12 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -116,21 +115,35 @@ class CommentCommandWebhookHandlerAnalyzeTest {
     }
 
     @Test
-    void normalAnalyzeRetainsCommandCacheShortcut() throws Exception {
-        CodeAnalysis cachedAnalysis = mock(CodeAnalysis.class);
-        when(cachedAnalysis.getId()).thenReturn(77L);
-        when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
-                .thenReturn(Optional.of(cachedAnalysis));
+    void normalAnalyzeRunsCompleteProcessorInsteadOfCommandCacheShortcut() throws Exception {
+        when(pullRequestAnalysisProcessor.process(any(), any(), eq(project)))
+                .thenReturn(Map.of("status", "completed"));
 
         WebhookResult result = handler.handle(analyzePayload(), project, events::add);
 
         assertThat(result.success()).isTrue();
-        assertThat(result.data())
-                .containsEntry("cached", true)
-                .containsEntry("analysisId", 77L);
         assertThat(events).anySatisfy(event ->
-                assertThat(event).containsEntry("state", "checking_cache"));
-        verify(pullRequestAnalysisProcessor, never()).process(any(), any(), any());
+                assertThat(event).containsEntry("state", "analysis_started"));
+        verify(codeAnalysisService, never()).getCodeAnalysisCache(
+                anyLong(), anyString(), anyLong());
+        verify(pullRequestAnalysisProcessor).process(any(), any(), eq(project));
+    }
+
+    @Test
+    void analyzeForwardsThePersistedCommandJobIdentity() throws Exception {
+        when(pullRequestAnalysisProcessor.process(any(), any(), eq(project)))
+                .thenReturn(Map.of("status", "completed"));
+
+        WebhookResult result = handler.handle(
+                analyzePayload(), project, events::add, "comment-attempt-42");
+
+        assertThat(result.success()).isTrue();
+        ArgumentCaptor<PrProcessRequest> request =
+                ArgumentCaptor.forClass(PrProcessRequest.class);
+        verify(pullRequestAnalysisProcessor).process(
+                request.capture(), any(), eq(project));
+        assertThat(request.getValue().getAnalysisRunKey())
+                .isEqualTo("comment-attempt-42");
     }
 
     private WebhookPayload analyzePayload() {

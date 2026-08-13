@@ -6,6 +6,7 @@ import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import org.rostilos.codecrow.vcsclient.model.VcsPullRequestChangeManifest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -88,6 +89,54 @@ class GitLabDiffApiTest {
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("404")
                     .hasMessageContaining("Not found");
+        }
+    }
+
+    @Test
+    void manifestUsesExpectedCountAndIncludesPatchlessEntries() throws Exception {
+        try (MockWebServer gitLab = new MockWebServer()) {
+            gitLab.enqueue(jsonResponse("{\"changes_count\":\"2\"}"));
+            gitLab.enqueue(jsonResponse("""
+                    [{
+                      "old_path": "src/App.java",
+                      "new_path": "src/App.java",
+                      "diff": ""
+                    }, {
+                      "old_path": "src/Old.java",
+                      "new_path": "src/New.java",
+                      "renamed_file": true
+                    }]
+                    """).setHeader("X-Total-Pages", "1"));
+            gitLab.start();
+
+            GitLabDiffApi diffs = new GitLabDiffApi(new GitLabApiContext(
+                    new OkHttpClient(), gitLab.url("/").toString()));
+            VcsPullRequestChangeManifest manifest =
+                    diffs.getMergeRequestChangeManifest("team", "repo", 17);
+
+            assertThat(manifest.isComplete()).isTrue();
+            assertThat(manifest.currentPaths())
+                    .containsExactly("src/App.java", "src/New.java");
+            assertThat(manifest.removedPaths()).containsExactly("src/Old.java");
+            assertThat(manifest.receipt()).contains("entries=2", "expected=2");
+        }
+    }
+
+    @Test
+    void truncatedExpectedCountMarksManifestIncomplete() throws Exception {
+        try (MockWebServer gitLab = new MockWebServer()) {
+            gitLab.enqueue(jsonResponse("{\"changes_count\":\"1000+\"}"));
+            gitLab.enqueue(jsonResponse("""
+                    [{"old_path":"src/App.java","new_path":"src/App.java"}]
+                    """).setHeader("X-Total-Pages", "1"));
+            gitLab.start();
+
+            GitLabDiffApi diffs = new GitLabDiffApi(new GitLabApiContext(
+                    new OkHttpClient(), gitLab.url("/").toString()));
+
+            assertThat(diffs.getMergeRequestChangeManifest("team", "repo", 17)
+                    .completeness())
+                    .isEqualTo(VcsPullRequestChangeManifest.Completeness.INCOMPLETE);
         }
     }
 

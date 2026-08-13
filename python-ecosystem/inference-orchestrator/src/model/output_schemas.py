@@ -97,6 +97,31 @@ class CodeReviewIssue(BaseModel):
             "other affected locations."
         ),
     )
+    triggerCondition: str = Field(
+        default="",
+        exclude=True,
+        description=(
+            "Internal causal evidence: the concrete runtime/input/state condition "
+            "that activates this defect. This is collected for verification and "
+            "is not part of the public issue contract."
+        ),
+    )
+    causalPath: str = Field(
+        default="",
+        exclude=True,
+        description=(
+            "Internal causal evidence: the shortest source-backed path from the "
+            "changed code to the harmful behavior. This is not public output."
+        ),
+    )
+    observableImpact: str = Field(
+        default="",
+        exclude=True,
+        description=(
+            "Internal causal evidence: the concrete externally observable failure "
+            "or incorrect state. This is not public output."
+        ),
+    )
 
     @field_validator('codeSnippet', mode='before')
     @classmethod

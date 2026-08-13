@@ -102,6 +102,15 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
     
     @Override
     public WebhookResult handle(WebhookPayload payload, Project project, Consumer<Map<String, Object>> eventConsumer) {
+        return handle(payload, project, eventConsumer, null);
+    }
+
+    @Override
+    public WebhookResult handle(
+            WebhookPayload payload,
+            Project project,
+            Consumer<Map<String, Object>> eventConsumer,
+            String analysisRunKey) {
         String eventType = payload.eventType();
         
         log.info("Handling Bitbucket Cloud PR event: {} for project {}", eventType, project.getId());
@@ -132,7 +141,7 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
                 return WebhookResult.ignored("Target branch '" + targetBranch + "' does not match configured analysis patterns");
             }
             
-            return handlePullRequestEvent(payload, project, eventConsumer);
+            return handlePullRequestEvent(payload, project, eventConsumer, analysisRunKey);
         } catch (Exception e) {
             log.error("Error processing {} event for project {}", eventType, project.getId(), e);
             return WebhookResult.error("Processing failed: " + e.getMessage());
@@ -140,7 +149,11 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
     }
 
     
-    private WebhookResult handlePullRequestEvent(WebhookPayload payload, Project project, Consumer<Map<String, Object>> eventConsumer) {
+    private WebhookResult handlePullRequestEvent(
+            WebhookPayload payload,
+            Project project,
+            Consumer<Map<String, Object>> eventConsumer,
+            String analysisRunKey) {
         String placeholderCommentId = null;
         String acquiredLockKey = null;
         
@@ -179,6 +192,7 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
             request.placeholderCommentId = placeholderCommentId;
             request.prAuthorId = payload.prAuthorId();
             request.prAuthorUsername = payload.prAuthorUsername();
+            request.setAnalysisRunKey(analysisRunKey);
             // Extract PR title/description for QA auto-doc task ID extraction
             if (payload.rawPayload() != null) {
                 request.prTitle = payload.rawPayload().path("pullrequest").path("title").asText(null);

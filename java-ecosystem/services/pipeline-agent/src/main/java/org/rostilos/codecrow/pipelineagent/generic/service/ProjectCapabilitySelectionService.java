@@ -106,7 +106,8 @@ public class ProjectCapabilitySelectionService {
 
         ProjectCapabilities preliminary = selector.select(
                 new RepositoryFacts(commit, List.copyOf(paths), markerContents));
-        List<String> enrichmentPaths = filterEnrichmentPaths(preliminary, changedFiles);
+        EnrichmentPathSelection enrichmentSelection = selectEnrichmentPaths(
+                preliminary, changedFiles);
         return new SelectionPlan(
                 commit,
                 List.copyOf(paths),
@@ -114,7 +115,8 @@ public class ProjectCapabilitySelectionService {
                 List.copyOf(patternMarkers),
                 consumed,
                 preliminary,
-                enrichmentPaths);
+                enrichmentSelection.paths(),
+                enrichmentSelection.dispositions());
     }
 
     /**
@@ -174,17 +176,29 @@ public class ProjectCapabilitySelectionService {
     public List<String> filterEnrichmentPaths(
             ProjectCapabilities capabilities,
             Collection<String> paths) {
-        if (paths == null || paths.isEmpty()) return List.of();
+        return selectEnrichmentPaths(capabilities, paths).paths();
+    }
+
+    private EnrichmentPathSelection selectEnrichmentPaths(
+            ProjectCapabilities capabilities,
+            Collection<String> paths) {
+        if (paths == null || paths.isEmpty()) {
+            return new EnrichmentPathSelection(List.of(), Map.of());
+        }
         TreeSet<String> retained = new TreeSet<>();
+        Map<String, String> dispositions = new LinkedHashMap<>();
         for (String path : paths) {
             String normalized = normalize(path);
             FileDisposition disposition = runtime.fileDisposition(normalized, capabilities);
-            if (disposition != FileDisposition.EXCLUDED
-                    && disposition != FileDisposition.GENERATED) {
+            if (disposition == FileDisposition.EXCLUDED) {
+                dispositions.put(normalized, "excluded");
+            } else if (disposition == FileDisposition.GENERATED) {
+                dispositions.put(normalized, "generated");
+            } else {
                 retained.add(normalized);
             }
         }
-        return List.copyOf(retained);
+        return new EnrichmentPathSelection(List.copyOf(retained), Map.copyOf(dispositions));
     }
 
     public PluginRegistry registry() {
@@ -205,7 +219,8 @@ public class ProjectCapabilitySelectionService {
             List<ContentPatternMarker> patternMarkers,
             int markerBytes,
             ProjectCapabilities preliminaryCapabilities,
-            List<String> enrichmentPaths) {
+            List<String> enrichmentPaths,
+            Map<String, String> enrichmentDispositions) {
         public SelectionPlan {
             if (commit == null || commit.isBlank()) {
                 throw new IllegalArgumentException("selection commit is required");
@@ -214,10 +229,16 @@ public class ProjectCapabilitySelectionService {
             markerContents = Map.copyOf(markerContents);
             patternMarkers = List.copyOf(patternMarkers);
             enrichmentPaths = List.copyOf(enrichmentPaths);
+            enrichmentDispositions = Map.copyOf(enrichmentDispositions);
             if (markerBytes < 0) throw new IllegalArgumentException("marker bytes cannot be negative");
             if (preliminaryCapabilities == null) {
                 throw new IllegalArgumentException("preliminary capabilities are required");
             }
         }
+    }
+
+    private record EnrichmentPathSelection(
+            List<String> paths,
+            Map<String, String> dispositions) {
     }
 }

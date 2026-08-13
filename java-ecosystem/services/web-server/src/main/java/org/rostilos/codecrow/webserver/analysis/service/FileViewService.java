@@ -174,7 +174,8 @@ public class FileViewService {
                         i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null,
                         i.getIssueScope() != null ? i.getIssueScope().name() : null,
                         i.getEndLineNumber(),
-                        i.getScopeStartLine()
+                        i.getScopeStartLine(),
+                        false
                 ))
                 .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
@@ -268,7 +269,8 @@ public class FileViewService {
                         i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null,
                         i.getIssueScope() != null ? i.getIssueScope().name() : null,
                         i.getEndLineNumber(),
-                        i.getScopeStartLine()
+                        i.getScopeStartLine(),
+                        false
                 ))
                 .collect(Collectors.toList());
 
@@ -343,7 +345,8 @@ public class FileViewService {
                         i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null,
                         i.getIssueScope() != null ? i.getIssueScope().name() : null,
                         i.getEndLineNumber(),
-                        i.getScopeStartLine()
+                        i.getScopeStartLine(),
+                        false
                 ))
                 .collect(Collectors.toList());
 
@@ -375,8 +378,9 @@ public class FileViewService {
             return Optional.empty();
         }
 
-        // Only show issues from the latest PR version (not accumulated across all iterations)
-        List<CodeAnalysisIssue> issues = codeAnalysisService.findIssuesByPrNumberLatestVersion(projectId, prNumber);
+        CodeAnalysisService.PrIssueHistoryProjection issueProjection =
+                codeAnalysisService.projectPrIssueHistory(projectId, prNumber);
+        List<CodeAnalysisIssue> issues = issueProjection.allActive();
         Map<String, List<CodeAnalysisIssue>> issuesByFile = issues.stream()
                 .filter(i -> i.getFilePath() != null)
                 .filter(FileViewService::hasTitle)
@@ -429,8 +433,11 @@ public class FileViewService {
         int lineCount = countLines(content);
         LineHashSequence lineHashes = LineHashSequence.from(content);
 
-        // Only show issues from the latest PR version (not accumulated across all iterations)
-        List<CodeAnalysisIssue> fileIssues = codeAnalysisService.findIssuesByPrNumberAndFilePathLatestVersion(projectId, prNumber, filePath);
+        CodeAnalysisService.PrIssueHistoryProjection issueProjection =
+                codeAnalysisService.projectPrIssueHistory(projectId, prNumber);
+        List<CodeAnalysisIssue> fileIssues = issueProjection.allActive().stream()
+                .filter(issue -> Objects.equals(filePath, issue.getFilePath()))
+                .toList();
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
                 .filter(FileViewService::hasTitle)
                 .filter(i -> !i.isResolved())
@@ -448,7 +455,8 @@ public class FileViewService {
                         i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null,
                         i.getIssueScope() != null ? i.getIssueScope().name() : null,
                         i.getEndLineNumber(),
-                        i.getScopeStartLine()
+                        i.getScopeStartLine(),
+                        issueProjection.isHistoricalNotRevalidated(i)
                 ))
                 .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
@@ -493,8 +501,11 @@ public class FileViewService {
             snippetLines.add(new FileSnippetResponse.SnippetLine(i, lineContent));
         }
 
-        // Only show issues from the latest PR version, filtered to the snippet range
-        List<CodeAnalysisIssue> allIssues = codeAnalysisService.findIssuesByPrNumberAndFilePathLatestVersion(projectId, prNumber, filePath);
+        CodeAnalysisService.PrIssueHistoryProjection issueProjection =
+                codeAnalysisService.projectPrIssueHistory(projectId, prNumber);
+        List<CodeAnalysisIssue> allIssues = issueProjection.allActive().stream()
+                .filter(issue -> Objects.equals(filePath, issue.getFilePath()))
+                .toList();
         int finalStartLine = startLine;
         int finalEndLine = endLine;
         List<FileViewResponse.InlineIssue> inlineIssues = allIssues.stream()
@@ -518,7 +529,8 @@ public class FileViewService {
                         i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null,
                         i.getIssueScope() != null ? i.getIssueScope().name() : null,
                         i.getEndLineNumber(),
-                        i.getScopeStartLine()
+                        i.getScopeStartLine(),
+                        issueProjection.isHistoricalNotRevalidated(i)
                 ))
                 .collect(Collectors.toList());
 
@@ -562,8 +574,11 @@ public class FileViewService {
             snippetLines.add(new FileSnippetResponse.SnippetLine(i, lineContent));
         }
 
-        // Only show issues from the latest PR version, filtered to the line range
-        List<CodeAnalysisIssue> allIssues = codeAnalysisService.findIssuesByPrNumberAndFilePathLatestVersion(projectId, prNumber, filePath);
+        CodeAnalysisService.PrIssueHistoryProjection issueProjection =
+                codeAnalysisService.projectPrIssueHistory(projectId, prNumber);
+        List<CodeAnalysisIssue> allIssues = issueProjection.allActive().stream()
+                .filter(issue -> Objects.equals(filePath, issue.getFilePath()))
+                .toList();
         int finalStart = startLine;
         int finalEnd = endLine;
         List<FileViewResponse.InlineIssue> inlineIssues = allIssues.stream()
@@ -587,7 +602,8 @@ public class FileViewService {
                         i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null,
                         i.getIssueScope() != null ? i.getIssueScope().name() : null,
                         i.getEndLineNumber(),
-                        i.getScopeStartLine()
+                        i.getScopeStartLine(),
+                        issueProjection.isHistoricalNotRevalidated(i)
                 ))
                 .collect(Collectors.toList());
 
@@ -714,7 +730,8 @@ public class FileViewService {
                         bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null,
                         bi.getIssueScope() != null ? bi.getIssueScope().name() : null,
                         bi.getCurrentEndLineNumber() != null ? bi.getCurrentEndLineNumber() : bi.getEndLineNumber(),
-                        bi.getCurrentScopeStartLine() != null ? bi.getCurrentScopeStartLine() : bi.getScopeStartLine()
+                        bi.getCurrentScopeStartLine() != null ? bi.getCurrentScopeStartLine() : bi.getScopeStartLine(),
+                        false
                 ))
                 .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
@@ -791,7 +808,8 @@ public class FileViewService {
                         bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null,
                         bi.getIssueScope() != null ? bi.getIssueScope().name() : null,
                         bi.getCurrentEndLineNumber() != null ? bi.getCurrentEndLineNumber() : bi.getEndLineNumber(),
-                        bi.getCurrentScopeStartLine() != null ? bi.getCurrentScopeStartLine() : bi.getScopeStartLine()
+                        bi.getCurrentScopeStartLine() != null ? bi.getCurrentScopeStartLine() : bi.getScopeStartLine(),
+                        false
                 ))
                 .collect(Collectors.toList());
 
@@ -861,7 +879,8 @@ public class FileViewService {
                         bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null,
                         bi.getIssueScope() != null ? bi.getIssueScope().name() : null,
                         bi.getCurrentEndLineNumber() != null ? bi.getCurrentEndLineNumber() : bi.getEndLineNumber(),
-                        bi.getCurrentScopeStartLine() != null ? bi.getCurrentScopeStartLine() : bi.getScopeStartLine()
+                        bi.getCurrentScopeStartLine() != null ? bi.getCurrentScopeStartLine() : bi.getScopeStartLine(),
+                        false
                 ))
                 .collect(Collectors.toList());
 

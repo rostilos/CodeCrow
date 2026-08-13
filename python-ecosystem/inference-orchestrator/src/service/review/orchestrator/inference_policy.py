@@ -40,7 +40,7 @@ OUTPUT_CAPS_ENABLED = _env_bool("REVIEW_OUTPUT_CAPS_ENABLED", True)
 OUTPUT_CAP_MODEL_KWARG = os.environ.get("REVIEW_OUTPUT_CAP_MODEL_KWARG", "").strip()
 FAST_CHECK_ENABLED = _env_bool("REVIEW_FAST_CHECK_ENABLED", True)
 STAGE_2_ENABLED = _env_bool("REVIEW_STAGE_2_ENABLED", True)
-LLM_DEDUP_ENABLED = _env_bool("REVIEW_LLM_DEDUP_ENABLED", True)
+LLM_DEDUP_ENABLED = False
 
 FAST_CHECK_MAX_FILES = _env_int("REVIEW_FAST_CHECK_MAX_FILES", 4)
 FAST_CHECK_MAX_CHANGED_LINES = _env_int("REVIEW_FAST_CHECK_MAX_CHANGED_LINES", 800)
@@ -53,12 +53,16 @@ MEDIUM_REVIEW_MAX_DIFF_BYTES = _env_int("REVIEW_MEDIUM_MAX_DIFF_BYTES", 450_000)
 FAST_CHECK_DEDUP_MAX_ISSUES = _env_int("REVIEW_FAST_CHECK_DEDUP_MAX_ISSUES", 5)
 
 DEFAULT_STAGE_OUTPUT_CAPS = {
-    "stage_0": {"small": 6_000, "medium": 8_000, "large": 12_000},
+    "stage_0": {"small": 4_000, "medium": 4_000, "large": 4_000},
+    # Discovery keeps the established headroom: reducing a model's maximum
+    # structured output creates truncation-driven false negatives on large packs.
     "stage_1": {"small": 20_000, "medium": 30_000, "large": 40_000},
-    "verification": {"small": 5_000, "medium": 8_000, "large": 12_000},
-    "stage_2": {"small": 11_000, "medium": 18_000, "large": 25_000},
-    "dedup": {"small": 3_000, "medium": 5_000, "large": 8_000},
-    "stage_3": {"small": 8_000, "medium": 12_000, "large": 18_000},
+    "verification": {"small": 3_000, "medium": 3_000, "large": 3_000},
+    "stage_2": {"small": 6_000, "medium": 6_000, "large": 6_000},
+    # Compatibility keys for non-PR callers. The PR review path no longer calls
+    # model semantic deduplication or Stage 3 aggregation.
+    "dedup": {"small": 3_000, "medium": 3_000, "large": 3_000},
+    "stage_3": {"small": 6_000, "medium": 6_000, "large": 6_000},
 }
 
 @dataclass(frozen=True)

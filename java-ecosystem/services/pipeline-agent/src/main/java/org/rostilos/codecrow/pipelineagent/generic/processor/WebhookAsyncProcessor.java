@@ -172,9 +172,11 @@ public class WebhookAsyncProcessor {
             
             // Create event consumer that logs to job
             log.info("Calling handler.handle for job {}", job.getExternalId());
-            WebhookHandler.WebhookResult result = handler.handle(payload, project, event ->
-                    logHandlerEvent(job, event)
-            );
+            WebhookHandler.WebhookResult result = handler.handle(
+                    payload,
+                    project,
+                    event -> logHandlerEvent(job, event),
+                    job.getExternalId());
             log.info("handler.handle completed for job {}, result status={}", job.getExternalId(), result.status());
             
             // Check if the webhook was ignored (e.g., branch not matching pattern, analysis disabled)

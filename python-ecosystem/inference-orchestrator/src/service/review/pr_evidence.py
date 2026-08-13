@@ -17,7 +17,13 @@ from dataclasses import dataclass
 import re
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
-from utils.diff_processor import DiffFile, DiffHunk, HunkDisposition, ProcessedDiff
+from utils.diff_processor import (
+    DiffChangeType,
+    DiffFile,
+    DiffHunk,
+    HunkDisposition,
+    ProcessedDiff,
+)
 
 
 STAGE_2_PR_EVIDENCE_CHAR_BUDGET = 24_000
@@ -294,6 +300,7 @@ def build_pr_evidence_ledger(
     review_diff: Optional[ProcessedDiff],
     *,
     incremental: bool,
+    provider_manifest_complete: bool = True,
     task_context: Optional[Dict[str, Any]] = None,
     pr_title: str = "",
     pr_description: str = "",
@@ -318,6 +325,7 @@ def build_pr_evidence_ledger(
             budget=full_budget,
             task_terms=task_terms,
             evidence_by_ref=evidence_by_ref,
+            provider_manifest_complete=provider_manifest_complete,
         )
     )
 
@@ -329,6 +337,7 @@ def build_pr_evidence_ledger(
             budget=delta_budget,
             task_terms=task_terms,
             evidence_by_ref=evidence_by_ref,
+            provider_manifest_complete=True,
         )
     else:
         delta_context = (
@@ -372,6 +381,7 @@ def _build_scope_context(
     budget: int,
     task_terms: Sequence[str],
     evidence_by_ref: Dict[str, PrLedgerEvidence],
+    provider_manifest_complete: bool,
 ) -> tuple[str, bool, bool, set[str]]:
     heading = (
         "FULL PR STATE LEDGER (base to current PR head)"
@@ -397,10 +407,13 @@ def _build_scope_context(
         ),
         "FILE MANIFEST:",
     ]
-    manifest_text, manifest_complete = _fit_lines(
+    manifest_text, rendered_manifest_complete = _fit_lines(
         manifest_header,
         manifest_lines,
         max(1_500, min(budget // 2, 9_000)),
+    )
+    manifest_complete = (
+        bool(provider_manifest_complete) and rendered_manifest_complete
     )
     if not manifest_complete:
         manifest_text += (
@@ -442,9 +455,19 @@ def _build_scope_context(
             if not diff_file.is_skipped
         )
     )
+    missing_text_evidence = any(
+        not diff_file.hunks
+        and not diff_file.is_skipped
+        and diff_file.change_type in {
+            DiffChangeType.ADDED,
+            DiffChangeType.MODIFIED,
+        }
+        for diff_file in processed_diff.files
+    )
     full_evidence_complete = (
         manifest_complete
         and no_compaction
+        and not missing_text_evidence
         and len(rendered_scope_evidence) == all_reviewable_hunks
         and all_evidence_rendered
     )

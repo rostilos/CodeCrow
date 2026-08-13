@@ -30,11 +30,13 @@ import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.model.VcsPullRequest;
+import org.rostilos.codecrow.vcsclient.model.VcsPullRequestChangeManifest;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.RestTemplate;
 
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
@@ -45,8 +47,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Test-side producer used by the deployed neutral replay.
@@ -145,6 +149,10 @@ class IsolatedReviewProducerReplayTest {
             assertThat(reviewRequest.getRagEnabled()).isFalse();
             assertThat(reviewRequest.getChangedFiles())
                     .containsExactlyElementsOf(new ArrayList<>(headFiles.keySet()));
+            assertThat(reviewRequest.getFullPrChangedFiles())
+                    .containsExactlyElementsOf(new ArrayList<>(headFiles.keySet()));
+            assertThat(reviewRequest.getFullPrManifestComplete()).isTrue();
+            assertThat(reviewRequest.getPrContextMaintenanceRequired()).isFalse();
             assertThat(reviewRequest.getProjectCapabilities())
                     .isNotNull();
             assertThat(reviewRequest.getProjectCapabilities()
@@ -180,6 +188,8 @@ class IsolatedReviewProducerReplayTest {
             assertThat(queuedRequest.path("currentCommitHash").asText())
                     .isEqualTo(headRevision);
             assertThat(queuedRequest.path("ragEnabled").asBoolean()).isFalse();
+            assertThat(queuedRequest.path("fullPrManifestComplete").asBoolean()).isTrue();
+            assertThat(queuedRequest.path("prContextMaintenanceRequired").asBoolean()).isFalse();
             assertThat(queuedRequest.path("aiApiKey").asText())
                     .isEqualTo("dry-run-provider-disabled");
             assertThat(queuedRequest.path("accessToken").isNull()).isTrue();
@@ -191,6 +201,96 @@ class IsolatedReviewProducerReplayTest {
                     objectMapper.writerWithDefaultPrettyPrinter()
                             .writeValueAsString(queued) + System.lineSeparator());
         }
+    }
+
+    @Test
+    void reacquiresImmutableDiffWhenNativeFallbackSeesANewerHead()
+            throws Exception {
+        String baseA = "a".repeat(40);
+        String headA = "b".repeat(40);
+        String baseB = "c".repeat(40);
+        String headB = "d".repeat(40);
+        String nativeDiff = diff("src/App.java", "native_unknown");
+        String confirmedDiff = diff("src/App.java", "confirmed_head_b");
+        AtomicInteger metadataCalls = new AtomicInteger();
+        AtomicInteger rangeCalls = new AtomicInteger();
+        VcsClient client = proxyVcsClient((method, arguments) -> switch (method.getName()) {
+            case "getPullRequest" -> metadataCalls.incrementAndGet() == 1
+                    ? pullRequest(baseA, headA)
+                    : pullRequest(baseB, headB);
+            case "getCommitRangeDiff" -> {
+                int call = rangeCalls.incrementAndGet();
+                if (call == 1) throw new IOException("first range unavailable");
+                assertThat(arguments[2]).isEqualTo(baseB);
+                assertThat(arguments[3]).isEqualTo(headB);
+                yield confirmedDiff;
+            }
+            case "getPullRequestDiff" -> nativeDiff;
+            case "getPullRequestChangeManifest" -> completeManifest("src/App.java");
+            default -> throw new UnsupportedOperationException(method.getName());
+        });
+
+        AiAnalysisRequest built = producer(client).buildAiAnalysisRequests(
+                project("snapshot-race"), processRequest(headA), Optional.empty())
+                .get(0);
+
+        assertThat(built.getCurrentCommitHash()).isEqualTo(headB);
+        assertThat(built.getRawDiff()).contains("confirmed_head_b");
+        assertThat(built.getFullPrManifestComplete()).isFalse();
+        assertThat(rangeCalls).hasValue(2);
+    }
+
+    @Test
+    void metadataConfirmationFailureKeepsNativeDiffButForcesFullReducedContext()
+            throws Exception {
+        String base = "a".repeat(40);
+        String head = "b".repeat(40);
+        String nativeDiff = diff("src/App.java", "native_snapshot");
+        AtomicInteger metadataCalls = new AtomicInteger();
+        VcsClient client = proxyVcsClient((method, arguments) -> switch (method.getName()) {
+            case "getPullRequest" -> {
+                if (metadataCalls.incrementAndGet() > 1) {
+                    throw new IOException("confirmation unavailable");
+                }
+                yield pullRequest(base, head);
+            }
+            case "getCommitRangeDiff" -> throw new IOException("range unavailable");
+            case "getPullRequestDiff" -> nativeDiff;
+            case "getPullRequestChangeManifest" -> completeManifest("src/App.java");
+            default -> throw new UnsupportedOperationException(method.getName());
+        });
+
+        AiAnalysisRequest built = producer(client).buildAiAnalysisRequests(
+                project("snapshot-confirmation"), processRequest(head), Optional.empty())
+                .get(0);
+
+        assertThat(built.getAnalysisMode()).isEqualTo(org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode.FULL);
+        assertThat(built.getPreviousCommitHash()).isNull();
+        assertThat(built.getRawDiff()).contains("native_snapshot");
+        assertThat(built.getFullPrManifestComplete()).isFalse();
+    }
+
+    @Test
+    void neverPublishesUnknownNativeDiffWhenConfirmedRangeReacquireFails() {
+        String baseA = "a".repeat(40);
+        String headA = "b".repeat(40);
+        String baseB = "c".repeat(40);
+        String headB = "d".repeat(40);
+        AtomicInteger metadataCalls = new AtomicInteger();
+        VcsClient client = proxyVcsClient((method, arguments) -> switch (method.getName()) {
+            case "getPullRequest" -> metadataCalls.incrementAndGet() == 1
+                    ? pullRequest(baseA, headA)
+                    : pullRequest(baseB, headB);
+            case "getCommitRangeDiff" -> throw new IOException("range unavailable");
+            case "getPullRequestDiff" -> diff("src/App.java", "unknown_snapshot");
+            case "getPullRequestChangeManifest" -> completeManifest("src/App.java");
+            default -> throw new UnsupportedOperationException(method.getName());
+        });
+
+        assertThatThrownBy(() -> producer(client).buildAiAnalysisRequests(
+                project("snapshot-reacquire"), processRequest(headA), Optional.empty()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("confirmed provider head");
     }
 
     private static Project project(String namespace) {
@@ -231,6 +331,70 @@ class IsolatedReviewProducerReplayTest {
         vcsBinding.setDefaultBranch(TARGET_BRANCH);
         project.setVcsRepoBinding(vcsBinding);
         return project;
+    }
+
+    private static SyntheticAiClientService producer(VcsClient client) {
+        return new SyntheticAiClientService(
+                new SyntheticTokenEncryptionService(),
+                new SyntheticVcsClientProvider(client),
+                new SyntheticEnrichmentService(Map.of(
+                        "src/App.java", "class App {}")),
+                null,
+                new PullRequestDiffPreparationService(
+                        new AnalysisLimitEnforcer()));
+    }
+
+    private static VcsPullRequest pullRequest(String base, String head) {
+        return new VcsPullRequest(
+                PULL_REQUEST_ID,
+                "Snapshot review",
+                "Pinned acquisition",
+                SOURCE_BRANCH,
+                TARGET_BRANCH,
+                base,
+                head,
+                "open",
+                false,
+                null);
+    }
+
+    private static VcsPullRequestChangeManifest completeManifest(String path) {
+        return new VcsPullRequestChangeManifest(
+                List.of(new VcsPullRequestChangeManifest.Change(
+                        path, "",
+                        VcsPullRequestChangeManifest.ChangeKind.MODIFIED)),
+                VcsPullRequestChangeManifest.Completeness.COMPLETE,
+                "synthetic:complete");
+    }
+
+    private static String diff(String path, String value) {
+        return "diff --git a/" + path + " b/" + path + "\n"
+                + "--- a/" + path + "\n"
+                + "+++ b/" + path + "\n"
+                + "@@ -1 +1 @@\n-old\n+" + value + "\n";
+    }
+
+    @FunctionalInterface
+    private interface VcsInvocation {
+        Object invoke(java.lang.reflect.Method method, Object[] arguments)
+                throws Throwable;
+    }
+
+    private static VcsClient proxyVcsClient(VcsInvocation invocation) {
+        return (VcsClient) java.lang.reflect.Proxy.newProxyInstance(
+                IsolatedReviewProducerReplayTest.class.getClassLoader(),
+                new Class<?>[]{VcsClient.class},
+                (proxy, method, arguments) -> {
+                    if (method.getDeclaringClass() == Object.class) {
+                        return switch (method.getName()) {
+                            case "toString" -> "SnapshotTestVcsClient";
+                            case "hashCode" -> System.identityHashCode(proxy);
+                            case "equals" -> proxy == arguments[0];
+                            default -> throw new UnsupportedOperationException(method.getName());
+                        };
+                    }
+                    return invocation.invoke(method, arguments);
+                });
     }
 
     private static PrProcessRequest processRequest(String headRevision) {
@@ -318,6 +482,17 @@ class IsolatedReviewProducerReplayTest {
                     }
                     if ("getPullRequestDiff".equals(method.getName())) {
                         return rawDiff;
+                    }
+                    if ("getPullRequestChangeManifest".equals(method.getName())) {
+                        return new VcsPullRequestChangeManifest(
+                                headFiles.keySet().stream()
+                                        .map(path -> new VcsPullRequestChangeManifest.Change(
+                                                path,
+                                                "",
+                                                VcsPullRequestChangeManifest.ChangeKind.MODIFIED))
+                                        .toList(),
+                                VcsPullRequestChangeManifest.Completeness.COMPLETE,
+                                "synthetic:complete");
                     }
                     throw new UnsupportedOperationException(
                             "unexpected synthetic VCS operation: "

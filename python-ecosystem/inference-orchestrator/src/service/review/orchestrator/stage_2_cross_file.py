@@ -82,6 +82,7 @@ async def execute_stage_2_cross_file(
         incremental=bool(
             request.analysisMode == "INCREMENTAL" and request.deltaDiff
         ),
+        provider_manifest_complete=(request.fullPrManifestComplete is True),
         task_context=(
             request.taskContext
             if isinstance(request.taskContext, dict)

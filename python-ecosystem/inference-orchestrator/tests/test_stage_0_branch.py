@@ -30,6 +30,63 @@ from utils.diff_processor import (
 
 class TestStage0Planning:
     @pytest.mark.asyncio(loop_scope="function")
+    async def test_planner_can_annotate_but_cannot_reduce_or_invent_coverage(self):
+        annotation = ReviewPlan(
+            analysis_summary="b.py has an input boundary",
+            file_groups=[FileGroup(
+                group_id="model-owned-group-is-ignored",
+                priority="CRITICAL",
+                rationale="annotation",
+                files=[
+                    ReviewFile(
+                        path="b.py",
+                        focus_areas=["VALIDATION"],
+                        risk_level="HIGH",
+                    ),
+                    ReviewFile(path="invented.py", risk_level="CRITICAL"),
+                ],
+            )],
+            files_to_skip=[],
+            cross_file_concerns=[
+                "Check a.py and b.py state propagation",
+                "Check src/invented.py contract",
+            ],
+        )
+        llm = MagicMock()
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(return_value=annotation)
+        llm.with_structured_output.return_value = structured
+        request = MagicMock(
+            changedFiles=["a.py", "b.py"],
+            enrichmentData=None,
+            taskContext=None,
+            projectVcsRepoSlug="repo",
+            pullRequestId=1,
+            prTitle="title",
+            prAuthor="author",
+            sourceBranchName="feature",
+            targetBranchName="main",
+            currentCommitHash="a" * 40,
+            commitHash="a" * 40,
+        )
+
+        result = await execute_stage_0_planning(llm, request)
+
+        files = [item for group in result.file_groups for item in group.files]
+        assert [item.path for item in files] == ["b.py", "a.py"]
+        assert {item.path for item in files} == {"a.py", "b.py"}
+        assert next(item for item in files if item.path == "b.py").focus_areas == [
+            "VALIDATION"
+        ]
+        assert next(item for item in files if item.path == "a.py").risk_level == "MEDIUM"
+        assert "invented.py" not in {item.path for item in files}
+        assert result.cross_file_concerns == [
+            "Check a.py and b.py state propagation"
+        ]
+        messages = structured.ainvoke.await_args.args[0]
+        assert [role for role, _ in messages] == ["system", "human"]
+
+    @pytest.mark.asyncio(loop_scope="function")
     async def test_returns_review_plan_from_structured_output(self):
         """Stage 0 should return a ReviewPlan when structured output succeeds."""
         expected_plan = ReviewPlan(
@@ -190,7 +247,7 @@ class TestStage0Planning:
         assert '"diff_was_limited": true' in prompt
         assert '"processed_skip_reason": "File too large: 999999 bytes > 1"' in prompt
         assert "+added_line()" in prompt
-        assert "FULL_DIFF_REVIEW" in prompt
+        assert "host, not you, owns coverage" in prompt
 
     def test_fallback_plan_skips_only_mechanically_unreviewable_files(self):
         request = MagicMock()

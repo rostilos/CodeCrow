@@ -7,6 +7,11 @@ Covers: _build_jvm_props, _build_pr_metadata, _emit_event, _create_llm,
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from model.dtos import (
+    PullRequestFileManifestDto,
+    PullRequestManifestChangeDto,
+    ReviewRequestDto,
+)
 from service.review.review_service import (
     ReviewService,
     allow_unbound_global_rag_fallback,
@@ -197,6 +202,87 @@ class TestReviewServiceRequestRag:
 
         assert result is None
         assert any(event.get("state") == "rag_skipped" for event in events)
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_manifest_only_pr_reaches_orchestrator_as_processed_evidence(
+        self,
+        service,
+        monkeypatch,
+    ):
+        request = ReviewRequestDto(
+            projectId=1,
+            projectVcsWorkspace="org",
+            projectVcsRepoSlug="repo",
+            projectWorkspace="org",
+            projectNamespace="repo",
+            aiProvider="test",
+            aiModel="test",
+            aiApiKey="test",
+            targetBranchName="main",
+            sourceBranchName="feature",
+            pullRequestId=42,
+            commitHash="head",
+            currentCommitHash="head",
+            baseCommitHash="base",
+            analysisType="PULL_REQUEST",
+            analysisMode="FULL",
+            rawDiff=None,
+            changedFiles=["src/new.py"],
+            deletedFiles=["src/old.py", "src/gone.py"],
+            prContextMaintenanceRequired=True,
+            fullPrManifestComplete=True,
+            pullRequestFileManifest=PullRequestFileManifestDto(
+                completeness="COMPLETE",
+                receipt="provider-complete",
+                changes=[
+                    PullRequestManifestChangeDto(
+                        path="src/new.py",
+                        previousPath="src/old.py",
+                        kind="RENAMED",
+                    ),
+                    PullRequestManifestChangeDto(
+                        path="src/gone.py",
+                        kind="DELETED",
+                    ),
+                ],
+            ),
+            ragEnabled=False,
+        )
+        client = MagicMock()
+        client.close_all_sessions = AsyncMock()
+        service._create_mcp_client = MagicMock(return_value=client)
+        service._create_llm = MagicMock(return_value=MagicMock())
+        orchestrator = MagicMock()
+        orchestrator.orchestrate_review = AsyncMock(return_value={
+            "comment": "reviewed",
+            "issues": [],
+        })
+        monkeypatch.setattr(
+            "service.review.review_service.os.path.exists",
+            lambda _path: True,
+        )
+        orchestrator_class = MagicMock(return_value=orchestrator)
+        monkeypatch.setattr(
+            "service.review.review_service.MultiStageReviewOrchestrator",
+            orchestrator_class,
+        )
+
+        result = await service._process_review(request)
+
+        assert result["result"]["comment"] == "reviewed"
+        call = orchestrator.orchestrate_review.await_args
+        review_scope = call.kwargs["processed_diff"]
+        full_scope = call.kwargs["full_pr_processed_diff"]
+        assert review_scope is not None
+        assert review_scope.files == []
+        assert full_scope is not None
+        assert {
+            (item.path, item.old_path, item.change_type.value)
+            for item in full_scope.files
+        } == {
+            ("src/new.py", "src/old.py", "renamed"),
+            ("src/gone.py", None, "deleted"),
+        }
 
 
 # ── _create_llm ──────────────────────────────────────────────────

@@ -169,6 +169,30 @@ class TestQueryRouterHelpers:
 # ─────────────────────────────────────────────────────────────
 class TestQueryRouterEndpoints:
 
+    def test_reverse_reference_request_normalizes_and_bounds_identifiers(self):
+        from pydantic import ValidationError
+        from rag_pipeline.api.models import DeterministicContextRequest
+
+        request = DeterministicContextRequest(
+            workspace="ws",
+            project="proj",
+            branches=["main"],
+            file_paths=["src/main.py"],
+            navigation_mode="REVERSE_REFERENCES",
+            reference_identifiers=[" LegacyApi ", "LegacyApi"],
+        )
+        assert request.reference_identifiers == ["LegacyApi"]
+
+        with pytest.raises(ValidationError):
+            DeterministicContextRequest(
+                workspace="ws",
+                project="proj",
+                branches=["main"],
+                file_paths=["src/main.py"],
+                navigation_mode="REVERSE_REFERENCES",
+                reference_identifiers=["x" * 301],
+            )
+
     @patch("rag_pipeline.api.routers.query._get_singletons")
     def test_semantic_search(self, mock_singletons):
         from rag_pipeline.api.routers.query import semantic_search
@@ -204,6 +228,11 @@ class TestQueryRouterEndpoints:
             project="proj",
             branches=["main"],
             file_paths=["src/main.py"],
+            navigation_mode="REVERSE_REFERENCES",
+            reference_identifiers=["LegacyApi"],
         )
         result = get_deterministic_context(request)
         assert "context" in result
+        kwargs = mock_query_service.get_deterministic_context.call_args.kwargs
+        assert kwargs["navigation_mode"] == "REVERSE_REFERENCES"
+        assert kwargs["reference_identifiers"] == ["LegacyApi"]

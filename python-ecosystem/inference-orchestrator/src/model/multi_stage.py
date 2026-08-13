@@ -8,7 +8,7 @@ These models are used for the multi-stage PR review process:
 """
 
 from typing import Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from model.output_schemas import CodeReviewIssue
 
@@ -19,15 +19,149 @@ class FileReviewOutput(BaseModel):
     analysis_summary: str
     issues: List[CodeReviewIssue] = Field(
         default_factory=list,
-        description="Current actionable defects plus matched previous-issue resolutions; omit successful fixes, praise, INFO notes, and speculative advice",
+        description=(
+            "Fresh current actionable defects only; omit historical issues, "
+            "successful fixes, praise, INFO notes, and speculative advice"
+        ),
     )
     confidence: str = Field(description="Confidence level (HIGH/MEDIUM/LOW)")
     note: str = Field(default="", description="Optional analysis note")
 
 
+class ReviewContextRequest(BaseModel):
+    """One falsifiable evidence request emitted by Stage 1 discovery."""
+
+    requestId: str = Field(
+        min_length=1,
+        max_length=80,
+        description="Batch-unique stable identifier, such as ctx-1.",
+    )
+    kind: str = Field(
+        default="LOCAL_EXACT",
+        description=(
+            "LOCAL_EXACT for one exact source lookup or CROSS_FILE for a "
+            "repository-interaction investigation handled by the next stage."
+        ),
+    )
+    question: str = Field(
+        min_length=8,
+        max_length=500,
+        description="A concrete question whose answer can confirm or reject a claim.",
+    )
+    targetPath: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="Repository-relative path when it is visible in supplied evidence.",
+    )
+    targetSymbol: Optional[str] = Field(
+        default=None,
+        max_length=300,
+        description="Exact symbol to locate when a path or range is not yet known.",
+    )
+    relationship: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="Specific caller/callee/import/contract relationship under test.",
+    )
+    requiredEvidence: str = Field(
+        min_length=8,
+        max_length=500,
+        description="The exact source fact that would confirm or refute the claim.",
+    )
+    startLine: Optional[int] = Field(default=None, ge=1)
+    endLine: Optional[int] = Field(default=None, ge=1)
+    relatedIssueIndexes: List[int] = Field(
+        default_factory=list,
+        max_length=20,
+        description=(
+            "Zero-based indexes in the flattened provisional issue list that "
+            "depend on this request."
+        ),
+    )
+    originatingPaths: List[str] = Field(
+        default_factory=list,
+        max_length=20,
+        exclude=True,
+        description=(
+            "Host-bound changed paths for an admitted CROSS_FILE request. "
+            "Model-supplied values are ignored."
+        ),
+    )
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def normalize_kind(cls, value) -> str:
+        normalized = str(value or "LOCAL_EXACT").strip().upper()
+        return normalized if normalized in {"LOCAL_EXACT", "CROSS_FILE"} else "LOCAL_EXACT"
+
+    @field_validator("requestId", "question", "requiredEvidence", mode="before")
+    @classmethod
+    def strip_required_text(cls, value) -> str:
+        return str(value or "").strip()
+
+    @field_validator("targetPath", "targetSymbol", "relationship", mode="before")
+    @classmethod
+    def strip_optional_text(cls, value):
+        normalized = str(value or "").strip()
+        return normalized or None
+
+    @field_validator("relatedIssueIndexes", mode="after")
+    @classmethod
+    def normalize_issue_indexes(cls, value: List[int]) -> List[int]:
+        return sorted({index for index in value if index >= 0})
+
+    @field_validator("originatingPaths", mode="after")
+    @classmethod
+    def normalize_originating_paths(cls, value: List[str]) -> List[str]:
+        return list(dict.fromkeys(
+            str(path).strip()
+            for path in value
+            if str(path).strip()
+        ))
+
+    @model_validator(mode="after")
+    def require_navigable_target(self):
+        if not (self.targetPath or self.targetSymbol or self.relationship):
+            raise ValueError(
+                "context request requires targetPath, targetSymbol, or relationship"
+            )
+        if (
+            self.startLine is not None
+            and self.endLine is not None
+            and self.endLine < self.startLine
+        ):
+            raise ValueError("context request endLine cannot precede startLine")
+        return self
+
+
 class FileReviewBatchOutput(BaseModel):
     """Stage 1 Output: Batch of file reviews."""
     reviews: List[FileReviewOutput] = Field(description="List of review results for the files in the batch")
+    contextRequests: List[ReviewContextRequest] = Field(
+        default_factory=list,
+        max_length=4,
+        description=(
+            "At most four falsifiable evidence requests. Do not request generic "
+            "context and do not repeat evidence already present in the prompt."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def require_unique_context_request_ids(self):
+        request_ids = [item.requestId for item in self.contextRequests]
+        if len(request_ids) != len(set(request_ids)):
+            raise ValueError("context request IDs must be unique within a batch")
+        issue_count = sum(len(review.issues) for review in self.reviews)
+        for request in self.contextRequests:
+            if not request.relatedIssueIndexes:
+                raise ValueError(
+                    "every context request must identify at least one provisional issue"
+                )
+            if any(index >= issue_count for index in request.relatedIssueIndexes):
+                raise ValueError(
+                    "context request references an out-of-range provisional issue"
+                )
+        return self
 
 
 class ReviewFile(BaseModel):

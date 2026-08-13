@@ -34,7 +34,41 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             "project.vcsBinding.vcsConnection",
             "project.aiBinding"
     })
-    Optional<CodeAnalysis> findByProjectIdAndCommitHashAndPrNumber(Long projectId, String commitHash, Long prNumber);
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = " +
+            "(SELECT ca2.id FROM CodeAnalysis ca2 WHERE ca2.project.id = :projectId " +
+            "AND ca2.commitHash = :commitHash AND ca2.prNumber = :prNumber " +
+            "ORDER BY ca2.createdAt DESC LIMIT 1)")
+    Optional<CodeAnalysis> findByProjectIdAndCommitHashAndPrNumber(
+            @Param("projectId") Long projectId,
+            @Param("commitHash") String commitHash,
+            @Param("prNumber") Long prNumber);
+
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
+            "issues",
+            "project",
+            "project.workspace",
+            "project.vcsBinding",
+            "project.vcsBinding.vcsConnection",
+            "project.aiBinding"
+    })
+    Optional<CodeAnalysis> findFirstByProjectIdAndCommitHashAndPrNumberAndBaseCommitHashAndAnalysisBehaviorDigestOrderByCreatedAtDescIdDesc(
+            Long projectId,
+            String commitHash,
+            Long prNumber,
+            String baseCommitHash,
+            String analysisBehaviorDigest);
+
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
+            "issues",
+            "project",
+            "project.workspace",
+            "project.vcsBinding",
+            "project.vcsBinding.vcsConnection",
+            "project.aiBinding"
+    })
+    Optional<CodeAnalysis> findByProjectIdAndAnalysisRunKey(
+            Long projectId,
+            String analysisRunKey);
 
     Optional<CodeAnalysis> findByProjectIdAndCommitHash(Long projectId, String commitHash);
     
@@ -168,6 +202,26 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
     Optional<CodeAnalysis> findTopByProjectIdAndCommitHash(
             @Param("projectId") Long projectId,
             @Param("commitHash") String commitHash);
+
+    /** Same commit fallback constrained to the current review behavior. */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
+            "issues",
+            "project",
+            "project.workspace",
+            "project.vcsBinding",
+            "project.vcsBinding.vcsConnection",
+            "project.aiBinding"
+    })
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = " +
+            "(SELECT ca2.id FROM CodeAnalysis ca2 WHERE ca2.project.id = :projectId " +
+            "AND ca2.commitHash = :commitHash " +
+            "AND ca2.analysisBehaviorDigest = :analysisBehaviorDigest " +
+            "AND ca2.status = org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.ACCEPTED " +
+            "ORDER BY ca2.createdAt DESC LIMIT 1)")
+    Optional<CodeAnalysis> findTopByProjectIdAndCommitHashAndAnalysisBehaviorDigest(
+            @Param("projectId") Long projectId,
+            @Param("commitHash") String commitHash,
+            @Param("analysisBehaviorDigest") String analysisBehaviorDigest);
 
     /**
      * Find PR-review analyses for a commit, newest first.

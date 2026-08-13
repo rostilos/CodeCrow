@@ -7,6 +7,7 @@ import java.util.Set;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.AnalysisScopeConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.vcsclient.model.VcsPullRequestChangeManifest;
 
 /**
  * Applies the effective analysis file scope to unified diffs and file sets.
@@ -68,6 +69,64 @@ public final class AnalysisScopeFilter {
             }
         }
         return excludedAny ? result.toString() : rawDiff;
+    }
+
+    /**
+     * Project a provider-complete PR inventory into the configured analysis
+     * scope. Completeness is preserved because the result is complete within
+     * that scope. A rename leaving the scope becomes an old-path tombstone so
+     * a formerly indexed in-scope file cannot survive in the current overlay.
+     */
+    public static VcsPullRequestChangeManifest filterManifest(
+            VcsPullRequestChangeManifest manifest,
+            Project project) {
+        if (manifest == null) {
+            return VcsPullRequestChangeManifest.unavailable(
+                    "provider manifest was null");
+        }
+        AnalysisScopeConfig scope = scope(project);
+        List<VcsPullRequestChangeManifest.Change> retained = new ArrayList<>();
+        boolean projected = false;
+        for (VcsPullRequestChangeManifest.Change change : manifest.changes()) {
+            if (change == null || change.path().isBlank()) {
+                projected = true;
+                continue;
+            }
+            if (change.kind() == VcsPullRequestChangeManifest.ChangeKind.RENAMED) {
+                boolean currentIncluded = scope.includes(change.path());
+                boolean previousIncluded = scope.includes(change.previousPath());
+                if (currentIncluded && previousIncluded) {
+                    retained.add(change);
+                } else if (currentIncluded) {
+                    retained.add(new VcsPullRequestChangeManifest.Change(
+                            change.path(), "",
+                            VcsPullRequestChangeManifest.ChangeKind.ADDED));
+                    projected = true;
+                } else if (previousIncluded) {
+                    retained.add(new VcsPullRequestChangeManifest.Change(
+                            change.previousPath(), "",
+                            VcsPullRequestChangeManifest.ChangeKind.DELETED));
+                    projected = true;
+                } else {
+                    projected = true;
+                }
+                continue;
+            }
+            if (scope.includes(change.path())) {
+                retained.add(change);
+            } else {
+                projected = true;
+            }
+        }
+        String receipt = manifest.receipt();
+        if (projected) {
+            receipt = (receipt.isBlank() ? "" : receipt + ";")
+                    + "analysis-scope-projected";
+        }
+        return new VcsPullRequestChangeManifest(
+                retained,
+                manifest.completeness(),
+                receipt);
     }
 
     public static void retainIncluded(Set<String> paths, Project project) {

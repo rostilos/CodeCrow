@@ -90,6 +90,15 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
     
     @Override
     public WebhookResult handle(WebhookPayload payload, Project project, Consumer<Map<String, Object>> eventConsumer) {
+        return handle(payload, project, eventConsumer, null);
+    }
+
+    @Override
+    public WebhookResult handle(
+            WebhookPayload payload,
+            Project project,
+            Consumer<Map<String, Object>> eventConsumer,
+            String analysisRunKey) {
         String eventType = payload.eventType();
         
         log.info("Handling GitHub PR event: {} for project {}", eventType, project.getId());
@@ -142,7 +151,7 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
                 return WebhookResult.ignored("Target branch '" + targetBranch + "' does not match configured analysis patterns");
             }
             
-            return handlePullRequestEvent(payload, project, eventConsumer);
+            return handlePullRequestEvent(payload, project, eventConsumer, analysisRunKey);
         } catch (Exception e) {
             log.error("Error processing {} event for project {}", eventType, project.getId(), e);
             return WebhookResult.error("Processing failed: " + e.getMessage());
@@ -153,7 +162,8 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
     private WebhookResult handlePullRequestEvent(
             WebhookPayload payload,
             Project project,
-            Consumer<Map<String, Object>> eventConsumer
+            Consumer<Map<String, Object>> eventConsumer,
+            String analysisRunKey
     ) {
         String placeholderCommentId = null;
         String acquiredLockKey = null;
@@ -193,6 +203,7 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
             request.placeholderCommentId = placeholderCommentId;
             request.prAuthorId = payload.prAuthorId();
             request.prAuthorUsername = payload.prAuthorUsername();
+            request.setAnalysisRunKey(analysisRunKey);
             // Extract PR title/description for QA auto-doc task ID extraction
             if (payload.rawPayload() != null) {
                 request.prTitle = payload.rawPayload().path("pull_request").path("title").asText(null);

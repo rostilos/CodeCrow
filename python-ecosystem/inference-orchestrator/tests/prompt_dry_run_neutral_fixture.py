@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from model.dtos import ReviewRequestDto
+from model.dtos import (
+    PullRequestFileManifestDto,
+    PullRequestManifestChangeDto,
+    ReviewRequestDto,
+)
 from model.enrichment import FileContentDto, PrEnrichmentDataDto
 
 
@@ -74,6 +78,17 @@ class DeterministicRagSpy:
         return {"status": "deleted"}
 
 
+def _complete_manifest(paths: list[str]) -> PullRequestFileManifestDto:
+    return PullRequestFileManifestDto(
+        changes=[
+            PullRequestManifestChangeDto(path=path, kind="MODIFIED")
+            for path in paths
+        ],
+        completeness="COMPLETE",
+        receipt="neutral-provider-manifest-receipt",
+    )
+
+
 def neutral_request(
     file_count: int = 1,
     *,
@@ -118,6 +133,9 @@ def neutral_request(
         ragCollectionTarget="cc_workspace_project_main_generation",
         ragBaseGenerationManifestSha256=BASE_GENERATION_MANIFEST,
         changedFiles=paths,
+        fullPrChangedFiles=paths,
+        pullRequestFileManifest=_complete_manifest(paths),
+        fullPrManifestComplete=True,
         rawDiff="\n".join(diffs) + "\n",
         enrichmentData=PrEnrichmentDataDto(fileContents=contents),
         useMcpTools=use_mcp_tools,
@@ -167,6 +185,9 @@ def mixed_language_request() -> ReviewRequestDto:
 
     return neutral_request().model_copy(update={
         "changedFiles": list(sources),
+        "fullPrChangedFiles": list(sources),
+        "pullRequestFileManifest": _complete_manifest(list(sources)),
+        "fullPrManifestComplete": True,
         "rawDiff": "\n".join(diffs) + "\n",
         "enrichmentData": PrEnrichmentDataDto(fileContents=[
             FileContentDto(

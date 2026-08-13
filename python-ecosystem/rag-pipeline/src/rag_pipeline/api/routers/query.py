@@ -655,6 +655,8 @@ def get_deterministic_context(request: DeterministicContextRequest):
             pr_number=request.pr_number,
             pr_changed_files=request.pr_changed_files,
             additional_identifiers=request.additional_identifiers,
+            navigation_mode=request.navigation_mode,
+            reference_identifiers=request.reference_identifiers,
             expected_revisions=(
                 {target_branch: base_revision}
                 if base_revision and target_branch else None

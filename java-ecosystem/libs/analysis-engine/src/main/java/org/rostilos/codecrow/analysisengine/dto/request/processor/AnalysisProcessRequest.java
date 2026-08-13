@@ -7,4 +7,10 @@ public interface AnalysisProcessRequest {
     String getCommitHash();
     AnalysisType getAnalysisType();
     String getTargetBranchName();
+
+    /**
+     * Durable identity of the accepted analysis attempt. Queue delivery IDs are
+     * deliberately separate because they may change when persisted work is resumed.
+     */
+    default String getAnalysisRunKey() { return null; }
 }

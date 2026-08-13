@@ -22,7 +22,7 @@ class TestConstruction:
     def test_valid_stage(self):
         e = McpToolExecutor(MagicMock(), _make_request(), "stage_1")
         assert e.allowed_tools == {"getBranchFileContent"}
-        assert e.max_calls == 3
+        assert e.max_calls == 4
 
     def test_stage_3(self):
         e = McpToolExecutor(MagicMock(), _make_request(), "stage_3")
@@ -46,7 +46,7 @@ class TestExecuteTool:
     @pytest.mark.asyncio(loop_scope="function")
     async def test_budget_exhausted(self):
         e = McpToolExecutor(MagicMock(), _make_request(), "stage_1")
-        e.call_count = 3  # already at max
+        e.call_count = 4  # already at max
         result = await e.execute_tool("getBranchFileContent", {"filePath": "a.py", "branch": "main"})
         assert "budget exhausted" in result.lower() or "budget" in result.lower()
 
@@ -279,18 +279,18 @@ class TestGetToolDefinitions:
 class TestProperties:
     def test_budget_remaining(self):
         e = McpToolExecutor(MagicMock(), _make_request(), "stage_1")
-        assert e.budget_remaining == 3
+        assert e.budget_remaining == 4
         e.call_count = 2
-        assert e.budget_remaining == 1
+        assert e.budget_remaining == 2
 
     def test_budget_exhausted(self):
         e = McpToolExecutor(MagicMock(), _make_request(), "stage_1")
         assert e.budget_exhausted is False
-        e.call_count = 3
+        e.call_count = 4
         assert e.budget_exhausted is True
 
     def test_summary(self):
         e = McpToolExecutor(MagicMock(), _make_request(), "stage_1")
         s = e.summary()
         assert "stage_1" in s
-        assert "0/3" in s
+        assert "0/4" in s

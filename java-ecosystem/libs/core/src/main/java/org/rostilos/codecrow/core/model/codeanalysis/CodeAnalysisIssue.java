@@ -122,6 +122,15 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
     private String contentFingerprint;
 
     /**
+     * Category-independent identity of the verified defect and its exact source
+     * evidence. Unlike {@link #issueFingerprint}, this value is not derived from
+     * severity/category and is used only to link occurrences of the same defect
+     * across analyses of one PR.
+     */
+    @Column(name = "lineage_fingerprint", length = 64)
+    private String lineageFingerprint;
+
+    /**
      * Verbatim source line the LLM referenced when reporting this issue.
      * Persisted for content-based line anchoring: at any later stage
      * (branch reconciliation, IssueTracker, serve-time) the snippet hash
@@ -245,6 +254,9 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
 
     public String getContentFingerprint() { return contentFingerprint; }
     public void setContentFingerprint(String contentFingerprint) { this.contentFingerprint = contentFingerprint; }
+
+    public String getLineageFingerprint() { return lineageFingerprint; }
+    public void setLineageFingerprint(String lineageFingerprint) { this.lineageFingerprint = lineageFingerprint; }
 
     public String getCodeSnippet() { return codeSnippet; }
     public void setCodeSnippet(String codeSnippet) { this.codeSnippet = codeSnippet; }

@@ -811,6 +811,16 @@ public class GitHubClient implements VcsClient {
     }
 
     @Override
+    public VcsPullRequestChangeManifest getPullRequestChangeManifest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException {
+        return new GetPullRequestDiffAction(httpClient).getPullRequestChangeManifest(
+                workspaceId, repoIdOrSlug, Math.toIntExact(pullRequestNumber));
+    }
+
+    @Override
     public String getCommitDiff(
             String workspaceId,
             String repoIdOrSlug,
@@ -1180,7 +1190,26 @@ public class GitHubClient implements VcsClient {
             String branchOrCommit,
             int maxFileSizeBytes
     ) throws IOException {
-        java.util.Map<String, String> results = new java.util.HashMap<>();
+        java.util.Map<String, String> contents = new java.util.LinkedHashMap<>();
+        getFileContentResults(workspaceId, repoIdOrSlug, filePaths, branchOrCommit, maxFileSizeBytes)
+                .forEach((path, result) -> {
+                    if (result.available()) {
+                        contents.put(path, result.content());
+                    }
+                });
+        return contents;
+    }
+
+    @Override
+    public java.util.Map<String, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult> getFileContentResults(
+            String workspaceId,
+            String repoIdOrSlug,
+            java.util.List<String> filePaths,
+            String branchOrCommit,
+            int maxFileSizeBytes
+    ) throws IOException {
+        java.util.Map<String, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult> results =
+                new java.util.LinkedHashMap<>();
         
         // GitHub GraphQL API endpoint
         String graphqlUrl = "https://api.github.com/graphql";
@@ -1201,7 +1230,7 @@ public class GitHubClient implements VcsClient {
                 String expression = branchOrCommit + ":" + path;
                 queryBuilder.append(alias).append(": object(expression: \"")
                         .append(expression.replace("\"", "\\\""))
-                        .append("\") { ... on Blob { text byteSize } } ");
+                        .append("\") { ... on Blob { text byteSize isBinary isTruncated } } ");
             }
             queryBuilder.append("}}");
             
@@ -1235,11 +1264,34 @@ public class GitHubClient implements VcsClient {
                         for (String path : batch) {
                             try {
                                 String content = getFileContent(workspaceId, repoIdOrSlug, path, branchOrCommit);
-                                if (content != null && content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= maxFileSizeBytes) {
-                                    results.put(path, content);
+                                if (content != null) {
+                                    int sizeBytes = content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+                                    if (content.indexOf('\0') >= 0) {
+                                        results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                                                path, sizeBytes,
+                                                org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.UNSUPPORTED,
+                                                "source contains binary data"));
+                                    } else if (sizeBytes <= maxFileSizeBytes) {
+                                        results.put(path,
+                                                org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.available(path, content));
+                                    } else {
+                                        results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                                                path, sizeBytes,
+                                                org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.TOO_LARGE,
+                                                "source exceeds the acquisition limit"));
+                                    }
+                                } else {
+                                    results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                                            path, 0,
+                                            org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.FETCH_FAILED,
+                                            "provider returned no exact source"));
                                 }
                             } catch (IOException e) {
                                 log.debug("Skipping file {}: {}", path, e.getMessage());
+                                results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                                        path, 0,
+                                        org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.FETCH_FAILED,
+                                        e.getMessage()));
                             }
                         }
                         break;
@@ -1254,14 +1306,37 @@ public class GitHubClient implements VcsClient {
                         String alias = "file" + j;
                         JsonNode fileNode = data.path(alias);
                         
-                        if (!fileNode.isMissingNode() && fileNode.has("text")) {
-                            int byteSize = fileNode.path("byteSize").asInt(0);
-                            if (byteSize <= maxFileSizeBytes) {
-                                String text = fileNode.get("text").asText();
-                                if (text != null) {
-                                    results.put(path, text);
-                                }
+                        if (!fileNode.isMissingNode() && !fileNode.isNull()) {
+                            long byteSize = fileNode.path("byteSize").asLong(0);
+                            if (fileNode.path("isBinary").asBoolean(false)) {
+                                results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                                        path, byteSize,
+                                        org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.UNSUPPORTED,
+                                        "provider identified binary source"));
+                            } else if (fileNode.path("isTruncated").asBoolean(false)) {
+                                results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                                        path, byteSize,
+                                        org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.TOO_LARGE,
+                                        "provider truncated exact source"));
+                            } else if (byteSize > maxFileSizeBytes) {
+                                results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                                        path, byteSize,
+                                        org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.TOO_LARGE,
+                                        "source exceeds the acquisition limit"));
+                            } else if (fileNode.has("text") && !fileNode.get("text").isNull()) {
+                                results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.available(
+                                        path, fileNode.get("text").asText()));
+                            } else {
+                                results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                                        path, byteSize,
+                                        org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.UNSUPPORTED,
+                                        "provider cannot represent source as text"));
                             }
+                        } else {
+                            results.put(path, org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                                    path, 0,
+                                    org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.FETCH_FAILED,
+                                    "provider returned no exact source"));
                         }
                     }
                     break; // Success
@@ -1273,7 +1348,15 @@ public class GitHubClient implements VcsClient {
             }
         }
         
-        log.info("Batch fetched {}/{} files from GitHub via GraphQL", results.size(), filePaths.size());
+        filePaths.forEach(path -> results.putIfAbsent(path,
+                org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.skipped(
+                        path, 0,
+                        org.rostilos.codecrow.vcsclient.model.VcsFileContentResult.Status.FETCH_FAILED,
+                        "exact source acquisition did not complete")));
+        long available = results.values().stream()
+                .filter(org.rostilos.codecrow.vcsclient.model.VcsFileContentResult::available)
+                .count();
+        log.info("Batch fetched {}/{} files from GitHub via GraphQL", available, filePaths.size());
         return results;
     }
     

@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.analysisengine.dto.request.ai;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.ai.AIProviderKey;
@@ -9,6 +10,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
 import org.rostilos.codecrow.plugins.ProjectCapabilities;
+import org.rostilos.codecrow.vcsclient.model.VcsPullRequestChangeManifest;
 
 import java.util.List;
 import java.util.Map;
@@ -16,6 +18,7 @@ import java.util.Optional;
 
 public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final Long projectId;
+    protected final String analysisRunKey;
     protected final String projectWorkspace;
     protected final String projectNamespace;
     protected final String projectVcsWorkspace;
@@ -44,6 +47,10 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String taskHistoryContext;
     protected final List<String> changedFiles;
     protected final List<String> deletedFiles;
+    protected final List<String> fullPrChangedFiles;
+    protected final List<String> fullPrDeletedFiles;
+    protected final VcsPullRequestChangeManifest pullRequestFileManifest;
+    protected final boolean prContextMaintenanceRequired;
     protected final List<String> diffSnippets;
     protected final String targetBranchName;
     protected final String sourceBranchName;
@@ -57,6 +64,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String previousCommitHash;
     protected final String currentCommitHash;
     protected final String baseCommitHash;
+    protected final String analysisBehaviorDigest;
 
     // File enrichment data (full file contents + dependency graph)
     protected final PrEnrichmentDataDto enrichmentData;
@@ -70,6 +78,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
     protected AiAnalysisRequestImpl(Builder<?> builder) {
         this.projectId = builder.projectId;
+        this.analysisRunKey = builder.analysisRunKey;
         this.projectVcsWorkspace = builder.projectVcsWorkspace;
         this.projectVcsRepoSlug = builder.projectVcsRepoSlug;
         this.aiProvider = builder.aiProvider;
@@ -93,6 +102,10 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.taskHistoryContext = builder.taskHistoryContext;
         this.changedFiles = builder.changedFiles;
         this.deletedFiles = builder.deletedFiles;
+        this.fullPrChangedFiles = builder.fullPrChangedFiles;
+        this.fullPrDeletedFiles = builder.fullPrDeletedFiles;
+        this.pullRequestFileManifest = builder.pullRequestFileManifest;
+        this.prContextMaintenanceRequired = builder.prContextMaintenanceRequired;
         this.diffSnippets = builder.diffSnippets;
         this.projectWorkspace = builder.projectWorkspace;
         this.projectNamespace = builder.projectNamespace;
@@ -107,6 +120,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.previousCommitHash = builder.previousCommitHash;
         this.currentCommitHash = builder.currentCommitHash;
         this.baseCommitHash = builder.baseCommitHash;
+        this.analysisBehaviorDigest = builder.analysisBehaviorDigest;
         // File enrichment data
         this.enrichmentData = builder.enrichmentData;
         // Custom project review rules
@@ -118,6 +132,12 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
     public Long getProjectId() {
         return projectId;
+    }
+
+    @Override
+    @JsonIgnore
+    public String getAnalysisRunKey() {
+        return analysisRunKey;
     }
 
     public String getProjectVcsWorkspace() {
@@ -208,6 +228,26 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return deletedFiles;
     }
 
+    @Override
+    public List<String> getFullPrChangedFiles() {
+        return fullPrChangedFiles != null ? fullPrChangedFiles : changedFiles;
+    }
+
+    @Override
+    public List<String> getFullPrDeletedFiles() {
+        return fullPrDeletedFiles != null ? fullPrDeletedFiles : deletedFiles;
+    }
+
+    @Override
+    public VcsPullRequestChangeManifest getPullRequestFileManifest() {
+        return pullRequestFileManifest;
+    }
+
+    @Override
+    public boolean getPrContextMaintenanceRequired() {
+        return prContextMaintenanceRequired;
+    }
+
     public List<String> getDiffSnippets() {
         return diffSnippets;
     }
@@ -289,6 +329,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     @SuppressWarnings("unchecked")
     public static class Builder<T extends Builder<T>> {
         private Long projectId;
+        private String analysisRunKey;
         private String projectNamespace;
         private String projectWorkspace;
         private String projectVcsWorkspace;
@@ -314,6 +355,10 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String taskHistoryContext;
         private List<String> changedFiles;
         private List<String> deletedFiles;
+        private List<String> fullPrChangedFiles;
+        private List<String> fullPrDeletedFiles;
+        private VcsPullRequestChangeManifest pullRequestFileManifest;
+        private boolean prContextMaintenanceRequired;
         private List<String> diffSnippets;
         private String targetBranchName;
         private String sourceBranchName;
@@ -326,6 +371,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String previousCommitHash;
         private String currentCommitHash;
         private String baseCommitHash;
+        private String analysisBehaviorDigest;
         // File enrichment data
         private PrEnrichmentDataDto enrichmentData;
         // Custom project review rules (JSON string)
@@ -343,6 +389,13 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withProjectId(Long projectId) {
             this.projectId = projectId;
+            return self();
+        }
+
+        public T withAnalysisRunKey(String analysisRunKey) {
+            this.analysisRunKey = analysisRunKey == null || analysisRunKey.isBlank()
+                    ? null
+                    : analysisRunKey.trim();
             return self();
         }
 
@@ -583,6 +636,27 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             return self();
         }
 
+        public T withFullPrChangedFiles(List<String> fullPrChangedFiles) {
+            this.fullPrChangedFiles = fullPrChangedFiles;
+            return self();
+        }
+
+        public T withFullPrDeletedFiles(List<String> fullPrDeletedFiles) {
+            this.fullPrDeletedFiles = fullPrDeletedFiles;
+            return self();
+        }
+
+        public T withPullRequestFileManifest(
+                VcsPullRequestChangeManifest pullRequestFileManifest) {
+            this.pullRequestFileManifest = pullRequestFileManifest;
+            return self();
+        }
+
+        public T withPrContextMaintenanceRequired(boolean required) {
+            this.prContextMaintenanceRequired = required;
+            return self();
+        }
+
         public T withDiffSnippets(List<String> diffSnippets) {
             this.diffSnippets = diffSnippets;
             return self();
@@ -590,6 +664,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withBaseCommitHash(String baseCommitHash) {
             this.baseCommitHash = baseCommitHash;
+            return self();
+        }
+
+        public T withAnalysisBehaviorDigest(String analysisBehaviorDigest) {
+            this.analysisBehaviorDigest = analysisBehaviorDigest;
             return self();
         }
 
@@ -681,5 +760,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     @Override
     public boolean getRagEnabled() {
         return ragEnabled;
+    }
+
+    @Override
+    @JsonIgnore
+    public String getAnalysisBehaviorDigest() {
+        return analysisBehaviorDigest;
     }
 }

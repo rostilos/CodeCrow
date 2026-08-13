@@ -12,7 +12,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from llm.llm_factory import LLMFactory
-from model.dtos import ReviewRequestDto
+from model.dtos import (
+    PullRequestFileManifestDto,
+    PullRequestManifestChangeDto,
+    ReviewRequestDto,
+)
 from model.enrichment import FileContentDto, PrEnrichmentDataDto
 from model.multi_stage import CrossFileAnalysisResult, CrossFileIssue
 from service.review.orchestrator.orchestrator import (
@@ -65,7 +69,8 @@ async def test_non_reviewable_hunk_manifest_completes_without_model_stage():
 
     assert result["issues"] == []
     assert "No text source hunks required model review" in result["comment"]
-    assert rag.index_requests == []
+    # Context maintenance is independent of whether any hunk needs a model.
+    assert len(rag.index_requests) == 1
     assert rag.requests == []
     assert rag.semantic_requests == []
     terminal_event = next(
@@ -73,11 +78,10 @@ async def test_non_reviewable_hunk_manifest_completes_without_model_stage():
         for event in events
         if event.get("state") == "review_evidence_completed"
     )
-    assert terminal_event["revisionBinding"]["prIndexed"] is False
-    assert (
-        terminal_event["revisionBinding"]["baseGenerationManifestSha256"]
-        is None
-    )
+    assert terminal_event["revisionBinding"]["prIndexed"] is True
+    assert terminal_event["revisionBinding"][
+        "baseGenerationManifestSha256"
+    ] == "3" * 64
 
 
 @pytest.mark.asyncio
@@ -104,9 +108,67 @@ async def test_metadata_only_diff_completes_without_model_or_rag_stage():
 
     assert result["issues"] == []
     assert "No text source hunks required model review" in result["comment"]
-    assert rag.index_requests == []
+    assert len(rag.index_requests) == 1
     assert rag.requests == []
     assert rag.semantic_requests == []
+
+
+@pytest.mark.asyncio
+async def test_mixed_pr_reviews_deleted_contract_alongside_text_hunks():
+    base = _request()
+    deletion = (
+        "diff --git a/src/legacy.py b/src/legacy.py\n"
+        "deleted file mode 100644\n"
+        "--- a/src/legacy.py\n"
+        "+++ /dev/null\n"
+        "@@ -1 +0,0 @@\n"
+        "-def legacy_api(value): return value\n"
+    )
+    request = base.model_copy(update={
+        "rawDiff": base.rawDiff + deletion,
+        "deletedFiles": ["src/legacy.py"],
+        "fullPrDeletedFiles": ["src/legacy.py"],
+        "pullRequestFileManifest": PullRequestFileManifestDto(
+            completeness="COMPLETE",
+            receipt="mixed-pr-manifest",
+            changes=[
+                PullRequestManifestChangeDto(
+                    path="src/file_0.py",
+                    kind="MODIFIED",
+                ),
+                PullRequestManifestChangeDto(
+                    path="src/legacy.py",
+                    kind="DELETED",
+                ),
+            ],
+        ),
+        "enrichmentData": PrEnrichmentDataDto(fileContents=[
+            *base.enrichmentData.fileContents,
+            FileContentDto(
+                path="src/consumer.py",
+                content="from src.legacy import legacy_api\nlegacy_api(1)\n",
+            ),
+        ]),
+    })
+    session = PromptCaptureSession(request=request)
+    orchestrator = MultiStageReviewOrchestrator(
+        llm=PromptCaptureLLM(session),
+        mcp_client=None,
+        rag_client=DeterministicRagSpy(),
+    )
+
+    result = await orchestrator.orchestrate_review(
+        request,
+        processed_diff=DiffProcessor().process(request.rawDiff),
+    )
+
+    assert result["issues"] == []
+    rendered = [item["renderedPrompt"] for item in session.prompts]
+    assert any(
+        "deletion-only or metadata-only rename changes" in prompt
+        for prompt in rendered
+    )
+    assert any(item["stage"] == "stage_1" for item in session.prompts)
 
 
 @pytest.mark.asyncio
@@ -270,8 +332,8 @@ async def test_dry_run_captures_complete_baseline_without_provider_or_semantic_c
         "prIndexMutationEnabled": False,
         "mcpToolsEnabled": False,
     }
-    assert list(result["promptCountsByStage"]) == ["stage_0", "stage_1", "stage_3"]
-    assert [prompt["sequence"] for prompt in result["prompts"]] == [1, 2, 3]
+    assert list(result["promptCountsByStage"]) == ["stage_0", "stage_1"]
+    assert [prompt["sequence"] for prompt in result["prompts"]] == [1, 2]
     assert result["promptCount"] == len(result["prompts"])
     assert result["totalCharacterCount"] == sum(
         prompt["characterCount"] for prompt in result["prompts"]
@@ -324,7 +386,7 @@ async def test_dry_run_preserves_neutral_mixed_language_manifest(monkeypatch):
     assert result["providerCalls"] == 0
     assert result["promptCountsByStage"]["stage_0"] == 1
     assert result["promptCountsByStage"]["stage_1"] >= 1
-    assert result["promptCountsByStage"]["stage_3"] == 1
+    assert result["promptCountsByStage"].get("stage_3", 0) == 0
     assert all(path in serialized for path in request.changedFiles)
     assert "return account.active" in serialized
     assert "record Account(boolean active)" in serialized
@@ -507,9 +569,9 @@ async def test_synthetic_findings_capture_conditional_review_prompts(monkeypatch
     assert stages["stage_0"] == 1
     assert stages["stage_1"] >= 1
     assert stages["verification"] == 1
-    assert stages["stage_2"] == 1
+    assert stages.get("stage_2", 0) == 0
     assert stages.get("deduplication", 0) == 0
-    assert stages["stage_3"] == 1
+    assert stages.get("stage_3", 0) == 0
     assert result["providerCalls"] == 0
     assert result["simulation"]["deterministicRagRequests"] == 0
     assert result["simulation"]["simulatedFindingsProduced"] == 6
@@ -559,7 +621,7 @@ def _incremental_task_request() -> tuple[ReviewRequestDto, str, str]:
 
 
 @pytest.mark.asyncio
-async def test_incremental_prompt_pipeline_keeps_review_delta_small_and_stage_2_pr_aware(
+async def test_incremental_prompt_pipeline_keeps_discovery_on_the_current_delta(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -580,21 +642,10 @@ async def test_incremental_prompt_pipeline_keeps_review_delta_small_and_stage_2_
         for prompt in result["prompts"]
         if prompt["stage"] in {"stage_0", "stage_1"}
     ]
-    stage_2 = next(
-        prompt["renderedPrompt"]
-        for prompt in result["prompts"]
-        if prompt["stage"] == "stage_2"
-    )
     assert stage_0_and_1
     assert all(delta_path in prompt for prompt in stage_0_and_1)
     assert all(prior_path not in prompt for prompt in stage_0_and_1)
-    assert "FULL PR STATE LEDGER (base to current PR head)" in stage_2
-    assert prior_path in stage_2
-    assert "recordCustomEvent" in stage_2
-    assert "CURRENT INCREMENTAL DELTA (publication/review scope)" in stage_2
-    assert delta_path in stage_2
-    assert "[PRF" in stage_2
-    assert "[DELTA" in stage_2
+    assert all(prompt["stage"] != "stage_2" for prompt in result["prompts"])
 
 
 @pytest.mark.asyncio
@@ -648,16 +699,12 @@ async def test_pipeline_suppresses_incremental_missing_task_false_positive():
 
     assert result["issues"] == []
     assert "PR does not implement" not in result["comment"]
-    assert any(
-        event.get("state") == "task_coverage_candidates_suppressed"
+    # Task prose no longer owns a broad omission-finding stage.
+    assert all(
+        event.get("state") != "task_coverage_candidates_suppressed"
         for event in events
     )
-    stage_3_prompt = next(
-        prompt["renderedPrompt"]
-        for prompt in session.prompts
-        if prompt["stage"] == "stage_3"
-    )
-    assert "PR does not implement" not in stage_3_prompt
+    assert all(prompt["stage"] != "stage_3" for prompt in session.prompts)
 
 
 @pytest.mark.asyncio
@@ -1187,7 +1234,7 @@ async def test_pr_overlay_review_groups_are_retained_for_stage_zero_planning():
 
 
 @pytest.mark.asyncio
-async def test_pr_overlay_marks_unenriched_diff_as_partial_evidence():
+async def test_pr_overlay_refuses_unenriched_partial_evidence():
     rag = DeterministicRagSpy()
     request = _request().model_copy(update={
         "enrichmentData": PrEnrichmentDataDto(fileContents=[]),
@@ -1203,14 +1250,8 @@ async def test_pr_overlay_marks_unenriched_diff_as_partial_evidence():
         DiffProcessor().process(request.rawDiff),
     )
 
-    assert len(rag.index_requests) == 1
-    indexed_file = rag.index_requests[0]["files"][0]
-    assert indexed_file["path"] == "src/file_0.py"
-    assert indexed_file["change_type"] == "MODIFIED"
-    assert indexed_file["content_state"] == "partial_diff"
-    assert indexed_file["content"].startswith(
-        "diff --git a/src/file_0.py b/src/file_0.py"
-    )
+    assert rag.index_requests == []
+    assert orchestrator._pr_indexed is False
 
 
 @pytest.mark.asyncio
@@ -1243,7 +1284,7 @@ async def test_pr_overlay_preserves_empty_post_change_source_as_complete():
 
 
 @pytest.mark.asyncio
-async def test_pr_overlay_does_not_choose_ambiguous_monorepo_enrichment():
+async def test_pr_overlay_refuses_ambiguous_monorepo_enrichment():
     rag = DeterministicRagSpy()
     request = _request().model_copy(update={
         "enrichmentData": PrEnrichmentDataDto(fileContents=[
@@ -1270,9 +1311,8 @@ async def test_pr_overlay_does_not_choose_ambiguous_monorepo_enrichment():
         DiffProcessor().process(request.rawDiff),
     )
 
-    indexed_file = rag.index_requests[0]["files"][0]
-    assert indexed_file["content_state"] == "partial_diff"
-    assert "origin = " not in indexed_file["content"]
+    assert rag.index_requests == []
+    assert orchestrator._pr_indexed is False
 
 
 @pytest.mark.asyncio

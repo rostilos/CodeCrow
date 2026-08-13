@@ -523,6 +523,8 @@ class RagClient:
         pr_number: Optional[int] = None,
         pr_changed_files: Optional[List[str]] = None,
         additional_identifiers: Optional[List[str]] = None,
+        navigation_mode: str = "CONTEXT",
+        reference_identifiers: Optional[List[str]] = None,
         source_revision: Optional[str] = None,
         base_revision: Optional[str] = None,
         base_generation_manifest_sha256: Optional[str] = None,
@@ -575,6 +577,10 @@ class RagClient:
                 payload["pr_changed_files"] = pr_changed_files
             if additional_identifiers:
                 payload["additional_identifiers"] = additional_identifiers
+            if navigation_mode != "CONTEXT":
+                payload["navigation_mode"] = navigation_mode
+            if reference_identifiers:
+                payload["reference_identifiers"] = reference_identifiers
             if source_revision:
                 payload["source_revision"] = source_revision
             if base_revision:

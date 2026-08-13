@@ -596,7 +596,16 @@ def format_rag_context(
             # Record every prompt-visible citation ID. Graph facts are optional:
             # generic semantic chunks must remain valid citation sources even
             # when they do not carry plugin-owned deterministic relationships.
-            visible_evidence_by_id.setdefault(evidence_id, ())
+            source_fact = {
+                "evidenceType": "prompt_code_chunk",
+                "path": path,
+                "content": bounded_text,
+                "contentDigest": "sha256:" + hashlib.sha256(
+                    bounded_text.encode("utf-8")
+                ).hexdigest(),
+                "source": source or "rag",
+            }
+            visible_evidence_by_id[evidence_id] = (source_fact,)
             facts = metadata.get("plugin_graph_facts")
             if isinstance(facts, list):
                 visible_facts = tuple(
@@ -611,7 +620,10 @@ def format_rag_context(
                     )
                 )
                 if visible_facts:
-                    visible_evidence_by_id[evidence_id] = visible_facts
+                    visible_evidence_by_id[evidence_id] = (
+                        source_fact,
+                        *visible_facts,
+                    )
         visible_plugin_fact_lines.update(
             line
             for line in candidate_plugin_fact_lines
@@ -749,7 +761,16 @@ def format_duplication_context(
             f"```\n{text}\n```\n"
         )
         if visible_evidence_by_id is not None:
-            visible_evidence_by_id.setdefault(evidence_id, ())
+            source_fact = {
+                "evidenceType": "prompt_code_chunk",
+                "path": path,
+                "content": text,
+                "contentDigest": "sha256:" + hashlib.sha256(
+                    text.encode("utf-8")
+                ).hexdigest(),
+                "source": "duplication",
+            }
+            visible_evidence_by_id[evidence_id] = (source_fact,)
             facts = metadata.get("plugin_graph_facts")
             if isinstance(facts, list):
                 visible_facts = tuple(

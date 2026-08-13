@@ -43,6 +43,18 @@ class IssueDTO(BaseModel):
     codeSnippet: Optional[str] = None
 
 
+class PullRequestManifestChangeDto(BaseModel):
+    path: str
+    previousPath: str = ""
+    kind: str = "UNKNOWN"
+
+
+class PullRequestFileManifestDto(BaseModel):
+    changes: List[PullRequestManifestChangeDto] = Field(default_factory=list)
+    completeness: str = "UNAVAILABLE"
+    receipt: str = ""
+
+
 class ReviewRequestDto(BaseModel):
     projectId: int
     projectVcsWorkspace: str
@@ -91,6 +103,23 @@ class ReviewRequestDto(BaseModel):
     sourceBranchName: Optional[str] = Field(default=None, description="Source branch name of the PR")
     changedFiles: Optional[List[str]] = Field(default_factory=list, description="List of changed file paths from diff")
     deletedFiles: Optional[List[str]] = Field(default_factory=list, description="Files deleted in this PR (excluded from review, used for RAG filtering)")
+    fullPrChangedFiles: Optional[List[str]] = Field(
+        default_factory=list,
+        description="Complete base-to-head current paths used for PR context maintenance",
+    )
+    fullPrDeletedFiles: Optional[List[str]] = Field(
+        default_factory=list,
+        description="Complete base-to-head deleted and renamed-away paths",
+    )
+    pullRequestFileManifest: Optional[PullRequestFileManifestDto] = None
+    fullPrManifestComplete: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether the provider proved the base-to-head path manifest complete. "
+            "None identifies legacy callers that did not send a manifest receipt."
+        ),
+    )
+    prContextMaintenanceRequired: bool = False
     diffSnippets: Optional[List[str]] = Field(default_factory=list, description="Code snippets from diff for RAG semantic search")
     rawDiff: Optional[str] = Field(default=None, description="Full raw diff content from PR for direct analysis without MCP tool call")
     maxAllowedTokens: Optional[int] = Field(default=None, description="Optional per-request token limit enforced by the client before calling the AI. If provided and the estimated token count exceeds this value, the request will be rejected.")

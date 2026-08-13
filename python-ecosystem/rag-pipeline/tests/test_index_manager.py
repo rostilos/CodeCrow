@@ -136,12 +136,12 @@ class TestCollectionManager:
         cm = self._make()
         cm.client.create_payload_index.side_effect = [
             RuntimeError("path index already exists"),
-            *([True] * 12),
+            *([True] * 18),
         ]
 
         cm._ensure_payload_indexes("test_coll")
 
-        assert cm.client.create_payload_index.call_count == 13
+        assert cm.client.create_payload_index.call_count == 19
         warnings = [
             record for record in caplog.records
             if record.levelname == "WARNING"
@@ -155,13 +155,13 @@ class TestCollectionManager:
 
         assert cm._ensure_payload_indexes("test_coll") is False
 
-        assert cm.client.create_payload_index.call_count == 13
+        assert cm.client.create_payload_index.call_count == 19
         warnings = [
             record for record in caplog.records
             if record.levelname == "WARNING"
         ]
         assert len(warnings) == 1
-        assert "failed for 13 field(s)" in warnings[0].getMessage()
+        assert "failed for 19 field(s)" in warnings[0].getMessage()
 
     def test_payload_index_repair_defers_when_schema_inspection_times_out(self):
         cm = self._make()
@@ -191,7 +191,7 @@ class TestCollectionManager:
         cm.ensure_collection_exists("test_coll")
         cm.ensure_collection_exists("test_coll")
 
-        assert cm.client.create_payload_index.call_count == 13
+        assert cm.client.create_payload_index.call_count == 19
 
     def test_payload_index_repair_only_creates_missing_schemas(self):
         from qdrant_client.models import PayloadSchemaType
@@ -224,6 +224,12 @@ class TestCollectionManager:
 
         assert schemas["workspace"] is PayloadSchemaType.KEYWORD
         assert schemas["project"] is PayloadSchemaType.KEYWORD
+        assert schemas["reference_identifiers"] is PayloadSchemaType.KEYWORD
+        assert schemas["imports"] is PayloadSchemaType.KEYWORD
+        assert schemas["calls"] is PayloadSchemaType.KEYWORD
+        assert schemas["extends"] is PayloadSchemaType.KEYWORD
+        assert schemas["implements"] is PayloadSchemaType.KEYWORD
+        assert schemas["referenced_types"] is PayloadSchemaType.KEYWORD
         assert schemas["pr"] is PayloadSchemaType.BOOL
         assert schemas["pr_number"] is PayloadSchemaType.INTEGER
 
@@ -245,7 +251,7 @@ class TestCollectionManager:
         cm.alias_exists = MagicMock(return_value=False)
         cm.ensure_collection_exists("test_coll")
 
-        assert cm.client.create_payload_index.call_count == 13
+        assert cm.client.create_payload_index.call_count == 19
 
     def test_delete_collection_failure(self):
         cm = self._make()

@@ -48,6 +48,19 @@ public interface WebhookHandler {
      * @return Processing result
      */
     WebhookResult handle(WebhookPayload payload, Project project, Consumer<Map<String, Object>> eventConsumer);
+
+    /**
+     * Process a webhook as one durable accepted attempt. Implementations that
+     * produce a persisted analysis can forward {@code analysisRunKey}; handlers
+     * without analysis persistence keep their existing behavior.
+     */
+    default WebhookResult handle(
+            WebhookPayload payload,
+            Project project,
+            Consumer<Map<String, Object>> eventConsumer,
+            String analysisRunKey) {
+        return handle(payload, project, eventConsumer);
+    }
     
     /**
      * Result of webhook processing.

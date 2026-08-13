@@ -7,6 +7,7 @@ import okhttp3.*;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.*;
 import org.rostilos.codecrow.analysisengine.util.TextFileEligibility;
 import org.rostilos.codecrow.vcsclient.VcsClient;
+import org.rostilos.codecrow.vcsclient.model.VcsFileContentResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -102,20 +103,21 @@ public class PrFileEnrichmentService {
 
         try {
             // Step 1: Filter to supported file types
-            List<String> supportedFiles = filterSupportedFiles(changedFiles, skipReasons);
+            List<FileContentDto> contentDtos = new ArrayList<>();
+            List<String> supportedFiles = filterSupportedFiles(changedFiles, skipReasons, contentDtos);
             if (supportedFiles.isEmpty()) {
                 log.info("No supported files to enrich after filtering");
-                return createEmptyResultWithStats(changedFiles.size(), 0, skipReasons, startTime);
+                return createEmptyResultWithStats(
+                        changedFiles.size(), skipReasons, contentDtos, startTime);
             }
 
             // Step 2: Fetch file contents in batch
             log.info("Fetching {} file contents for enrichment (ref: {})", supportedFiles.size(), branch);
-            Map<String, String> fileContents = vcsClient.getFileContents(
-                    workspace, repoSlug, supportedFiles, branch, (int) Math.min(maxFileSizeBytes, Integer.MAX_VALUE));
+            Map<String, VcsFileContentResult> fileContents = fetchFileContentResults(
+                    vcsClient, workspace, repoSlug, supportedFiles, branch);
 
             // Step 3: Build FileContentDto list
-            List<FileContentDto> contentDtos = buildFileContentDtos(
-                    supportedFiles, fileContents, skipReasons);
+            contentDtos.addAll(buildFileContentDtos(supportedFiles, fileContents, skipReasons));
 
             // Check total size limit
             long totalSize = contentDtos.stream()
@@ -127,6 +129,10 @@ public class PrFileEnrichmentService {
                 log.warn("Total file content size {} exceeds limit {} - truncating",
                         totalSize, maxTotalSizeBytes);
                 contentDtos = truncateToSizeLimit(contentDtos, maxTotalSizeBytes, skipReasons);
+                totalSize = contentDtos.stream()
+                        .filter(f -> !f.skipped())
+                        .mapToLong(FileContentDto::sizeBytes)
+                        .sum();
             }
 
             // Step 4: Parse files to extract AST metadata
@@ -191,17 +197,17 @@ public class PrFileEnrichmentService {
         Map<String, Integer> skipReasons = new HashMap<>();
 
         try {
-            List<String> supportedFiles = filterSupportedFiles(changedFiles, skipReasons);
+            List<FileContentDto> contentDtos = new ArrayList<>();
+            List<String> supportedFiles = filterSupportedFiles(changedFiles, skipReasons, contentDtos);
             if (supportedFiles.isEmpty()) {
-                return PrEnrichmentDataDto.empty();
+                return createEmptyResultWithStats(
+                        changedFiles.size(), skipReasons, contentDtos, startTime);
             }
 
-            Map<String, String> fileContents = vcsClient.getFileContents(
-                    workspace, repoSlug, supportedFiles, branchOrCommit,
-                    (int) Math.min(maxFileSizeBytes, Integer.MAX_VALUE));
+            Map<String, VcsFileContentResult> fileContents = fetchFileContentResults(
+                    vcsClient, workspace, repoSlug, supportedFiles, branchOrCommit);
 
-            List<FileContentDto> contentDtos = buildFileContentDtos(
-                    supportedFiles, fileContents, skipReasons);
+            contentDtos.addAll(buildFileContentDtos(supportedFiles, fileContents, skipReasons));
 
             long totalSize = contentDtos.stream()
                     .filter(f -> !f.skipped())
@@ -209,6 +215,10 @@ public class PrFileEnrichmentService {
                     .sum();
             if (totalSize > maxTotalSizeBytes) {
                 contentDtos = truncateToSizeLimit(contentDtos, maxTotalSizeBytes, skipReasons);
+                totalSize = contentDtos.stream()
+                        .filter(f -> !f.skipped())
+                        .mapToLong(FileContentDto::sizeBytes)
+                        .sum();
             }
 
             long processingTime = System.currentTimeMillis() - startTime;
@@ -235,11 +245,15 @@ public class PrFileEnrichmentService {
      * Filter out known binary / non-text files. Everything not blacklisted is
      * allowed through for enrichment and file snapshots.
      */
-    private List<String> filterSupportedFiles(List<String> files, Map<String, Integer> skipReasons) {
+    private List<String> filterSupportedFiles(
+            List<String> files,
+            Map<String, Integer> skipReasons,
+            List<FileContentDto> dispositionReceipts) {
         List<String> supported = new ArrayList<>();
         for (String file : files) {
             if (!TextFileEligibility.isTextCandidate(file)) {
                 skipReasons.merge("binary_or_non_text", 1, Integer::sum);
+                dispositionReceipts.add(FileContentDto.skipped(file, "binary_or_non_text"));
             } else {
                 supported.add(file);
             }
@@ -253,22 +267,74 @@ public class PrFileEnrichmentService {
      */
     private List<FileContentDto> buildFileContentDtos(
             List<String> requestedFiles,
-            Map<String, String> fileContents,
+            Map<String, VcsFileContentResult> fileContents,
             Map<String, Integer> skipReasons) {
         List<FileContentDto> result = new ArrayList<>();
 
         for (String path : requestedFiles) {
-            String content = fileContents.get(path);
-
-            if (content == null) {
-                result.add(FileContentDto.skipped(path, "fetch_failed"));
-                skipReasons.merge("fetch_failed", 1, Integer::sum);
-            } else {
-                result.add(FileContentDto.of(path, content));
+            VcsFileContentResult outcome = fileContents.get(path);
+            if (outcome != null && outcome.available()) {
+                String content = outcome.content();
+                long actualSize = content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+                if (content.indexOf('\0') >= 0) {
+                    addSkipped(result, skipReasons, path, "unsupported_source");
+                } else if (actualSize > maxFileSizeBytes) {
+                    addSkipped(result, skipReasons, path, "file_size_limit_exceeded");
+                } else {
+                    result.add(FileContentDto.of(path, content));
+                }
+                continue;
             }
+
+            String reason = switch (outcome == null
+                    ? VcsFileContentResult.Status.FETCH_FAILED
+                    : outcome.status()) {
+                case TOO_LARGE -> "file_size_limit_exceeded";
+                case UNSUPPORTED -> "unsupported_source";
+                case AVAILABLE, FETCH_FAILED -> "fetch_failed";
+            };
+            addSkipped(result, skipReasons, path, reason);
         }
 
         return result;
+    }
+
+    private void addSkipped(
+            List<FileContentDto> results,
+            Map<String, Integer> skipReasons,
+            String path,
+            String reason) {
+        results.add(FileContentDto.skipped(path, reason));
+        skipReasons.merge(reason, 1, Integer::sum);
+    }
+
+    private Map<String, VcsFileContentResult> fetchFileContentResults(
+            VcsClient vcsClient,
+            String workspace,
+            String repoSlug,
+            List<String> requestedFiles,
+            String branchOrCommit) throws IOException {
+        int acquisitionLimit = (int) Math.min(maxFileSizeBytes, Integer.MAX_VALUE);
+        Map<String, VcsFileContentResult> outcomes = vcsClient.getFileContentResults(
+                workspace, repoSlug, requestedFiles, branchOrCommit, acquisitionLimit);
+        if (outcomes != null && !outcomes.isEmpty()) {
+            return outcomes;
+        }
+
+        // Compatibility for older/custom providers (and tests) that only
+        // implement the established path-to-content batch contract.
+        Map<String, String> legacyContents = vcsClient.getFileContents(
+                workspace, repoSlug, requestedFiles, branchOrCommit, acquisitionLimit);
+        Map<String, VcsFileContentResult> converted = new LinkedHashMap<>();
+        for (String path : requestedFiles) {
+            String content = legacyContents == null ? null : legacyContents.get(path);
+            converted.put(path, content == null
+                    ? VcsFileContentResult.skipped(
+                            path, 0, VcsFileContentResult.Status.FETCH_FAILED,
+                            "provider returned no exact source")
+                    : VcsFileContentResult.available(path, content));
+        }
+        return converted;
     }
 
     /**
@@ -294,7 +360,7 @@ public class PrFileEnrichmentService {
                 currentSize += file.sizeBytes();
             } else {
                 result.add(FileContentDto.skipped(file.path(), "total_size_limit_exceeded"));
-                skipReasons.merge("total_size_limit", 1, Integer::sum);
+                skipReasons.merge("total_size_limit_exceeded", 1, Integer::sum);
             }
         }
 
@@ -567,12 +633,13 @@ public class PrFileEnrichmentService {
 
     private PrEnrichmentDataDto createEmptyResultWithStats(
             int totalFiles,
-            int enriched,
             Map<String, Integer> skipReasons,
+            List<FileContentDto> contents,
             long startTime) {
         long processingTime = System.currentTimeMillis() - startTime;
+        int enriched = (int) contents.stream().filter(file -> !file.skipped()).count();
         return new PrEnrichmentDataDto(
-                Collections.emptyList(),
+                List.copyOf(contents),
                 Collections.emptyList(),
                 Collections.emptyList(),
                 new PrEnrichmentDataDto.EnrichmentStats(

@@ -53,9 +53,9 @@ def _full_profile():
     )
 
 
-def test_grouped_llm_dedup_is_enabled_by_default():
-    assert should_use_llm_dedup(_full_profile(), 20) is True
-    assert should_use_llm_dedup(_fast_profile(), 2) is True
+def test_llm_dedup_is_disabled_after_common_verification():
+    assert should_use_llm_dedup(_full_profile(), 20) is False
+    assert should_use_llm_dedup(_fast_profile(), 2) is False
 
 
 def test_llm_dedup_can_be_disabled_explicitly(monkeypatch):
@@ -123,11 +123,11 @@ def test_high_severity_issue_forces_stage_2_without_category_allowlist():
     assert "high-severity" in reason
 
 
-def test_default_output_caps_are_not_tiny_for_structured_json():
-    assert DEFAULT_STAGE_OUTPUT_CAPS["stage_0"]["large"] >= 12_000
-    assert DEFAULT_STAGE_OUTPUT_CAPS["stage_1"]["large"] >= 40_000
-    assert DEFAULT_STAGE_OUTPUT_CAPS["stage_2"]["large"] >= 25_000
-    assert DEFAULT_STAGE_OUTPUT_CAPS["stage_3"]["large"] >= 18_000
+def test_default_output_caps_preserve_discovery_headroom_and_bound_followups():
+    assert DEFAULT_STAGE_OUTPUT_CAPS["stage_0"]["large"] == 4_000
+    assert DEFAULT_STAGE_OUTPUT_CAPS["stage_1"]["large"] == 40_000
+    assert DEFAULT_STAGE_OUTPUT_CAPS["stage_2"]["large"] == 6_000
+    assert DEFAULT_STAGE_OUTPUT_CAPS["verification"]["large"] == 3_000
 
 
 def test_stage_output_cap_env_override(monkeypatch):

@@ -43,7 +43,8 @@ from service.review.evidence_scopes import process_review_evidence_scopes
 _FILE_SECTION = re.compile(
     r"^FILE #\d+:\s*(?P<path>[^\r\n]+).*?"
     r"Current File Content \(post-change; may be bounded when explicitly labelled\):\s*\n"
-    r"(?P<content>.*?)\n\n(?:Delta )?Diff:\s*\n(?P<diff>.*?)(?=\n---(?:\n|$)|\Z)",
+    r"(?P<content>.*?)\n\n(?:Delta )?Diff(?: \(NEW CHANGES ONLY\))?:\s*\n"
+    r"(?P<diff>.*?)(?=\n---(?:\n|$)|\Z)",
     re.MULTILINE | re.DOTALL,
 )
 _RERANK_ID = re.compile(r'"id"\s*:\s*(\d+)')
@@ -68,6 +69,11 @@ def _message_payload(message: Any) -> dict[str, Any]:
         return {
             str(key): _json_safe(value)
             for key, value in message.items()
+        }
+    if isinstance(message, tuple) and len(message) == 2:
+        return {
+            "role": str(message[0]),
+            "content": _json_safe(message[1]),
         }
     payload: dict[str, Any] = {
         "type": getattr(message, "type", message.__class__.__name__),
@@ -127,11 +133,20 @@ def _classify_stage(schema: Any, rendered: str, tools: tuple[dict[str, Any], ...
         "ReconciliationOutput": "branch_reconciliation",
         "CodeReviewOutput": "branch_analysis",
         "RerankResponse": "rag_reranking",
+        "CrossFileInvestigationOutput": "stage_2",
+        "CompatibilityOutput": "stage_2",
+        "VerificationPacketOutput": "verification",
     }
     if _schema_name(schema) in by_schema:
         return by_schema[_schema_name(schema)]
-    if tools and "Verification Agent" in rendered:
+    if (
+        (tools and "Verification Agent" in rendered)
+        or "final adversarial verifier for code-review candidates" in rendered
+        or "final code-review verification JSON" in rendered
+    ):
         return "verification"
+    if "bounded cross-file defect hypotheses" in rendered:
+        return "stage_2"
     if "JSON repair expert" in rendered:
         return "json_repair"
     if "Produce final PR executive summary" in rendered:
@@ -262,9 +277,25 @@ class PromptCaptureSession:
             }
         return response
 
-    def raw_response_for(self, stage: str) -> CapturedAIMessage:
+    def raw_response_for(self, stage: str, rendered: str = "") -> CapturedAIMessage:
         if stage == "verification":
-            content = '{"issue_ids_to_drop":[]}'
+            verification_ids = list(dict.fromkeys(re.findall(
+                r'"verificationId"\s*:\s*"([^"]+)"',
+                rendered,
+            )))
+            content = json.dumps({
+                "verdicts": [
+                    {
+                        "verificationId": verification_id,
+                        "verdict": "CONFIRMED",
+                        "duplicateOf": None,
+                        "rationale": "Dry-run confirms the synthetic candidate.",
+                    }
+                    for verification_id in verification_ids
+                ],
+            }, separators=(",", ":"))
+        elif stage == "stage_2":
+            content = '{"issues":[]}'
         elif stage in {"branch_analysis", "branch_reconciliation"}:
             content = '{"comment":"Dry-run simulated response.","issues":[]}'
         else:
@@ -328,6 +359,9 @@ class PromptCaptureSession:
                                 "Synthetic required change used only for dry-run prompt construction."
                             ),
                             codeSnippet=anchor,
+                            triggerCondition="Dry-run synthetic trigger condition.",
+                            causalPath=f"Changed source in {path} reaches the synthetic failure.",
+                            observableImpact="Dry-run synthetic observable failure.",
                         ))
                 reviews.append(FileReviewOutput(
                     file=path,
@@ -344,6 +378,26 @@ class PromptCaptureSession:
                 pr_recommendation="Dry-run simulated recommendation.",
                 confidence="HIGH",
             )
+
+        if _schema_name(schema) == "CrossFileInvestigationOutput":
+            return schema.model_validate({"issues": []})
+
+        if _schema_name(schema) == "VerificationPacketOutput":
+            verification_ids = list(dict.fromkeys(re.findall(
+                r'"verificationId"\s*:\s*"([^"]+)"',
+                rendered,
+            )))
+            return schema.model_validate({
+                "verdicts": [
+                    {
+                        "verificationId": verification_id,
+                        "verdict": "CONFIRMED",
+                        "duplicateOf": None,
+                        "rationale": "Dry-run confirms the synthetic candidate.",
+                    }
+                    for verification_id in verification_ids
+                ],
+            })
 
         if schema is DeduplicatedIssueList:
             return DeduplicatedIssueList(kept_indices=list(range(10_000)))
@@ -677,7 +731,7 @@ class PromptCaptureLLM:
                 rendered,
                 self._include_raw,
             )
-        return self._session.raw_response_for(record["stage"])
+        return self._session.raw_response_for(record["stage"], rendered)
 
 
 class DeterministicOnlyRagClient:

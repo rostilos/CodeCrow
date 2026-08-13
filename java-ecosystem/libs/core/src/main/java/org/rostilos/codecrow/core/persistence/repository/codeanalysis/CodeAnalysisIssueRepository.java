@@ -56,6 +56,28 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
     @Query("SELECT cai FROM CodeAnalysisIssue cai WHERE cai.id = :id")
     java.util.Optional<CodeAnalysisIssue> findByIdWithAnalysis(@Param("id") Long id);
 
+    /** Resolve a model-supplied historical ID only inside the current PR scope. */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
+            "analysis",
+            "analysis.project",
+            "analysis.project.workspace"
+    })
+    @Query("SELECT cai FROM CodeAnalysisIssue cai " +
+            "WHERE cai.id = :id " +
+            "AND cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.prNumber = :prNumber " +
+            "AND cai.analysis.prVersion < (" +
+            "  SELECT currentAnalysis.prVersion FROM CodeAnalysis currentAnalysis " +
+            "  WHERE currentAnalysis.id = :currentAnalysisId " +
+            "  AND currentAnalysis.project.id = :projectId " +
+            "  AND currentAnalysis.prNumber = :prNumber" +
+            ")")
+    java.util.Optional<CodeAnalysisIssue> findScopedHistoricalIssue(
+            @Param("id") Long id,
+            @Param("projectId") Long projectId,
+            @Param("prNumber") Long prNumber,
+            @Param("currentAnalysisId") Long currentAnalysisId);
+
     /**
      * Find all issues for a specific file across ALL analyses on the given branch.
      * Used by the source code viewer to show every issue for a file, not just those
@@ -93,6 +115,11 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
      * Find all issues across all analyses for a specific PR.
      * Used by the PR-level source code viewer to show issue counts per file.
      */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
+            "analysis",
+            "analysis.project",
+            "analysis.project.workspace"
+    })
     @Query("SELECT cai FROM CodeAnalysisIssue cai " +
             "WHERE cai.analysis.project.id = :projectId " +
             "AND cai.analysis.prNumber = :prNumber " +

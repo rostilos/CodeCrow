@@ -11,6 +11,8 @@ import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
 import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator;
 import org.rostilos.codecrow.core.util.tracking.DiffSanitizer;
 import org.rostilos.codecrow.core.util.tracking.IssueFingerprint;
+import org.rostilos.codecrow.core.util.tracking.PrIssueLineage;
+import org.rostilos.codecrow.core.util.tracking.PrIssueLineageFingerprint;
 import org.rostilos.codecrow.core.util.anchoring.SnippetAnchoringService;
 import org.rostilos.codecrow.core.util.tracking.LineHashSequence;
 import org.slf4j.Logger;
@@ -30,7 +32,6 @@ public class CodeAnalysisService {
     private final CodeAnalysisIssueRepository issueRepository;
     private final QualityGateRepository qualityGateRepository;
     private final QualityGateEvaluator qualityGateEvaluator;
-    private final IssueDeduplicationService issueDeduplicationService;
     private static final Logger log = LoggerFactory.getLogger(CodeAnalysisService.class);
 
     @Autowired
@@ -38,14 +39,12 @@ public class CodeAnalysisService {
             CodeAnalysisRepository codeAnalysisRepository,
             CodeAnalysisIssueRepository issueRepository,
             QualityGateRepository qualityGateRepository,
-            QualityGateEvaluator qualityGateEvaluator,
-            IssueDeduplicationService issueDeduplicationService
+            QualityGateEvaluator qualityGateEvaluator
     ) {
         this.codeAnalysisRepository = codeAnalysisRepository;
         this.issueRepository = issueRepository;
         this.qualityGateRepository = qualityGateRepository;
         this.qualityGateEvaluator = qualityGateEvaluator;
-        this.issueDeduplicationService = issueDeduplicationService;
     }
 
     /**
@@ -125,10 +124,59 @@ public class CodeAnalysisService {
             String taskId,
             String taskSummary
     ) {
+        return createAnalysisFromAiResponse(
+                project, analysisData, pullRequestId, targetBranchName,
+                sourceBranchName, commitHash, vcsAuthorId, vcsAuthorUsername,
+                diffFingerprint, fileContents, taskId, taskSummary, null, null);
+    }
+
+    /**
+     * Persists a PR review using the provider-confirmed base revision and the
+     * current analysis behavior as part of its durable identity.
+     */
+    public CodeAnalysis createAnalysisFromAiResponse(
+            Project project,
+            Map<String, Object> analysisData,
+            Long pullRequestId,
+            String targetBranchName,
+            String sourceBranchName,
+            String commitHash,
+            String vcsAuthorId,
+            String vcsAuthorUsername,
+            String diffFingerprint,
+            Map<String, String> fileContents,
+            String taskId,
+            String taskSummary,
+            String baseCommitHash,
+            String analysisBehaviorDigest
+    ) {
         try {
-            // Check if analysis already exists for this commit (handles webhook retries)
-            Optional<CodeAnalysis> existingAnalysis = codeAnalysisRepository
-                    .findByProjectIdAndCommitHashAndPrNumber(project.getId(), commitHash, pullRequestId);
+            // One accepted analysis attempt owns one durable occurrence. This lets a
+            // deliberate same-head rerun persist fresh findings, while recovering
+            // the same persisted job remains idempotent. Legacy callers that
+            // do not carry an attempt key retain the historical lookup.
+            String normalizedBaseCommitHash = baseCommitHash == null || baseCommitHash.isBlank()
+                    ? CodeAnalysis.UNKNOWN_BASE_COMMIT
+                    : baseCommitHash;
+            Object rawAnalysisRunKey = analysisData != null
+                    ? analysisData.get("analysisRunKey")
+                    : null;
+            String analysisRunKey = normalizeTaskValue(
+                    rawAnalysisRunKey instanceof String value ? value : null,
+                    64);
+            boolean hasRunIdentity = analysisRunKey != null;
+            boolean hasBehaviorIdentity = analysisBehaviorDigest != null
+                    && !analysisBehaviorDigest.isBlank();
+            Optional<CodeAnalysis> existingAnalysis = hasRunIdentity
+                    ? codeAnalysisRepository.findByProjectIdAndAnalysisRunKey(
+                            project.getId(), analysisRunKey)
+                    : !hasBehaviorIdentity
+                    ? codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(
+                            project.getId(), commitHash, pullRequestId)
+                    : codeAnalysisRepository
+                            .findFirstByProjectIdAndCommitHashAndPrNumberAndBaseCommitHashAndAnalysisBehaviorDigestOrderByCreatedAtDescIdDesc(
+                                    project.getId(), commitHash, pullRequestId,
+                                    normalizedBaseCommitHash, analysisBehaviorDigest);
 
             if (existingAnalysis.isPresent()) {
                 log.info("Analysis already exists for project={}, commit={}, pr={}. Returning existing.",
@@ -145,6 +193,9 @@ public class CodeAnalysisService {
             analysis.setSourceBranchName(sourceBranchName);
             analysis.setPrVersion(previousVersion + 1);
             analysis.setDiffFingerprint(diffFingerprint);
+            analysis.setBaseCommitHash(normalizedBaseCommitHash);
+            analysis.setAnalysisBehaviorDigest(analysisBehaviorDigest);
+            analysis.setAnalysisRunKey(analysisRunKey);
             analysis.setTaskId(normalizeTaskValue(taskId, 128));
             analysis.setTaskSummary(normalizeTaskValue(taskSummary, 512));
 
@@ -279,7 +330,8 @@ public class CodeAnalysisService {
                         }
                         CodeAnalysisIssue issue = createIssueFromData(
                                 issueData, String.valueOf(i), vcsAuthorId, vcsAuthorUsername,
-                                commitHash, prNumber, analysisId, fileContents);
+                                commitHash, prNumber, analysisId, fileContents,
+                                savedAnalysis.getProject().getId());
                         if (issue != null) {
                             savedAnalysis.addIssue(issue);
                         }
@@ -304,7 +356,8 @@ public class CodeAnalysisService {
 
                         CodeAnalysisIssue issue = createIssueFromData(
                                 issueData, entry.getKey(), vcsAuthorId, vcsAuthorUsername,
-                                commitHash, prNumber, analysisId, fileContents);
+                                commitHash, prNumber, analysisId, fileContents,
+                                savedAnalysis.getProject().getId());
                         if (issue != null) {
                             savedAnalysis.addIssue(issue);
                         }
@@ -328,22 +381,10 @@ public class CodeAnalysisService {
                             && !DiffSanitizer.NO_FIX_PLACEHOLDER.equals(i.getSuggestedFixDiff()))
                     .count();
 
-            // De-duplicate only exact anchored identities. Location alone and FILE scope
-            // are not identities because independent findings can share them.
-            List<CodeAnalysisIssue> deduplicated = issueDeduplicationService.deduplicateAtIngestion(
-                    savedAnalysis.getIssues());
-            int deduped = rawIssueCount - deduplicated.size();
-            if (deduped > 0) {
-                savedAnalysis.getIssues().clear();
-                for (CodeAnalysisIssue issue : deduplicated) {
-                    savedAnalysis.addIssue(issue);
-                }
-            }
-
             log.info("Java post-processing complete: {} raw → {} final issues "
-                            + "(deduped={}, linesHashed={}, diffsPresent={})",
+                            + "(verifiedMembershipPreserved=true, linesHashed={}, diffsPresent={})",
                     rawIssueCount, savedAnalysis.getIssues().size(),
-                    deduped, linesCorrected, diffsRestored);
+                    linesCorrected, diffsRestored);
             
             // Evaluate quality gate — wrapped defensively so a QG failure
             // (e.g. detached entity, lazy-init) does not abort the entire analysis
@@ -412,12 +453,42 @@ public class CodeAnalysisService {
         return codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(projectId, commitHash, prNumber).stream().findFirst();
     }
 
+    public Optional<CodeAnalysis> getCodeAnalysisCache(
+            Long projectId,
+            String commitHash,
+            Long prNumber,
+            String baseCommitHash,
+            String analysisBehaviorDigest) {
+        if (analysisBehaviorDigest == null || analysisBehaviorDigest.isBlank()) {
+            return Optional.empty();
+        }
+        String normalizedBaseCommitHash = baseCommitHash == null || baseCommitHash.isBlank()
+                ? CodeAnalysis.UNKNOWN_BASE_COMMIT
+                : baseCommitHash;
+        return codeAnalysisRepository
+                .findFirstByProjectIdAndCommitHashAndPrNumberAndBaseCommitHashAndAnalysisBehaviorDigestOrderByCreatedAtDescIdDesc(
+                        projectId, commitHash, prNumber, normalizedBaseCommitHash,
+                        analysisBehaviorDigest);
+    }
+
     /**
      * Fallback cache lookup by commit hash only (ignoring PR number).
      * Handles close/reopen scenarios where the same commit gets a new PR number.
      */
     public Optional<CodeAnalysis> getAnalysisByCommitHash(Long projectId, String commitHash) {
         return codeAnalysisRepository.findTopByProjectIdAndCommitHash(projectId, commitHash);
+    }
+
+    public Optional<CodeAnalysis> getAnalysisByCommitHash(
+            Long projectId,
+            String commitHash,
+            String analysisBehaviorDigest) {
+        if (analysisBehaviorDigest == null || analysisBehaviorDigest.isBlank()) {
+            return Optional.empty();
+        }
+        return codeAnalysisRepository
+                .findTopByProjectIdAndCommitHashAndAnalysisBehaviorDigest(
+                        projectId, commitHash, analysisBehaviorDigest);
     }
 
     /**
@@ -506,10 +577,18 @@ public class CodeAnalysisService {
 
         // Deep-copy issues
         for (CodeAnalysisIssue srcIssue : source.getIssues()) {
+            if (srcIssue.isResolved()) {
+                // Historical lifecycle rows are not current findings and must not
+                // be copied into a different PR's current analysis.
+                continue;
+            }
             CodeAnalysisIssue issueClone = new CodeAnalysisIssue();
             issueClone.setSeverity(srcIssue.getSeverity());
             issueClone.setFilePath(srcIssue.getFilePath());
             issueClone.setLineNumber(srcIssue.getLineNumber());
+            issueClone.setEndLineNumber(srcIssue.getEndLineNumber());
+            issueClone.setScopeStartLine(srcIssue.getScopeStartLine());
+            issueClone.setIssueScope(srcIssue.getIssueScope());
             issueClone.setReason(srcIssue.getReason());
             issueClone.setTitle(srcIssue.getTitle());
             issueClone.setSuggestedFixDescription(srcIssue.getSuggestedFixDescription());
@@ -529,9 +608,12 @@ public class CodeAnalysisService {
             issueClone.setIssueFingerprint(srcIssue.getIssueFingerprint());
             issueClone.setContentFingerprint(srcIssue.getContentFingerprint());
             issueClone.setCodeSnippet(srcIssue.getCodeSnippet());
-            // Copy PR tracking lineage
-            issueClone.setTrackedFromIssueId(srcIssue.getTrackedFromIssueId());
-            issueClone.setTrackingConfidence(srcIssue.getTrackingConfidence());
+            // A cross-PR clone is a new lineage scope. The destination matcher
+            // recomputes its receipt and links it only to a destination-PR tip.
+            issueClone.setLineageFingerprint(null);
+            issueClone.setTrackedFromIssueId(null);
+            issueClone.setTrackingConfidence(null);
+            issueClone.setDetectionSource(srcIssue.getDetectionSource());
             saved.addIssue(issueClone);
         }
 
@@ -572,7 +654,8 @@ public class CodeAnalysisService {
             String commitHash,
             Long prNumber,
             Long analysisId,
-            Map<String, String> fileContents
+            Map<String, String> fileContents,
+            Long projectId
     ) {
         try {
             // Sanitize all string values in the AI response map to strip null bytes
@@ -602,10 +685,16 @@ public class CodeAnalysisService {
                     } else if (originalIdObj instanceof Number) {
                         originalId = ((Number) originalIdObj).longValue();
                     }
-                    if (originalId != null) {
-                        originalIssue = issueRepository.findById(originalId).orElse(null);
+                    if (originalId != null && projectId != null && prNumber != null
+                            && analysisId != null) {
+                        originalIssue = issueRepository.findScopedHistoricalIssue(
+                                originalId, projectId, prNumber, analysisId).orElse(null);
                         if (originalIssue != null) {
                             log.debug("Found original issue {} for reconciliation", originalId);
+                        } else {
+                            log.warn("Ignoring out-of-scope or current model-supplied issue ID {} "
+                                            + "for project={}, PR={}, analysis={}",
+                                    originalId, projectId, prNumber, analysisId);
                         }
                     }
                 } catch (NumberFormatException e) {
@@ -739,14 +828,6 @@ public class CodeAnalysisService {
             // because their old source anchor is missing or stale.
             boolean historicalResolution = isResolved && originalIssue != null;
 
-            // INFO records are observations, not actionable defects. Only a matched
-            // historical resolution is retained for lifecycle bookkeeping.
-            if (issue.getSeverity() == IssueSeverity.INFO && !historicalResolution) {
-                log.info("Dropping non-actionable INFO issue: file={}, line={}, title={}",
-                        issue.getFilePath(), issue.getLineNumber(), issue.getTitle());
-                return null;
-            }
-            
             log.debug("Issue resolved status: isResolvedObj={}, type={}, parsed={}", 
                     isResolvedObj, isResolvedObj != null ? isResolvedObj.getClass().getSimpleName() : "null", isResolved);
 
@@ -905,6 +986,14 @@ public class CodeAnalysisService {
             }
 
             computeTrackingHashes(issue, fileContents, codeSnippet);
+            issue.setLineageFingerprint(PrIssueLineageFingerprint.compute(
+                    issue,
+                    stringValue(issueData.get("triggerCondition")),
+                    stringValue(issueData.get("causalPath")),
+                    stringValue(issueData.get("observableImpact")),
+                    stringValue(issueData.get("claimKind")),
+                    collectionValue(issueData.get("evidenceRefs")),
+                    collectionValue(issueData.get("relatedLocations"))));
 
             log.debug("Created issue: {} severity, category: {}, file: {}, line: {}, resolved: {}",
                     issue.getSeverity(), issue.getIssueCategory(), issue.getFilePath(), issue.getLineNumber(), isResolved);
@@ -922,7 +1011,15 @@ public class CodeAnalysisService {
      */
     private CodeAnalysisIssue createIssueFromData(Map<String, Object> issueData, String issueKey, String vcsAuthorId, String vcsAuthorUsername) {
         return createIssueFromData(issueData, issueKey, vcsAuthorId, vcsAuthorUsername,
-                null, null, null, Collections.emptyMap());
+                null, null, null, Collections.emptyMap(), null);
+    }
+
+    private static String stringValue(Object value) {
+        return value instanceof String string ? string : null;
+    }
+
+    private static Collection<?> collectionValue(Object value) {
+        return value instanceof Collection<?> collection ? collection : List.of();
     }
 
     /**
@@ -963,7 +1060,7 @@ public class CodeAnalysisService {
     }
 
     public Optional<CodeAnalysis> findByProjectIdAndPrNumber(Long projectId, Long prNumber) {
-        return codeAnalysisRepository.findByProjectIdAndPrNumber(projectId, prNumber);
+        return codeAnalysisRepository.findByProjectIdAndPrNumberWithMaxPrVersion(projectId, prNumber);
     }
 
     /**
@@ -1057,22 +1154,61 @@ public class CodeAnalysisService {
                 issueRepository.findByProjectIdAndBranchName(projectId, branchName));
     }
 
-    /**
-     * Find all issues across all analyses for a specific PR number.
-     * Deduplicates tracked issues, keeping only the version from the most recent analysis.
-     */
+    /** Find the disjoint current and historical active lineage tips for a PR. */
+    public PrIssueHistoryProjection projectPrIssueHistory(Long projectId, Long prNumber) {
+        List<CodeAnalysisIssue> allIssues = issueRepository.findByProjectIdAndPrNumber(projectId, prNumber);
+        PrIssueLineage.Projection lineage = PrIssueLineage.project(allIssues);
+        for (PrIssueLineage.InvalidEdge invalidEdge : lineage.invalidEdges()) {
+            log.warn("Ignoring invalid stored PR lineage edge child={} predecessor={}: {}",
+                    invalidEdge.childId(), invalidEdge.predecessorId(), invalidEdge.reason());
+        }
+
+        Long currentAnalysisId = codeAnalysisRepository
+                .findByProjectIdAndPrNumberWithMaxPrVersion(projectId, prNumber)
+                .map(CodeAnalysis::getId)
+                .orElse(null);
+        List<CodeAnalysisIssue> current = new ArrayList<>();
+        List<CodeAnalysisIssue> historical = new ArrayList<>();
+        for (CodeAnalysisIssue issue : lineage.activeTips()) {
+            if (currentAnalysisId != null && issue.getAnalysis() != null
+                    && currentAnalysisId.equals(issue.getAnalysis().getId())) {
+                current.add(issue);
+            } else {
+                historical.add(issue);
+            }
+        }
+        return new PrIssueHistoryProjection(List.copyOf(current), List.copyOf(historical));
+    }
+
+    /** Find active tips across all analyses for a specific PR number. */
     public List<CodeAnalysisIssue> findIssuesByPrNumber(Long projectId, Long prNumber) {
-        return deduplicateBranchIssues(
-                issueRepository.findByProjectIdAndPrNumber(projectId, prNumber));
+        return projectPrIssueHistory(projectId, prNumber).allActive();
     }
 
     /**
-     * Find all issues for a specific file across all analyses for a PR number.
-     * Deduplicates tracked issues, keeping only the version from the most recent analysis.
+     * Find active tips for a specific file across all PR analyses.
      */
     public List<CodeAnalysisIssue> findIssuesByPrNumberAndFilePath(Long projectId, Long prNumber, String filePath) {
-        return deduplicateBranchIssues(
-                issueRepository.findByProjectIdAndPrNumberAndFilePath(projectId, prNumber, filePath));
+        return projectPrIssueHistory(projectId, prNumber).allActive().stream()
+                .filter(issue -> Objects.equals(filePath, issue.getFilePath()))
+                .toList();
+    }
+
+    public record PrIssueHistoryProjection(
+            List<CodeAnalysisIssue> currentFindings,
+            List<CodeAnalysisIssue> historicalActiveNotRevalidated
+    ) {
+        public List<CodeAnalysisIssue> allActive() {
+            List<CodeAnalysisIssue> combined = new ArrayList<>(
+                    currentFindings.size() + historicalActiveNotRevalidated.size());
+            combined.addAll(currentFindings);
+            combined.addAll(historicalActiveNotRevalidated);
+            return List.copyOf(combined);
+        }
+
+        public boolean isHistoricalNotRevalidated(CodeAnalysisIssue issue) {
+            return historicalActiveNotRevalidated.contains(issue);
+        }
     }
 
     /**

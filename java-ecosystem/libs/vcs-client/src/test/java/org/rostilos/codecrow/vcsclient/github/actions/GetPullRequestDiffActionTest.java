@@ -9,6 +9,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
 import java.util.List;
+import org.rostilos.codecrow.vcsclient.model.VcsPullRequestChangeManifest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -140,5 +141,57 @@ class GetPullRequestDiffActionTest {
                 new GetPullRequestDiffAction.PullRequestFilePatch(
                         "assets/logo.png", "", "modified", ""));
         verify(response).close();
+    }
+
+    @Test
+    void manifestIncludesPatchlessFilesAndFollowsPagination() throws IOException {
+        Response first = mock(Response.class);
+        ResponseBody firstBody = mock(ResponseBody.class);
+        when(first.isSuccessful()).thenReturn(true);
+        when(first.body()).thenReturn(firstBody);
+        when(firstBody.string()).thenReturn("""
+                [{"filename":"src/App.java","status":"modified"}]
+                """);
+        when(first.header("Link")).thenReturn(
+                "<https://api.github.com/next>; rel=\"next\"");
+
+        Response second = mock(Response.class);
+        ResponseBody secondBody = mock(ResponseBody.class);
+        when(second.isSuccessful()).thenReturn(true);
+        when(second.body()).thenReturn(secondBody);
+        when(secondBody.string()).thenReturn("""
+                [{"filename":"src/New.java","previous_filename":"src/Old.java","status":"renamed"}]
+                """);
+        when(second.header("Link")).thenReturn(null);
+
+        when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
+        when(call.execute()).thenReturn(first, second);
+
+        VcsPullRequestChangeManifest manifest = action.getPullRequestChangeManifest(
+                "owner", "repo", 123);
+
+        assertThat(manifest.isComplete()).isTrue();
+        assertThat(manifest.currentPaths())
+                .containsExactly("src/App.java", "src/New.java");
+        assertThat(manifest.removedPaths()).containsExactly("src/Old.java");
+        assertThat(manifest.receipt()).contains("pages=2", "entries=2");
+        verify(first).close();
+        verify(second).close();
+    }
+
+    @Test
+    void manifestWithMissingDestinationPathIsIncomplete() throws IOException {
+        when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
+        when(call.execute()).thenReturn(response);
+        when(response.isSuccessful()).thenReturn(true);
+        when(response.body()).thenReturn(responseBody);
+        when(responseBody.string()).thenReturn("[{\"status\":\"modified\"}]");
+        when(response.header("Link")).thenReturn(null);
+
+        VcsPullRequestChangeManifest manifest = action.getPullRequestChangeManifest(
+                "owner", "repo", 123);
+
+        assertThat(manifest.isComplete()).isFalse();
+        assertThat(manifest.changes()).isEmpty();
     }
 }

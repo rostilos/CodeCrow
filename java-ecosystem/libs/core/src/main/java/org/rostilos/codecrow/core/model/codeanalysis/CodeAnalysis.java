@@ -12,12 +12,28 @@ import java.util.ArrayList;
         name = "code_analysis",
         uniqueConstraints = {
                 @UniqueConstraint(
-                        name = "uq_code_analysis_project_commit",
-                        columnNames = {"project_id", "commit_hash", "pr_number"}
+                        name = "uq_code_analysis_project_run",
+                        columnNames = {"project_id", "analysis_run_key"}
                 )
         }
 )
 public class CodeAnalysis {
+
+    /**
+     * Identity assigned to rows created before review behavior became an
+     * explicit persistence concern. New PR reviews always replace this value
+     * with the digest supplied by the analysis engine.
+     */
+    public static final String LEGACY_ANALYSIS_BEHAVIOR_DIGEST =
+            "13b3b60741ccf0da771d0adada28590693ed3a436d3ccca12e7888308a41bb56";
+
+    /**
+     * Durable representation for a provider response that did not include a
+     * base revision. A non-null value keeps the database uniqueness guarantee
+     * effective for retries even when provider metadata is temporarily
+     * incomplete.
+     */
+    public static final String UNKNOWN_BASE_COMMIT = "";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -35,8 +51,28 @@ public class CodeAnalysis {
     @Column(name = "pr_number")
     private Long prNumber;
 
-    @Column(name = "commit_hash", length = 40)
+    @Column(name = "commit_hash", length = 64)
     private String commitHash;
+
+    /** Immutable target-branch revision used as the base of this PR review. */
+    @Column(name = "base_commit_hash", nullable = false, length = 64)
+    private String baseCommitHash = UNKNOWN_BASE_COMMIT;
+
+    /**
+     * Digest of review-affecting engine behavior. It is part of the durable
+     * idempotency key so a behavior change can produce a fresh review at an
+     * otherwise identical PR head.
+     */
+    @Column(name = "analysis_behavior_digest", nullable = false, length = 64)
+    private String analysisBehaviorDigest = LEGACY_ANALYSIS_BEHAVIOR_DIGEST;
+
+    /**
+     * Digest of one accepted analysis attempt and its confirmed review snapshot.
+     * Different intentional reruns at the same head receive different keys;
+     * recovering the same persisted job and snapshot remains idempotent.
+     */
+    @Column(name = "analysis_run_key", length = 64)
+    private String analysisRunKey;
 
     @Column(name = "diff_fingerprint", length = 64)
     private String diffFingerprint;
@@ -129,6 +165,27 @@ public class CodeAnalysis {
 
     public String getCommitHash() { return commitHash; }
     public void setCommitHash(String commitHash) { this.commitHash = commitHash; }
+
+    public String getBaseCommitHash() { return baseCommitHash; }
+    public void setBaseCommitHash(String baseCommitHash) {
+        this.baseCommitHash = baseCommitHash == null || baseCommitHash.isBlank()
+                ? UNKNOWN_BASE_COMMIT
+                : baseCommitHash;
+    }
+
+    public String getAnalysisBehaviorDigest() { return analysisBehaviorDigest; }
+    public void setAnalysisBehaviorDigest(String analysisBehaviorDigest) {
+        this.analysisBehaviorDigest = analysisBehaviorDigest == null || analysisBehaviorDigest.isBlank()
+                ? LEGACY_ANALYSIS_BEHAVIOR_DIGEST
+                : analysisBehaviorDigest;
+    }
+
+    public String getAnalysisRunKey() { return analysisRunKey; }
+    public void setAnalysisRunKey(String analysisRunKey) {
+        this.analysisRunKey = analysisRunKey == null || analysisRunKey.isBlank()
+                ? null
+                : analysisRunKey.trim();
+    }
 
     public String getDiffFingerprint() { return diffFingerprint; }
     public void setDiffFingerprint(String diffFingerprint) { this.diffFingerprint = diffFingerprint; }

@@ -370,7 +370,7 @@ class TestBuildMetadata:
             node_type="function_definition",
             extends=["Base"],
             implements=["IFoo"],
-            imports=["os"],
+            imports=["os", "from src.legacy import legacy_api"],
             namespace="mypackage",
             methods=["bar"],
             properties=["prop"],
@@ -397,7 +397,7 @@ class TestBuildMetadata:
         assert meta["signature"] == "def foo():"
         assert meta["extends"] == ["Base"]
         assert meta["implements"] == ["IFoo"]
-        assert meta["imports"] == ["os"]
+        assert meta["imports"] == ["os", "from src.legacy import legacy_api"]
         assert meta["namespace"] == "mypackage"
         assert meta["methods"] == ["bar"]
         assert meta["properties"] == ["prop"]
@@ -407,6 +407,8 @@ class TestBuildMetadata:
         assert meta["modifiers"] == ["public"]
         assert meta["calls"] == ["print"]
         assert meta["referenced_types"] == ["str"]
+        assert "src.legacy" in meta["reference_identifiers"]
+        assert "legacy_api" in meta["reference_identifiers"]
         assert meta["variables"] == ["z"]
         assert meta["constants"] == ["PI"]
         assert meta["type_parameters"] == ["T"]

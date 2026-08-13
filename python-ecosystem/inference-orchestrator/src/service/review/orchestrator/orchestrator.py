@@ -1,13 +1,6 @@
-"""
-Multi-Stage Review Orchestrator.
-
-Orchestrates the 4-stage AI code review pipeline:
-- Stage 0: Planning & Prioritization
-- Stage 1: Parallel File Review  
-- Stage 2: Cross-File & Architectural Analysis
-- Stage 3: Aggregation & Final Report
-"""
+"""Evidence-first pull-request review orchestration."""
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -24,30 +17,27 @@ from utils.hunk_coverage import (
 from utils.prompts.prompt_builder import PromptBuilder
 
 from service.review.orchestrator.reconciliation import (
-    reconcile_previous_issues,
     issues_are_conservative_duplicates,
     deduplicate_cross_batch_issues,
     deduplicate_final_issues,
-    deduplicate_final_issues_llm,
 )
 from service.review.orchestrator.verification_agent import (
     _resolve_historical_candidate,
     apply_candidate_provenance_gate,
-    previous_open_issue_ids,
     reviewable_hunk_ids_for_issue,
     run_deterministic_evidence_gate,
-    run_verification_agent,
 )
 from service.review.orchestrator.inference_policy import (
     build_review_inference_profile,
-    should_run_stage_2,
-    should_use_fast_dedup,
-    should_use_llm_dedup,
     with_stage_output_cap,
 )
 from service.review.orchestrator.stage_1_file_review import (
     Stage1RagState,
     Stage1ReviewUnitState,
+)
+from service.review.orchestrator.exact_context import (
+    ExactContextResolver,
+    ReviewFollowupBudget,
 )
 from utils.path_identity import normalize_repository_path, repository_paths_match
 from service.review.orchestrator.stages import (
@@ -56,12 +46,19 @@ from service.review.orchestrator.stages import (
     execute_branch_reconciliation_direct,
     execute_stage_0_planning,
     execute_stage_1_file_reviews,
-    execute_stage_2_cross_file,
-    prefetch_stage_2_cross_module_context,
-    execute_stage_3_aggregation,
     _emit_status,
     _emit_progress,
 )
+from service.review.orchestrator.targeted_cross_file import (
+    MAX_CALLS as MAX_FOLLOW_UP_CALLS,
+    GeneratedCrossFileCandidate,
+    run_targeted_cross_file,
+)
+from service.review.orchestrator.change_compatibility import (
+    run_change_compatibility_review,
+)
+from service.review.orchestrator.verification_wave import run_verification_wave
+from service.review.orchestrator.report_renderer import render_verified_report
 from service.review.plugin_context import (
     apply_effective_project_capabilities,
     apply_plugin_plan_constraints,
@@ -77,10 +74,44 @@ from service.review.pr_evidence import (
     PrEvidenceLedger,
     STAGE_2_PR_EVIDENCE_CHAR_BUDGET,
     build_pr_evidence_ledger,
-    gate_task_coverage_candidates,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _manifest_text_evidence_gaps(
+    request: ReviewRequestDto,
+    processed_diff: Optional[ProcessedDiff],
+) -> set[str]:
+    """Return provider-attested active paths with no selected patch evidence."""
+    parsed_paths = {
+        normalize_repository_path(item.path)
+        for item in (processed_diff.files if processed_diff is not None else ())
+        if normalize_repository_path(item.path)
+    }
+    incremental = (
+        str(getattr(request, "analysisMode", "FULL") or "FULL").upper()
+        == "INCREMENTAL"
+    )
+    selected_paths = {
+        normalize_repository_path(path)
+        for path in (getattr(request, "changedFiles", None) or ())
+    }
+    return {
+        normalize_repository_path(change.path)
+        for change in (
+            getattr(getattr(request, "pullRequestFileManifest", None), "changes", None)
+            or ()
+        )
+        if str(getattr(change, "kind", "") or "").strip().upper()
+        in {"ADDED", "MODIFIED", "COPIED", "UNKNOWN"}
+        and normalize_repository_path(change.path)
+        and normalize_repository_path(change.path) not in parsed_paths
+        and (
+            not incremental
+            or normalize_repository_path(change.path) in selected_paths
+        )
+    }
 
 
 def _task_context_value(
@@ -347,6 +378,20 @@ class MultiStageReviewOrchestrator:
 
         if not self.rag_client or not processed_diff:
             return
+
+        manifest = request.pullRequestFileManifest
+        if request.fullPrManifestComplete is not True:
+            logger.warning(
+                "PR context overlay not mutated because the provider did not "
+                "attest a complete base-to-head path manifest (%s); continuing "
+                "with local review evidence and the target-branch index",
+                (
+                    manifest.receipt or manifest.completeness
+                    if manifest is not None
+                    else "manifest-unavailable"
+                ),
+            )
+            return
         
         pr_number = request.pullRequestId
         if not pr_number:
@@ -374,6 +419,8 @@ class MultiStageReviewOrchestrator:
                 )
         
         files = []
+        emitted_paths: set[str] = set()
+        unavailable_current_paths: list[str] = []
         for f in processed_diff.files:
             raw_change_type = (
                 f.change_type.value
@@ -381,9 +428,6 @@ class MultiStageReviewOrchestrator:
                 else str(f.change_type)
             )
             change_type = raw_change_type.upper()
-            if f.is_skipped and change_type != "DELETED":
-                continue
-
             # Prefer exact repository identity. A checkout-prefix suffix is
             # accepted only when all matching candidates contain identical
             # source; ambiguous monorepo paths remain explicitly partial.
@@ -408,25 +452,72 @@ class MultiStageReviewOrchestrator:
                     "change_type": change_type,
                     "content_state": "complete",
                 })
+                emitted_paths.add(normalize_repository_path(f.path))
                 continue
 
             has_complete_source = f.full_content is not None
-            content = f.full_content if has_complete_source else f.content
-            if content is None:
-                continue
-            content_state = "complete" if has_complete_source else "partial_diff"
-            if content_state == "partial_diff":
-                logger.warning(
-                    "PR indexing: complete source unavailable for %s; "
-                    "sending explicitly partial diff evidence",
-                    f.path,
+            if not has_complete_source:
+                skip_reason = str(f.skip_reason or "").lower()
+                is_source_free_artifact = (
+                    bool(f.is_binary or f.is_gitlink)
+                    or f.plugin_disposition in {"excluded", "generated"}
+                    or any(
+                        marker in skip_reason
+                        for marker in (
+                            "binary",
+                            "gitlink",
+                            "generated",
+                            "excluded",
+                            "unsupported_source",
+                            "file_size_limit_exceeded",
+                            "total_size_limit_exceeded",
+                        )
+                    )
                 )
+                if is_source_free_artifact:
+                    files.append({
+                        "path": f.path,
+                        "content": "",
+                        "change_type": change_type,
+                        "content_state": "complete",
+                    })
+                    emitted_paths.add(normalize_repository_path(f.path))
+                    continue
+                unavailable_current_paths.append(f.path)
+                continue
             files.append({
                 "path": f.path,
-                "content": content,
+                "content": f.full_content,
                 "change_type": change_type,
-                "content_state": content_state,
+                "content_state": "complete",
             })
+            emitted_paths.add(normalize_repository_path(f.path))
+
+        # A provider manifest represents rename old paths and files deleted in
+        # earlier incremental runs even when the current raw diff has no patch
+        # for them. Explicit tombstones prevent the base index from resurfacing
+        # those stale paths inside the current PR overlay.
+        for deleted_path in request.fullPrDeletedFiles or ():
+            normalized_deleted = normalize_repository_path(deleted_path)
+            if not normalized_deleted or normalized_deleted in emitted_paths:
+                continue
+            files.append({
+                "path": deleted_path,
+                "content": "",
+                "change_type": "DELETED",
+                "content_state": "complete",
+            })
+            emitted_paths.add(normalized_deleted)
+
+        if unavailable_current_paths:
+            logger.warning(
+                "PR context overlay not mutated because exact current-head source "
+                "is unavailable for %d active manifest path(s): %s; continuing "
+                "without binding an incomplete overlay",
+                len(unavailable_current_paths),
+                ", ".join(unavailable_current_paths[:20]),
+            )
+            return
         
         if not files:
             logger.info("No files to index for PR")
@@ -522,7 +613,7 @@ class MultiStageReviewOrchestrator:
                         pr_generation_fingerprint,
                         overlay_generation_manifest,
                     )
-                )
+                ) and not (result.get("partial_files") or ())
                 if complete_overlay_binding:
                     request.ragPrGenerationFingerprint = (
                         pr_generation_fingerprint
@@ -956,9 +1047,14 @@ class MultiStageReviewOrchestrator:
             _clear_request_rag_bindings(request)
 
         snapshot_identity = validate_review_snapshot_identity(request)
-        validate_acquired_diff_manifest(
-            request.changedFiles or (),
-            request.deletedFiles or (),
+        if not request.prContextMaintenanceRequired:
+            validate_acquired_diff_manifest(
+                request.changedFiles or (),
+                request.deletedFiles or (),
+                processed_diff,
+            )
+        manifest_text_evidence_gaps = _manifest_text_evidence_gaps(
+            request,
             processed_diff,
         )
         is_incremental = (
@@ -968,7 +1064,8 @@ class MultiStageReviewOrchestrator:
         
         if is_incremental:
             logger.info(
-                "[%s] INCREMENTAL mode: reviewing delta diff, %d previous issues to reconcile",
+                "[%s] INCREMENTAL mode: reviewing the newest compatible delta; "
+                "%d historical issue occurrence(s) remain outside discovery",
                 _review_log_id(request),
                 len(request.previousCodeAnalysisIssues or []),
             )
@@ -983,6 +1080,7 @@ class MultiStageReviewOrchestrator:
             ),
             processed_diff,
             incremental=bool(is_incremental),
+            provider_manifest_complete=(request.fullPrManifestComplete is True),
             task_context=request.taskContext,
             pr_title=request.prTitle or "",
             pr_description=request.prDescription or "",
@@ -1013,18 +1111,12 @@ class MultiStageReviewOrchestrator:
                 (
                     "Fast check enabled for small PR "
                     f"({inference_profile.describe()}): bounded planning, "
-                    "conditional cross-file analysis, and deterministic small-issue dedup."
+                    "conditional cross-file analysis, and exact candidate deduplication."
                 ),
             )
         else:
             logger.info("Fast check not enabled: %s", inference_profile.describe())
 
-        stage_2_context_task: Optional[asyncio.Task] = None
-        stage_2_visible_evidence_by_id: Dict[
-            str, tuple[Dict[str, Any], ...]
-        ] = {}
-        stage_2_visible_prompt_hunk_ids: set[str] = set()
-        stage_2_prompt_provenance: Dict[str, str] = {}
         hunk_coverage = HunkCoverageLedger.from_processed_diff(processed_diff)
         candidate_ledger = CandidateEvidenceLedger()
 
@@ -1038,7 +1130,7 @@ class MultiStageReviewOrchestrator:
             )
             await self._index_pr_files(
                 request,
-                processed_diff,
+                full_pr_processed_diff or processed_diff,
                 snapshot_identity=snapshot_identity,
             )
             _emit_status(
@@ -1047,11 +1139,123 @@ class MultiStageReviewOrchestrator:
                 "Optional repository context preparation completed",
             )
 
+            followup_budget = ReviewFollowupBudget(
+                max_calls=MAX_FOLLOW_UP_CALLS,
+            )
+            exact_context_resolver = ExactContextResolver(
+                request,
+                file_metadata=(
+                    getattr(
+                        getattr(request, "enrichmentData", None),
+                        "fileMetadata",
+                        None,
+                    )
+                    or ()
+                ),
+                rag_client=request_rag_client,
+                mcp_client=self.client,
+            )
+
+            # Deleted files and metadata-only renames do not own a truthful
+            # current-side inline hunk. Review those compatibility effects for
+            # both deletion-only and mixed PRs so an unrelated text edit cannot
+            # hide a broken unchanged caller.
+            compatibility = await run_change_compatibility_review(
+                with_stage_output_cap(
+                    self.llm,
+                    "stage_2",
+                    inference_profile,
+                ),
+                request,
+                processed_diff,
+                exact_context_resolver=exact_context_resolver,
+                followup_budget=followup_budget,
+                candidate_ledger=candidate_ledger,
+            )
+            compatibility_issues = list(compatibility.issues)
+            _clear_discovery_lifecycle_fields(compatibility_issues)
+            if compatibility.changes_considered:
+                _emit_status(
+                    self.event_callback,
+                    "change_compatibility_completed",
+                    (
+                        "Deletion/rename compatibility check completed: "
+                        f"{len(compatibility_issues)} candidate(s), "
+                        f"{len(compatibility.incomplete_changes)} incomplete "
+                        "change(s)"
+                    ),
+                )
+
             if (
                 processed_diff is not None
                 and not hunk_coverage.reviewable_hunk_ids
-                and not request.previousCodeAnalysisIssues
             ):
+                if compatibility_issues:
+                    compatibility_issues = apply_candidate_provenance_gate(
+                        compatibility_issues,
+                        request,
+                        processed_diff,
+                        candidate_ledger,
+                    )
+                    compatibility_issues = run_deterministic_evidence_gate(
+                        compatibility_issues,
+                        request,
+                        processed_diff,
+                        candidate_ledger,
+                    )
+                    compatibility_issues = apply_plugin_validation_gate(
+                        compatibility_issues,
+                        request,
+                        exact_evidence_by_id={},
+                        deterministic_retrieval_states=(),
+                        candidate_ledger=candidate_ledger,
+                    )
+                    verification_result = await run_verification_wave(
+                        with_stage_output_cap(
+                            self.llm,
+                            "verification",
+                            inference_profile,
+                        ),
+                        compatibility_issues,
+                        request,
+                        processed_diff,
+                        candidate_ledger,
+                    )
+                    confirmed = list(verification_result.confirmed)
+                    hunk_coverage.mark_validated()
+                    final_report = render_verified_report(
+                        request,
+                        confirmed,
+                        incomplete_candidates=(
+                            verification_result.incomplete_count
+                            + len(compatibility.incomplete_changes)
+                            + len(manifest_text_evidence_gaps)
+                        ),
+                        rejected_candidates=verification_result.rejected_count,
+                    )
+                    hunk_coverage.complete()
+                    hunk_coverage.assert_complete()
+                    candidate_ledger.publish(confirmed)
+                    candidate_ledger.assert_terminal()
+                    _emit_review_evidence_completed(
+                        self.event_callback,
+                        hunk_coverage,
+                        candidate_ledger=candidate_ledger,
+                        request=request,
+                        pr_indexed=self._pr_indexed,
+                    )
+                    _emit_progress(
+                        self.event_callback,
+                        100,
+                        "Deletion/rename compatibility review complete",
+                    )
+                    return {
+                        "comment": final_report,
+                        "issues": [
+                            _serialize_issue_for_client(issue)
+                            for issue in confirmed
+                        ],
+                    }
                 hunk_coverage.complete()
                 hunk_coverage.assert_complete()
                 _emit_review_evidence_completed(
@@ -1073,9 +1277,28 @@ class MultiStageReviewOrchestrator:
                 )
                 return {
                     "comment": (
-                        "No text source hunks required model review. Every changed "
-                        "hunk was accounted for as generated, excluded, binary, "
-                        "deleted, or another deterministic non-reviewable input."
+                        "No text source hunks required model review. "
+                        + (
+                            "Provider metadata identified "
+                            f"{len(manifest_text_evidence_gaps)} active source "
+                            "change(s) whose patch evidence was unavailable; those "
+                            "changes were not reviewed. "
+                            if manifest_text_evidence_gaps
+                            else
+                            "Every acquired hunk was accounted for as generated, "
+                            "excluded, binary, deleted, or another deterministic "
+                            "non-reviewable input. "
+                        )
+                        + (
+                            "Deletion/rename compatibility could not be established "
+                            f"for {len(compatibility.incomplete_changes)} change(s) "
+                            "because exact current-head related evidence was "
+                            "unavailable or the bounded check could not complete."
+                            if compatibility.incomplete_changes
+                            else
+                            "No deletion or rename compatibility defect was proven "
+                            "from exact current-head related source."
+                        )
                     ),
                     "issues": [],
                 }
@@ -1118,16 +1341,6 @@ class MultiStageReviewOrchestrator:
             )
             _emit_progress(self.event_callback, 10, stage_0_message)
 
-            if not inference_profile.fast_check_enabled and request_rag_client:
-                stage_2_context_task = asyncio.create_task(
-                    prefetch_stage_2_cross_module_context(
-                        request_rag_client,
-                        request,
-                        processed_diff=processed_diff,
-                        visible_evidence_by_id=stage_2_visible_evidence_by_id,
-                    )
-                )
-            
             # === STAGE 1: File Reviews ===
             stage_1_rag_state = Stage1RagState()
             stage_1_review_unit_state = Stage1ReviewUnitState()
@@ -1151,170 +1364,72 @@ class MultiStageReviewOrchestrator:
                 rag_state=stage_1_rag_state,
                 review_unit_state=stage_1_review_unit_state,
                 candidate_ledger=candidate_ledger,
+                followup_budget=followup_budget,
+                exact_context_resolver=exact_context_resolver,
+                mcp_client=self.client,
             )
             hunk_coverage.mark_reviewed_hunks(
                 stage_1_review_unit_state.reviewed_hunk_ids
             )
-            
-            # Cross-batch deduplication applies only to active findings.
-            # Historical resolutions carry lifecycle identity and must survive
-            # even when their original reason resembles a current candidate.
-            protected_open_issue_ids = previous_open_issue_ids(request)
-            before_cross_batch_dedup = list(file_issues)
-            file_issues = _deduplicate_cross_batch_issues_preserving_lifecycle(
-                file_issues,
-                protected_open_issue_ids,
+            _clear_discovery_lifecycle_fields(file_issues)
+            _emit_progress(
+                self.event_callback,
+                55,
+                f"Stage 1 Complete: {len(file_issues)} candidate(s)",
             )
-            candidate_ledger.reject_removed(
-                before_cross_batch_dedup,
-                file_issues,
-                gate="deduplication",
-                code="cross_batch_duplicate",
+
+            # === TARGETED CROSS-FILE INVESTIGATION ===
+            _emit_status(
+                self.event_callback,
+                "cross_file_investigation_started",
+                "Investigating exact cross-file hypotheses...",
             )
-            
-            _emit_progress(self.event_callback, 60, f"Stage 1 Complete: {len(file_issues)} issues found across files")
-
-            # === STAGE 1.5: Issue Reconciliation ===
-            if request.previousCodeAnalysisIssues:
-                _emit_status(self.event_callback, "reconciliation_started", "Reconciling previous issues...")
-                file_issues = await reconcile_previous_issues(
-                    request,
-                    file_issues,
-                    processed_diff,
-                    candidate_ledger,
-                )
-                _emit_progress(self.event_callback, 70, f"Reconciliation Complete: {len(file_issues)} total issues after reconciliation")
-
-            # === STAGE 1.5: LLM-Driven Verification ===
-            file_issues = apply_candidate_provenance_gate(
-                file_issues,
+            targeted_result = await run_targeted_cross_file(
+                with_stage_output_cap(self.llm, "stage_2", inference_profile),
                 request,
                 processed_diff,
-                candidate_ledger,
-                stage_1_review_unit_state.units_by_hunk,
-            )
-            if VERIFICATION_ENABLED:
-                _emit_status(self.event_callback, "verification_started", "Verifying issues against file contents...")
-                file_issues = await run_verification_agent(
-                    with_stage_output_cap(self.llm, "verification", inference_profile),
-                    file_issues,
-                    request,
-                    processed_diff,
-                    candidate_ledger,
-                )
-                _emit_progress(self.event_callback, 75, f"Verification Complete: {len(file_issues)} total issues after verification")
-            else:
-                logger.info("Verification skipped by REVIEW_VERIFICATION_ENABLED")
-                _emit_status(
-                    self.event_callback,
-                    "verification_skipped",
-                    "Verification skipped by REVIEW_VERIFICATION_ENABLED",
-                )
-
-            # === STAGE 2: Cross-File Analysis ===
-            run_stage_2, stage_2_reason = should_run_stage_2(
-                inference_profile,
-                request,
                 review_plan,
                 file_issues,
+                context_requests=(
+                    stage_1_review_unit_state.cross_file_context_requests
+                ),
+                exact_context_resolver=exact_context_resolver,
+                followup_budget=followup_budget,
+                available_calls=followup_budget.remaining,
             )
-            if run_stage_2:
+            _register_targeted_cross_file_candidates(
+                targeted_result.candidates,
+                request,
+                processed_diff,
+                stage_1_review_unit_state,
+                candidate_ledger,
+            )
+            targeted_issues = targeted_result.issues
+            _clear_discovery_lifecycle_fields(targeted_issues)
+            file_issues.extend(targeted_issues)
+            file_issues.extend(compatibility_issues)
+            if targeted_result.incomplete_tickets:
                 _emit_status(
                     self.event_callback,
-                    "stage_2_started",
-                    f"Stage 2: Analyzing cross-file patterns ({stage_2_reason})...",
-                )
-                prefetched_cross_module_context = (
-                    await stage_2_context_task
-                    if stage_2_context_task is not None
-                    else None
-                )
-                cross_file_results = await execute_stage_2_cross_file(
-                    with_stage_output_cap(self.llm, "stage_2", inference_profile),
-                    request,
-                    file_issues,
-                    review_plan,
-                    processed_diff=processed_diff,
-                    rag_client=request_rag_client,
-                    fallback_llm=self.llm,
-                    prefetched_cross_module_context=prefetched_cross_module_context,
-                    visible_evidence_by_id=stage_2_visible_evidence_by_id,
-                    visible_prompt_hunk_ids=stage_2_visible_prompt_hunk_ids,
-                    prompt_provenance=stage_2_prompt_provenance,
-                    pr_evidence_ledger=pr_evidence_ledger,
-                )
-                coverage_gate = gate_task_coverage_candidates(
-                    cross_file_results.cross_file_issues,
-                    incremental=bool(is_incremental),
-                    task_context=request.taskContext,
-                    previous_issue_ids=(
-                        issue.id
-                        for issue in (request.previousCodeAnalysisIssues or ())
+                    "cross_file_investigation_incomplete",
+                    (
+                        "Cross-file evidence unavailable or budget-exhausted for "
+                        f"{len(targeted_result.incomplete_tickets)} ticket(s); "
+                        "dependent claims were withheld"
                     ),
-                    ledger=pr_evidence_ledger,
                 )
-                if coverage_gate.rejected:
-                    cross_file_results.cross_file_issues = list(
-                        coverage_gate.kept
-                    )
-                    rejection_counts: Dict[str, int] = {}
-                    for _, reason in coverage_gate.rejected:
-                        rejection_counts[reason] = (
-                            rejection_counts.get(reason, 0) + 1
-                        )
-                    logger.warning(
-                        "[%s] Suppressed %d unsupported task-coverage "
-                        "candidate(s): %s",
-                        _review_log_id(request),
-                        len(coverage_gate.rejected),
-                        rejection_counts,
-                    )
-                    _emit_status(
-                        self.event_callback,
-                        "task_coverage_candidates_suppressed",
-                        (
-                            "Withheld unsupported PR-wide task-coverage "
-                            f"claim(s): {len(coverage_gate.rejected)}"
-                        ),
-                    )
-            else:
-                if stage_2_context_task and not stage_2_context_task.done():
-                    stage_2_context_task.cancel()
-                logger.info("Fast check: skipping Stage 2 (%s)", stage_2_reason)
-                _emit_status(
-                    self.event_callback,
-                    "fast_check_stage_2_skipped",
-                    f"Fast check: Stage 2 skipped ({stage_2_reason})",
-                )
-                cross_file_results = CrossFileAnalysisResult(
-                    pr_risk_level="LOW",
-                    cross_file_issues=[],
-                    pr_recommendation="No cross-file risk signals detected in fast check.",
-                    confidence="HIGH",
-                )
-            # Merge Stage 2 cross-file issues into the issue list
-            if cross_file_results.cross_file_issues:
-                cross_issues_converted = _convert_cross_file_issues(cross_file_results.cross_file_issues)
-                _register_stage_2_candidates(
-                    cross_issues_converted,
-                    request,
-                    processed_diff,
-                    stage_1_review_unit_state,
-                    candidate_ledger,
-                    stage_2_visible_prompt_hunk_ids,
-                    stage_2_visible_evidence_by_id,
-                    stage_2_prompt_provenance,
-                )
-                file_issues.extend(cross_issues_converted)
-                logger.info(
-                    f"Stage 2 contributed {len(cross_issues_converted)} cross-file issues "
-                    f"(total issues now: {len(file_issues)})"
-                )
+            _emit_progress(
+                self.event_callback,
+                70,
+                (
+                    "Cross-file investigation complete: "
+                    f"{len(targeted_issues)} candidate(s) from "
+                    f"{targeted_result.admitted_tickets} admitted ticket(s)"
+                ),
+            )
 
-            # Every issue-producing stage is subject to the same source-evidence
-            # invariant. Stage 1.5 verifies file issues earlier so Stage 2 does
-            # not build on false premises; this final deterministic pass also
-            # covers issues newly introduced by Stage 2.
+            # Every issue-producing stage now shares one deterministic and
+            # adversarial verification path. Historical prose/IDs never enter it.
             file_issues = apply_candidate_provenance_gate(
                 file_issues,
                 request,
@@ -1328,204 +1443,56 @@ class MultiStageReviewOrchestrator:
                 processed_diff,
                 candidate_ledger,
             )
-            exact_evidence_by_id = dict(
-                stage_1_rag_state.exact_evidence_by_id
-            )
-            for evidence_id, facts in stage_2_visible_evidence_by_id.items():
-                existing = exact_evidence_by_id.get(evidence_id, ())
-                exact_evidence_by_id[evidence_id] = tuple(sorted(
-                    {
-                        json.dumps(
-                            fact,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ): fact
-                        for fact in (*existing, *facts)
-                    }.values(),
-                    key=lambda fact: json.dumps(
-                        fact,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                ))
             file_issues = apply_plugin_validation_gate(
                 file_issues,
                 request,
-                exact_evidence_by_id=exact_evidence_by_id,
+                exact_evidence_by_id=dict(stage_1_rag_state.exact_evidence_by_id),
                 deterministic_retrieval_states=(
                     stage_1_rag_state.deterministic_retrieval_states
                 ),
                 candidate_ledger=candidate_ledger,
             )
-            hunk_coverage.mark_validated()
-
-            _emit_progress(self.event_callback, 85, "Stage 2 Complete: Cross-file analysis finished")
-
-            # === FINAL DEDUP: after ALL issue-finding stages (1 + 1.5 + 2) ===
-            # Historical resolutions are lifecycle updates, not competing
-            # findings. Active historical identities do participate so duplicate
-            # history and fresh recreations can be consolidated. The merge keeps
-            # one persisted identity and emits explicit close updates for any
-            # superseded historical IDs.
-            active_issues, resolved_lifecycle_issues = _partition_issue_lifecycle(
-                file_issues
+            _emit_status(
+                self.event_callback,
+                "verification_started",
+                f"Verifying {len(file_issues)} candidate(s) against exact source...",
             )
-            pre_dedup_count = len(active_issues)
-            if not active_issues:
-                deduplicated_active_issues = []
-            elif should_use_llm_dedup(
-                inference_profile,
-                pre_dedup_count,
-            ):
-                _emit_status(
-                    self.event_callback,
-                    "final_dedup_started",
-                    (
-                        "Final dedup: grouped recall-safe semantic dedup for "
-                        f"{pre_dedup_count} issue(s)"
-                    ),
-                )
-                deduplicated_active_issues = await deduplicate_final_issues_llm(
-                    with_stage_output_cap(self.llm, "dedup", inference_profile),
-                    active_issues,
-                )
-            else:
-                fast_dedup = should_use_fast_dedup(
-                    inference_profile,
-                    pre_dedup_count,
-                )
-                _emit_status(
-                    self.event_callback,
-                    (
-                        "fast_check_dedup"
-                        if fast_dedup
-                        else "deterministic_final_dedup"
-                    ),
-                    (
-                        "Fast check: "
-                        if fast_dedup
-                        else "Final dedup: "
-                    )
-                    + (
-                        "conservative deterministic dedup for "
-                        f"{pre_dedup_count} issue(s)"
-                    ),
-                )
-                deduplicated_active_issues = deduplicate_final_issues(
-                    active_issues
-                )
-            before_final_dedup = list(active_issues)
-            candidate_ledger.reject_removed(
-                before_final_dedup,
-                deduplicated_active_issues,
-                gate="deduplication",
-                code="final_duplicate",
-            )
-
-            retained_object_ids = {
-                id(issue) for issue in deduplicated_active_issues
-            }
-            consolidated_history: List[CodeReviewIssue] = []
-            for removed_issue in before_final_dedup:
-                if id(removed_issue) in retained_object_ids:
-                    continue
-                removed_id = str(getattr(removed_issue, "id", "") or "").strip()
-                if removed_id not in protected_open_issue_ids:
-                    continue
-                resolved_copy = _resolved_historical_copy(
-                    removed_issue,
-                    protected_open_issue_ids,
-                    (
-                        "Closed because final root-cause deduplication "
-                        "consolidated this duplicate into the retained finding."
-                    ),
-                )
-                if resolved_copy is not None:
-                    consolidated_history.append(resolved_copy)
-
-            if len(deduplicated_active_issues) != pre_dedup_count:
-                logger.info(
-                    "Final dedup before Stage 3: %d → %d active root findings "
-                    "(%d historical duplicate(s) closed)",
-                    pre_dedup_count,
-                    len(deduplicated_active_issues),
-                    len(consolidated_history),
-                )
-            file_issues = (
-                deduplicated_active_issues
-                + resolved_lifecycle_issues
-                + consolidated_history
-            )
-
-            # Stage 3 receives the structured Stage 2 result separately from the
-            # publication list. Keep both views consistent so a candidate rejected
-            # by the final publication gate cannot reappear in the prose report.
-            removed_cross_file_count = _retain_published_cross_file_issues(
-                cross_file_results,
+            verification_result = await run_verification_wave(
+                with_stage_output_cap(self.llm, "verification", inference_profile),
                 file_issues,
-            )
-            if removed_cross_file_count:
-                logger.info(
-                    "Removed %d unpublished Stage 2 candidate(s) from final report context",
-                    removed_cross_file_count,
-                )
-
-            # === STAGE 3: Aggregation ===
-            _emit_status(self.event_callback, "stage_3_started", "Stage 3: Generating final report...")
-            stage_3_result = await execute_stage_3_aggregation(
-                with_stage_output_cap(self.llm, "stage_3", inference_profile),
                 request,
-                review_plan,
-                file_issues,
-                cross_file_results,
-                is_incremental, processed_diff=processed_diff,
-                mcp_client=self.client if use_mcp else None,
-                use_mcp_tools=use_mcp,
-                fallback_llm=self.llm,
+                processed_diff,
+                candidate_ledger,
             )
-            final_report = stage_3_result["report"]
+            file_issues = list(verification_result.confirmed)
+            hunk_coverage.mark_validated()
+            _emit_progress(
+                self.event_callback,
+                90,
+                (
+                    f"Verification complete: {len(file_issues)} confirmed, "
+                    f"{verification_result.rejected_count} rejected, "
+                    f"{verification_result.incomplete_count} incomplete"
+                ),
+            )
+
             task_key = _task_evidence_key(request)
             task_evidence_payload = (
                 pr_evidence_ledger.task_implementation_evidence_payload(task_key)
             )
-            dismissed_ids = set(stage_3_result.get("dismissed_issue_ids", []))
-            dismissed_object_ids = {
-                int(value)
-                for value in stage_3_result.get(
-                    "dismissed_issue_object_ids",
-                    [],
-                )
-            }
-
-            # A dismissed historical OPEN issue is a lifecycle update, not an
-            # omission. Return it as resolved so the client can close the stored
-            # record; only genuinely fresh candidates are removed outright.
-            if dismissed_ids or dismissed_object_ids:
-                before_stage_3_dismissals = list(file_issues)
-                file_issues, resolved_count, dropped_count = (
-                    _apply_stage_3_dismissals(
-                        file_issues,
-                        dismissed_ids,
-                        protected_open_issue_ids,
-                        dismissed_object_ids=dismissed_object_ids,
-                    )
-                )
-                logger.info(
-                    "Stage 3 dismissed %d fresh issue(s) and resolved %d "
-                    "historical OPEN issue(s) after evidence validation "
-                    "(verification keys: %s)",
-                    dropped_count,
-                    resolved_count,
-                    stage_3_result.get("dismissed_issue_keys", []),
-                )
-                candidate_ledger.reject_removed(
-                    before_stage_3_dismissals,
-                    file_issues,
-                    gate="stage_3_verification",
-                    code="dismissed",
-                )
-
-            _emit_progress(self.event_callback, 100, "Stage 3 Complete: Report generated")
+            final_report = render_verified_report(
+                request,
+                file_issues,
+                incomplete_candidates=(
+                    verification_result.incomplete_count
+                    + len(compatibility.incomplete_changes)
+                    + len(stage_1_review_unit_state.incomplete_followups)
+                    + len(set(targeted_result.incomplete_tickets))
+                    + len(manifest_text_evidence_gaps)
+                ),
+                rejected_candidates=verification_result.rejected_count,
+            )
+            _emit_progress(self.event_callback, 100, "Verified report rendered")
             hunk_coverage.complete()
             hunk_coverage.assert_complete()
             candidate_ledger.publish(file_issues)
@@ -1565,17 +1532,6 @@ class MultiStageReviewOrchestrator:
             )
             raise
         finally:
-            if stage_2_context_task and not stage_2_context_task.done():
-                stage_2_context_task.cancel()
-                try:
-                    await stage_2_context_task
-                except asyncio.CancelledError:
-                    pass
-            elif stage_2_context_task and stage_2_context_task.done() and not stage_2_context_task.cancelled():
-                try:
-                    stage_2_context_task.exception()
-                except Exception:
-                    pass
             # PR-indexed data is intentionally NOT cleaned up here.
             # It persists so that subsequent PR context queries can use it.
             # Cleanup happens via:
@@ -1680,6 +1636,74 @@ class MultiStageReviewOrchestrator:
             )
         
         return plan
+
+
+def _clear_discovery_lifecycle_fields(issues: List[CodeReviewIssue]) -> None:
+    """Treat model output as fresh candidates, never as database lifecycle input."""
+    for issue in issues:
+        issue.id = None
+        issue.isResolved = False
+        issue.resolutionReason = None
+        issue.resolutionExplanation = None
+        issue.resolvedInCommit = None
+        issue.visibility = None
+
+
+def _register_targeted_cross_file_candidates(
+    generated_candidates: tuple[GeneratedCrossFileCandidate, ...],
+    request: ReviewRequestDto,
+    processed_diff: Optional[ProcessedDiff],
+    review_units: Stage1ReviewUnitState,
+    candidate_ledger: CandidateEvidenceLedger,
+) -> None:
+    """Register targeted cross-file output against its exact changed trigger."""
+    for generated in generated_candidates:
+        issue = generated.issue
+        evidence_digest = hashlib.sha256(
+            generated.ticket.related_source.encode("utf-8")
+        ).hexdigest()
+        evidence_id = "XCTX-" + evidence_digest[:20]
+        issue.evidenceRefs = list(dict.fromkeys([
+            *(getattr(issue, "evidenceRefs", None) or ()),
+            evidence_id,
+        ]))
+        anchor_hunk_ids = reviewable_hunk_ids_for_issue(
+            issue,
+            request,
+            processed_diff,
+        )
+        unit_ids = tuple(sorted({
+            unit_id
+            for hunk_id in anchor_hunk_ids
+            for unit_id in review_units.units_by_hunk.get(hunk_id, set())
+        }))
+        candidate_ledger.register(
+            issue,
+            stage="cross_file_investigation",
+            source_key=generated.ticket.ticket_id,
+            review_unit_ids=unit_ids,
+            prompt_hunk_ids=anchor_hunk_ids,
+            prompt_digest=generated.prompt_digest,
+            visible_evidence_by_id={
+                evidence_id: ({
+                    "path": generated.ticket.related_file,
+                    "revision": (
+                        request.currentCommitHash or request.commitHash or ""
+                    ),
+                    "startLine": generated.ticket.related_start_line,
+                    "endLine": (
+                        generated.ticket.related_start_line
+                        + max(
+                            0,
+                            len(generated.ticket.related_source.splitlines()) - 1,
+                        )
+                    ),
+                    "contentDigest": "sha256:" + evidence_digest,
+                    "source": "cross-file-exact-context",
+                    "content": generated.ticket.related_source,
+                },),
+            },
+        )
 
 
 def _convert_cross_file_issues(cross_file_issues) -> List[CodeReviewIssue]:
@@ -1966,8 +1990,17 @@ def _deduplicate_cross_batch_issues_preserving_lifecycle(
 
 
 def _serialize_issue_for_client(issue: CodeReviewIssue) -> Dict[str, Any]:
-    """Serialize lifecycle metadata using the field name consumed by Java."""
+    """Serialize the verified internal issue contract consumed by Java.
+
+    Causal evidence is excluded from the public Pydantic dump and report, but
+    Java needs it to derive a category-independent lineage fingerprint.
+    """
     data = issue.model_dump()
+    data.update({
+        "triggerCondition": issue.triggerCondition,
+        "causalPath": issue.causalPath,
+        "observableImpact": issue.observableImpact,
+    })
     if data.get("isResolved") is not True:
         data.pop("resolutionReason", None)
         data.pop("resolutionExplanation", None)

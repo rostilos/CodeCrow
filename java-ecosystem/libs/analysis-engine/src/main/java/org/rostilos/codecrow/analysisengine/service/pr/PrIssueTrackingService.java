@@ -2,35 +2,32 @@ package org.rostilos.codecrow.analysisengine.service.pr;
 
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine;
-import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine.*;
-import org.rostilos.codecrow.astparser.model.ParsedTree;
-import org.rostilos.codecrow.astparser.api.ScopeResolver;
-import org.rostilos.codecrow.core.util.anchoring.SnippetLocator;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
-import org.rostilos.codecrow.core.util.tracking.*;
+import org.rostilos.codecrow.core.util.tracking.PrIssueLineage;
+import org.rostilos.codecrow.core.util.tracking.PrIssueLineageFingerprint;
+import org.rostilos.codecrow.core.util.tracking.TrackingConfidence;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 /**
- * Applies deterministic 4-pass issue tracking ({@link IssueTracker}) to PR iterations.
- * <p>
- * When a PR is updated (new push), the AI produces a fresh set of issues. This service
- * matches the new issues against the previous iteration's issues using content-based
- * fingerprints and line hashes, then records the tracking lineage on each new issue.
- * <p>
- * This provides:
- * <ul>
- *   <li>Stable issue identity across PR iterations (VCS comments don't duplicate)</li>
- *   <li>Clear "new / persisting / resolved" classification for the source code viewer</li>
- *   <li>Audit trail via {@code trackedFromIssueId} + {@code trackingConfidence}</li>
- * </ul>
+ * Links freshly verified PR findings to active occurrences from every earlier run.
+ *
+ * <p>Historical findings are never copied into the current analysis and omission
+ * never resolves them. Each current finding and historical tip participates in at
+ * most one exact match. Category and severity are not identity inputs.</p>
  */
 @Service
 @Transactional
@@ -39,33 +36,20 @@ public class PrIssueTrackingService {
     private static final Logger log = LoggerFactory.getLogger(PrIssueTrackingService.class);
 
     private final CodeAnalysisIssueRepository issueRepository;
-    private final IssueReconciliationEngine reconciliationEngine;
-    private final AstScopeEnricher astScopeEnricher;
 
-    public PrIssueTrackingService(CodeAnalysisIssueRepository issueRepository,
-                                  IssueReconciliationEngine reconciliationEngine,
-                                  AstScopeEnricher astScopeEnricher) {
+    /** Kept in the constructor to preserve the existing module wiring. */
+    public PrIssueTrackingService(
+            CodeAnalysisIssueRepository issueRepository,
+            IssueReconciliationEngine ignoredReconciliationEngine,
+            AstScopeEnricher ignoredAstScopeEnricher
+    ) {
         this.issueRepository = issueRepository;
-        this.reconciliationEngine = reconciliationEngine;
-        this.astScopeEnricher = astScopeEnricher;
     }
 
     /**
-     * Run deterministic tracking between a new analysis and the previous analysis for the same PR.
-     * <p>
-     * For each matched pair:
-     * <ul>
-     *   <li>{@code trackedFromIssueId} is set to the previous issue's ID</li>
-     *   <li>{@code trackingConfidence} is set to the match confidence (EXACT, SHIFTED, etc.)</li>
-     * </ul>
-     * Unmatched new issues are genuinely new (first time in this PR).
-     * Unmatched previous issues are resolved (no longer flagged).
-     *
-     * @param newAnalysis      the newly created analysis (issues already persisted, with fingerprints)
-     * @param previousAnalysis the most recent previous analysis for the same PR, or null
-     * @param newFileContents  file contents for the new analysis commit (for re-computing hashes)
-     * @param prevFileContents file contents for the previous analysis commit (for re-computing hashes)
-     * @return a tracking summary
+     * Reconcile {@code newAnalysis} with all earlier occurrences from its PR.
+     * File-content arguments remain for source compatibility; lineage matching
+     * uses the already persisted current-head anchor receipt.
      */
     public TrackingSummary trackPrIteration(
             CodeAnalysis newAnalysis,
@@ -73,465 +57,186 @@ public class PrIssueTrackingService {
             Map<String, String> newFileContents,
             Map<String, String> prevFileContents
     ) {
-        if (previousAnalysis == null) {
-            log.info("No previous analysis for PR — first iteration, skipping tracking for analysis {}",
-                    newAnalysis.getId());
-            return new TrackingSummary(0, 0, newAnalysis.getIssues().size(), 0);
+        if (newAnalysis == null || newAnalysis.getProject() == null
+                || newAnalysis.getProject().getId() == null
+                || newAnalysis.getPrNumber() == null) {
+            log.warn("Skipping PR lineage reconciliation for an unscoped analysis");
+            return new TrackingSummary(0, 0, issueCount(newAnalysis), 0);
+        }
+        List<CodeAnalysisIssue> scopedOccurrences = issueRepository.findByProjectIdAndPrNumber(
+                newAnalysis.getProject().getId(), newAnalysis.getPrNumber());
+        return trackAgainstScopedHistory(newAnalysis, scopedOccurrences);
+    }
+
+    /**
+     * Package-visible for focused tests and cache-path reconciliation.
+     */
+    TrackingSummary trackAgainstScopedHistory(
+            CodeAnalysis newAnalysis,
+            List<CodeAnalysisIssue> scopedOccurrences
+    ) {
+        List<CodeAnalysisIssue> currentIssues = newAnalysis.getIssues() != null
+                ? new ArrayList<>(newAnalysis.getIssues())
+                : List.of();
+        Set<Long> currentIds = currentIssues.stream()
+                .map(CodeAnalysisIssue::getId)
+                .filter(Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+
+        List<CodeAnalysisIssue> historicalOccurrences = scopedOccurrences == null
+                ? new ArrayList<>()
+                : scopedOccurrences.stream()
+                        .filter(Objects::nonNull)
+                        .filter(issue -> issue.getAnalysis() != newAnalysis)
+                        .filter(issue -> issue.getAnalysis() == null
+                                || !Objects.equals(issue.getAnalysis().getId(), newAnalysis.getId()))
+                        .filter(issue -> issue.getId() == null || !currentIds.contains(issue.getId()))
+                        .toList();
+
+        PrIssueLineage.Projection projection = PrIssueLineage.project(historicalOccurrences);
+        for (PrIssueLineage.InvalidEdge invalidEdge : projection.invalidEdges()) {
+            log.warn("Ignoring invalid stored PR lineage edge child={} predecessor={}: {}",
+                    invalidEdge.childId(), invalidEdge.predecessorId(), invalidEdge.reason());
         }
 
-        List<CodeAnalysisIssue> newIssues = newAnalysis.getIssues();
-        List<CodeAnalysisIssue> prevIssues = previousAnalysis.getIssues();
-
-        if (newIssues.isEmpty() && prevIssues.isEmpty()) {
-            return new TrackingSummary(0, 0, 0, 0);
+        Map<String, List<CodeAnalysisIssue>> tipsByFingerprint = new LinkedHashMap<>();
+        Map<String, List<CodeAnalysisIssue>> tipsByLegacyAnchor = new LinkedHashMap<>();
+        for (CodeAnalysisIssue tip : projection.activeTips()) {
+            String fingerprint = ensureLineageFingerprint(tip);
+            if (fingerprint != null) {
+                tipsByFingerprint.computeIfAbsent(fingerprint, ignored -> new ArrayList<>()).add(tip);
+            }
+            String legacyAnchor = legacyAnchorIdentity(tip);
+            if (legacyAnchor != null) {
+                tipsByLegacyAnchor.computeIfAbsent(legacyAnchor, ignored -> new ArrayList<>()).add(tip);
+            }
         }
+        tipsByFingerprint.values().forEach(tips -> tips.sort(
+                Comparator.comparing(PrIssueTrackingService::analysisOrder).reversed()));
 
-        // Group issues by file for per-file tracking (same approach as BranchAnalysisProcessor)
-        Map<String, List<CodeAnalysisIssue>> newByFile = groupByFile(newIssues);
-        Map<String, List<CodeAnalysisIssue>> prevByFile = groupByFile(prevIssues);
-
-        // Collect all file paths involved
-        Set<String> allFiles = new HashSet<>();
-        allFiles.addAll(newByFile.keySet());
-        allFiles.addAll(prevByFile.keySet());
-
+        Set<Long> consumedTipIds = new HashSet<>();
         int matched = 0;
         int newOnly = 0;
-        int resolved = 0;
-        int unanchoredResolved = 0;
-        int unanchoredPersisting = 0;
-        List<CodeAnalysisIssue> unmatchedPreviousIssues = new ArrayList<>();
-
-        for (String filePath : allFiles) {
-            List<CodeAnalysisIssue> fileNewIssues = newByFile.getOrDefault(filePath, List.of());
-            List<CodeAnalysisIssue> filePrevIssues = prevByFile.getOrDefault(filePath, List.of());
-
-            if (fileNewIssues.isEmpty()) {
-                unmatchedPreviousIssues.addAll(filePrevIssues);
-                continue;
-            }
-            if (filePrevIssues.isEmpty()) {
-                // All new issues in this file are genuinely new
-                newOnly += fileNewIssues.size();
+        for (CodeAnalysisIssue current : currentIssues) {
+            // Discovery-supplied IDs are never trusted as links. Only this
+            // scoped host matcher is allowed to set lineage on a fresh row.
+            current.setTrackedFromIssueId(null);
+            current.setTrackingConfidence(null);
+            if (current.isResolved()) {
+                newOnly++;
                 continue;
             }
 
-            // ── Separate unanchored previous issues (line <= 1, no lineHash, no codeSnippet) ──
-            // These cannot be reliably tracked by content hashing. Instead, match them
-            // by the original issue ID that the AI preserves in its response.
-            // If the AI omitted the issue entirely → resolved (AI didn't find it).
-            // If the AI re-reported it with isResolved=true → resolved.
-            // If the AI re-reported it with isResolved=false → mark for AI reconciliation.
-            List<CodeAnalysisIssue> anchoredPrevIssues = new ArrayList<>();
-            List<CodeAnalysisIssue> unanchoredPrevIssues = new ArrayList<>();
-            for (CodeAnalysisIssue prev : filePrevIssues) {
-                if (isUnanchored(prev)) {
-                    unanchoredPrevIssues.add(prev);
-                } else {
-                    anchoredPrevIssues.add(prev);
-                }
+            String fingerprint = ensureLineageFingerprint(current);
+            List<CodeAnalysisIssue> candidates = fingerprint != null
+                    ? tipsByFingerprint.getOrDefault(fingerprint, List.of())
+                    : List.of();
+            CodeAnalysisIssue match = uniqueAvailableExactAnchor(
+                    current, candidates, consumedTipIds);
+            if (match == null) {
+                String legacyAnchor = legacyAnchorIdentity(current);
+                match = uniqueAvailableExactAnchor(
+                        current,
+                        legacyAnchor != null
+                                ? tipsByLegacyAnchor.getOrDefault(legacyAnchor, List.of())
+                                : List.of(),
+                        consumedTipIds);
             }
-
-            // Handle unanchored previous issues via fingerprint matching.
-            // Unlike IssueTracker (which would make these "immortal" via Pass 3/4),
-            // we match by fingerprint but ALSO respect the new issue's isResolved flag
-            // from the AI's Stage 1 review.
-            if (!unanchoredPrevIssues.isEmpty()) {
-                // Build a lookup: fingerprint → list of new issues with that fingerprint
-                Map<String, List<CodeAnalysisIssue>> newByFingerprint = new LinkedHashMap<>();
-                for (CodeAnalysisIssue newIssue : fileNewIssues) {
-                    String fp = newIssue.getIssueFingerprint();
-                    if (fp != null) {
-                        newByFingerprint.computeIfAbsent(fp, k -> new ArrayList<>()).add(newIssue);
-                    }
-                }
-
-                Set<CodeAnalysisIssue> unanchoredMatchedNewIssues = new HashSet<>();
-                for (CodeAnalysisIssue prevIssue : unanchoredPrevIssues) {
-                    String prevFp = prevIssue.getIssueFingerprint();
-                    List<CodeAnalysisIssue> candidates = prevFp != null
-                            ? newByFingerprint.getOrDefault(prevFp, List.of())
-                            : List.of();
-
-                    // Pick the first unmatched candidate (unanchored issues at line 1 are
-                    // identical in terms of fingerprint, so order doesn't matter)
-                    CodeAnalysisIssue matchedNew = null;
-                    for (CodeAnalysisIssue c : candidates) {
-                        if (!unanchoredMatchedNewIssues.contains(c)) {
-                            matchedNew = c;
-                            break;
-                        }
-                    }
-
-                    if (matchedNew != null) {
-                        // AI re-reported this issue — link them
-                        matchedNew.setTrackedFromIssueId(prevIssue.getId());
-                        matchedNew.setTrackingConfidence(TrackingConfidence.UNANCHORED_FP_MATCH);
-                        unanchoredMatchedNewIssues.add(matchedNew);
-
-                        if (matchedNew.isResolved()) {
-                            // AI marked it resolved in Stage 1 → trust it
-                            unanchoredResolved++;
-                            log.info("Unanchored issue {} resolved by AI (new issue {}, file={})",
-                                    prevIssue.getId(), matchedNew.getId(), filePath);
-                        } else if (prevIssue.isResolved()) {
-                            // Previous was resolved (user dismissed) → carry forward
-                            matchedNew.setResolved(true);
-                            matchedNew.setResolvedDescription(prevIssue.getResolvedDescription());
-                            matchedNew.setResolvedByPr(prevIssue.getResolvedByPr());
-                            matchedNew.setResolvedCommitHash(prevIssue.getResolvedCommitHash());
-                            matchedNew.setResolvedAnalysisId(prevIssue.getResolvedAnalysisId());
-                            matchedNew.setResolvedAt(prevIssue.getResolvedAt());
-                            matchedNew.setResolvedBy(prevIssue.getResolvedBy());
-                            unanchoredResolved++;
-                        } else {
-                            // AI says still present — persists (but can be overridden by
-                            // dedicated AI reconciliation if caller implements it)
-                            unanchoredPersisting++;
-                        }
-                        issueRepository.save(matchedNew);
-                        matched++;
-                    } else {
-                        unmatchedPreviousIssues.add(prevIssue);
-                        log.info("Unanchored issue {} omitted by AI in new review; deferring resolution until anchor check (file={})",
-                                prevIssue.getId(), filePath);
-                    }
-                }
-
-                // Remove unanchored-matched new issues from the pool before IssueTracker
-                // so they don't get double-counted or double-matched
-                fileNewIssues = fileNewIssues.stream()
-                        .filter(ni -> !unanchoredMatchedNewIssues.contains(ni))
-                        .collect(Collectors.toList());
-            }
-
-            // ── Run IssueTracker on anchored issues only ──
-            if (anchoredPrevIssues.isEmpty() && fileNewIssues.isEmpty()) {
-                continue;
-            }
-            if (anchoredPrevIssues.isEmpty()) {
-                newOnly += fileNewIssues.size();
-                continue;
-            }
-            if (fileNewIssues.isEmpty()) {
-                unmatchedPreviousIssues.addAll(anchoredPrevIssues);
+            if (match == null) {
+                newOnly++;
                 continue;
             }
 
-            // Wrap issues as Trackables
-            // RAW = new issues (recomputed against new file content)
-            List<TrackableIssue> rawTrackables = fileNewIssues.stream()
-                    .map(issue -> recomputeTrackable(issue, newFileContents))
-                    .collect(Collectors.toList());
-
-            // BASE = previous issues (with original detection-time hashes)
-            List<TrackableIssue> baseTrackables = anchoredPrevIssues.stream()
-                    .map(TrackableIssue::fromOriginal)
-                    .collect(Collectors.toList());
-
-            // Run 4-pass tracking
-            Tracking<TrackableIssue, TrackableIssue> tracking =
-                    IssueTracker.track(rawTrackables, baseTrackables);
-
-            // Process matched pairs — record lineage + carry forward resolution status
-            for (Tracking.MatchedPair<TrackableIssue, TrackableIssue> pair : tracking.getMatchedPairs()) {
-                CodeAnalysisIssue newIssue = pair.raw().issue();
-                CodeAnalysisIssue prevIssue = pair.base().issue();
-
-                newIssue.setTrackedFromIssueId(prevIssue.getId());
-                newIssue.setTrackingConfidence(pair.confidence());
-
-                // Check resolved status from BOTH directions:
-                // 1. Previous issue was resolved (user dismissed, or previous reconciliation)
-                // 2. New issue was marked resolved by the AI in Stage 1 review
-                //    (createIssueFromData sets isResolved=true when AI says isResolved: true)
-                if (prevIssue.isResolved()) {
-                    // Carry forward previous resolution
-                    newIssue.setResolved(true);
-                    newIssue.setResolvedDescription(prevIssue.getResolvedDescription());
-                    newIssue.setResolvedByPr(prevIssue.getResolvedByPr());
-                    newIssue.setResolvedCommitHash(prevIssue.getResolvedCommitHash());
-                    newIssue.setResolvedAnalysisId(prevIssue.getResolvedAnalysisId());
-                    newIssue.setResolvedAt(prevIssue.getResolvedAt());
-                    newIssue.setResolvedBy(prevIssue.getResolvedBy());
-                    log.info("Carried forward resolved status from issue {} to new issue {} (confidence={})",
-                            prevIssue.getId(), newIssue.getId(), pair.confidence().name());
-                } else if (newIssue.isResolved()) {
-                    // AI in Stage 1 marked this re-emitted issue as resolved — trust it
-                    log.info("AI marked matched issue as resolved: prev={} → new={} (confidence={})",
-                            prevIssue.getId(), newIssue.getId(), pair.confidence().name());
-                }
-
-                issueRepository.save(newIssue);
-                matched++;
-            }
-
-            // Unmatched new = genuinely new issues (no lineage to set)
-            newOnly += tracking.getUnmatchedRaws().size();
-
-            // Unmatched previous issues are resolved only after anchor verification below.
-            unmatchedPreviousIssues.addAll(tracking.getUnmatchedBases().stream()
-                    .map(TrackableIssue::issue)
-                    .toList());
+            current.setTrackedFromIssueId(match.getId());
+            current.setTrackingConfidence(TrackingConfidence.EXACT);
+            consumedTipIds.add(match.getId());
+            issueRepository.save(current);
+            matched++;
         }
 
-        // ── Post-tracking: snippet verification for matched new issues ──
-        // Correct any line drift in the new issues using their codeSnippet anchors
-        int snippetCorrected = 0;
-        if (newFileContents != null && !newFileContents.isEmpty()) {
-            Map<String, List<CodeAnalysisIssue>> matchedNewByFile = newIssues.stream()
-                    .filter(i -> i.getTrackedFromIssueId() != null)
-                    .filter(i -> i.getCodeSnippet() != null && !i.getCodeSnippet().isBlank())
-                    .filter(i -> i.getFilePath() != null)
-                    .collect(Collectors.groupingBy(CodeAnalysisIssue::getFilePath));
-
-            ScopeResolver scopeResolver = astScopeEnricher.getFacade().getScopeResolver();
-
-            for (Map.Entry<String, List<CodeAnalysisIssue>> entry : matchedNewByFile.entrySet()) {
-                String fileContent = newFileContents.get(entry.getKey());
-                if (fileContent == null) continue;
-                LineHashSequence lineHashes = LineHashSequence.from(fileContent);
-                if (lineHashes.getLineCount() == 0) continue;
-
-                // Use AST overload — tryParse returns null for unsupported files,
-                // and the engine overload gracefully falls back to the base method
-                ParsedTree tree = astScopeEnricher.tryParse(entry.getKey(), fileContent);
-                List<SnippetVerificationResult> corrections;
-                try {
-                    corrections = reconciliationEngine.verifySnippetAnchors(
-                            entry.getValue(), lineHashes, tree, scopeResolver);
-                } finally {
-                    if (tree != null) tree.close();
-                }
-                for (SnippetVerificationResult svr : corrections) {
-                    CodeAnalysisIssue cai = (CodeAnalysisIssue) svr.issue();
-                    log.info("PR snippet verification corrected issue {} in {}:{} -> {}",
-                            cai.getId(), entry.getKey(), cai.getLineNumber(), svr.correctedLine());
-                    // For CodeAnalysisIssue, lineNumber is the immutable detection-time value.
-                    // We update lineHash to reflect the corrected position for future tracking.
-                    cai.setLineHash(svr.correctedLineHash());
-                    cai.setLineHashContext(svr.correctedContextHash());
-                    issueRepository.save(cai);
-                    snippetCorrected++;
-                }
-            }
-        }
-
-        ResolutionCheckResult resolutionCheck = resolveUnmatchedPreviousIssues(
-                unmatchedPreviousIssues, newAnalysis, newFileContents);
-        resolved += resolutionCheck.resolvedCount();
-        int sweepRevived = resolutionCheck.keptUnresolvedCount();
-
-        log.info("PR tracking for analysis {}: {} matched, {} new, {} resolved " +
-                        "(unanchored: {} resolved, {} persisting, snippetCorrected: {}, sweepWarnings: {}) " +
-                        "(previous analysis={})",
-                newAnalysis.getId(), matched, newOnly, resolved,
-                unanchoredResolved, unanchoredPersisting, snippetCorrected, sweepRevived,
-                previousAnalysis.getId());
-
-        return new TrackingSummary(matched, resolved, newOnly,
-                prevIssues.stream().filter(CodeAnalysisIssue::isResolved).count(),
-                unanchoredResolved, unanchoredPersisting);
+        long previouslyResolved = historicalOccurrences.stream()
+                .filter(CodeAnalysisIssue::isResolved)
+                .count();
+        log.info("PR all-run lineage for analysis {}: {} matched, {} new, {} historical active tips, "
+                        + "{} invalid edges; omission resolved 0",
+                newAnalysis.getId(), matched, newOnly, projection.activeTips().size(),
+                projection.invalidEdges().size());
+        return new TrackingSummary(matched, 0, newOnly, previouslyResolved);
     }
 
-    private ResolutionCheckResult resolveUnmatchedPreviousIssues(
-            List<CodeAnalysisIssue> unmatchedPreviousIssues,
-            CodeAnalysis newAnalysis,
-            Map<String, String> newFileContents) {
-        if (unmatchedPreviousIssues == null || unmatchedPreviousIssues.isEmpty()) {
-            return new ResolutionCheckResult(0, 0);
-        }
-
-        List<CodeAnalysisIssue> uniqueUnmatched = deduplicateById(unmatchedPreviousIssues);
-        int resolved = 0;
-        int kept = 0;
-
-        for (CodeAnalysisIssue previousIssue : uniqueUnmatched) {
-            if (previousIssue == null || previousIssue.isResolved()) {
-                continue;
-            }
-
-            String filePath = previousIssue.getFilePath();
-            String fileContent = newFileContents != null && filePath != null
-                    ? newFileContents.get(filePath)
-                    : null;
-
-            if (fileContent == null || fileContent.isEmpty()) {
-                kept++;
-                log.warn("PR tracking: previous issue {} omitted but file content unavailable for {} — keeping unresolved",
-                        previousIssue.getId(), filePath);
-                continue;
-            }
-
-            if (!hasReliableAnchor(previousIssue)) {
-                kept++;
-                log.warn("PR tracking: previous issue {} omitted but has no reliable anchor — keeping unresolved",
-                        previousIssue.getId());
-                continue;
-            }
-
-            if (anchorStillPresent(previousIssue, fileContent)) {
-                kept++;
-                log.warn("PR tracking: previous issue {} (file={}, line={}) anchor still present "
-                                + "but AI omitted it in new review — keeping unresolved",
-                        previousIssue.getId(), previousIssue.getFilePath(), previousIssue.getLineNumber());
-                continue;
-            }
-
-            markPreviousIssueResolved(previousIssue, newAnalysis,
-                    "Issue anchor removed in PR iteration");
-            issueRepository.save(previousIssue);
-            resolved++;
-        }
-
-        return new ResolutionCheckResult(resolved, kept);
-    }
-
-    private List<CodeAnalysisIssue> deduplicateById(List<CodeAnalysisIssue> issues) {
-        List<CodeAnalysisIssue> unique = new ArrayList<>();
-        Set<Long> seenIds = new HashSet<>();
-        for (CodeAnalysisIssue issue : issues) {
-            if (issue == null) continue;
-            Long id = issue.getId();
-            if (id != null && !seenIds.add(id)) {
-                continue;
-            }
-            unique.add(issue);
-        }
-        return unique;
-    }
-
-    private boolean hasReliableAnchor(CodeAnalysisIssue issue) {
-        return (issue.getCodeSnippet() != null && !issue.getCodeSnippet().isBlank())
-                || issue.getLineHash() != null;
-    }
-
-    private boolean anchorStillPresent(CodeAnalysisIssue issue, String fileContent) {
-        LineHashSequence lineHashes = LineHashSequence.from(fileContent);
-        if (lineHashes.getLineCount() == 0) {
-            return true; // fail open on empty content
-        }
-
-        String snippet = issue.getCodeSnippet();
-        if (snippet != null && !snippet.isBlank()) {
-            SnippetLocator.LocateResult located = SnippetLocator.locate(
-                    snippet,
-                    fileContent,
-                    issue.getLineNumber() != null ? issue.getLineNumber() : 1);
-            if (located.strategy() != SnippetLocator.Strategy.NOT_FOUND) {
-                return true;
-            }
-
-            String firstNonBlank = Arrays.stream(snippet.split("\\r?\\n"))
-                    .filter(line -> line != null && !line.isBlank())
-                    .findFirst()
-                    .orElse(null);
-            if (firstNonBlank != null
-                    && lineHashes.containsHash(LineHashSequence.hashLine(firstNonBlank))) {
-                return true;
+    /** Recompute cleared clone receipts before destination-PR matching. */
+    private String ensureLineageFingerprint(CodeAnalysisIssue issue) {
+        if (issue.getLineageFingerprint() == null || issue.getLineageFingerprint().isBlank()) {
+            issue.setLineageFingerprint(PrIssueLineageFingerprint.computePersisted(issue));
+            if (issue.getId() != null) {
+                issueRepository.save(issue);
             }
         }
-
-        return issue.getLineHash() != null && lineHashes.containsHash(issue.getLineHash());
-    }
-
-    private void markPreviousIssueResolved(CodeAnalysisIssue issue, CodeAnalysis newAnalysis, String reason) {
-        issue.setResolved(true);
-        issue.setResolvedDescription(reason);
-        issue.setResolvedByPr(newAnalysis.getPrNumber());
-        issue.setResolvedCommitHash(newAnalysis.getCommitHash());
-        issue.setResolvedAnalysisId(newAnalysis.getId());
-        issue.setResolvedAt(java.time.OffsetDateTime.now());
-        issue.setResolvedBy("pr-tracking");
-        log.info("PR tracking resolved previous issue {} in PR {} commit {}: {}",
-                issue.getId(), newAnalysis.getPrNumber(), newAnalysis.getCommitHash(), reason);
-    }
-
-    private record ResolutionCheckResult(int resolvedCount, int keptUnresolvedCount) {}
-
-    // ── Trackable adapter ────────────────────────────────────────────────
-
-    /**
-     * Wraps a {@link CodeAnalysisIssue} as a {@link Trackable} for the tracker.
-     * Can use either the original stored hashes or recomputed hashes from fresh file content.
-     */
-    private record TrackableIssue(
-            CodeAnalysisIssue issue,
-            String fingerprint,
-            Integer line,
-            String lineHash,
-            String filePath
-    ) implements Trackable {
-
-        @Override public String getIssueFingerprint() { return fingerprint; }
-        @Override public Integer getLine() { return line; }
-        @Override public String getLineHash() { return lineHash; }
-        @Override public String getFilePath() { return filePath; }
-
-        /**
-         * Create from an issue using its original stored hashes (for the base/previous side).
-         */
-        static TrackableIssue fromOriginal(CodeAnalysisIssue issue) {
-            return new TrackableIssue(
-                    issue,
-                    issue.getIssueFingerprint(),
-                    issue.getLineNumber(),
-                    issue.getLineHash(),
-                    issue.getFilePath()
-            );
-        }
+        return issue.getLineageFingerprint();
     }
 
     /**
-     * Create a Trackable for a new issue, recomputing line hash from fresh file content.
-     * The fingerprint stays the same (it was computed during issue creation), but
-     * lineHash is recomputed against the current file content for accurate matching.
+     * Exact persisted anchors disambiguate a receipt collision (or a legacy
+     * content-fingerprint match); ambiguity deliberately creates a new root.
      */
-    private TrackableIssue recomputeTrackable(CodeAnalysisIssue issue, Map<String, String> fileContents) {
-        String lineHash = issue.getLineHash();
-        Integer line = issue.getLineNumber();
+    private CodeAnalysisIssue uniqueAvailableExactAnchor(
+            CodeAnalysisIssue current,
+            List<CodeAnalysisIssue> candidates,
+            Set<Long> consumedTipIds
+    ) {
+        List<CodeAnalysisIssue> available = candidates.stream()
+                .filter(candidate -> candidate.getId() != null)
+                .filter(candidate -> !consumedTipIds.contains(candidate.getId()))
+                .filter(candidate -> exactAnchorMatches(current, candidate))
+                .toList();
+        return available.size() == 1 ? available.get(0) : null;
+    }
 
-        // If we have file content, recompute to ensure accuracy
-        if (fileContents != null && issue.getFilePath() != null
-                && fileContents.containsKey(issue.getFilePath())) {
-            LineHashSequence hashes = LineHashSequence.from(fileContents.get(issue.getFilePath()));
-            if (line != null && line > 0 && hashes.getLineCount() > 0) {
-                lineHash = hashes.getHashForLine(line);
-            }
+    private boolean exactAnchorMatches(CodeAnalysisIssue left, CodeAnalysisIssue right) {
+        if (!Objects.equals(normalizePath(left.getFilePath()), normalizePath(right.getFilePath()))) {
+            return false;
         }
-
-        return new TrackableIssue(
-                issue,
-                issue.getIssueFingerprint(),
-                line,
-                lineHash,
-                issue.getFilePath()
-        );
+        if (left.getLineHash() != null && right.getLineHash() != null) {
+            return left.getLineHash().equals(right.getLineHash());
+        }
+        if (left.getCodeSnippet() != null && !left.getCodeSnippet().isBlank()
+                && right.getCodeSnippet() != null && !right.getCodeSnippet().isBlank()) {
+            return normalizeSnippet(left.getCodeSnippet()).equals(normalizeSnippet(right.getCodeSnippet()));
+        }
+        return left.getIssueScope() != null
+                && left.getIssueScope() == right.getIssueScope()
+                && left.getIssueScope().name().equals("FILE");
     }
 
-    /**
-     * An issue is "unanchored" when it has no meaningful code location —
-     * line is absent or 1, no line hash, and no code snippet.
-     * These cannot be reliably tracked by content hashing (IssueTracker Pass 3/4
-     * would match them forever on fingerprint+line alone).
-     */
-    private boolean isUnanchored(CodeAnalysisIssue issue) {
-        return (issue.getLineNumber() == null || issue.getLineNumber() <= 1)
-                && issue.getLineHash() == null
-                && (issue.getCodeSnippet() == null || issue.getCodeSnippet().isBlank());
+    /** Category-independent bridge for rows created before lineage receipts existed. */
+    private String legacyAnchorIdentity(CodeAnalysisIssue issue) {
+        if (issue.getContentFingerprint() == null || issue.getContentFingerprint().isBlank()) {
+            return null;
+        }
+        return normalizePath(issue.getFilePath()) + "\n" + issue.getContentFingerprint();
     }
 
-    private Map<String, List<CodeAnalysisIssue>> groupByFile(List<CodeAnalysisIssue> issues) {
-        return issues.stream()
-                .filter(i -> i.getFilePath() != null)
-                .collect(Collectors.groupingBy(CodeAnalysisIssue::getFilePath));
+    private static String normalizePath(String path) {
+        return path == null ? "" : path.strip().replace('\\', '/');
     }
 
-    // ── Summary DTO ──────────────────────────────────────────────────────
+    private static String normalizeSnippet(String snippet) {
+        return snippet.strip().replaceAll("\\s+", " ");
+    }
 
-    /**
-     * Summary of the tracking result for logging and event publishing.
-     */
+    private static long analysisOrder(CodeAnalysisIssue issue) {
+        if (issue.getAnalysis() != null && issue.getAnalysis().getPrVersion() != null) {
+            return issue.getAnalysis().getPrVersion();
+        }
+        return issue.getAnalysis() != null && issue.getAnalysis().getId() != null
+                ? issue.getAnalysis().getId()
+                : issue.getId() != null ? issue.getId() : 0L;
+    }
+
+    private static int issueCount(CodeAnalysis analysis) {
+        return analysis != null && analysis.getIssues() != null ? analysis.getIssues().size() : 0;
+    }
+
     public record TrackingSummary(
             int matchedCount,
             int resolvedCount,
@@ -540,8 +245,12 @@ public class PrIssueTrackingService {
             int unanchoredResolvedCount,
             int unanchoredPersistingCount
     ) {
-        /** Convenience constructor for first iteration (no tracking). */
-        public TrackingSummary(int matchedCount, int resolvedCount, int newIssueCount, long previouslyResolvedCount) {
+        public TrackingSummary(
+                int matchedCount,
+                int resolvedCount,
+                int newIssueCount,
+                long previouslyResolvedCount
+        ) {
             this(matchedCount, resolvedCount, newIssueCount, previouslyResolvedCount, 0, 0);
         }
 

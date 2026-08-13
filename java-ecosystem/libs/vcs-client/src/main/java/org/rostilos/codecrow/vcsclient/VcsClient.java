@@ -203,6 +203,24 @@ public interface VcsClient {
     ) throws IOException;
 
     /**
+     * Get the provider-native, paginated base-to-head path inventory for a
+     * pull/merge request. Implementations must only return {@code COMPLETE}
+     * after exhausting the provider's native pagination and truncation rules.
+     *
+     * <p>This is optional enrichment. Callers must continue core review when a
+     * provider cannot supply it, but must not advertise an incomplete manifest
+     * as a complete current-head snapshot.</p>
+     */
+    default VcsPullRequestChangeManifest getPullRequestChangeManifest(
+            String workspaceId,
+            String repoIdOrSlug,
+            long pullRequestNumber
+    ) throws IOException {
+        return VcsPullRequestChangeManifest.unavailable(
+                "provider does not expose a complete pull-request path manifest");
+    }
+
+    /**
      * Get the unified diff for one commit.
      */
     String getCommitDiff(
@@ -273,6 +291,32 @@ public interface VcsClient {
      */
     default List<VcsCommit> getCommitHistory(String workspaceId, String repoIdOrSlug, String branchOrCommit, int limit) throws IOException {
         throw new UnsupportedOperationException("Commit history not supported by this provider");
+    }
+
+    /**
+     * Prove that {@code ancestorCommit} is reachable from
+     * {@code descendantCommit}. The conservative compatibility implementation
+     * uses each provider's exact-commit history API and returns false when the
+     * ancestor is outside the bounded window. False therefore means "not
+     * proven" and callers must use a full analysis.
+     */
+    default boolean isCommitAncestor(
+            String workspaceId,
+            String repoIdOrSlug,
+            String ancestorCommit,
+            String descendantCommit
+    ) throws IOException {
+        if (ancestorCommit == null || ancestorCommit.isBlank()
+                || descendantCommit == null || descendantCommit.isBlank()) {
+            return false;
+        }
+        if (ancestorCommit.equals(descendantCommit)) {
+            return true;
+        }
+        return getCommitHistory(workspaceId, repoIdOrSlug, descendantCommit, 256)
+                .stream()
+                .map(VcsCommit::hash)
+                .anyMatch(ancestorCommit::equals);
     }
 
     /**
@@ -363,6 +407,35 @@ public interface VcsClient {
             } catch (IOException e) {
                 // Skip files that fail to fetch
             }
+        }
+        return results;
+    }
+
+    /**
+     * Fetch exact source while retaining a disposition for every requested
+     * path. Providers should override this method when their batch API can
+     * distinguish size/format exclusions from acquisition failures.
+     *
+     * <p>The compatibility implementation delegates to the established batch
+     * method and conservatively treats an omitted path as a fetch failure.</p>
+     */
+    default java.util.Map<String, VcsFileContentResult> getFileContentResults(
+            String workspaceId,
+            String repoIdOrSlug,
+            List<String> filePaths,
+            String branchOrCommit,
+            int maxFileSizeBytes
+    ) throws IOException {
+        java.util.Map<String, String> contents = getFileContents(
+                workspaceId, repoIdOrSlug, filePaths, branchOrCommit, maxFileSizeBytes);
+        java.util.Map<String, VcsFileContentResult> results = new java.util.LinkedHashMap<>();
+        for (String path : filePaths) {
+            String content = contents.get(path);
+            results.put(path, content != null
+                    ? VcsFileContentResult.available(path, content)
+                    : VcsFileContentResult.skipped(
+                            path, 0, VcsFileContentResult.Status.FETCH_FAILED,
+                            "provider returned no exact source"));
         }
         return results;
     }

@@ -311,6 +311,39 @@ class DeterministicContextRequest(BaseModel):
         description="Extra type/function names to look up (from AST enrichment: extends, implements, calls). "
                     "Injected directly into Step 2 definition lookup alongside Qdrant-extracted identifiers."
     )
+    navigation_mode: Literal["CONTEXT", "REVERSE_REFERENCES"] = Field(
+        default="CONTEXT",
+        description=(
+            "CONTEXT returns normal deterministic context. "
+            "REVERSE_REFERENCES returns only paths and line ranges for "
+            "current-revision chunks whose neutral AST relationships match "
+            "reference_identifiers."
+        ),
+    )
+    reference_identifiers: Optional[List[str]] = Field(
+        default=None,
+        max_length=20,
+        description=(
+            "Exact removed symbols or qualified names used by bounded "
+            "reverse-reference navigation."
+        ),
+    )
+
+    @field_validator("reference_identifiers")
+    @classmethod
+    def validate_reference_identifiers(cls, values):
+        if values is None:
+            return None
+        normalized = []
+        for value in values:
+            identifier = str(value or "").strip()
+            if not identifier:
+                continue
+            if len(identifier) > 300:
+                raise ValueError("Reference identifier exceeds 300 characters")
+            if identifier not in normalized:
+                normalized.append(identifier)
+        return normalized
     source_revision: Optional[str] = Field(
         default=None,
         min_length=1,

@@ -418,6 +418,85 @@ class FileSnapshotServiceTest {
 
             assertThat(result).isZero();
         }
+
+        @Test
+        void synchronizeSnapshotsForPr_prunesDeletedRenamedAwayAndRevertedPaths() throws Exception {
+            PullRequest pr = new PullRequest();
+            setId(pr, 10L);
+            CodeAnalysis analysis = new CodeAnalysis();
+            setId(analysis, 20L);
+
+            AnalyzedFileSnapshot deleted = new AnalyzedFileSnapshot();
+            deleted.setFilePath("src/Deleted.java");
+            AnalyzedFileSnapshot renamedAway = new AnalyzedFileSnapshot();
+            renamedAway.setFilePath("src/BeforeRename.java");
+            AnalyzedFileSnapshot reverted = new AnalyzedFileSnapshot();
+            reverted.setFilePath("src/RevertedToBase.java");
+            when(snapshotRepository.findByPullRequestId(10L))
+                    .thenReturn(List.of(deleted, renamedAway, reverted));
+            when(contentRepository.findByContentHash(anyString())).thenReturn(Optional.empty());
+            when(contentRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            when(snapshotRepository.findByPullRequestIdAndFilePath(10L, "src/AfterRename.java"))
+                    .thenReturn(Optional.empty());
+
+            int changed = service.synchronizeSnapshotsForPr(
+                    pr,
+                    analysis,
+                    Map.of("src/AfterRename.java", "class AfterRename {}"),
+                    "head",
+                    List.of("src/AfterRename.java"));
+
+            assertThat(changed).isEqualTo(4);
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Iterable<AnalyzedFileSnapshot>> deletedCaptor =
+                    ArgumentCaptor.forClass(Iterable.class);
+            verify(snapshotRepository).deleteAll(deletedCaptor.capture());
+            assertThat(deletedCaptor.getValue())
+                    .containsExactlyInAnyOrder(deleted, renamedAway, reverted);
+            verify(snapshotRepository).save(argThat(snapshot ->
+                    "src/AfterRename.java".equals(snapshot.getFilePath())
+                            && snapshot.getPullRequest() == pr));
+        }
+
+        @Test
+        void synchronizeSnapshotsForPr_prunesActiveSnapshotWhenExactFetchFails() throws Exception {
+            PullRequest pr = new PullRequest();
+            setId(pr, 10L);
+            CodeAnalysis analysis = new CodeAnalysis();
+            setId(analysis, 20L);
+            AnalyzedFileSnapshot active = new AnalyzedFileSnapshot();
+            active.setFilePath("src/StillChanged.java");
+            when(snapshotRepository.findByPullRequestId(10L)).thenReturn(List.of(active));
+
+            int changed = service.synchronizeSnapshotsForPr(
+                    pr,
+                    analysis,
+                    Map.of(),
+                    "head",
+                    List.of("./src/StillChanged.java"));
+
+            assertThat(changed).isOne();
+            verify(snapshotRepository).deleteAll(List.of(active));
+            verify(snapshotRepository, never()).save(any());
+        }
+
+        @Test
+        void synchronizeSnapshotsForPr_emptyCompleteManifest_prunesAllSnapshots() throws Exception {
+            PullRequest pr = new PullRequest();
+            setId(pr, 10L);
+            CodeAnalysis analysis = new CodeAnalysis();
+            setId(analysis, 20L);
+            AnalyzedFileSnapshot reverted = new AnalyzedFileSnapshot();
+            reverted.setFilePath("src/RevertedToBase.java");
+            when(snapshotRepository.findByPullRequestId(10L)).thenReturn(List.of(reverted));
+
+            int changed = service.synchronizeSnapshotsForPr(
+                    pr, analysis, Map.of(), "head", List.of());
+
+            assertThat(changed).isOne();
+            verify(snapshotRepository).deleteAll(List.of(reverted));
+            verify(snapshotRepository, never()).save(any());
+        }
     }
 
     // ── Branch-level persistence ─────────────────────────────────────────

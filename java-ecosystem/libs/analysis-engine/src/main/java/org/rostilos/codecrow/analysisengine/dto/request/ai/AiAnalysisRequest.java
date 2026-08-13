@@ -6,9 +6,13 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import java.util.List;
 import java.util.Map;
 import org.rostilos.codecrow.plugins.ProjectCapabilities;
+import org.rostilos.codecrow.vcsclient.model.VcsPullRequestChangeManifest;
 
 public interface AiAnalysisRequest {
     Long getProjectId();
+
+    /** Server-owned identity of this accepted analysis attempt. */
+    default String getAnalysisRunKey() { return null; }
 
     default String getProjectWorkspace() { return null; }
 
@@ -79,6 +83,27 @@ public interface AiAnalysisRequest {
 
     List<String> getDeletedFiles();
 
+    /** Base-to-current paths for current-head context maintenance. */
+    default List<String> getFullPrChangedFiles() { return getChangedFiles(); }
+
+    /** Base-to-current tombstones, including rename source paths. */
+    default List<String> getFullPrDeletedFiles() { return getDeletedFiles(); }
+
+    /**
+     * Provider-native path inventory and its completeness receipt. A non-null
+     * but incomplete value is useful diagnostics, not permission to bind a
+     * complete current-head overlay.
+     */
+    default VcsPullRequestChangeManifest getPullRequestFileManifest() { return null; }
+
+    default boolean getFullPrManifestComplete() {
+        VcsPullRequestChangeManifest manifest = getPullRequestFileManifest();
+        return manifest != null && manifest.isComplete();
+    }
+
+    /** True when the request only refreshes exact current-head context. */
+    default boolean getPrContextMaintenanceRequired() { return false; }
+
     List<String> getDiffSnippets();
 
     default String getTargetBranchName() { return null; }
@@ -94,6 +119,13 @@ public interface AiAnalysisRequest {
     String getCurrentCommitHash();
 
     default String getBaseCommitHash() { return null; }
+
+    /**
+     * Internal digest of the deployed review contract and review-affecting
+     * project/model configuration. It is persisted with PR results and used
+     * to decide whether an earlier head is a compatible incremental base.
+     */
+    default String getAnalysisBehaviorDigest() { return null; }
 
     /**
      * Previous issues supplied to AI for incremental PR tracking or branch

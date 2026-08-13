@@ -3,6 +3,8 @@ Stage 0: Planning & Prioritization — analyze PR metadata and build a review pl
 """
 import json
 import logging
+import os
+import re
 from typing import Any, Dict, Optional
 
 from model.dtos import ReviewRequestDto
@@ -13,9 +15,29 @@ from utils.task_context_builder import build_task_context
 from service.review.plugin_context import review_plugin_context
 
 from utils.llm_response import extract_llm_response_text
-from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
+from service.review.orchestrator.json_utils import (
+    load_json_with_local_repairs,
+    supports_structured_output,
+)
+from utils.path_identity import normalize_repository_path
+from utils.prompts.review_messages import to_review_messages
 
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        logger.warning("Invalid integer for %s; using %d", name, default)
+        return default
+
+
+STAGE0_PLANNING_CHAR_BUDGET = max(
+    20_000,
+    _env_int("REVIEW_STAGE0_PLANNING_CHAR_BUDGET", 120_000),
+)
+_RISK_LEVELS = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 
 
 def _build_diff_lookup(processed_diff: Optional[ProcessedDiff]) -> Dict[str, Any]:
@@ -73,45 +95,54 @@ async def execute_stage_0_planning(
 ) -> ReviewPlan:
     diff_by_path = _build_diff_lookup(processed_diff)
     planning_paths = _reviewable_planning_paths(request, processed_diff)
+    host_plan = _build_fallback_review_plan(
+        request,
+        processed_diff,
+        analysis_summary=(
+            "Fallback review plan generated locally as a host-owned mandatory "
+            "manifest. LLM annotations are additive and cannot alter coverage."
+        ),
+        infer_cross_file_concerns=False,
+    )
 
-    changed_files_summary = []
-    if planning_paths:
-        for f in planning_paths:
-            df = diff_by_path.get(f) or diff_by_path.get(f.rsplit('/', 1)[-1] if '/' in f else f)
-            changed_files_summary.append(_summarize_file_for_planning(f, df))
+    changed_files_summary = _build_bounded_planning_summaries(
+        request,
+        planning_paths,
+        diff_by_path,
+    )
 
     # Include refactoring signals so the planner can adjust expectations
     refactoring_context = ""
     if processed_diff and processed_diff.refactoring_signals:
         refactoring_context = (
             "\n\n⚠️ REFACTORING SIGNALS DETECTED:\n"
-            + "\n".join(f"- {s}" for s in processed_diff.refactoring_signals)
+            + "\n".join(
+                f"- {_truncate_planning_line(str(signal), 300)}"
+                for signal in processed_diff.refactoring_signals[:12]
+            )
             + "\nThese suggest code reorganisation rather than new functionality. "
             "Flag fewer issues for moved/renamed code — focus on real regressions."
         )
 
     if use_local_planning:
         logger.info("Stage 0 fast check: using local deterministic review plan")
-        return _build_fallback_review_plan(
-            request,
-            processed_diff,
-            analysis_summary="Fast check review plan generated locally for a small PR.",
-            infer_cross_file_concerns=False,
-        )
+        return host_plan.model_copy(update={
+            "analysis_summary": (
+                "Fast check uses the host-owned mandatory review plan without "
+                "optional LLM annotations."
+            ),
+        })
 
     if processed_diff is not None and not planning_paths:
         logger.info(
             "Stage 0 provider call skipped: host manifest contains no reviewable paths"
         )
-        return _build_fallback_review_plan(
-            request,
-            processed_diff,
-            analysis_summary=(
+        return host_plan.model_copy(update={
+            "analysis_summary": (
                 "No changed source hunks require direct review after deterministic "
                 "file-policy and mechanical disposition accounting."
             ),
-            infer_cross_file_concerns=False,
-        )
+        })
 
     prompt = PromptBuilder.build_stage_0_planning_prompt(
         repo_slug=request.projectVcsRepoSlug,
@@ -132,26 +163,35 @@ async def execute_stage_0_planning(
             include_evidence_targets=False,
         ),
     )
+    messages = to_review_messages(prompt)
 
     if supports_structured_output(llm):
         try:
             structured_llm = llm.with_structured_output(ReviewPlan)
-            result = await structured_llm.ainvoke(prompt)
+            result = await structured_llm.ainvoke(messages)
             if result:
-                logger.info("Stage 0 planning completed with structured output")
-                return result
+                logger.info("Stage 0 annotation completed with structured output")
+                return _apply_planner_annotations(host_plan, result)
         except Exception as e:
-            logger.debug("Structured output failed for Stage 0: %s", e)
+            logger.info(
+                "Stage 0 annotation unavailable; preserving the complete host plan: %s",
+                e,
+            )
+        # A failed or empty structured generation is one incomplete annotation
+        # call, not permission to spend another call on JSON repair/fallback.
+        return host_plan
     else:
         logger.info("Structured output skipped for Stage 0; using prompt JSON parsing")
 
     try:
-        response = await llm.ainvoke(prompt)
+        response = await llm.ainvoke(messages)
         content = extract_llm_response_text(response)
-        return await parse_llm_response(content, ReviewPlan, llm)
+        _, payload = load_json_with_local_repairs(content)
+        annotation = ReviewPlan(**payload)
+        return _apply_planner_annotations(host_plan, annotation)
     except Exception as e:
         logger.info("Stage 0 planning unavailable; using local fallback plan: %s", e)
-        return _build_fallback_review_plan(request, processed_diff)
+        return host_plan
 
 
 def _build_fallback_review_plan(
@@ -271,7 +311,13 @@ def apply_mechanical_skip_constraints(
     return plan
 
 
-def _summarize_file_for_planning(path: str, diff_file: Any = None) -> Dict[str, Any]:
+def _summarize_file_for_planning(
+    path: str,
+    diff_file: Any = None,
+    current_source: Optional[str] = None,
+    *,
+    include_unit_detail: bool = True,
+) -> Dict[str, Any]:
     summary = {
         "path": path,
         "type": diff_file.change_type.value.upper() if diff_file else "MODIFIED",
@@ -297,7 +343,193 @@ def _summarize_file_for_planning(path: str, diff_file: Any = None) -> Dict[str, 
     if changed_lines:
         summary["representative_changed_lines"] = changed_lines
 
+    reviewable_hunks = [
+        hunk
+        for hunk in (getattr(diff_file, "hunks", None) or ())
+        if hunk.disposition is HunkDisposition.REVIEWABLE
+    ]
+    summary["mandatory_unit_count"] = len(reviewable_hunks)
+    if include_unit_detail and reviewable_hunks:
+        summary["mandatory_units"] = [
+            _planning_unit_header(hunk, current_source)
+            for hunk in reviewable_hunks
+        ]
+
     return summary
+
+
+def _build_bounded_planning_summaries(
+    request: ReviewRequestDto,
+    planning_paths: list[str],
+    diff_by_path: Dict[str, Any],
+) -> list[Dict[str, Any]]:
+    content_by_path: Dict[str, str] = {}
+    enrichment = getattr(request, "enrichmentData", None)
+    for file_content in getattr(enrichment, "fileContents", None) or ():
+        path = normalize_repository_path(getattr(file_content, "path", ""))
+        content = getattr(file_content, "content", None)
+        if path and isinstance(content, str) and content:
+            content_by_path[path] = content
+
+    summaries: list[Dict[str, Any]] = []
+    used_chars = 2
+    omitted_units = 0
+    omitted_files = 0
+    for path in planning_paths:
+        diff_file = diff_by_path.get(path) or diff_by_path.get(
+            path.rsplit("/", 1)[-1] if "/" in path else path
+        )
+        source = content_by_path.get(normalize_repository_path(path))
+        detailed = _summarize_file_for_planning(path, diff_file, source)
+        detailed_chars = len(json.dumps(detailed, ensure_ascii=False, default=str))
+        if used_chars + detailed_chars <= STAGE0_PLANNING_CHAR_BUDGET:
+            summaries.append(detailed)
+            used_chars += detailed_chars
+            continue
+        compact = _summarize_file_for_planning(
+            path,
+            diff_file,
+            None,
+            include_unit_detail=False,
+        )
+        compact["annotation_context_omitted"] = True
+        compact_chars = len(json.dumps(compact, ensure_ascii=False, default=str))
+        if used_chars + compact_chars <= STAGE0_PLANNING_CHAR_BUDGET:
+            summaries.append(compact)
+            used_chars += compact_chars
+        else:
+            omitted_files += 1
+            omitted_units += int(compact.get("mandatory_unit_count") or 0)
+    if omitted_files:
+        summaries.append({
+            "annotation_manifest_truncated": True,
+            "omitted_file_count": omitted_files,
+            "omitted_mandatory_unit_count": omitted_units,
+            "coverage_effect": "none; host-owned Stage 1 review remains mandatory",
+        })
+    return summaries
+
+
+def _planning_unit_header(hunk, current_source: Optional[str]) -> Dict[str, Any]:
+    changed_lines = [
+        _truncate_planning_line(line)
+        for line in hunk.content.splitlines()
+        if line.startswith(("+", "-"))
+        and not line.startswith(("+++", "---"))
+    ][:12]
+    header: Dict[str, Any] = {
+        "unit_id": hunk.id,
+        "hunk_header": hunk.header,
+        "new_start": hunk.new_start,
+        "new_count": hunk.new_count,
+        "changed_lines": changed_lines,
+    }
+    if current_source and hunk.new_start > 0:
+        lines = current_source.splitlines()
+        start = max(1, hunk.new_start - 6)
+        end = min(
+            len(lines),
+            hunk.new_start + max(1, hunk.new_count) + 6,
+        )
+        if start <= end:
+            window = "\n".join(lines[start - 1:end])
+            header["current_source_window"] = {
+                "start_line": start,
+                "end_line": end,
+                "content": window[:2_400],
+            }
+    return header
+
+
+def _apply_planner_annotations(
+    host_plan: ReviewPlan,
+    annotation: ReviewPlan,
+) -> ReviewPlan:
+    """Apply only bounded risk/focus/hypothesis annotations to host coverage."""
+    annotation_by_path: Dict[str, ReviewFile] = {}
+    for group in annotation.file_groups or ():
+        for review_file in group.files or ():
+            key = normalize_repository_path(review_file.path)
+            if key and key not in annotation_by_path:
+                annotation_by_path[key] = review_file
+
+    host_files = [
+        review_file
+        for group in host_plan.file_groups
+        for review_file in group.files
+    ]
+    buckets: Dict[str, list[ReviewFile]] = {risk: [] for risk in _RISK_LEVELS}
+    allowed_paths = {normalize_repository_path(item.path) for item in host_files}
+    for host_file in host_files:
+        planner_file = annotation_by_path.get(
+            normalize_repository_path(host_file.path)
+        )
+        risk = str(
+            getattr(planner_file, "risk_level", "MEDIUM") or "MEDIUM"
+        ).strip().upper()
+        if risk not in _RISK_LEVELS:
+            risk = "MEDIUM"
+        focus_areas = _sanitize_focus_areas(
+            getattr(planner_file, "focus_areas", ()) if planner_file else ()
+        )
+        buckets[risk].append(host_file.model_copy(update={
+            "risk_level": risk,
+            "focus_areas": focus_areas,
+        }))
+
+    groups = [
+        FileGroup(
+            group_id=f"HOST_ANNOTATED_{risk}",
+            priority=risk,
+            rationale=(
+                "Host-owned mandatory units grouped by bounded planner risk "
+                "annotation; universal review coverage is unchanged."
+            ),
+            files=buckets[risk],
+        )
+        for risk in _RISK_LEVELS
+        if buckets[risk]
+    ]
+    annotation.analysis_summary = str(annotation.analysis_summary or "")[:1_000]
+    annotation.file_groups = groups
+    annotation.files_to_skip = list(host_plan.files_to_skip or ())
+    annotation.cross_file_concerns = _sanitize_cross_file_hypotheses(
+        annotation.cross_file_concerns,
+        allowed_paths,
+    )
+    return annotation
+
+
+def _sanitize_focus_areas(values) -> list[str]:
+    return list(dict.fromkeys(
+        str(value).strip()[:80]
+        for value in (values or ())
+        if str(value).strip()
+    ))[:8]
+
+
+_PATH_TOKEN = re.compile(r"(?<![\w.-])([\w.-]+(?:/[\w.@+-]+)+)")
+
+
+def _sanitize_cross_file_hypotheses(
+    values,
+    allowed_paths: set[str],
+) -> list[str]:
+    retained = []
+    for value in values or ():
+        hypothesis = str(value or "").strip()[:500]
+        if not hypothesis:
+            continue
+        mentioned_paths = {
+            normalize_repository_path(match)
+            for match in _PATH_TOKEN.findall(hypothesis)
+        }
+        if mentioned_paths and not mentioned_paths.issubset(allowed_paths):
+            continue
+        retained.append(hypothesis)
+        if len(retained) >= 8:
+            break
+    return list(dict.fromkeys(retained))
 
 
 def _diff_was_limited(diff_file: Any = None) -> bool:

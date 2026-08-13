@@ -11,6 +11,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.*;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
+import org.rostilos.codecrow.vcsclient.model.VcsFileContentResult;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
@@ -94,6 +95,11 @@ class PrFileEnrichmentServiceTest {
                     List.of("image.png", "photo.jpg", "archive.zip", "lib.dll"));
             assertThat(result.stats().filesSkipped()).isEqualTo(4);
             assertThat(result.stats().skipReasons()).containsKey("binary_or_non_text");
+            assertThat(result.fileContents())
+                    .extracting(FileContentDto::path)
+                    .containsExactlyInAnyOrder("image.png", "photo.jpg", "archive.zip", "lib.dll");
+            assertThat(result.fileContents()).allMatch(file -> file.skipped()
+                    && "binary_or_non_text".equals(file.skipReason()));
         }
 
         @Test void keepsAllTextFiles() throws Exception {
@@ -224,6 +230,37 @@ class PrFileEnrichmentServiceTest {
                 assertThat(file.skipped()).isFalse();
             });
         }
+
+        @Test void preservesProviderDispositionForEveryUnavailableSource() throws IOException {
+            List<String> files = List.of("huge.java", "encoded.java", "missing.java");
+            when(vcsClient.getFileContentResults(
+                    eq("ws"), eq("repo"), eq(files), eq("main"), anyInt()))
+                    .thenReturn(Map.of(
+                            "huge.java", VcsFileContentResult.skipped(
+                                    "huge.java", 9_000_000,
+                                    VcsFileContentResult.Status.TOO_LARGE, "too large"),
+                            "encoded.java", VcsFileContentResult.skipped(
+                                    "encoded.java", 100,
+                                    VcsFileContentResult.Status.UNSUPPORTED, "not text"),
+                            "missing.java", VcsFileContentResult.skipped(
+                                    "missing.java", 0,
+                                    VcsFileContentResult.Status.FETCH_FAILED, "timeout")));
+
+            PrEnrichmentDataDto result = service.fetchFileContentsOnly(
+                    vcsClient, "ws", "repo", "main", files);
+
+            assertThat(result.fileContents())
+                    .extracting(FileContentDto::path, FileContentDto::skipReason)
+                    .containsExactly(
+                            org.assertj.core.groups.Tuple.tuple(
+                                    "huge.java", "file_size_limit_exceeded"),
+                            org.assertj.core.groups.Tuple.tuple(
+                                    "encoded.java", "unsupported_source"),
+                            org.assertj.core.groups.Tuple.tuple(
+                                    "missing.java", "fetch_failed"));
+            assertThat(result.stats().filesSkipped()).isEqualTo(3);
+            verify(vcsClient, never()).getFileContents(anyString(), anyString(), anyList(), anyString(), anyInt());
+        }
     }
 
     @Nested
@@ -266,7 +303,7 @@ class PrFileEnrichmentServiceTest {
                     .setBody("{\"results\":[]}"));
 
             PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
-            assertThat(result.stats().skipReasons()).containsKey("total_size_limit");
+            assertThat(result.stats().skipReasons()).containsKey("total_size_limit_exceeded");
         }
     }
 

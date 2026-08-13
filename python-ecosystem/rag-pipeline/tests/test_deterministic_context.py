@@ -330,6 +330,180 @@ class TestQueryChangedFile:
         assert "Bar" in imports_raw
 
 
+class TestReverseReferenceNavigation:
+
+    def test_returns_only_bounded_revision_pinned_path_ranges(self):
+        svc = _build_service()
+        svc.qdrant_client.scroll.return_value = ([
+            _make_point({
+                "text": "SECRET INDEXED CHUNK TEXT",
+                "path": "src/z_consumer.py",
+                "branch": "main",
+                "commit": "base-head",
+                "start_line": 30,
+                "end_line": 40,
+                "calls": ["LegacyApi"],
+            }, "z"),
+            _make_point({
+                "text": "another indexed body",
+                "path": "src/a_consumer.py",
+                "branch": "main",
+                "commit": "base-head",
+                "start_line": 5,
+                "end_line": 9,
+                "reference_identifiers": ["LegacyApi"],
+            }, "a"),
+            _make_point({
+                "text": "second chunk in same file",
+                "path": "src/a_consumer.py",
+                "branch": "main",
+                "commit": "base-head",
+                "start_line": 50,
+                "end_line": 60,
+                "referenced_types": ["LegacyApi"],
+            }, "a2"),
+        ], None)
+
+        result = svc._query_reverse_references(
+            "coll",
+            _branch_filter(),
+            ["LegacyApi"],
+            max_candidates=3,
+            branches=["main"],
+            target_branch="main",
+            expected_revisions={"main": "base-head"},
+            pr_source_revision=None,
+            pr_base_revision=None,
+            pr_base_generation_manifest_sha256=None,
+            pr_generation_fingerprint=None,
+        )
+
+        assert result["reference_navigation"] == [
+            {"path": "src/a_consumer.py", "start_line": 5, "end_line": 9},
+            {"path": "src/z_consumer.py", "start_line": 30, "end_line": 40},
+        ]
+        assert "SECRET INDEXED CHUNK TEXT" not in str(result)
+        assert result["_metadata"]["retrieval_state"] == "complete"
+        query_filter = svc.qdrant_client.scroll.call_args.kwargs[
+            "scroll_filter"
+        ].model_dump(mode="json")
+        serialized_filter = str(query_filter)
+        for field in (
+            "reference_identifiers",
+            "imports",
+            "calls",
+            "extends",
+            "implements",
+            "referenced_types",
+        ):
+            assert field in serialized_filter
+        assert "LegacyApi" in serialized_filter
+
+    def test_rejects_candidate_outside_requested_immutable_revision(self):
+        from rag_pipeline.core.repository_overlay import (
+            IncrementalIndexPreconditionError,
+        )
+
+        svc = _build_service()
+        svc.qdrant_client.scroll.return_value = ([
+            _make_point({
+                "path": "src/caller.py",
+                "branch": "main",
+                "commit": "stale-head",
+                "start_line": 1,
+                "end_line": 2,
+                "calls": ["LegacyApi"],
+            }),
+        ], None)
+
+        with pytest.raises(IncrementalIndexPreconditionError):
+            svc._query_reverse_references(
+                "coll",
+                _branch_filter(),
+                ["LegacyApi"],
+                max_candidates=3,
+                branches=["main"],
+                target_branch="main",
+                expected_revisions={"main": "base-head"},
+                pr_source_revision=None,
+                pr_base_revision=None,
+                pr_base_generation_manifest_sha256=None,
+                pr_generation_fingerprint=None,
+            )
+
+    def test_rejects_pr_candidate_outside_requested_overlay_generation(self):
+        from rag_pipeline.core.repository_overlay import (
+            IncrementalIndexPreconditionError,
+        )
+
+        svc = _build_service()
+        svc.qdrant_client.scroll.return_value = ([
+            _make_point({
+                "path": "src/caller.py",
+                "pr": True,
+                "pr_source_revision": "wrong-head",
+                "pr_base_revision": "base-head",
+                "pr_base_generation_manifest_sha256": "m" * 64,
+                "pr_generation_fingerprint": "sha256:" + "f" * 64,
+                "start_line": 1,
+                "end_line": 2,
+                "calls": ["LegacyApi"],
+            }),
+        ], None)
+
+        with pytest.raises(IncrementalIndexPreconditionError):
+            svc._query_reverse_references(
+                "coll",
+                _branch_filter(),
+                ["LegacyApi"],
+                max_candidates=3,
+                branches=["main"],
+                target_branch="main",
+                expected_revisions={"main": "base-head"},
+                pr_source_revision="source-head",
+                pr_base_revision="base-head",
+                pr_base_generation_manifest_sha256="m" * 64,
+                pr_generation_fingerprint="sha256:" + "f" * 64,
+            )
+
+    def test_cap_is_deterministic_and_reported_partial(self):
+        svc = _build_service()
+        svc.qdrant_client.scroll.return_value = ([
+            _make_point({
+                "path": f"src/{name}_consumer.py",
+                "branch": "main",
+                "start_line": index + 1,
+                "end_line": index + 2,
+                "calls": ["LegacyApi"],
+            }, name)
+            for index, name in enumerate(("z", "a", "m", "b"))
+        ], None)
+
+        result = svc._query_reverse_references(
+            "coll",
+            _branch_filter(),
+            ["LegacyApi"],
+            max_candidates=3,
+            branches=["main"],
+            target_branch="main",
+            expected_revisions=None,
+            pr_source_revision=None,
+            pr_base_revision=None,
+            pr_base_generation_manifest_sha256=None,
+            pr_generation_fingerprint=None,
+        )
+
+        assert [
+            value["path"] for value in result["reference_navigation"]
+        ] == [
+            "src/a_consumer.py",
+            "src/b_consumer.py",
+            "src/m_consumer.py",
+        ]
+        assert result["_metadata"]["truncated"] is True
+        assert result["_metadata"]["retrieval_state"] == "partial"
+
+
 class TestArchitectureContext:
 
     def test_exact_architecture_packet_expands_to_concrete_related_file(self):

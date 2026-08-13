@@ -19,6 +19,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichme
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.queue.RedisQueueService;
+import org.rostilos.codecrow.vcsclient.model.VcsPullRequestChangeManifest;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
@@ -29,6 +30,7 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -254,6 +256,98 @@ class AiAnalysisClientTest {
                         assertThat(response.get("comment")).isEqualTo("Code review comment");
                         assertThat(response.get("issues")).isInstanceOf(List.class);
                         assertThat((List<?>) response.get("issues")).hasSize(2);
+                        assertThat(response.get("analysisRunKey")).isInstanceOf(String.class);
+                        assertThatCode(() -> java.util.UUID.fromString(
+                                        (String) response.get("analysisRunKey")))
+                                        .doesNotThrowAnyException();
+                }
+
+                @Test
+                @DisplayName("should preserve durable attempt identity separately from Redis delivery")
+                void shouldPreserveDurableAttemptIdentitySeparatelyFromRedisDelivery()
+                                throws Exception {
+                        AiAnalysisRequest durableAttempt = new TestAiAnalysisRequest() {
+                                @Override
+                                public String getAnalysisRunKey() {
+                                        return "persisted-job-42";
+                                }
+                        };
+                        Map<String, Object> finalEvent = Map.of(
+                                        "type", "final",
+                                        "result", Map.of("comment", "ok", "issues", List.of()));
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        Map<String, Object> response = client.performAnalysis(durableAttempt);
+
+                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+                        verify(queueService).leftPush(
+                                        eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> queued = objectMapper.readValue(
+                                        payloadCaptor.getValue(), Map.class);
+                        String deliveryId = (String) queued.get("job_id");
+                        assertThatCode(() -> java.util.UUID.fromString(deliveryId))
+                                        .doesNotThrowAnyException();
+                        assertThat(response).containsEntry(
+                                        "analysisRunKey",
+                                        AiAnalysisClient.persistenceRunKey(
+                                                        durableAttempt, deliveryId));
+                        assertThat(deliveryId).isNotEqualTo(response.get("analysisRunKey"));
+                }
+
+                @Test
+                @DisplayName("should keep recovery stable while separating attempts and moved heads")
+                void shouldScopePersistenceIdentityToAttemptAndConfirmedSnapshot() {
+                        AiAnalysisRequest firstSnapshot = durableRequest(
+                                        "accepted-attempt-1", "base-a", "head-a");
+                        AiAnalysisRequest recoveredSnapshot = durableRequest(
+                                        "accepted-attempt-1", "base-a", "head-a");
+                        AiAnalysisRequest newAttempt = durableRequest(
+                                        "accepted-attempt-2", "base-a", "head-a");
+                        AiAnalysisRequest movedHead = durableRequest(
+                                        "accepted-attempt-1", "base-a", "head-b");
+
+                        String original = AiAnalysisClient.persistenceRunKey(
+                                        firstSnapshot, "delivery-1");
+
+                        assertThat(AiAnalysisClient.persistenceRunKey(
+                                        recoveredSnapshot, "delivery-2"))
+                                        .isEqualTo(original);
+                        assertThat(AiAnalysisClient.persistenceRunKey(
+                                        newAttempt, "delivery-3"))
+                                        .isNotEqualTo(original);
+                        assertThat(AiAnalysisClient.persistenceRunKey(
+                                        movedHead, "delivery-4"))
+                                        .isNotEqualTo(original);
+                        assertThat(original).hasSize(64);
+                }
+
+                private AiAnalysisRequest durableRequest(
+                                String acceptedAttempt,
+                                String baseCommit,
+                                String headCommit) {
+                        return new TestAiAnalysisRequest() {
+                                @Override
+                                public String getAnalysisRunKey() {
+                                        return acceptedAttempt;
+                                }
+
+                                @Override
+                                public String getBaseCommitHash() {
+                                        return baseCommit;
+                                }
+
+                                @Override
+                                public String getCurrentCommitHash() {
+                                        return headCommit;
+                                }
+
+                                @Override
+                                public String getAnalysisBehaviorDigest() {
+                                        return "behavior-a";
+                                }
+                        };
                 }
 
                 @Test
@@ -316,6 +410,70 @@ class AiAnalysisClientTest {
                         assertThat(requestPayload.get("projectWorkspace")).isEqualTo("Codecrow");
                         assertThat(requestPayload.get("projectNamespace")).isEqualTo("codecrow-garden");
                         assertThat(requestPayload.get("ragEnabled")).isEqualTo(true);
+                }
+
+                @Test
+                @DisplayName("should serialize full PR context scope separately from direct review scope")
+                void shouldSerializeFullPrContextScopeSeparately() throws Exception {
+                        AiAnalysisRequest contextRequest = new TestAiAnalysisRequest() {
+                                private final VcsPullRequestChangeManifest manifest =
+                                                new VcsPullRequestChangeManifest(
+                                                                List.of(new VcsPullRequestChangeManifest.Change(
+                                                                                "src/Earlier.java", "",
+                                                                                VcsPullRequestChangeManifest.ChangeKind.MODIFIED)),
+                                                                VcsPullRequestChangeManifest.Completeness.COMPLETE,
+                                                                "test:complete");
+
+                                @Override
+                                public List<String> getChangedFiles() {
+                                        return List.of("src/Latest.java");
+                                }
+
+                                @Override
+                                public List<String> getFullPrChangedFiles() {
+                                        return List.of("src/Earlier.java", "src/Latest.java");
+                                }
+
+                                @Override
+                                public List<String> getFullPrDeletedFiles() {
+                                        return List.of("src/Removed.java");
+                                }
+
+                                @Override
+                                public VcsPullRequestChangeManifest getPullRequestFileManifest() {
+                                        return manifest;
+                                }
+
+                                @Override
+                                public boolean getPrContextMaintenanceRequired() {
+                                        return true;
+                                }
+                        };
+                        Map<String, Object> finalEvent = Map.of(
+                                        "type", "final",
+                                        "result", Map.of("comment", "ok", "issues", List.of()));
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        client.performAnalysis(contextRequest);
+
+                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> queued = objectMapper.readValue(
+                                        payloadCaptor.getValue(), Map.class);
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> requestPayload =
+                                        (Map<String, Object>) queued.get("request");
+                        assertThat(requestPayload.get("changedFiles"))
+                                        .isEqualTo(List.of("src/Latest.java"));
+                        assertThat(requestPayload.get("fullPrChangedFiles"))
+                                        .isEqualTo(List.of("src/Earlier.java", "src/Latest.java"));
+                        assertThat(requestPayload.get("fullPrDeletedFiles"))
+                                        .isEqualTo(List.of("src/Removed.java"));
+                        assertThat(requestPayload)
+                                        .containsEntry("fullPrManifestComplete", true)
+                                        .containsEntry("prContextMaintenanceRequired", true);
                 }
 
                 @Test

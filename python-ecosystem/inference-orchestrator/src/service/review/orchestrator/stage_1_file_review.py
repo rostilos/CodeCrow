@@ -14,7 +14,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
-from model.multi_stage import ReviewPlan, FileReviewBatchOutput
+from model.multi_stage import (
+    ReviewPlan,
+    FileReviewBatchOutput,
+    ReviewContextRequest,
+)
 from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import (
     DiffChangeType,
@@ -27,15 +31,10 @@ from utils.task_context_builder import build_task_context
 from utils.dependency_graph import create_smart_batches_async
 
 from utils.llm_response import extract_llm_response_text
-from service.review.orchestrator.json_utils import parse_llm_response
-from service.review.orchestrator.reconciliation import (
-    issue_matches_files,
-    format_previous_issues_for_batch,
-)
+from service.review.orchestrator.json_utils import load_json_with_local_repairs
 from service.review.orchestrator.context_helpers import (
     extract_diff_snippets,
     format_rag_context,
-    format_duplication_context,
 )
 from utils.path_identity import (
     normalize_repository_path,
@@ -51,6 +50,15 @@ from service.review.plugin_context import (
 )
 from service.review.candidate_ledger import CandidateEvidenceLedger
 from service.review.prompt_diagnostics import record_prompt_diagnostic
+from service.review.orchestrator.exact_context import (
+    ExactContextResolver,
+    ReviewFollowupBudget,
+)
+from utils.prompts.review_messages import (
+    append_review_continuation,
+    serialize_review_messages,
+    to_review_messages,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +81,8 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-SEMANTIC_RAG_FILLER_ENABLED = _env_bool("REVIEW_SEMANTIC_RAG_FILLER_ENABLED", True)
-DUPLICATION_RAG_ENABLED = _env_bool("REVIEW_DUPLICATION_RAG_ENABLED", True)
+SEMANTIC_RAG_FILLER_ENABLED = _env_bool("REVIEW_SEMANTIC_RAG_FILLER_ENABLED", False)
+DUPLICATION_RAG_ENABLED = _env_bool("REVIEW_DUPLICATION_RAG_ENABLED", False)
 STAGE1_MAX_FILES_PER_BATCH = max(1, _env_int("REVIEW_STAGE1_MAX_FILES_PER_BATCH", 7))
 STAGE1_BATCH_TOKEN_BUDGET = max(10_000, _env_int("REVIEW_STAGE1_BATCH_TOKEN_BUDGET", 60_000))
 STAGE1_DIFF_CHUNK_TOKEN_BUDGET = max(8_000, _env_int("REVIEW_STAGE1_DIFF_CHUNK_TOKEN_BUDGET", 35_000))
@@ -140,6 +148,108 @@ class Stage1RagState:
     deterministic_retrieval_states: List[str] = field(default_factory=list)
 
 
+class Stage1ContinuationAdmission:
+    """Assign scarce continuation calls by stable batch order, not latency.
+
+    Initial Stage 1 generations remain concurrent. A batch that asks for exact
+    evidence waits only for earlier batches to declare whether they need a
+    continuation. Released reservations pass to the next requesting batch.
+    """
+
+    def __init__(self, total_batches: int, budget: ReviewFollowupBudget) -> None:
+        self._total_batches = max(0, int(total_batches))
+        self._budget = budget
+        self._condition = asyncio.Condition()
+        self._states: dict[int, str] = {}
+        self._source_keys: dict[int, str] = {}
+
+    async def acquire(self, batch_index: int, source_key: str) -> bool:
+        async with self._condition:
+            self._validate_index(batch_index)
+            if batch_index in self._states:
+                raise RuntimeError("Stage 1 batch submitted continuation admission twice")
+            self._states[batch_index] = "waiting"
+            self._source_keys[batch_index] = source_key
+            self._condition.notify_all()
+            while True:
+                if any(
+                    earlier not in self._states
+                    for earlier in range(1, batch_index)
+                ):
+                    await self._condition.wait()
+                    continue
+                waiting = sorted(
+                    index
+                    for index, state in self._states.items()
+                    if state == "waiting"
+                )
+                if waiting and waiting[0] != batch_index:
+                    await self._condition.wait()
+                    continue
+                if self._budget.remaining > 0:
+                    admitted = await self._budget.reserve(
+                        "stage_1_exact_continuation",
+                        source_key,
+                    )
+                    if admitted:
+                        self._states[batch_index] = "active"
+                        self._condition.notify_all()
+                        return True
+                if any(state == "active" for state in self._states.values()):
+                    await self._condition.wait()
+                    continue
+                self._states[batch_index] = "denied"
+                self._condition.notify_all()
+                return False
+
+    async def skip(self, batch_index: int) -> None:
+        async with self._condition:
+            self._validate_index(batch_index)
+            if batch_index not in self._states:
+                self._states[batch_index] = "skipped"
+                self._condition.notify_all()
+
+    async def release(self, batch_index: int) -> None:
+        async with self._condition:
+            if self._states.get(batch_index) != "active":
+                return
+            await self._budget.release(
+                "stage_1_exact_continuation",
+                self._source_keys[batch_index],
+            )
+            self._states[batch_index] = "released"
+            self._condition.notify_all()
+
+    async def commit(self, batch_index: int) -> None:
+        async with self._condition:
+            if self._states.get(batch_index) != "active":
+                raise RuntimeError("Stage 1 continuation admission is not active")
+            await self._budget.commit(
+                "stage_1_exact_continuation",
+                self._source_keys[batch_index],
+            )
+            self._states[batch_index] = "committed"
+            self._condition.notify_all()
+
+    async def finish(self, batch_index: int) -> None:
+        async with self._condition:
+            self._validate_index(batch_index)
+            state = self._states.get(batch_index)
+            if state == "active":
+                await self._budget.release(
+                    "stage_1_exact_continuation",
+                    self._source_keys[batch_index],
+                )
+                self._states[batch_index] = "released"
+            elif state in {None, "waiting"}:
+                self._states[batch_index] = "skipped"
+            self._condition.notify_all()
+
+    def _validate_index(self, batch_index: int) -> None:
+        if batch_index < 1 or batch_index > self._total_batches:
+            raise ValueError("Stage 1 batch index is outside the scheduled range")
+
+
 @dataclass(frozen=True)
 class _DiffReviewChunk:
     """One prompt-sized diff unit and the immutable hunks it contains."""
@@ -155,6 +265,13 @@ class Stage1ReviewUnitState:
     units_by_hunk: Dict[str, set[str]] = field(default_factory=dict)
     unit_owner: Dict[str, int] = field(default_factory=dict)
     completed_unit_ids: set[str] = field(default_factory=set)
+    mandatory_unit_ids_by_hunk: Dict[str, str] = field(default_factory=dict)
+    cross_file_context_requests: List[ReviewContextRequest] = field(
+        default_factory=list
+    )
+    continuation_calls_used: int = 0
+    continuation_budget_exhausted: bool = False
+    incomplete_followups: set[str] = field(default_factory=set)
     registered: bool = False
 
     def register_batches(self, batches: List[List[Dict[str, Any]]]) -> None:
@@ -183,6 +300,23 @@ class Stage1ReviewUnitState:
                             f"Stage 1 review unit {unit_id} has an invalid hunk identity"
                         )
                     self.units_by_hunk.setdefault(hunk_id, set()).add(unit_id)
+                    self.mandatory_unit_ids_by_hunk.setdefault(
+                        hunk_id,
+                        _mandatory_hunk_unit_id(
+                            getattr(item.get("file"), "path", ""),
+                            hunk_id,
+                        ),
+                    )
+
+    def record_context_requests(
+        self,
+        requests: List[ReviewContextRequest],
+    ) -> None:
+        for request in requests:
+            # requestId is only batch-unique; different concurrent batches may
+            # legitimately emit ctx-1 for different interactions.
+            if request.kind == "CROSS_FILE":
+                self.cross_file_context_requests.append(request)
 
     def unit_ids_for_batch(
         self,
@@ -1491,6 +1625,18 @@ def _review_unit_id(path: str, chunk: _DiffReviewChunk) -> str:
     return "sha256:" + digest
 
 
+def _mandatory_hunk_unit_id(path: str, hunk_id: str) -> str:
+    """Stable host-owned identity for one reviewable hunk."""
+    digest = hashlib.sha256(
+        (
+            normalize_repository_path(path)
+            + "\0"
+            + str(hunk_id or "").strip()
+        ).encode("utf-8")
+    ).hexdigest()
+    return "sha256:" + digest
+
+
 def _expand_oversized_diff_batches(
     batches: List[List[Dict[str, Any]]],
     prepared_context: Stage1PreparedContext,
@@ -1691,7 +1837,19 @@ async def fetch_batch_rag_context(
                      f"(priority={priority_upper}, top_k={top_k})")
 
         pr_number = request.pullRequestId if exact_revision_bound else None
-        all_pr_files = request.changedFiles if exact_revision_bound else None
+        all_pr_files = (
+            list(dict.fromkeys([
+                *(request.fullPrChangedFiles or request.changedFiles or ()),
+                *(request.fullPrDeletedFiles or request.deletedFiles or ()),
+            ]))
+            if exact_revision_bound
+            else None
+        )
+        all_pr_deleted_files = (
+            (request.fullPrDeletedFiles or request.deletedFiles)
+            if exact_revision_bound
+            else None
+        )
         source_revision = (
             request.currentCommitHash or request.commitHash
             if exact_revision_bound
@@ -1779,7 +1937,7 @@ async def fetch_batch_rag_context(
                 base_branch=(base_branch if pr_number else None),
                 pr_number=pr_number,
                 all_pr_changed_files=all_pr_files,
-                deleted_files=(request.deletedFiles or None) if pr_number else None,
+                deleted_files=(all_pr_deleted_files or None) if pr_number else None,
                 source_revision=source_revision,
                 base_revision=base_revision,
                 base_generation_manifest_sha256=base_generation_receipt,
@@ -2192,10 +2350,31 @@ async def execute_stage_1_file_reviews(
     rag_state: Optional[Stage1RagState] = None,
     review_unit_state: Optional[Stage1ReviewUnitState] = None,
     candidate_ledger: Optional[CandidateEvidenceLedger] = None,
+    followup_budget: Optional[ReviewFollowupBudget] = None,
+    exact_context_resolver: Optional[ExactContextResolver] = None,
+    exact_context_reader=None,
+    mcp_client=None,
 ) -> List[CodeReviewIssue]:
     prepared_context = _build_stage_1_prepared_context(request, processed_diff, is_incremental)
     rag_state = rag_state or Stage1RagState()
     review_unit_state = review_unit_state or Stage1ReviewUnitState()
+    followup_budget = followup_budget or ReviewFollowupBudget(max_calls=4)
+    if exact_context_resolver is None:
+        exact_context_resolver = ExactContextResolver(
+            request,
+            file_contents={
+                key: value
+                for key, value in prepared_context.file_content_by_path.items()
+                if value is not None
+            },
+            file_metadata=(
+                getattr(getattr(request, "enrichmentData", None), "fileMetadata", None)
+                or ()
+            ),
+            rag_client=rag_client,
+            mcp_client=mcp_client,
+            exact_reader=exact_context_reader,
+        )
     batches = await create_smart_batches_wrapper(
         file_groups=plan.file_groups,
         processed_diff=prepared_context.diff_source,
@@ -2205,6 +2384,10 @@ async def execute_stage_1_file_reviews(
     )
     batches = _expand_oversized_diff_batches(batches, prepared_context)
     review_unit_state.register_batches(batches)
+    continuation_admission = Stage1ContinuationAdmission(
+        len(batches),
+        followup_budget,
+    )
 
     total_review_units = sum(len(batch) for batch in batches)
     unique_file_paths = {
@@ -2243,20 +2426,27 @@ async def execute_stage_1_file_reviews(
         batch: List[Dict[str, Any]],
     ) -> tuple[int, List[CodeReviewIssue], tuple[str, ...]]:
         unit_ids = review_unit_state.unit_ids_for_batch(batch_idx, batch)
-        async with semaphore:
-            batch_paths = [item["file"].path for item in batch]
-            has_rels = any(item.get('has_relationships') for item in batch)
-            logger.debug(f"Batch {batch_idx}: {batch_paths} (cross-file relationships: {has_rels})")
-            result = await _review_batch_with_timing(
-                batch_idx, llm, request, batch, rag_client, prepared_context,
-                is_incremental, rag_context, pr_indexed,
-                llm_reranker=llm_reranker,
-                use_llm_rerank=use_llm_rerank,
-                fallback_llm=fallback_llm,
-                rag_state=rag_state,
-                candidate_ledger=candidate_ledger,
-            )
-            return batch_idx, result, unit_ids
+        try:
+            async with semaphore:
+                batch_paths = [item["file"].path for item in batch]
+                has_rels = any(item.get('has_relationships') for item in batch)
+                logger.debug(f"Batch {batch_idx}: {batch_paths} (cross-file relationships: {has_rels})")
+                result = await _review_batch_with_timing(
+                    batch_idx, llm, request, batch, rag_client, prepared_context,
+                    is_incremental, rag_context, pr_indexed,
+                    llm_reranker=llm_reranker,
+                    use_llm_rerank=use_llm_rerank,
+                    fallback_llm=fallback_llm,
+                    rag_state=rag_state,
+                    candidate_ledger=candidate_ledger,
+                    followup_budget=followup_budget,
+                    exact_context_resolver=exact_context_resolver,
+                    continuation_admission=continuation_admission,
+                    review_unit_state=review_unit_state,
+                )
+                return batch_idx, result, unit_ids
+        finally:
+            await continuation_admission.finish(batch_idx)
 
     tasks = [
         asyncio.create_task(_run_batch(batch_idx, batch))
@@ -2317,6 +2507,10 @@ async def _review_batch_with_timing(
     fallback_llm=None,
     rag_state: Optional[Stage1RagState] = None,
     candidate_ledger: Optional[CandidateEvidenceLedger] = None,
+    followup_budget: Optional[ReviewFollowupBudget] = None,
+    exact_context_resolver: Optional[ExactContextResolver] = None,
+    continuation_admission: Optional[Stage1ContinuationAdmission] = None,
+    review_unit_state: Optional[Stage1ReviewUnitState] = None,
 ) -> List[CodeReviewIssue]:
     start_time = time.time()
     batch_paths = [item["file"].path for item in batch]
@@ -2331,6 +2525,11 @@ async def _review_batch_with_timing(
             fallback_llm=fallback_llm,
             rag_state=rag_state,
             candidate_ledger=candidate_ledger,
+            followup_budget=followup_budget,
+            exact_context_resolver=exact_context_resolver,
+            batch_index=batch_idx,
+            continuation_admission=continuation_admission,
+            review_unit_state=review_unit_state,
         )
         elapsed = time.time() - start_time
         logger.info(f"[Batch {batch_idx}] FINISHED in {elapsed:.2f}s - {len(result)} issues")
@@ -2355,6 +2554,11 @@ async def review_file_batch(
     fallback_llm=None,
     rag_state: Optional[Stage1RagState] = None,
     candidate_ledger: Optional[CandidateEvidenceLedger] = None,
+    followup_budget: Optional[ReviewFollowupBudget] = None,
+    exact_context_resolver: Optional[ExactContextResolver] = None,
+    batch_index: Optional[int] = None,
+    continuation_admission: Optional[Stage1ContinuationAdmission] = None,
+    review_unit_state: Optional[Stage1ReviewUnitState] = None,
 ) -> List[CodeReviewIssue]:
     batch_files_data = []
     batch_file_paths = []
@@ -2490,8 +2694,8 @@ async def review_file_batch(
         rag_context_text = format_rag_context(
             batch_rag_context,
             set(batch_file_paths),
-            pr_changed_files=request.changedFiles,
-            deleted_files=request.deletedFiles,
+            pr_changed_files=request.fullPrChangedFiles or request.changedFiles,
+            deleted_files=request.fullPrDeletedFiles or request.deletedFiles,
             current_file_complete_paths=complete_current_file_paths,
             visible_evidence_by_id=batch_visible_evidence_by_id,
         )
@@ -2527,8 +2731,8 @@ async def review_file_batch(
             rag_context_text = format_rag_context(
                 scoped_fallback_rag_context,
                 set(batch_file_paths),
-                pr_changed_files=request.changedFiles,
-                deleted_files=request.deletedFiles,
+                pr_changed_files=request.fullPrChangedFiles or request.changedFiles,
+                deleted_files=request.fullPrDeletedFiles or request.deletedFiles,
                 current_file_complete_paths=complete_current_file_paths,
                 visible_evidence_by_id=batch_visible_evidence_by_id,
             )
@@ -2552,16 +2756,6 @@ async def review_file_batch(
 
     logger.info(f"RAG context for batch: {len(rag_context_text)} chars")
 
-    previous_issues_for_batch = ""
-    has_previous_issues = request.previousCodeAnalysisIssues and len(request.previousCodeAnalysisIssues) > 0
-    if has_previous_issues:
-        relevant_prev_issues = [
-            issue for issue in request.previousCodeAnalysisIssues
-            if issue_matches_files(issue, batch_file_paths)
-        ]
-        if relevant_prev_issues:
-            previous_issues_for_batch = format_previous_issues_for_batch(relevant_prev_issues)
-
     file_metadata_text = _format_batch_metadata_json(batch_metadata)
     if not file_metadata_text:
         logger.debug(f"No structured parser metadata for batch {batch_file_paths}")
@@ -2578,9 +2772,8 @@ async def review_file_batch(
         file_outlines=file_metadata_text,
         rag_context=rag_context_text,
         is_incremental=is_incremental,
-        previous_issues=previous_issues_for_batch,
-        all_pr_files=request.changedFiles,
-        deleted_files=request.deletedFiles,
+        all_pr_files=request.fullPrChangedFiles or request.changedFiles,
+        deleted_files=request.fullPrDeletedFiles or request.deletedFiles,
         task_context=prepared_context.task_context,
         plugin_context=plugin_context_text,
     )
@@ -2612,52 +2805,434 @@ async def review_file_batch(
         "pluginChars": len(plugin_context_text),
         "projectRulesChars": len(project_rules),
         "taskContextChars": len(prepared_context.task_context),
-        "previousIssuesChars": len(previous_issues_for_batch),
+        "previousIssuesChars": 0,
         "currentSourcePerFileBudget": current_source_per_file_budget,
     })
 
-    issues = await _invoke_stage_1_batch_llm(llm, prompt, batch_file_paths, label="capped")
-    if issues is not None:
-        _register_stage_1_candidates(
-            issues,
-            batch_items,
-            candidate_ledger,
-            prompt,
-            batch_visible_evidence_by_id,
+    initial_output = await _invoke_stage_1_batch_llm(
+        llm,
+        prompt,
+        batch_file_paths,
+        label="capped",
+    )
+    if initial_output is not None:
+        return await _finalize_stage_1_batch_output(
+            llm=llm,
+            initial_output=initial_output,
+            generation_prompt=prompt,
+            batch_file_paths=batch_file_paths,
+            batch_items=batch_items,
+            candidate_ledger=candidate_ledger,
+            visible_evidence_by_id=batch_visible_evidence_by_id,
+            exact_context_resolver=exact_context_resolver,
+            followup_budget=followup_budget,
+            batch_index=batch_index,
+            continuation_admission=continuation_admission,
+            review_unit_state=review_unit_state,
+            rag_state=rag_state,
         )
-        return issues
-
-    if fallback_llm is not None and fallback_llm is not llm:
-        logger.info(
-            "Stage 1 batch failed with capped LLM for %s; retrying without output cap",
-            batch_file_paths,
-        )
-        issues = await _invoke_stage_1_batch_llm(
-            fallback_llm,
-            prompt,
-            batch_file_paths,
-            label="uncapped retry",
-        )
-        if issues is not None:
-            _register_stage_1_candidates(
-                issues,
-                batch_items,
-                candidate_ledger,
-                prompt,
-                batch_visible_evidence_by_id,
-            )
-            return issues
 
     logger.debug(
-        "Batch review parse failure for %s after capped%s attempts. "
+        "Batch review parse failure for %s after one generation. "
         "The batch will fail so missing results cannot be published as a clean review.",
         batch_file_paths,
-        " and uncapped" if fallback_llm is not None and fallback_llm is not llm else "",
     )
     raise RuntimeError(
         "Stage 1 batch produced no valid result after all configured attempts: "
         + ", ".join(batch_file_paths)
     )
+
+
+async def _finalize_stage_1_batch_output(
+    *,
+    llm,
+    initial_output,
+    generation_prompt: str,
+    batch_file_paths: List[str],
+    batch_items: List[Dict[str, Any]],
+    candidate_ledger: Optional[CandidateEvidenceLedger],
+    visible_evidence_by_id: Dict[str, tuple[Dict[str, Any], ...]],
+    exact_context_resolver: Optional[ExactContextResolver],
+    followup_budget: Optional[ReviewFollowupBudget],
+    batch_index: Optional[int] = None,
+    continuation_admission: Optional[Stage1ContinuationAdmission] = None,
+    review_unit_state: Optional[Stage1ReviewUnitState] = None,
+    rag_state: Optional[Stage1RagState] = None,
+) -> List[CodeReviewIssue]:
+    """Resolve one bounded evidence continuation and register only final issues."""
+    incomplete_key = lambda request_id: (
+        f"batch-{batch_index if batch_index is not None else 'direct'}:{request_id}"
+    )
+    if isinstance(initial_output, list):
+        # Compatibility for direct test/custom callers that still return issues.
+        issues = list(initial_output)
+        requests: List[ReviewContextRequest] = []
+        provisional_payload: Any = {"reviews": [], "contextRequests": []}
+    else:
+        issues = _extract_calibrated_issues(initial_output)
+        requests = list(initial_output.contextRequests or ())
+        provisional_payload = _stage_1_output_payload(initial_output)
+
+    cross_file_requests = _bind_cross_file_request_origins(
+        requests,
+        issues,
+        batch_file_paths,
+    )
+    if review_unit_state is not None:
+        review_unit_state.record_context_requests(cross_file_requests)
+
+    local_requests = [
+        request for request in requests if request.kind == "LOCAL_EXACT"
+    ]
+    if not local_requests:
+        if continuation_admission is not None and batch_index is not None:
+            await continuation_admission.skip(batch_index)
+        final_issues = _drop_request_dependent_issues(
+            issues,
+            cross_file_requests,
+        )
+        _register_stage_1_candidates(
+            final_issues,
+            batch_items,
+            candidate_ledger,
+            generation_prompt,
+            visible_evidence_by_id,
+        )
+        return final_issues
+
+    if exact_context_resolver is None:
+        if continuation_admission is not None and batch_index is not None:
+            await continuation_admission.skip(batch_index)
+        logger.info(
+            "Stage 1 exact context unavailable for %s; dependent candidates withheld",
+            batch_file_paths,
+        )
+        if review_unit_state is not None:
+            review_unit_state.incomplete_followups.update(
+                incomplete_key(request.requestId) for request in local_requests
+            )
+        final_issues = _drop_request_dependent_issues(issues, requests)
+        _register_stage_1_candidates(
+            final_issues,
+            batch_items,
+            candidate_ledger,
+            generation_prompt,
+            visible_evidence_by_id,
+        )
+        return final_issues
+
+    budget = followup_budget or ReviewFollowupBudget(max_calls=4)
+    source_key = (
+        f"batch-{batch_index}:" if batch_index is not None else ""
+    ) + ",".join(sorted(batch_file_paths))
+    budget_kind = "stage_1_exact_continuation"
+    scheduled_admission = (
+        continuation_admission is not None and batch_index is not None
+    )
+    if scheduled_admission:
+        admitted = await continuation_admission.acquire(batch_index, source_key)
+    else:
+        admitted = await budget.reserve(budget_kind, source_key)
+    if not admitted:
+        logger.info(
+            "Stage 1 follow-up budget exhausted for %s; dependent candidates withheld",
+            batch_file_paths,
+        )
+        if review_unit_state is not None:
+            review_unit_state.continuation_budget_exhausted = True
+            review_unit_state.incomplete_followups.update(
+                incomplete_key(request.requestId) for request in local_requests
+            )
+        final_issues = _drop_request_dependent_issues(issues, requests)
+        _register_stage_1_candidates(
+            final_issues,
+            batch_items,
+            candidate_ledger,
+            generation_prompt,
+            visible_evidence_by_id,
+        )
+        return final_issues
+
+    # Reserve the only call that can consume this evidence before optional RAG
+    # navigation or pinned VCS reads. Budget-losing batches do no external work.
+    resolution = await exact_context_resolver.resolve(
+        local_requests,
+        originating_paths=batch_file_paths,
+    )
+    unresolved_ids = {item.request_id for item in resolution.unresolved}
+    resolved_ids = {item.request_id for item in resolution.resolved}
+    unresolved_requests = [
+        request
+        for request in local_requests
+        if request.requestId in unresolved_ids
+    ]
+    if review_unit_state is not None:
+        review_unit_state.incomplete_followups.update(
+            incomplete_key(request.requestId) for request in unresolved_requests
+        )
+    if not resolution.resolved:
+        if scheduled_admission:
+            await continuation_admission.release(batch_index)
+        else:
+            await budget.release(budget_kind, source_key)
+        final_issues = _drop_request_dependent_issues(issues, requests)
+        _register_stage_1_candidates(
+            final_issues,
+            batch_items,
+            candidate_ledger,
+            generation_prompt,
+            visible_evidence_by_id,
+        )
+        return final_issues
+
+    if review_unit_state is not None:
+        review_unit_state.continuation_calls_used += 1
+
+    continuation_messages = append_review_continuation(
+        generation_prompt,
+        provisional_payload,
+        resolution.prompt_payload(),
+    )
+    continuation_prompt = serialize_review_messages(continuation_messages)
+    merged_visible_evidence = dict(visible_evidence_by_id)
+    merged_visible_evidence.update(resolution.visible_evidence_by_id)
+    if rag_state is not None:
+        rag_state.exact_evidence_by_id.update(
+            resolution.visible_evidence_by_id
+        )
+
+    if scheduled_admission:
+        await continuation_admission.commit(batch_index)
+    else:
+        await budget.commit(budget_kind, source_key)
+    final_output = await _invoke_stage_1_batch_llm(
+        llm,
+        continuation_messages,
+        batch_file_paths,
+        label="exact-context continuation",
+    )
+    if final_output is None:
+        # Retrieval and continuation are optional enrichment. Preserve unrelated
+        # provisional findings but never publish a claim that requested evidence.
+        if review_unit_state is not None:
+            review_unit_state.incomplete_followups.update(
+                incomplete_key(request_id) for request_id in resolved_ids
+            )
+        final_issues = _drop_request_dependent_issues(issues, requests)
+        _register_stage_1_candidates(
+            final_issues,
+            batch_items,
+            candidate_ledger,
+            generation_prompt,
+            visible_evidence_by_id,
+        )
+        return final_issues
+
+    if isinstance(final_output, list):
+        final_issues = list(final_output)
+        repeated_requests: List[ReviewContextRequest] = []
+    else:
+        final_issues = _extract_calibrated_issues(final_output)
+        repeated_requests = list(final_output.contextRequests or ())
+    repeated_cross_file_requests = _bind_cross_file_request_origins(
+        repeated_requests,
+        final_issues,
+        batch_file_paths,
+    )
+    if review_unit_state is not None:
+        review_unit_state.incomplete_followups.update(
+            incomplete_key(request.requestId)
+            for request in repeated_requests
+            if request.kind == "LOCAL_EXACT"
+        )
+    if repeated_cross_file_requests and review_unit_state is not None:
+        review_unit_state.record_context_requests(repeated_cross_file_requests)
+    if repeated_requests:
+        final_issues = _drop_request_dependent_issues(
+            final_issues,
+            repeated_requests,
+        )
+    if cross_file_requests:
+        # A candidate that explicitly requested repository-level evidence is not
+        # publishable merely because an unrelated local continuation succeeded.
+        final_issues = _drop_matching_request_dependent_issues(
+            final_issues,
+            issues,
+            cross_file_requests,
+        )
+    if unresolved_requests:
+        final_issues = _drop_matching_request_dependent_issues(
+            final_issues,
+            issues,
+            unresolved_requests,
+        )
+    _attach_resolved_context_evidence(
+        final_issues,
+        issues,
+        local_requests,
+        resolution.resolved,
+    )
+
+    _register_stage_1_candidates(
+        final_issues,
+        batch_items,
+        candidate_ledger,
+        continuation_prompt,
+        merged_visible_evidence,
+    )
+    logger.info(
+        "Stage 1 used one exact-context continuation for %s: "
+        "%d/%d requests resolved, %d final issues",
+        batch_file_paths,
+        len(resolved_ids),
+        len(local_requests),
+        len(final_issues),
+    )
+    return final_issues
+
+
+def _bind_cross_file_request_origins(
+    requests: List[ReviewContextRequest],
+    issues: List[CodeReviewIssue],
+    batch_file_paths: List[str],
+) -> List[ReviewContextRequest]:
+    """Attach trusted changed-path origins before provisional issues are withheld."""
+    bound: List[ReviewContextRequest] = []
+    for request in requests:
+        if request.kind != "CROSS_FILE":
+            continue
+        origins = list(dict.fromkeys(
+            str(issues[index].file or "").strip()
+            for index in request.relatedIssueIndexes
+            if 0 <= index < len(issues) and str(issues[index].file or "").strip()
+        ))
+        if not origins:
+            request_text = " ".join(filter(None, (
+                request.question,
+                request.relationship,
+                request.requiredEvidence,
+            ))).casefold()
+            origins = [
+                path
+                for path in batch_file_paths
+                if path.casefold() in request_text
+                or path.rsplit("/", 1)[-1].casefold() in request_text
+            ]
+        if not origins and len(batch_file_paths) == 1:
+            origins = list(batch_file_paths)
+        bound.append(request.model_copy(update={"originatingPaths": origins}))
+    return bound
+
+
+def _attach_resolved_context_evidence(
+    final_issues: List[CodeReviewIssue],
+    provisional_issues: List[CodeReviewIssue],
+    requests: List[ReviewContextRequest],
+    evidence_items,
+) -> None:
+    evidence_by_request = {
+        item.request_id: item.evidence_id for item in evidence_items
+    }
+    for request in requests:
+        evidence_id = evidence_by_request.get(request.requestId)
+        if not evidence_id:
+            continue
+        dependent = [
+            provisional_issues[index]
+            for index in request.relatedIssueIndexes
+            if 0 <= index < len(provisional_issues)
+        ]
+        exact_keys = {_issue_continuation_key(issue) for issue in dependent}
+        anchor_keys = {_issue_anchor_key(issue) for issue in dependent}
+        for issue in final_issues:
+            if (
+                _issue_continuation_key(issue) in exact_keys
+                or _issue_anchor_key(issue) in anchor_keys
+            ):
+                issue.evidenceRefs = list(dict.fromkeys([
+                    *(getattr(issue, "evidenceRefs", None) or ()),
+                    evidence_id,
+                ]))
+
+
+def _drop_request_dependent_issues(
+    issues: List[CodeReviewIssue],
+    requests: List[ReviewContextRequest],
+) -> List[CodeReviewIssue]:
+    dependent_indexes = {
+        index
+        for request in requests
+        for index in request.relatedIssueIndexes
+        if 0 <= index < len(issues)
+    }
+    return [
+        issue
+        for index, issue in enumerate(issues)
+        if index not in dependent_indexes
+    ]
+
+
+def _drop_matching_request_dependent_issues(
+    current_issues: List[CodeReviewIssue],
+    provisional_issues: List[CodeReviewIssue],
+    requests: List[ReviewContextRequest],
+) -> List[CodeReviewIssue]:
+    dependent = [
+        provisional_issues[index]
+        for request in requests
+        for index in request.relatedIssueIndexes
+        if 0 <= index < len(provisional_issues)
+    ]
+    exact_keys = {_issue_continuation_key(issue) for issue in dependent}
+    provisional_by_anchor: Dict[tuple[str, str], List[CodeReviewIssue]] = {}
+    dependent_by_anchor: Dict[tuple[str, str], List[CodeReviewIssue]] = {}
+    for issue in provisional_issues:
+        provisional_by_anchor.setdefault(_issue_anchor_key(issue), []).append(issue)
+    for issue in dependent:
+        dependent_by_anchor.setdefault(_issue_anchor_key(issue), []).append(issue)
+    fully_dependent_anchors = {
+        anchor
+        for anchor, values in dependent_by_anchor.items()
+        if len(values) == len(provisional_by_anchor.get(anchor, ()))
+    }
+    return [
+        issue
+        for issue in current_issues
+        if _issue_continuation_key(issue) not in exact_keys
+        and _issue_anchor_key(issue) not in fully_dependent_anchors
+    ]
+
+
+def _issue_anchor_key(issue: CodeReviewIssue) -> tuple[str, str]:
+    return (
+        normalize_repository_path(issue.file or ""),
+        " ".join(str(issue.codeSnippet or "").split()),
+    )
+
+
+def _issue_continuation_key(issue: CodeReviewIssue) -> tuple[str, str, str]:
+    anchor = _issue_anchor_key(issue)
+    return (
+        anchor[0],
+        anchor[1],
+        " ".join(str(issue.title or issue.reason or "").casefold().split()),
+    )
+
+
+def _stage_1_output_payload(output: FileReviewBatchOutput) -> dict[str, Any]:
+    """Serialize provisional output including internal causal fields."""
+    payload = output.model_dump(mode="json")
+    for review_payload, review in zip(payload.get("reviews", ()), output.reviews):
+        for issue_payload, issue in zip(
+            review_payload.get("issues", ()),
+            review.issues,
+        ):
+            issue_payload.update({
+                "triggerCondition": issue.triggerCondition,
+                "causalPath": issue.causalPath,
+                "observableImpact": issue.observableImpact,
+            })
+    return payload
 
 
 async def _resolve_fallback_rag_context(fallback_rag_context: Optional[Any]) -> Optional[Dict[str, Any]]:
@@ -2762,34 +3337,73 @@ def _rag_context_has_chunks(rag_context: Optional[Dict[str, Any]]) -> bool:
 
 async def _invoke_stage_1_batch_llm(
     llm,
-    prompt: str,
+    prompt,
     batch_file_paths: List[str],
     label: str,
-) -> Optional[List[CodeReviewIssue]]:
+) -> Optional[FileReviewBatchOutput]:
+    messages = to_review_messages(prompt) if isinstance(prompt, str) else prompt
     if _supports_structured_output(llm):
         try:
             structured_llm = llm.with_structured_output(FileReviewBatchOutput)
-            result = await structured_llm.ainvoke(prompt)
+            result = await structured_llm.ainvoke(messages)
             if result:
-                return _extract_calibrated_issues(result)
+                if _stage_1_output_covers_batch(result, batch_file_paths):
+                    return result
+                logger.debug(
+                    "Structured Stage 1 output did not cover its mandatory batch %s (%s)",
+                    batch_file_paths,
+                    label,
+                )
+                return None
             logger.debug("Structured output returned empty Stage 1 result for %s (%s)", batch_file_paths, label)
         except Exception as e:
             logger.debug("Structured output failed for Stage 1 batch %s (%s): %s", batch_file_paths, label, e)
-    else:
-        logger.info(
-            "Structured output skipped for Stage 1 batch %s (%s); using prompt JSON parsing",
+        # A malformed/failed structured generation is incomplete. Do not make a
+        # second model call merely to repair or reformat the same output.
+        return None
+
+    logger.info(
+        "Structured output skipped for Stage 1 batch %s (%s); using one raw JSON generation",
+        batch_file_paths,
+        label,
+    )
+    try:
+        response = await llm.ainvoke(messages)
+        content = extract_llm_response_text(response)
+        _, payload = load_json_with_local_repairs(content)
+        result = FileReviewBatchOutput(**payload)
+        return (
+            result
+            if _stage_1_output_covers_batch(result, batch_file_paths)
+            else None
+        )
+    except Exception as parse_err:
+        logger.debug(
+            "Stage 1 batch parse failed for %s (%s): %s",
             batch_file_paths,
             label,
+            parse_err,
         )
-
-    try:
-        response = await llm.ainvoke(prompt)
-        content = extract_llm_response_text(response)
-        data = await parse_llm_response(content, FileReviewBatchOutput, llm)
-        return _extract_calibrated_issues(data)
-    except Exception as parse_err:
-        logger.debug("Stage 1 batch parse failed for %s (%s): %s", batch_file_paths, label, parse_err)
         return None
+
+
+def _stage_1_output_covers_batch(
+    output: FileReviewBatchOutput,
+    batch_file_paths: List[str],
+) -> bool:
+    expected = [normalize_repository_path(path) for path in batch_file_paths]
+    reviewed = [
+        normalize_repository_path(review.file)
+        for review in output.reviews
+    ]
+    if len(reviewed) != len(expected) or sorted(reviewed) != sorted(expected):
+        return False
+    expected_set = set(expected)
+    return all(
+        normalize_repository_path(issue.file) in expected_set
+        for review in output.reviews
+        for issue in review.issues
+    )
 
 
 def _extract_calibrated_issues(batch_output: FileReviewBatchOutput) -> List[CodeReviewIssue]:

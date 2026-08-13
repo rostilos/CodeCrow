@@ -44,6 +44,8 @@ public record FileViewResponse(
             /** End line number for scope highlighting (null for LINE-scoped issues). */
             Integer endLineNumber,
             /** Scope start line for scope highlighting (null for LINE-scoped issues). */
-            Integer scopeStartLine
+            Integer scopeStartLine,
+            /** True when this is an older active lineage tip that was not reviewed in the current run. */
+            boolean historicalNotRevalidated
     ) {}
 }

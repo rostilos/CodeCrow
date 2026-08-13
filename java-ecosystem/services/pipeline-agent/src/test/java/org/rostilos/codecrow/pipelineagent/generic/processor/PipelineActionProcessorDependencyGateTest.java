@@ -55,6 +55,7 @@ class PipelineActionProcessorDependencyGateTest {
         request.analysisType = AnalysisType.PR_REVIEW;
         Job job = new Job();
         job.setJobType(JobType.PR_ANALYSIS);
+        job.setExternalId("pipeline-attempt-1");
 
         when(branchAnalysisGateService.awaitDependencies(
                 org.mockito.ArgumentMatchers.eq(1L),
@@ -67,6 +68,7 @@ class PipelineActionProcessorDependencyGateTest {
                 request, event -> { }, job);
 
         assertThat(result).containsEntry("status", "accepted");
+        assertThat(request.getAnalysisRunKey()).isEqualTo("pipeline-attempt-1");
         InOrder ordered = inOrder(branchAnalysisGateService, pullRequestAnalysisProcessor);
         ordered.verify(branchAnalysisGateService).awaitDependencies(
                 org.mockito.ArgumentMatchers.eq(1L),

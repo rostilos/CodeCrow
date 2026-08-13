@@ -228,6 +228,10 @@ class ReviewService:
         # planned as though every historical PR path belonged to this run.
         review_evidence_diff = select_review_evidence_diff(request)
         has_raw_diff = bool(review_evidence_diff)
+        has_manifest_evidence = bool(
+            request.pullRequestFileManifest
+            and request.pullRequestFileManifest.changes
+        )
 
         # ── MCP-free branch reconciliation fast path ──
         # When Java provides pre-fetched file contents AND there are previous
@@ -252,15 +256,16 @@ class ReviewService:
         # subject to this full-review equality check.
         processed_diff = None
         full_pr_processed_diff = None
-        if has_raw_diff and needs_multistage_review:
+        if (has_raw_diff or has_manifest_evidence) and needs_multistage_review:
             evidence_scopes = process_review_evidence_scopes(request)
             processed_diff = evidence_scopes.review
             full_pr_processed_diff = evidence_scopes.full_pr
-            validate_acquired_diff_manifest(
-                request.changedFiles or (),
-                request.deletedFiles or (),
-                processed_diff,
-            )
+            if has_raw_diff and not request.prContextMaintenanceRequired:
+                validate_acquired_diff_manifest(
+                    request.changedFiles or (),
+                    request.deletedFiles or (),
+                    processed_diff,
+                )
 
             logger.info(
                 f"Diff pre-processed: {processed_diff.total_files} files, "
@@ -289,9 +294,6 @@ class ReviewService:
                         "Full PR evidence scope unavailable; continuing the "
                         "delta review with PR-wide omission claims disabled"
                     )
-            else:
-                full_pr_processed_diff = processed_diff
-
             if processed_diff.truncated:
                 self._emit_event(event_callback, {
                     "type": "warning",

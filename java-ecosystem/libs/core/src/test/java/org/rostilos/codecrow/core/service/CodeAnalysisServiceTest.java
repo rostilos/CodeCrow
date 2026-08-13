@@ -38,13 +38,12 @@ class CodeAnalysisServiceTest {
     @Mock
     private QualityGateEvaluator qualityGateEvaluator;
 
-    private IssueDeduplicationService issueDeduplicationService;
     private CodeAnalysisService codeAnalysisService;
 
     @BeforeEach
     void setUp() {
-        issueDeduplicationService = new IssueDeduplicationService();
-        codeAnalysisService = new CodeAnalysisService(codeAnalysisRepository, issueRepository, qualityGateRepository, qualityGateEvaluator, issueDeduplicationService);
+        codeAnalysisService = new CodeAnalysisService(
+                codeAnalysisRepository, issueRepository, qualityGateRepository, qualityGateEvaluator);
     }
 
     // ── Helper methods ──────────────────────────────────────────────────────
@@ -138,6 +137,138 @@ class CodeAnalysisServiceTest {
     @Nested
     @DisplayName("createAnalysisFromAiResponse()")
     class CreateAnalysisFromAiResponseTests {
+
+        @Test
+        @DisplayName("should scope same-head idempotency to analysis behavior")
+        void shouldScopeSameHeadIdempotencyToAnalysisBehavior() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            String behavior = "6e2e7eab973ee3df3203ed97c071424b974ee92c7b147c9b9051e64857d4125d";
+            when(codeAnalysisRepository
+                    .findFirstByProjectIdAndCommitHashAndPrNumberAndBaseCommitHashAndAnalysisBehaviorDigestOrderByCreatedAtDescIdDesc(
+                            1L, "head", 42L, "base", behavior))
+                    .thenReturn(Optional.empty());
+            when(codeAnalysisRepository.findMaxPrVersion(1L, 42L)).thenReturn(Optional.of(3));
+            when(codeAnalysisRepository.save(any(CodeAnalysis.class))).thenAnswer(invocation -> {
+                CodeAnalysis analysis = invocation.getArgument(0);
+                setField(analysis, "id", 100L);
+                return analysis;
+            });
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, createBasicAnalysisData("fresh behavior"), 42L,
+                    "main", "feature", "head", "author", "user", "review-fingerprint",
+                    Map.of(), null, null, "base", behavior);
+
+            assertThat(result.getBaseCommitHash()).isEqualTo("base");
+            assertThat(result.getAnalysisBehaviorDigest()).isEqualTo(behavior);
+            assertThat(result.getPrVersion()).isEqualTo(4);
+            verify(codeAnalysisRepository, never())
+                    .findByProjectIdAndCommitHashAndPrNumber(anyLong(), anyString(), anyLong());
+        }
+
+        @Test
+        @DisplayName("should preserve same-head idempotency for the same base and behavior")
+        void shouldReturnExistingAnalysisForSameBaseAndBehavior() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            CodeAnalysis existing = createCodeAnalysis(10L, project);
+            String behavior = "6e2e7eab973ee3df3203ed97c071424b974ee92c7b147c9b9051e64857d4125d";
+            when(codeAnalysisRepository
+                    .findFirstByProjectIdAndCommitHashAndPrNumberAndBaseCommitHashAndAnalysisBehaviorDigestOrderByCreatedAtDescIdDesc(
+                            1L, "head", 42L, "base", behavior))
+                    .thenReturn(Optional.of(existing));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, createBasicAnalysisData("retry"), 42L,
+                    "main", "feature", "head", "author", "user", "review-fingerprint",
+                    Map.of(), null, null, "base", behavior);
+
+            assertThat(result).isSameAs(existing);
+            verify(codeAnalysisRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should persist an intentional same-head inference as a new occurrence")
+        void shouldPersistNewInferenceRunAtSameHead() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            String behavior = "6e2e7eab973ee3df3203ed97c071424b974ee92c7b147c9b9051e64857d4125d";
+            Map<String, Object> data = createBasicAnalysisData("fresh rerun");
+            data.put("analysisRunKey", "run-2");
+            when(codeAnalysisRepository.findByProjectIdAndAnalysisRunKey(1L, "run-2"))
+                    .thenReturn(Optional.empty());
+            when(codeAnalysisRepository.findMaxPrVersion(1L, 42L)).thenReturn(Optional.of(4));
+            when(codeAnalysisRepository.save(any(CodeAnalysis.class)))
+                    .thenAnswer(invocation -> invocation.getArgument(0));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "head",
+                    "author", "user", "review-fingerprint", Map.of(),
+                    null, null, "base", behavior);
+
+            assertThat(result.getAnalysisRunKey()).isEqualTo("run-2");
+            assertThat(result.getPrVersion()).isEqualTo(5);
+            verify(codeAnalysisRepository, never())
+                    .findFirstByProjectIdAndCommitHashAndPrNumberAndBaseCommitHashAndAnalysisBehaviorDigestOrderByCreatedAtDescIdDesc(
+                            anyLong(), anyString(), anyLong(), anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("should reuse only an exact accepted-attempt replay")
+        void shouldReuseExactInferenceRunReplay() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            CodeAnalysis existing = createCodeAnalysis(10L, project);
+            Map<String, Object> data = createBasicAnalysisData("replayed response");
+            data.put("analysisRunKey", "run-1");
+            when(codeAnalysisRepository.findByProjectIdAndAnalysisRunKey(1L, "run-1"))
+                    .thenReturn(Optional.of(existing));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "head",
+                    "author", "user", "review-fingerprint", Map.of(),
+                    null, null, "base", "behavior");
+
+            assertThat(result).isSameAs(existing);
+            verify(codeAnalysisRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should use a durable empty base identity when provider metadata omits the base")
+        void shouldNormalizeMissingBaseCommitForBehaviorIdentity() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            String behavior = "6e2e7eab973ee3df3203ed97c071424b974ee92c7b147c9b9051e64857d4125d";
+            when(codeAnalysisRepository
+                    .findFirstByProjectIdAndCommitHashAndPrNumberAndBaseCommitHashAndAnalysisBehaviorDigestOrderByCreatedAtDescIdDesc(
+                            1L, "head", 42L, CodeAnalysis.UNKNOWN_BASE_COMMIT, behavior))
+                    .thenReturn(Optional.empty());
+            when(codeAnalysisRepository.findMaxPrVersion(1L, 42L)).thenReturn(Optional.empty());
+            when(codeAnalysisRepository.save(any(CodeAnalysis.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, createBasicAnalysisData("fresh behavior"), 42L,
+                    "main", "feature", "head", "author", "user", "review-fingerprint",
+                    Map.of(), null, null, null, behavior);
+
+            assertThat(result.getBaseCommitHash()).isEqualTo(CodeAnalysis.UNKNOWN_BASE_COMMIT);
+        }
+
+        @Test
+        @DisplayName("should treat a blank behavior digest as legacy identity")
+        void shouldTreatBlankBehaviorDigestAsLegacyIdentity() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            CodeAnalysis existing = createCodeAnalysis(10L, project);
+            when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "head", 42L))
+                    .thenReturn(Optional.of(existing));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, createBasicAnalysisData("retry"), 42L,
+                    "main", "feature", "head", "author", "user", "review-fingerprint",
+                    Map.of(), null, null, "base", "  ");
+
+            assertThat(result).isSameAs(existing);
+            verify(codeAnalysisRepository, never())
+                    .findFirstByProjectIdAndCommitHashAndPrNumberAndBaseCommitHashAndAnalysisBehaviorDigestOrderByCreatedAtDescIdDesc(
+                            anyLong(), anyString(), anyLong(), anyString(), anyString());
+            verify(codeAnalysisRepository, never()).save(any());
+        }
 
         @Test
         @DisplayName("should return existing analysis if one already exists")
@@ -415,7 +546,8 @@ class CodeAnalysisServiceTest {
 
             CodeAnalysisIssue originalIssue = new CodeAnalysisIssue();
             setField(originalIssue, "id", 50L);
-            when(issueRepository.findById(50L)).thenReturn(Optional.of(originalIssue));
+            when(issueRepository.findScopedHistoricalIssue(50L, 1L, 42L, 100L))
+                    .thenReturn(Optional.of(originalIssue));
 
             Map<String, Object> issueData = createIssueData("HIGH", "App.java", 10, "Fixed");
             issueData.put("id", "50");
@@ -440,8 +572,8 @@ class CodeAnalysisServiceTest {
         }
 
         @Test
-        @DisplayName("should reject active INFO issue at Java ingestion")
-        void shouldRejectActiveInfoIssueAtJavaIngestion() {
+        @DisplayName("should preserve verified active INFO issue at Java ingestion")
+        void shouldPreserveActiveInfoIssueAtJavaIngestion() {
             Project project = createProjectWithWorkspace(1L, "Test", 1L);
             stubNewPrAnalysis(1L, "abc123", 42L);
 
@@ -456,9 +588,42 @@ class CodeAnalysisServiceTest {
                     project, data, 42L, "main", "feature", "abc123",
                     "author1", "authorUser");
 
-            assertThat(result.getIssues()).isEmpty();
-            assertThat(result.getTotalIssues()).isZero();
-            assertThat(result.getInfoSeverityCount()).isZero();
+            assertThat(result.getIssues()).hasSize(1);
+            assertThat(result.getTotalIssues()).isOne();
+            assertThat(result.getInfoSeverityCount()).isOne();
+            assertThat(result.getIssues().get(0).getLineageFingerprint())
+                    .matches("[0-9a-f]{64}");
+        }
+
+        @Test
+        @DisplayName("should preserve distinct verified issues with identical prose")
+        void shouldPreserveDistinctVerifiedIssuesWithIdenticalProse() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            stubNewPrAnalysis(1L, "abc123", 42L);
+
+            Map<String, Object> first = createIssueData(
+                    "HIGH", "App.java", 10,
+                    "This explanation is intentionally identical and long enough for old prose deduplication");
+            first.put("title", "Same title");
+            first.put("codeSnippet", "firstDanger();");
+            Map<String, Object> second = createIssueData(
+                    "HIGH", "App.java", 20,
+                    "This explanation is intentionally identical and long enough for old prose deduplication");
+            second.put("title", "Same title");
+            second.put("codeSnippet", "secondDanger();");
+
+            Map<String, Object> data = createBasicAnalysisData("Two verified findings");
+            data.put("issues", List.of(first, second));
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser", "fp123",
+                    Map.of("App.java", String.join("\n",
+                            "class App {", "firstDanger();", "", "", "", "", "", "", "", "",
+                            "", "", "", "", "", "", "", "", "", "secondDanger();", "}")));
+
+            assertThat(result.getIssues()).hasSize(2);
+            assertThat(result.getIssues()).extracting(CodeAnalysisIssue::getLineNumber)
+                    .containsExactly(2, 20);
         }
 
         @Test
@@ -469,7 +634,8 @@ class CodeAnalysisServiceTest {
 
             CodeAnalysisIssue originalIssue = new CodeAnalysisIssue();
             setField(originalIssue, "id", 50L);
-            when(issueRepository.findById(50L)).thenReturn(Optional.of(originalIssue));
+            when(issueRepository.findScopedHistoricalIssue(50L, 1L, 42L, 100L))
+                    .thenReturn(Optional.of(originalIssue));
 
             Map<String, Object> issueData = createIssueData(
                     "INFO", "App.java", 10, "Historical fixed-point observation");
@@ -503,7 +669,8 @@ class CodeAnalysisServiceTest {
 
             CodeAnalysisIssue originalIssue = new CodeAnalysisIssue();
             setField(originalIssue, "id", 51L);
-            when(issueRepository.findById(51L)).thenReturn(Optional.of(originalIssue));
+            when(issueRepository.findScopedHistoricalIssue(51L, 1L, 42L, 100L))
+                    .thenReturn(Optional.of(originalIssue));
 
             Map<String, Object> issueData = createIssueData(
                     "MEDIUM", "App.java", 3, "Historical issue fixed by the current change");
@@ -645,7 +812,8 @@ class CodeAnalysisServiceTest {
                 if (a.getId() == null) setField(a, "id", 100L);
                 return a;
             });
-            when(issueRepository.findById(99L)).thenReturn(Optional.empty());
+            when(issueRepository.findScopedHistoricalIssue(99L, 1L, 42L, 100L))
+                    .thenReturn(Optional.empty());
 
             Map<String, Object> issueData = createIssueData("HIGH", "App.java", 10, "Bug");
             issueData.put("id", 99); // Number type
@@ -661,7 +829,7 @@ class CodeAnalysisServiceTest {
                     "author1", "authorUser");
 
             assertThat(result.getIssues()).hasSize(1);
-            verify(issueRepository).findById(99L);
+            verify(issueRepository).findScopedHistoricalIssue(99L, 1L, 42L, 100L);
         }
 
         @Test
@@ -744,7 +912,8 @@ class CodeAnalysisServiceTest {
             setField(originalIssue, "id", 99L);
             originalIssue.setSuggestedFixDiff("--- a/App.java\n+++ b/App.java\n@@ -10,3 +10,3 @@\n- bad\n+ good");
             originalIssue.setSuggestedFixDescription("Replace bad with good");
-            when(issueRepository.findById(99L)).thenReturn(Optional.of(originalIssue));
+            when(issueRepository.findScopedHistoricalIssue(99L, 1L, 42L, 100L))
+                    .thenReturn(Optional.of(originalIssue));
 
             // The LLM response references the original issue but omits the diff
             Map<String, Object> issueData = createIssueData("HIGH", "App.java", 10, "Still bad");
@@ -982,6 +1151,55 @@ class CodeAnalysisServiceTest {
     }
 
     @Nested
+    @DisplayName("projectPrIssueHistory()")
+    class ProjectPrIssueHistoryTests {
+
+        @Test
+        @DisplayName("should expose current findings and historical active tips without double counting")
+        void shouldProjectDisjointCurrentAndHistoricalTips() {
+            Project project = createProject(1L, "Test");
+            CodeAnalysis run1 = createCodeAnalysis(10L, project);
+            run1.setPrNumber(42L);
+            run1.setPrVersion(1);
+            CodeAnalysis run2 = createCodeAnalysis(20L, project);
+            run2.setPrNumber(42L);
+            run2.setPrVersion(2);
+            CodeAnalysis currentRun = createCodeAnalysis(40L, project);
+            currentRun.setPrNumber(42L);
+            currentRun.setPrVersion(4);
+
+            CodeAnalysisIssue superseded = issueForProjection(101L, run1, "Superseded");
+            CodeAnalysisIssue historicalTip = issueForProjection(202L, run2, "Not revalidated");
+            CodeAnalysisIssue current = issueForProjection(404L, currentRun, "Current");
+            current.setTrackedFromIssueId(101L);
+
+            when(issueRepository.findByProjectIdAndPrNumber(1L, 42L))
+                    .thenReturn(List.of(superseded, historicalTip, current));
+            when(codeAnalysisRepository.findByProjectIdAndPrNumberWithMaxPrVersion(1L, 42L))
+                    .thenReturn(Optional.of(currentRun));
+
+            CodeAnalysisService.PrIssueHistoryProjection result =
+                    codeAnalysisService.projectPrIssueHistory(1L, 42L);
+
+            assertThat(result.currentFindings()).containsExactly(current);
+            assertThat(result.historicalActiveNotRevalidated()).containsExactly(historicalTip);
+            assertThat(result.allActive()).containsExactly(current, historicalTip);
+            assertThat(result.allActive()).doesNotContain(superseded);
+        }
+    }
+
+    private CodeAnalysisIssue issueForProjection(Long id, CodeAnalysis analysis, String title) {
+        CodeAnalysisIssue issue = new CodeAnalysisIssue();
+        setField(issue, "id", id);
+        issue.setTitle(title);
+        issue.setFilePath("App.java");
+        issue.setSeverity(IssueSeverity.HIGH);
+        issue.setIssueCategory(IssueCategory.BUG_RISK);
+        analysis.addIssue(issue);
+        return issue;
+    }
+
+    @Nested
     @DisplayName("cloneAnalysisForPr()")
     class CloneAnalysisForPrTests {
 
@@ -1021,6 +1239,12 @@ class CodeAnalysisServiceTest {
             srcIssue.setSuggestedFixDiff("diff");
             srcIssue.setIssueCategory(IssueCategory.BUG_RISK);
             srcIssue.setResolved(false);
+            srcIssue.setIssueScope(IssueScope.LINE);
+            srcIssue.setEndLineNumber(12);
+            srcIssue.setScopeStartLine(8);
+            srcIssue.setLineageFingerprint("a".repeat(64));
+            srcIssue.setTrackedFromIssueId(77L);
+            srcIssue.setTrackingConfidence(org.rostilos.codecrow.core.util.tracking.TrackingConfidence.EXACT);
             srcIssue.setVcsAuthorId("author1");
             srcIssue.setVcsAuthorUsername("authorUser");
             source.addIssue(srcIssue);
@@ -1044,6 +1268,10 @@ class CodeAnalysisServiceTest {
             assertThat(result.getIssues()).hasSize(1);
             assertThat(result.getIssues().get(0).getFilePath()).isEqualTo("App.java");
             assertThat(result.getIssues().get(0).getSeverity()).isEqualTo(IssueSeverity.HIGH);
+            assertThat(result.getIssues().get(0).getIssueScope()).isEqualTo(IssueScope.LINE);
+            assertThat(result.getIssues().get(0).getTrackedFromIssueId()).isNull();
+            assertThat(result.getIssues().get(0).getTrackingConfidence()).isNull();
+            assertThat(result.getIssues().get(0).getLineageFingerprint()).isNull();
         }
     }
 
@@ -1209,8 +1437,10 @@ class CodeAnalysisServiceTest {
         @Test
         @DisplayName("findByProjectIdAndPrNumber should delegate")
         void findByProjectIdAndPrNumber() {
-            when(codeAnalysisRepository.findByProjectIdAndPrNumber(1L, 42L)).thenReturn(Optional.empty());
+            when(codeAnalysisRepository.findByProjectIdAndPrNumberWithMaxPrVersion(1L, 42L))
+                    .thenReturn(Optional.empty());
             assertThat(codeAnalysisService.findByProjectIdAndPrNumber(1L, 42L)).isEmpty();
+            verify(codeAnalysisRepository).findByProjectIdAndPrNumberWithMaxPrVersion(1L, 42L);
         }
 
         @Test

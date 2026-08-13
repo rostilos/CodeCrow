@@ -340,7 +340,7 @@ diff --git a/app/code/Acme/Checkout/etc/di.xml b/app/code/Acme/Checkout/etc/di.x
     assert result.skipped_files == 1
 
 
-def test_file_policy_failure_aborts_before_prompt_construction(monkeypatch):
+def test_file_policy_failure_keeps_file_reviewable(monkeypatch):
     runtime = MagicMock()
     runtime.file_disposition.side_effect = RuntimeError("broken-policy")
     monkeypatch.setattr(
@@ -363,11 +363,40 @@ def test_file_policy_failure_aborts_before_prompt_construction(monkeypatch):
 """
     )
 
-    with pytest.raises(RuntimeError, match="broken-policy"):
-        plugin_context.apply_plugin_file_policy(_request(), processed)
+    records = []
+    with plugin_context.capture_plugin_diagnostics(records.append):
+        result = plugin_context.apply_plugin_file_policy(_request(), processed)
+
+    assert result.files[0].is_skipped is False
+    assert result.files[0].plugin_disposition is None
+    assert [item["code"] for item in records] == [
+        "plugin-file-policy-exception"
+    ]
 
 
-def test_review_context_fails_before_prompt_when_plugin_contribution_is_incomplete(
+def test_file_policy_setup_failure_keeps_diff_reviewable(monkeypatch):
+    monkeypatch.setattr(
+        plugin_context,
+        "_plugin_host",
+        MagicMock(side_effect=RuntimeError("broken-host")),
+    )
+    processed = DiffProcessor().process(
+        "diff --git a/example.py b/example.py\n"
+        "--- a/example.py\n+++ b/example.py\n@@ -1 +1 @@\n-old\n+new\n"
+    )
+
+    records = []
+    with plugin_context.capture_plugin_diagnostics(records.append):
+        result = plugin_context.apply_plugin_file_policy(_request(), processed)
+
+    assert result is processed
+    assert result.files[0].is_skipped is False
+    assert [item["code"] for item in records] == [
+        "plugin-file-policy-setup-exception"
+    ]
+
+
+def test_review_context_omits_incomplete_optional_plugin_contribution(
     monkeypatch,
 ):
     from codecrow_plugins import PluginDiagnostic, ReviewContribution
@@ -394,10 +423,111 @@ def test_review_context_fails_before_prompt_when_plugin_contribution_is_incomple
         lambda _request: MagicMock(),
     )
 
-    with pytest.raises(RuntimeError, match=(
-        "python:plugin-review-exception: ValueError: broken contribution"
-    )):
-        plugin_context.review_plugin_context(_request(), ["example.py"])
+    records = []
+    with plugin_context.capture_plugin_diagnostics(records.append):
+        context = plugin_context.review_plugin_context(_request(), ["example.py"])
+
+    assert context == ""
+    assert [item["code"] for item in records] == ["plugin-review-exception"]
+
+
+def test_review_context_runtime_exception_fails_open(monkeypatch):
+    runtime = MagicMock()
+    runtime.review_contribution.side_effect = RuntimeError("broken-contribution")
+    monkeypatch.setattr(
+        plugin_context,
+        "_plugin_host",
+        lambda: (MagicMock(), runtime, MagicMock()),
+    )
+    monkeypatch.setattr(
+        plugin_context,
+        "resolve_project_capabilities",
+        lambda _request: MagicMock(),
+    )
+
+    records = []
+    with plugin_context.capture_plugin_diagnostics(records.append):
+        context = plugin_context.review_plugin_context(_request(), ["example.py"])
+
+    assert context == ""
+    assert [item["code"] for item in records] == ["plugin-review-exception"]
+
+
+def test_review_plan_preserves_host_plan_when_plugin_contribution_is_incomplete(
+    monkeypatch,
+):
+    from codecrow_plugins import PluginDiagnostic, ReviewContribution
+
+    runtime = MagicMock()
+    runtime.review_contribution.return_value = (
+        ReviewContribution(),
+        (
+            PluginDiagnostic(
+                code="plugin-review-exception",
+                message="ValueError: broken contribution",
+                plugin_id="python",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        plugin_context,
+        "_plugin_host",
+        lambda: (MagicMock(), runtime, MagicMock()),
+    )
+    monkeypatch.setattr(
+        plugin_context,
+        "resolve_project_capabilities",
+        lambda _request: MagicMock(),
+    )
+    plan = ReviewPlan(
+        analysis_summary="host-owned",
+        file_groups=[FileGroup(
+            group_id="host",
+            priority="MEDIUM",
+            rationale="mandatory coverage",
+            files=[ReviewFile(path="example.py")],
+        )],
+    )
+
+    records = []
+    with plugin_context.capture_plugin_diagnostics(records.append):
+        result = plugin_context.apply_plugin_plan_constraints(plan, _request())
+
+    assert result is plan
+    assert [item["code"] for item in records] == ["plugin-review-exception"]
+
+
+def test_review_plan_runtime_exception_preserves_host_plan(monkeypatch):
+    runtime = MagicMock()
+    runtime.review_contribution.side_effect = RuntimeError("broken-contribution")
+    monkeypatch.setattr(
+        plugin_context,
+        "_plugin_host",
+        lambda: (MagicMock(), runtime, MagicMock()),
+    )
+    monkeypatch.setattr(
+        plugin_context,
+        "resolve_project_capabilities",
+        lambda _request: MagicMock(),
+    )
+    plan = ReviewPlan(
+        analysis_summary="host-owned",
+        file_groups=[FileGroup(
+            group_id="host",
+            priority="MEDIUM",
+            rationale="mandatory coverage",
+            files=[ReviewFile(path="example.py")],
+        )],
+    )
+
+    records = []
+    with plugin_context.capture_plugin_diagnostics(records.append):
+        result = plugin_context.apply_plugin_plan_constraints(plan, _request())
+
+    assert result is plan
+    assert [item["code"] for item in records] == [
+        "plugin-review-planning-exception"
+    ]
 
 
 def test_magento_does_not_group_by_path_shape_without_graph_evidence():
@@ -679,6 +809,77 @@ def test_generic_claim_with_available_semantic_citation_is_kept():
     )
 
     assert result == [issue]
+
+
+def test_optional_plugin_validation_exception_keeps_candidate(monkeypatch):
+    runtime = MagicMock()
+    runtime.graph_facts.return_value = ((), ())
+    runtime.start_repository_analysis.side_effect = RuntimeError(
+        "broken repository analyzer"
+    )
+    runtime.validate_with_diagnostics.side_effect = RuntimeError(
+        "broken validator"
+    )
+    monkeypatch.setattr(
+        plugin_context,
+        "_plugin_host",
+        lambda: (MagicMock(), runtime, MagicMock()),
+    )
+    monkeypatch.setattr(
+        plugin_context,
+        "resolve_project_capabilities",
+        lambda _request: MagicMock(),
+    )
+    issue = CodeReviewIssue(
+        severity="HIGH",
+        category="BUG_RISK",
+        file="app/code/Acme/Checkout/Model/Cart.php",
+        line=1,
+        title="Current source dereferences null",
+        reason="The changed method dereferences a nullable local value.",
+        suggestedFixDescription="Guard the nullable value.",
+        codeSnippet="$value->execute();",
+    )
+
+    records = []
+    with plugin_context.capture_plugin_diagnostics(records.append):
+        result = plugin_context.apply_plugin_validation_gate(
+            [issue],
+            _request(),
+        )
+
+    assert result == [issue]
+    assert {item["code"] for item in records} == {
+        "plugin-repository-validation-exception",
+        "plugin-candidate-validation-exception",
+    }
+
+
+def test_optional_plugin_validation_setup_exception_keeps_candidate(monkeypatch):
+    monkeypatch.setattr(
+        plugin_context,
+        "_plugin_host",
+        MagicMock(side_effect=RuntimeError("broken-host")),
+    )
+    issue = CodeReviewIssue(
+        severity="HIGH",
+        category="BUG_RISK",
+        file="src/app.py",
+        line=1,
+        title="Current source dereferences null",
+        reason="The changed method dereferences a nullable value.",
+        suggestedFixDescription="Guard the nullable value.",
+        codeSnippet="value.run()",
+    )
+
+    records = []
+    with plugin_context.capture_plugin_diagnostics(records.append):
+        result = plugin_context.apply_plugin_validation_gate([issue], _request())
+
+    assert result == [issue]
+    assert [item["code"] for item in records] == [
+        "plugin-candidate-validation-setup-exception"
+    ]
 
 
 def test_candidate_cannot_use_review_wide_evidence_from_another_prompt():

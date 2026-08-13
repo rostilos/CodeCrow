@@ -12,6 +12,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
+import org.rostilos.codecrow.vcsclient.model.VcsPullRequestChangeManifest;
 
 import java.util.Arrays;
 import java.util.List;
@@ -34,9 +35,16 @@ class AiAnalysisRequestImplTest {
         void shouldBuildWithAllFields() {
             List<String> changedFiles = Arrays.asList("file1.java", "file2.java");
             List<String> diffSnippets = Arrays.asList("snippet1", "snippet2");
+            var manifest = new VcsPullRequestChangeManifest(
+                    List.of(new VcsPullRequestChangeManifest.Change(
+                            "file0.java", "",
+                            VcsPullRequestChangeManifest.ChangeKind.MODIFIED)),
+                    VcsPullRequestChangeManifest.Completeness.COMPLETE,
+                    "provider:complete");
 
             AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
                     .withProjectId(1L)
+                    .withAnalysisRunKey(" persisted-job-42 ")
                     .withPullRequestId(100L)
                     .withProjectVcsConnectionBindingInfo("workspace", "repo-slug")
                     .withProjectAiConnectionTokenDecrypted("api-key-123")
@@ -50,6 +58,11 @@ class AiAnalysisRequestImplTest {
                     .withPrDescription("PR Description")
                     .withTaskContext(Map.of("task_key", "PROJ-123", "task_summary", "Build export"))
                     .withChangedFiles(changedFiles)
+                    .withDeletedFiles(List.of("delta-deleted.java"))
+                    .withFullPrChangedFiles(List.of("file0.java", "file1.java", "file2.java"))
+                    .withFullPrDeletedFiles(List.of("old-name.java"))
+                    .withPullRequestFileManifest(manifest)
+                    .withPrContextMaintenanceRequired(true)
                     .withDiffSnippets(diffSnippets)
                     .withProjectMetadata("proj-workspace", "proj-namespace")
                     .withTargetBranchName("main")
@@ -59,9 +72,12 @@ class AiAnalysisRequestImplTest {
                     .withDeltaDiff("delta diff")
                     .withPreviousCommitHash("abc123")
                     .withCurrentCommitHash("def456")
+                    .withBaseCommitHash("base123")
+                    .withAnalysisBehaviorDigest("behavior123")
                     .build();
 
             assertThat(request.getProjectId()).isEqualTo(1L);
+            assertThat(request.getAnalysisRunKey()).isEqualTo("persisted-job-42");
             assertThat(request.getPullRequestId()).isEqualTo(100L);
             assertThat(request.getProjectVcsWorkspace()).isEqualTo("workspace");
             assertThat(request.getProjectVcsRepoSlug()).isEqualTo("repo-slug");
@@ -78,6 +94,13 @@ class AiAnalysisRequestImplTest {
             assertThat(request.getTaskContext()).containsEntry("task_key", "PROJ-123");
             assertThat(request.getTaskContext()).containsEntry("task_summary", "Build export");
             assertThat(request.getChangedFiles()).containsExactly("file1.java", "file2.java");
+            assertThat(request.getDeletedFiles()).containsExactly("delta-deleted.java");
+            assertThat(request.getFullPrChangedFiles())
+                    .containsExactly("file0.java", "file1.java", "file2.java");
+            assertThat(request.getFullPrDeletedFiles()).containsExactly("old-name.java");
+            assertThat(request.getPullRequestFileManifest()).isEqualTo(manifest);
+            assertThat(request.getFullPrManifestComplete()).isTrue();
+            assertThat(request.getPrContextMaintenanceRequired()).isTrue();
             assertThat(request.getDiffSnippets()).containsExactly("snippet1", "snippet2");
             assertThat(request.getProjectWorkspace()).isEqualTo("proj-workspace");
             assertThat(request.getProjectNamespace()).isEqualTo("proj-namespace");
@@ -88,6 +111,8 @@ class AiAnalysisRequestImplTest {
             assertThat(request.getDeltaDiff()).isEqualTo("delta diff");
             assertThat(request.getPreviousCommitHash()).isEqualTo("abc123");
             assertThat(request.getCurrentCommitHash()).isEqualTo("def456");
+            assertThat(request.getBaseCommitHash()).isEqualTo("base123");
+            assertThat(request.getAnalysisBehaviorDigest()).isEqualTo("behavior123");
         }
 
         @Test
@@ -110,6 +135,8 @@ class AiAnalysisRequestImplTest {
             assertThat(request.getPullRequestId()).isNull();
             assertThat(request.getAiApiKey()).isNull();
             assertThat(request.getChangedFiles()).isNull();
+            assertThat(request.getFullPrChangedFiles()).isNull();
+            assertThat(request.getFullPrDeletedFiles()).isNull();
         }
     }
 

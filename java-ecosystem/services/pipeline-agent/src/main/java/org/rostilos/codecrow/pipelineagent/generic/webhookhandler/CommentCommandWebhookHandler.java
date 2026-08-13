@@ -2,7 +2,6 @@ package org.rostilos.codecrow.pipelineagent.generic.webhookhandler;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
-import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.PrSummarizeCache;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
@@ -123,6 +122,15 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
     
     @Override
     public WebhookResult handle(WebhookPayload payload, Project project, Consumer<Map<String, Object>> eventConsumer) {
+        return handle(payload, project, eventConsumer, null);
+    }
+
+    @Override
+    public WebhookResult handle(
+            WebhookPayload payload,
+            Project project,
+            Consumer<Map<String, Object>> eventConsumer,
+            String analysisRunKey) {
         if (!payload.isCommentEvent() || !payload.hasCodecrowCommand()) {
             return WebhookResult.ignored("Not a CodeCrow command comment");
         }
@@ -164,32 +172,26 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
         
         // Process based on command type
         return switch (command.type()) {
-            case ANALYZE -> handleAnalyzeCommand(enrichedPayload, project, eventConsumer);
+            case ANALYZE -> handleAnalyzeCommand(
+                    enrichedPayload, project, eventConsumer, analysisRunKey);
             case SUMMARIZE -> handleSummarizeCommand(enrichedPayload, project, eventConsumer);
-            case REVIEW -> handleReviewCommand(enrichedPayload, project, eventConsumer);
+            case REVIEW -> handleReviewCommand(
+                    enrichedPayload, project, eventConsumer, analysisRunKey);
             case ASK -> handleAskCommand(enrichedPayload, project, command.arguments(), eventConsumer);
             case QA_DOC -> handleQaDocCommand(enrichedPayload, project, command.arguments(), eventConsumer);
         };
     }
     
-    /**
-     * Handle /codecrow analyze command.
-     * Returns cached results if available for the same commit hash.
-     */
+    /** Handle /codecrow analyze command through the complete review pipeline. */
     private WebhookResult handleAnalyzeCommand(
             WebhookPayload payload, 
             Project project, 
-            Consumer<Map<String, Object>> eventConsumer
+            Consumer<Map<String, Object>> eventConsumer,
+            String analysisRunKey
     ) {
         log.info("Handling analyze command for project={}, PR={}", project.getId(), payload.pullRequestId());
 
-        boolean promptDryRun = PromptDryRunMode.isEnabledForProject(project.getId());
-        if (promptDryRun) {
-            // A full-pipeline capture must traverse immutable PR acquisition,
-            // enrichment, overlay indexing, retrieval, and Stage 0-3 even when this
-            // commit already has an analysis. PullRequestAnalysisProcessor also
-            // bypasses its persistence caches; bypass this command-level shortcut so
-            // the normal user trigger reaches that processor.
+        if (PromptDryRunMode.isEnabledForProject(project.getId())) {
             eventConsumer.accept(Map.of(
                 "type", "status",
                 "state", "cache_bypassed",
@@ -199,40 +201,18 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
                 "Prompt dry run bypassing comment-command analysis cache for project={}, PR={}",
                 project.getId(), payload.pullRequestId());
         } else {
+            // Result reuse is intentionally disabled until a cache hit can run
+            // the same full-manifest snapshot and current-head RAG maintenance
+            // as a fresh review. Do not bypass the processor at command ingress.
             eventConsumer.accept(Map.of(
                 "type", "status",
-                "state", "checking_cache",
-                "message", "Checking for existing analysis..."
+                "state", "analysis_started",
+                "message", "Running full current-head analysis..."
             ));
-        }
-
-        // Check for cached analysis only for a normal paid review. Prompt dry-run
-        // must reach the complete processor path regardless of prior results.
-        if (!promptDryRun && payload.commitHash() != null && payload.pullRequestId() != null) {
-            Optional<CodeAnalysis> cachedAnalysis = codeAnalysisService.getCodeAnalysisCache(
-                project.getId(),
-                payload.commitHash(),
-                Long.parseLong(payload.pullRequestId())
-            );
-            
-            if (cachedAnalysis.isPresent()) {
-                eventConsumer.accept(Map.of(
-                    "type", "status",
-                    "state", "cache_hit",
-                    "message", "Found existing analysis, posting results..."
-                ));
-                
-                // Return cached result - the VCS reporting service will post it
-                return WebhookResult.success("Analysis retrieved from cache", Map.of(
-                    "cached", true,
-                    "analysisId", cachedAnalysis.get().getId(),
-                    "commandType", "analyze"
-                ));
-            }
         }
         
         // Run PR analysis using the processor
-        return runPrAnalysis(payload, project, eventConsumer, "analyze");
+        return runPrAnalysis(payload, project, eventConsumer, "analyze", analysisRunKey);
     }
     
     /**
@@ -363,12 +343,13 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
     private WebhookResult handleReviewCommand(
             WebhookPayload payload, 
             Project project, 
-            Consumer<Map<String, Object>> eventConsumer
+            Consumer<Map<String, Object>> eventConsumer,
+            String analysisRunKey
     ) {
         log.info("Handling review command for project={}, PR={}", project.getId(), payload.pullRequestId());
         
         // Run PR analysis - same as analyze command
-        return runPrAnalysis(payload, project, eventConsumer, "review");
+        return runPrAnalysis(payload, project, eventConsumer, "review", analysisRunKey);
     }
     
     /**
@@ -403,7 +384,8 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             WebhookPayload payload,
             Project project,
             Consumer<Map<String, Object>> eventConsumer,
-            String commandType
+            String commandType,
+            String analysisRunKey
     ) {
         try {
             eventConsumer.accept(Map.of(
@@ -422,6 +404,7 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             request.analysisType = AnalysisType.PR_REVIEW;
             request.prAuthorId = payload.prAuthorId();
             request.prAuthorUsername = payload.prAuthorUsername();
+            request.setAnalysisRunKey(analysisRunKey);
             
             // Fetch PR details from API if branch info is missing (e.g., for GitHub issue_comment events)
             if (request.sourceBranchName == null || request.targetBranchName == null) {

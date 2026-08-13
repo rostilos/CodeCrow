@@ -1,7 +1,8 @@
 """
 Controlled MCP tool executor with per-stage whitelist and call budget.
 
-Stage 1 (context gaps):      getBranchFileContent — max 3 calls/batch
+Stage 1 (context gaps):      getBranchFileContent — max 4 direct calls; the
+                             review-scoped exact resolver supplies its own cap
 Stage 3 (issue verification): getBranchFileContent, getPullRequestComments — max 5 calls total
 """
 import asyncio
@@ -32,7 +33,7 @@ class McpToolExecutor:
     STAGE_CONFIG = {
         "stage_1": {
             "tools": {"getBranchFileContent"},
-            "max_calls": 3,
+            "max_calls": 4,
         },
         "stage_3": {
             "tools": {"getBranchFileContent", "getPullRequestComments"},
@@ -47,6 +48,7 @@ class McpToolExecutor:
         stage: str,
         review_revision: Optional[str] = None,
         verification_issues: Optional[Dict[str, Any]] = None,
+        max_calls: Optional[int] = None,
     ):
         if stage not in self.STAGE_CONFIG:
             raise ValueError(f"Unknown stage '{stage}'. Valid: {list(self.STAGE_CONFIG)}")
@@ -56,7 +58,10 @@ class McpToolExecutor:
         self.request = request
         self.stage = stage
         self.allowed_tools: Set[str] = config["tools"]
-        self.max_calls: int = config["max_calls"]
+        self.max_calls: int = max(
+            1,
+            int(max_calls if max_calls is not None else config["max_calls"]),
+        )
         self.call_count: int = 0
         self.call_log: List[Dict[str, Any]] = []
         self.review_revision = str(review_revision or "").strip()
@@ -87,14 +92,15 @@ class McpToolExecutor:
         arguments = dict(arguments or {})
         arguments.setdefault("workspace", self.request.projectVcsWorkspace)
         arguments.setdefault("repoSlug", self.request.projectVcsRepoSlug)
+        if tool_name == "getBranchFileContent" and self.review_revision:
+            # Discovery and verification evidence must come from the exact
+            # reviewed revision. Never read new PR code from the target branch.
+            arguments["branch"] = self.review_revision
         if (
             self.stage == "stage_3"
             and tool_name == "getBranchFileContent"
             and self.review_revision
         ):
-            # Post-review evidence must come from the exact reviewed revision.
-            # Never let a model accidentally verify new PR code against target.
-            arguments["branch"] = self.review_revision
             verification_id = str(
                 arguments.get("verificationId") or ""
             ).strip()
@@ -184,17 +190,11 @@ class McpToolExecutor:
                             "finding Verification ID; the host pins the reviewed "
                             "revision and requests an anchor-centred source window."
                             if self.stage == "stage_3"
-                            else "Read a file's content from the target branch."
+                            else "Read exact source from the host-pinned review revision."
                         ),
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                **({
-                                    "branch": {
-                                        "type": "string",
-                                        "description": "Target branch name (for example main).",
-                                    },
-                                } if self.stage != "stage_3" else {}),
                                 "filePath": {
                                     "type": "string",
                                     "description": "Path to the file in the repository"
@@ -211,7 +211,7 @@ class McpToolExecutor:
                             "required": (
                                 ["filePath", "verificationId"]
                                 if self.stage == "stage_3"
-                                else ["branch", "filePath"]
+                                else ["filePath"]
                             ),
                         },
                     },

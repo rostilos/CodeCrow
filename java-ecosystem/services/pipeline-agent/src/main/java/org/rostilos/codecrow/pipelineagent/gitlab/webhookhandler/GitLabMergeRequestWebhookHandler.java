@@ -99,6 +99,15 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
     
     @Override
     public WebhookResult handle(WebhookPayload payload, Project project, Consumer<Map<String, Object>> eventConsumer) {
+        return handle(payload, project, eventConsumer, null);
+    }
+
+    @Override
+    public WebhookResult handle(
+            WebhookPayload payload,
+            Project project,
+            Consumer<Map<String, Object>> eventConsumer,
+            String analysisRunKey) {
         String eventType = payload.eventType();
         
         log.info("Handling GitLab MR event: {} for project {}", eventType, project.getId());
@@ -139,7 +148,7 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
                 return WebhookResult.ignored("Target branch '" + targetBranch + "' does not match configured analysis patterns");
             }
             
-            return handleMergeRequestEvent(payload, project, eventConsumer);
+            return handleMergeRequestEvent(payload, project, eventConsumer, analysisRunKey);
         } catch (Exception e) {
             log.error("Error processing {} event for project {}", eventType, project.getId(), e);
             return WebhookResult.error("Processing failed: " + e.getMessage());
@@ -151,7 +160,8 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
     private WebhookResult handleMergeRequestEvent(
             WebhookPayload payload,
             Project project,
-            Consumer<Map<String, Object>> eventConsumer
+            Consumer<Map<String, Object>> eventConsumer,
+            String analysisRunKey
     ) {
         String placeholderCommentId = null;
         String acquiredLockKey = null;
@@ -195,6 +205,7 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
             request.placeholderCommentId = placeholderCommentId;
             request.prAuthorId = payload.prAuthorId();
             request.prAuthorUsername = payload.prAuthorUsername();
+            request.setAnalysisRunKey(analysisRunKey);
             // Pass the pre-acquired lock key to avoid double-locking in the processor
             request.preAcquiredLockKey = acquiredLockKey;
             

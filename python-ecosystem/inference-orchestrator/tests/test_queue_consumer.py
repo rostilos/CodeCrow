@@ -194,8 +194,7 @@ async def test_neutral_mixed_language_dry_run_traverses_queue_handler(
         "stage_0_started",
         "stage_1_started",
         "verification_started",
-        "stage_2_started",
-        "stage_3_started",
+        "cross_file_investigation_started",
         "review_evidence_completed",
         "prompt_dry_run_completed",
     } <= states

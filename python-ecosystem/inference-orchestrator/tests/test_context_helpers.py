@@ -26,6 +26,20 @@ diff --git a/src/OrderService.java b/src/OrderService.java
 """
 
 
+def _prompt_source_facts(values):
+    return tuple(
+        value for value in values
+        if value.get("evidenceType") == "prompt_code_chunk"
+    )
+
+
+def _plugin_graph_facts(values):
+    return tuple(
+        value for value in values
+        if value.get("evidenceType") != "prompt_code_chunk"
+    )
+
+
 # ── extract_symbols_from_diff ────────────────────────────────────
 
 class TestExtractSymbolsFromDiff:
@@ -158,7 +172,8 @@ class TestFormatRagContext:
 
         evidence_id = rag_evidence_id(chunk)
         assert f"Evidence ID: {evidence_id}" in result
-        assert visible == {evidence_id: ()}
+        assert len(_prompt_source_facts(visible[evidence_id])) == 1
+        assert _prompt_source_facts(visible[evidence_id])[0]["content"] == chunk["text"]
 
     def test_prompt_visible_semantic_graph_fact_is_available_to_validation(self):
         fact = {
@@ -189,7 +204,8 @@ class TestFormatRagContext:
         )
 
         assert "[java-type]" in result
-        assert visible == {rag_evidence_id(chunk): (fact,)}
+        assert _plugin_graph_facts(visible[rag_evidence_id(chunk)]) == (fact,)
+        assert len(_prompt_source_facts(visible[rag_evidence_id(chunk)])) == 1
 
     def test_repeated_file_fact_prefix_is_rendered_once_without_losing_source(self):
         fact = {
@@ -239,10 +255,12 @@ class TestFormatRagContext:
         assert result.count(fact_line) == 1
         assert "public class App {" in result
         assert "void execute() {}" in result
-        assert visible == {
-            rag_evidence_id(first): (fact,),
-            rag_evidence_id(second): (),
-        }
+        assert _plugin_graph_facts(visible[rag_evidence_id(first)]) == (fact,)
+        assert _plugin_graph_facts(visible[rag_evidence_id(second)]) == ()
+        assert all(
+            len(_prompt_source_facts(visible[evidence_id])) == 1
+            for evidence_id in (rag_evidence_id(first), rag_evidence_id(second))
+        )
 
     def test_metadata_facts_are_rendered_once_without_mutating_stored_source(self):
         fact = {
@@ -284,10 +302,12 @@ class TestFormatRagContext:
         assert result.count(fact_line) == 1
         assert "def review()" in result
         assert "def validate()" in result
-        assert visible == {
-            rag_evidence_id(first): (),
-            rag_evidence_id(second): (fact,),
-        }
+        assert _plugin_graph_facts(visible[rag_evidence_id(first)]) == ()
+        assert _plugin_graph_facts(visible[rag_evidence_id(second)]) == (fact,)
+        assert all(
+            len(_prompt_source_facts(visible[evidence_id])) == 1
+            for evidence_id in (rag_evidence_id(first), rag_evidence_id(second))
+        )
 
     def test_omitted_fact_prefix_does_not_hide_later_visible_copy(self):
         fact = {
@@ -338,7 +358,7 @@ class TestFormatRagContext:
         )
 
         assert fact_line in result
-        assert visible[rag_evidence_id(later)] == (fact,)
+        assert _plugin_graph_facts(visible[rag_evidence_id(later)]) == (fact,)
 
     def test_metadata_fact_hidden_by_chunk_truncation_cannot_validate(self):
         visible_fact = {
@@ -380,7 +400,7 @@ class TestFormatRagContext:
             visible_evidence_by_id=visible,
         )
 
-        assert visible[rag_evidence_id(chunk)] == (visible_fact,)
+        assert _plugin_graph_facts(visible[rag_evidence_id(chunk)]) == (visible_fact,)
 
     def test_filters_deleted_files(self):
         rag = {
@@ -598,7 +618,7 @@ class TestFormatRagContext:
 
         assert "src/Reviewed.py" in result
         assert "[python-call] src.reviewed calls dependency" in result
-        assert tuple(visible.values()) == ((fact,),)
+        assert tuple(_plugin_graph_facts(value) for value in visible.values()) == ((fact,),)
 
     def test_truncated_current_file_chunk_is_retained(self):
         rag = {

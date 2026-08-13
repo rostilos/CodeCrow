@@ -238,6 +238,8 @@ class DeterministicContextMixin:
             pr_number: Optional[int] = None,
             pr_changed_files: Optional[List[str]] = None,
             additional_identifiers: Optional[List[str]] = None,
+            navigation_mode: str = "CONTEXT",
+            reference_identifiers: Optional[List[str]] = None,
             expected_revisions: Optional[Dict[str, str]] = None,
             pr_source_revision: Optional[str] = None,
             pr_base_revision: Optional[str] = None,
@@ -407,6 +409,23 @@ class DeterministicContextMixin:
             logger.info(f"Deterministic hybrid mode: also searching PR-indexed data (pr_number={pr_number})")
         else:
             branch_filter = base_branch_condition
+
+        if navigation_mode == "REVERSE_REFERENCES":
+            return self._query_reverse_references(
+                collection_name,
+                branch_filter,
+                reference_identifiers or (),
+                max_candidates=max(1, min(50, int(limit_per_file))),
+                branches=branches,
+                target_branch=target_branch,
+                expected_revisions=expected_revisions,
+                pr_source_revision=pr_source_revision,
+                pr_base_revision=pr_base_revision,
+                pr_base_generation_manifest_sha256=(
+                    pr_base_generation_manifest_sha256
+                ),
+                pr_generation_fingerprint=pr_generation_fingerprint,
+            )
 
         # ── Tracking state ──
         all_chunks = []
@@ -631,6 +650,150 @@ class DeterministicContextMixin:
         }
 
     # ── Internal helpers ──
+
+    def _query_reverse_references(
+            self,
+            collection_name: str,
+            branch_filter,
+            identifiers,
+            *,
+            max_candidates: int,
+            branches: List[str],
+            target_branch: Optional[str],
+            expected_revisions: Optional[Dict[str, str]],
+            pr_source_revision: Optional[str],
+            pr_base_revision: Optional[str],
+            pr_base_generation_manifest_sha256: Optional[str],
+            pr_generation_fingerprint: Optional[str],
+    ) -> Dict:
+        """Return bounded navigation coordinates for reverse AST relations.
+
+        The returned projection deliberately excludes stored chunk text.  A
+        consumer must perform an immutable-revision source read at each path
+        and range before using a candidate as review evidence.
+        """
+        batch = tuple(sorted({
+            str(identifier).strip()
+            for identifier in identifiers
+            if str(identifier).strip()
+        }))[:self.config.max_identifiers_per_query]
+        if not batch:
+            return {
+                "reference_navigation": [],
+                "_metadata": {
+                    "retrieval_state": "complete",
+                    "candidate_count": 0,
+                    "truncated": False,
+                },
+            }
+
+        relation_fields = (
+            "reference_identifiers",
+            "imports",
+            "calls",
+            "extends",
+            "implements",
+            "referenced_types",
+        )
+        # Scan a bounded superset before the deterministic per-path projection;
+        # several chunks may belong to the same caller file.
+        scan_limit = min(64, max_candidates * 8)
+        results, truncated = self._scroll_bounded(
+            collection_name,
+            Filter(must=[
+                branch_filter,
+                Filter(should=[
+                    FieldCondition(
+                        key=field,
+                        match=MatchAny(any=list(batch)),
+                    )
+                    for field in relation_fields
+                ]),
+            ]),
+            scan_limit,
+        )
+        selected = self._apply_branch_priority(
+            results,
+            target_branch,
+            branches,
+            set(),
+        )
+
+        coordinates = []
+        seen_paths = set()
+        for point in sorted(selected, key=_point_sort_key):
+            payload = point.payload or {}
+            self._require_requested_revision(
+                payload,
+                expected_revisions=expected_revisions,
+                pr_source_revision=pr_source_revision,
+                pr_base_revision=pr_base_revision,
+                pr_base_generation_manifest_sha256=(
+                    pr_base_generation_manifest_sha256
+                ),
+                pr_generation_fingerprint=pr_generation_fingerprint,
+            )
+            path = normalize_repository_path(payload.get("path", ""))
+            if (
+                not path
+                or path.startswith("__analysis_architecture__/")
+                or path in seen_paths
+            ):
+                continue
+            seen_paths.add(path)
+            coordinates.append({
+                "path": path,
+                "start_line": max(1, int(payload.get("start_line", 1) or 1)),
+                "end_line": max(1, int(payload.get("end_line", 1) or 1)),
+            })
+        was_truncated = truncated or len(coordinates) > max_candidates
+        coordinates = coordinates[:max_candidates]
+        return {
+            "reference_navigation": coordinates,
+            "_metadata": {
+                "retrieval_state": "partial" if was_truncated else "complete",
+                "candidate_count": len(coordinates),
+                "truncated": was_truncated,
+            },
+        }
+
+    @staticmethod
+    def _require_requested_revision(
+            payload: Dict,
+            *,
+            expected_revisions: Optional[Dict[str, str]],
+            pr_source_revision: Optional[str],
+            pr_base_revision: Optional[str],
+            pr_base_generation_manifest_sha256: Optional[str],
+            pr_generation_fingerprint: Optional[str],
+    ) -> None:
+        if payload.get("pr") is True:
+            if pr_generation_fingerprint and (
+                payload.get("pr_generation_fingerprint")
+                != pr_generation_fingerprint
+                or payload.get("pr_source_revision") != pr_source_revision
+                or payload.get("pr_base_revision") != pr_base_revision
+                or payload.get("pr_base_generation_manifest_sha256")
+                != pr_base_generation_manifest_sha256
+            ):
+                raise IncrementalIndexPreconditionError(
+                    "reverse-reference retrieval returned a PR point outside "
+                    "the requested overlay generation"
+                )
+            return
+        expected_revision = (
+            expected_revisions.get(payload.get("branch"))
+            if expected_revisions
+            else None
+        )
+        if (
+            expected_revision is not None
+            and payload.get("commit") != expected_revision
+        ):
+            raise IncrementalIndexPreconditionError(
+                "reverse-reference retrieval returned a repository point "
+                "outside the requested immutable revision"
+            )
 
     def _query_architecture_context(
             self, collection_name, branch_filter, file_paths, limit_per_file,

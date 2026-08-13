@@ -81,6 +81,9 @@ class CandidateRecord:
     generation_prompt_digest: str
     evidence_refs: tuple[str, ...]
     visible_evidence_by_id: dict[str, tuple[dict[str, Any], ...]]
+    trigger_condition: str = ""
+    causal_path: str = ""
+    observable_impact: str = ""
     anchor_hunk_ids: tuple[str, ...] = ()
     terminal_state: Optional[str] = None
     rejection: Optional[CandidateRejection] = None
@@ -121,6 +124,13 @@ class CandidateEvidenceLedger:
         visible_evidence = _normalized_visible_evidence(
             visible_evidence_by_id
         )
+        trigger_condition = str(
+            getattr(issue, "triggerCondition", "") or ""
+        ).strip()
+        causal_path = str(getattr(issue, "causalPath", "") or "").strip()
+        observable_impact = str(
+            getattr(issue, "observableImpact", "") or ""
+        ).strip()
         if generation_prompt is not None and prompt_digest is not None:
             raise ValueError(
                 "provide either a generation prompt or its digest, not both"
@@ -150,6 +160,11 @@ class CandidateEvidenceLedger:
                 "promptHunkIds": hunks,
                 "generationPromptDigest": resolved_prompt_digest,
                 "visibleEvidence": visible_evidence,
+                "causalEvidence": {
+                    "triggerCondition": trigger_condition,
+                    "causalPath": causal_path,
+                    "observableImpact": observable_impact,
+                },
                 "issue": _issue_payload(issue),
             },
             ensure_ascii=False,
@@ -176,6 +191,9 @@ class CandidateEvidenceLedger:
             generation_prompt_digest=resolved_prompt_digest,
             evidence_refs=evidence_refs,
             visible_evidence_by_id=visible_evidence,
+            trigger_condition=trigger_condition,
+            causal_path=causal_path,
+            observable_impact=observable_impact,
             object_ids={object_id},
         )
         self._records[candidate_id] = record
@@ -353,6 +371,11 @@ class CandidateEvidenceLedger:
                     "visibleEvidenceIds": sorted(
                         record.visible_evidence_by_id
                     ),
+                    "causalEvidence": {
+                        "triggerCondition": record.trigger_condition,
+                        "causalPath": record.causal_path,
+                        "observableImpact": record.observable_impact,
+                    },
                     "visibleEvidenceFactDigests": {
                         evidence_id: [
                             "sha256:" + hashlib.sha256(

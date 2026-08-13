@@ -18,9 +18,11 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Service for persisting analyzed file contents with content-addressed deduplication.
@@ -238,8 +240,9 @@ public class FileSnapshotService {
      *   <li>If no snapshot exists → create one.</li>
      *   <li>Previously-stored files from earlier iterations remain untouched.</li>
      * </ul>
-     * This ensures that after multiple PR iterations the source viewer shows <b>all</b>
-     * files ever analysed, not just the files from the latest run.
+     * This is the fail-open persistence path used when no complete current
+     * manifest is available. Complete-manifest callers should use
+     * {@link #synchronizeSnapshotsForPr} so removed paths are pruned.
      *
      * @param pullRequest  the PR to attach snapshots to
      * @param analysis     the current analysis (also stored on the snapshot for back-reference)
@@ -310,6 +313,68 @@ public class FileSnapshotService {
         log.info("Persisted {} PR-level file snapshots for PR {} (analysis={}, {} files provided)",
                 changed, pullRequest.getId(), analysis.getId(), fileContents.size());
         return changed;
+    }
+
+    /**
+     * Synchronize PR snapshots to a provider-complete current base-to-head
+     * manifest, then upsert the exact source acquired for active paths.
+     *
+     * <p>Manifest membership and exact-source availability drive pruning.
+     * Paths no longer in the complete manifest (deleted, renamed away, or
+     * reverted to base) are removed. An active path without current exact
+     * source is also removed instead of exposing older content under the new
+     * PR head. Callers must not use this method with a partial manifest.</p>
+     *
+     * @param activeManifestPaths all non-deleted paths in the complete current
+     *                            base-to-head manifest
+     * @return number of snapshots created, updated, or removed
+     */
+    public int synchronizeSnapshotsForPr(
+            PullRequest pullRequest,
+            CodeAnalysis analysis,
+            Map<String, String> fileContents,
+            String commitHash,
+            List<String> activeManifestPaths) {
+        if (pullRequest == null || pullRequest.getId() == null) {
+            throw new IllegalArgumentException("persisted pull request is required");
+        }
+        if (activeManifestPaths == null) {
+            throw new IllegalArgumentException("complete active PR manifest is required");
+        }
+
+        Set<String> activePaths = new LinkedHashSet<>();
+        for (String path : activeManifestPaths) {
+            String normalized = normalizePath(path);
+            if (normalized != null) activePaths.add(normalized);
+        }
+
+        Map<String, String> activeContents = new LinkedHashMap<>();
+        if (fileContents != null) {
+            fileContents.forEach((path, content) -> {
+                String normalized = normalizePath(path);
+                if (normalized != null && content != null && activePaths.contains(normalized)) {
+                    activeContents.put(normalized, content);
+                }
+            });
+        }
+        Set<String> exactPaths = activeContents.keySet();
+        List<AnalyzedFileSnapshot> stale = snapshotRepository
+                .findByPullRequestId(pullRequest.getId())
+                .stream()
+                .filter(snapshot -> {
+                    String normalized = normalizePath(snapshot.getFilePath());
+                    return normalized == null
+                            || !activePaths.contains(normalized)
+                            || !exactPaths.contains(normalized);
+                })
+                .toList();
+        if (!stale.isEmpty()) {
+            snapshotRepository.deleteAll(stale);
+            log.info("Pruned {} stale PR-level file snapshots for PR {} from complete manifest",
+                    stale.size(), pullRequest.getId());
+        }
+        return stale.size()
+                + persistSnapshotsForPr(pullRequest, analysis, activeContents, commitHash);
     }
 
     // ── Branch-level persistence (direct FK) ───────────────────────────
@@ -434,7 +499,7 @@ public class FileSnapshotService {
     // ── PR-level retrieval ───────────────────────────────────────────────
 
     /**
-     * Retrieve all file snapshots accumulated for a PR with content eagerly loaded.
+     * Retrieve the currently retained file snapshots for a PR with content eagerly loaded.
      */
     public List<AnalyzedFileSnapshot> getSnapshotsWithContentForPr(Long pullRequestId) {
         return snapshotRepository.findByPullRequestIdWithContent(pullRequestId);
@@ -560,6 +625,14 @@ public class FileSnapshotService {
         } catch (NoSuchAlgorithmException e) {
             throw new RuntimeException("SHA-256 not available", e);
         }
+    }
+
+    private static String normalizePath(String path) {
+        if (path == null || path.isBlank()) return null;
+        String normalized = path.replace('\\', '/');
+        while (normalized.startsWith("./")) normalized = normalized.substring(2);
+        while (normalized.startsWith("/")) normalized = normalized.substring(1);
+        return normalized.isBlank() ? null : normalized;
     }
 
     private static int countLines(String content) {
