@@ -944,7 +944,7 @@ public class BranchAnalysisProcessor {
 					"RAG module not deployed — skipping incremental update");
 			return;
 		}
-		if (commitDiff == null || commitDiff.isBlank()) {
+		if (scopedOnly && (commitDiff == null || commitDiff.isBlank())) {
 			log.info("Skipping RAG incremental update - no scoped files require an update");
 			EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
 					"No scoped files require a RAG update");
@@ -966,19 +966,19 @@ public class BranchAnalysisProcessor {
 				return;
 			}
 
-				String targetBranch = request.getTargetBranchName();
-				String baseBranch = ragOperationsService.getBaseBranch(project);
+			String targetBranch = request.getTargetBranchName();
+			String baseBranch = ragOperationsService.getBaseBranch(project);
 
-				if (!targetBranch.equals(baseBranch)
-						&& !ragOperationsService.shouldHaveBranchIndex(project, targetBranch)) {
-					log.info("Skipping RAG update for non-retained branch: project={}, branch={}",
-							project.getId(), targetBranch);
-					EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
-							"Branch is analyzed but is not configured as a retained RAG branch");
-					return;
-				}
+			if (!targetBranch.equals(baseBranch)
+					&& !ragOperationsService.shouldHaveBranchIndex(project, targetBranch)) {
+				log.info("Skipping RAG update for non-retained branch: project={}, branch={}",
+						project.getId(), targetBranch);
+				EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
+						"Branch is analyzed but is not configured as a retained RAG branch");
+				return;
+			}
 
-				// Health check: verify RAG pipeline is reachable before starting
+			// Health check: verify RAG pipeline is reachable before starting
 			if (!ragOperationsService.isRagPipelineHealthy()) {
 				log.warn("RAG pipeline is not reachable — skipping incremental update for project={}",
 						project.getId());
@@ -1013,10 +1013,11 @@ public class BranchAnalysisProcessor {
 				}
 			}
 
-			log.info("RAG update completed for project={}, branch={}, commit={}",
+			// RagOperationsService owns the precise terminal event. A boolean true
+			// also covers an already-current revision, so translating it into a
+			// generic "updated" event here would be a false success report.
+			log.info("RAG reconciliation completed for project={}, branch={}, commit={}",
 					project.getId(), targetBranch, request.getCommitHash());
-			EventNotificationEmitter.emitStatus(consumer, "rag_update_complete",
-					"RAG index updated successfully for branch: " + targetBranch);
 		} catch (Exception e) {
 			log.warn("RAG incremental update failed (non-critical): {}", e.getMessage());
 			EventNotificationEmitter.emitStatus(consumer, "rag_update_failed",

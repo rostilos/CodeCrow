@@ -50,6 +50,9 @@ RULES:
 8. Focus on WHAT changed from the user's perspective, not HOW it was implemented.
 9. Use markdown formatting: headings (#), bold (**), bullet lists (-), numbered lists (1.).
 10. Keep it actionable — testers should be able to start testing immediately after reading.
+11. Return exactly one test-case sentinel block in this order: `<!-- codecrow-test-cases:start -->`, its localized section heading, `<!-- codecrow-test-cases:content -->`, all test scenarios, then `<!-- codecrow-test-cases:end -->`.
+12. Return exactly one environment sentinel block in this order: `<!-- codecrow-environment:start -->`, its localized section heading, `<!-- codecrow-environment:content -->`, all environment/setup notes, then `<!-- codecrow-environment:end -->`. This block is mandatory; when no special setup is needed, say so explicitly inside its content.
+13. Never repeat test scenarios or environment/setup notes outside their sentinel blocks, including when a custom template contains similarly named sections.
 
 STRICTLY FORBIDDEN (never include any of these in the output):
 - File names or file paths (e.g. "src/main/...", "UserService.java", "index.tsx")
@@ -129,6 +132,7 @@ The output MUST include test cases even when another template or structure is re
 Wrap the complete test-case section in these exact invisible markers:
 <!-- codecrow-test-cases:start -->
 ### Test Scenarios
+<!-- codecrow-test-cases:content -->
 **Scenario Name** (HIGH)
 - **Preconditions:** Required setup
 - **Steps:**
@@ -136,7 +140,14 @@ Wrap the complete test-case section in these exact invisible markers:
 - **Expected Result:** Observable result
 <!-- codecrow-test-cases:end -->
 Use exactly HIGH, MEDIUM, or LOW as each scenario's priority.
-Do not place non-test-case content between those markers."""
+Do not place non-test-case content between those markers.
+
+Also include this mandatory environment/setup block:
+<!-- codecrow-environment:start -->
+### Environment and Setup Notes
+<!-- codecrow-environment:content -->
+State special setup requirements, or explicitly state that no special setup is required.
+<!-- codecrow-environment:end -->"""
 
 
 QA_DOC_BASE_PROMPT = """Generate structured QA documentation for the following PR changes.
@@ -185,6 +196,7 @@ For each area, use bullet points:
 
 <!-- codecrow-test-cases:start -->
 ### 3. Test Scenarios
+<!-- codecrow-test-cases:content -->
 For each functional area, list test scenarios using this format:
 
 **Scenario Name** (HIGH)
@@ -203,8 +215,11 @@ Bullet list of boundary conditions and error scenarios to verify, written as use
 ### 5. Regression Risks
 Areas of the application that might be indirectly affected. Describe by feature/screen, not by code.
 
+<!-- codecrow-environment:start -->
 ### 6. Environment and Setup Notes
+<!-- codecrow-environment:content -->
 Any special configuration, test data, or browser requirements needed for testing.
+<!-- codecrow-environment:end -->
 
 Generate the documentation now."""
 
@@ -251,6 +266,7 @@ request scenarios or asks for a different document structure:
 
 <!-- codecrow-test-cases:start -->
 ### Test Scenarios
+<!-- codecrow-test-cases:content -->
 **Scenario Name** (HIGH)
 - **Preconditions:** Required setup
 - **Steps:**
@@ -259,7 +275,20 @@ request scenarios or asks for a different document structure:
 <!-- codecrow-test-cases:end -->
 Use exactly HIGH, MEDIUM, or LOW as each scenario's priority.
 
-Do not place overview content between the markers. Generate the QA documentation now."""
+Do not place overview content between the markers. If the custom template contains a
+test-case/scenario area, use it only as structural guidance: move that content into the
+single block above and do not render a second test-case section.
+
+After the test-case block, append this mandatory block even when no special setup is needed:
+<!-- codecrow-environment:start -->
+### Environment and Setup Notes
+<!-- codecrow-environment:content -->
+State all environment/setup requirements, or explicitly state that none are required.
+<!-- codecrow-environment:end -->
+
+If the custom template contains environment/setup content, move it into this single
+environment block and do not render a duplicate section outside the markers.
+Generate the QA documentation now."""
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +521,7 @@ For each acceptance criterion from the task:
 
 <!-- codecrow-test-cases:start -->
 ## 3. Test Scenarios by Area
+<!-- codecrow-test-cases:content -->
 
 Group scenarios under the functional area heading (### Area Name).
 List each scenario using the bullet-list format shown above.
@@ -507,11 +537,14 @@ Bullet list of unusual conditions to verify:
 Areas of the application that were NOT changed but might be affected:
 - [Feature/screen] — why it might be impacted, how to verify
 
+<!-- codecrow-environment:start -->
 ## 6. Environment and Setup Notes
+<!-- codecrow-environment:content -->
 Any special requirements:
 - Test data needed
 - Configuration or feature flags to enable
 - Browser or device requirements
+<!-- codecrow-environment:end -->
 
 Generate the FINAL document now. Remember: NO TABLES, NO FILE NAMES, NO CODE, NO SQL, NO API ENDPOINTS, NO CLI COMMANDS."""
 
@@ -561,16 +594,19 @@ Produce an UPDATED QA testing guide by:
 5. **Marking** new/updated sections with *(updated in latest push)* so testers see what's new
 6. **Preserving** all scenarios from the previous guide that are still valid
 7. **Stripping any technical references** that may have leaked — replace with user-facing descriptions
-8. **Preserving the exact `<!-- codecrow-test-cases:start -->` and `<!-- codecrow-test-cases:end -->` markers** around all test scenarios. If the previous guide has no markers, add them.
+8. **Returning the exact test-case sentinel sequence**: start marker, localized heading, content marker, all scenarios, end marker.
+9. **Returning the exact environment sentinel sequence**: start marker, localized heading, content marker, all setup notes, end marker. Include it even when its content only states that no special setup is required.
+10. **Keeping all test cases and environment/setup notes inside those blocks only**, with no duplicate sections elsewhere.
 
 The result must be a COMPLETE, standalone QA testing guide — not just the changes.
 
 Generate the updated document now. Remember: NO TABLES, NO FILE NAMES, NO CODE, NO SQL, NO API ENDPOINTS, NO CLI COMMANDS."""
 
 
-QA_DOC_TEST_CASES_REPAIR_PROMPT = """Generate ONLY the missing manual test-case section for this PR.
-Write all user-facing text in **{output_language}**. Keep the existing breadth and
-detail of the QA guidance; do not summarize or reduce scenarios because the change is large.
+QA_DOC_SECTION_BOUNDARY_REPAIR_PROMPT = """Repair the sentinel structure of this COMPLETE QA testing guide.
+Write user-facing text in **{output_language}**, but preserve the guide's content,
+coverage, ordering, localized headings, and level of detail. Return the complete guide,
+not an explanation and not only the repaired sections.
 
 PR #{pr_number} in {project_name}: {pr_title}
 Task: {task_key} — {task_summary}
@@ -586,9 +622,15 @@ PR diff:
 {diff}
 ```
 
-Return only this structure, with one or more concrete scenarios:
+Existing guide:
+---
+{documentation}
+---
+
+Required exact structure for test cases:
 <!-- codecrow-test-cases:start -->
-### Test Scenarios
+### Localized test-case section heading
+<!-- codecrow-test-cases:content -->
 **Scenario Name** (HIGH)
 - **Preconditions:** Required setup
 - **Steps:**
@@ -596,10 +638,21 @@ Return only this structure, with one or more concrete scenarios:
 - **Expected Result:** Observable result
 <!-- codecrow-test-cases:end -->
 
-Use exactly HIGH, MEDIUM, or LOW as each scenario's priority.
+Required exact structure for environment/setup notes:
+<!-- codecrow-environment:start -->
+### Localized environment/setup section heading
+<!-- codecrow-environment:content -->
+All setup requirements, or an explicit statement that no special setup is required.
+<!-- codecrow-environment:end -->
 
-Never include file names, code symbols, SQL, endpoints, commands, configuration
-files, code snippets, or implementation-stack details."""
+Each of the six markers must occur exactly once and in the shown order. Move all test
+scenarios into the test-case block and all environment/setup notes into the environment
+block. Do not duplicate either kind of content elsewhere. Preserve every unrelated
+section before, between, and after these blocks. The test-case body must contain one or
+more concrete scenarios with HIGH, MEDIUM, or LOW priority.
+
+Never include file names, code symbols, SQL, endpoints, commands, configuration files,
+code snippets, or implementation-stack details."""
 
 
 # ---------------------------------------------------------------------------

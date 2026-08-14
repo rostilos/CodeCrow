@@ -219,14 +219,21 @@ class TestSlimStageResults:
 
 
 class TestIndependentTestCases:
-    def test_custom_template_cannot_remove_test_cases(self):
+    def test_custom_template_requires_both_exact_sentinel_blocks(self):
         assert "custom template MUST NOT remove test cases" in QA_DOC_CUSTOM_PROMPT
         assert "<!-- codecrow-test-cases:start -->" in QA_DOC_CUSTOM_PROMPT
+        assert "<!-- codecrow-test-cases:content -->" in QA_DOC_CUSTOM_PROMPT
         assert "<!-- codecrow-test-cases:end -->" in QA_DOC_CUSTOM_PROMPT
+        assert "<!-- codecrow-environment:start -->" in QA_DOC_CUSTOM_PROMPT
+        assert "<!-- codecrow-environment:content -->" in QA_DOC_CUSTOM_PROMPT
+        assert "<!-- codecrow-environment:end -->" in QA_DOC_CUSTOM_PROMPT
+        assert "do not render a duplicate" in QA_DOC_CUSTOM_PROMPT
 
     def test_detects_only_marked_structured_scenarios(self):
         valid = """
         <!-- codecrow-test-cases:start -->
+        ### Будь-який локалізований заголовок
+        <!-- codecrow-test-cases:content -->
         **Checkout succeeds** (HIGH)
         - **Expected Result:** Confirmation appears
         <!-- codecrow-test-cases:end -->
@@ -237,6 +244,8 @@ class TestIndependentTestCases:
         )
         assert not QaDocOrchestrator._contains_extractable_test_cases("""
             <!-- codecrow-test-cases:start -->
+            ### Test Scenarios
+            <!-- codecrow-test-cases:content -->
             <!-- codecrow-test-cases:end -->
             **Scenario outside the disclosure boundary** (HIGH)
         """)
@@ -244,49 +253,99 @@ class TestIndependentTestCases:
             <!-- codecrow-test-cases:end -->
             **Scenario between reversed markers** (HIGH)
             <!-- codecrow-test-cases:start -->
+            ### Test Scenarios
+            <!-- codecrow-test-cases:content -->
         """)
 
-    def test_moves_an_overbroad_end_marker_before_later_numbered_sections(self):
-        documentation = """
-        ### 1. Change Summary
-        Checkout changed.
-
+    def test_accepts_complete_blocks_with_arbitrary_localized_headings(self):
+        valid = """
         <!-- codecrow-test-cases:start -->
-        ### 3. Test Scenarios
-        ### Checkout
+        ## Абсолютно довільний локалізований заголовок
+        <!-- codecrow-test-cases:content -->
+        ### Оформлення
+        **Успішне оформлення** (HIGH)
+        - **Expected Result:** Замовлення створено
+        <!-- codecrow-test-cases:end -->
+
+        ## 4. Граничні випадки та негативне тестування
+        - Перевірити порожній кошик.
+
+        <!-- codecrow-environment:start -->
+        ## Ще один довільний локалізований заголовок
+        <!-- codecrow-environment:content -->
+        - Використати тестове середовище.
+        <!-- codecrow-environment:end -->
+        """
+
+        assert QaDocOrchestrator._has_complete_shareable_sections(valid)
+
+    def test_does_not_infer_sections_from_headings(self):
+        unmarked = """
+        ## 3. Test Scenarios
         **Checkout succeeds** (HIGH)
         - **Expected Result:** Confirmation appears
+        ## 6. Налаштування та вимоги до середовища
+        - Використати тестове середовище.
+        """
 
-        ### 4. Edge Cases and Negative Testing
-        - Try an expired card.
+        assert not QaDocOrchestrator._has_complete_shareable_sections(unmarked)
+        assert not QaDocOrchestrator._contains_extractable_test_cases(unmarked)
 
-        ### 5. Regression Risks
-        - Existing card payments.
-
-        ### 6. Environment and Setup Notes
-        - Use the QA environment.
+    def test_rejects_duplicate_or_misordered_sentinels(self):
+        invalid = """
+        <!-- codecrow-environment:start -->
+        ### Setup
+        <!-- codecrow-environment:content -->
+        No special setup.
+        <!-- codecrow-environment:end -->
+        <!-- codecrow-test-cases:start -->
+        <!-- codecrow-test-cases:start -->
+        ### Tests
+        <!-- codecrow-test-cases:content -->
+        **Checkout succeeds** (HIGH)
         <!-- codecrow-test-cases:end -->
         """
 
-        normalized = QaDocOrchestrator._normalize_test_case_markers(documentation)
+        assert not QaDocOrchestrator._has_complete_shareable_sections(invalid)
 
-        assert normalized.index("<!-- codecrow-test-cases:end -->") < normalized.index(
-            "### 4. Edge Cases and Negative Testing"
-        )
-        assert normalized.index("<!-- codecrow-test-cases:end -->") > normalized.index(
-            "**Checkout succeeds** (HIGH)"
-        )
-        assert "### 5. Regression Risks" in normalized
-        assert "### 6. Environment and Setup Notes" in normalized
+    def test_rejects_body_text_in_the_heading_slot(self):
+        invalid = """
+        <!-- codecrow-test-cases:start -->
+        ### Tests
+        This must not leak into Jira before the link.
+        <!-- codecrow-test-cases:content -->
+        **Checkout succeeds** (HIGH)
+        <!-- codecrow-test-cases:end -->
+        <!-- codecrow-environment:start -->
+        ### Setup
+        <!-- codecrow-environment:content -->
+        No special setup.
+        <!-- codecrow-environment:end -->
+        """
+
+        assert not QaDocOrchestrator._has_complete_shareable_sections(invalid)
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_repairs_a_custom_document_that_omits_test_cases(self):
+    async def test_repairs_the_complete_document_when_sentinels_are_missing(self):
         response = MagicMock(content="""
+            # Custom QA summary
+            The checkout flow changed.
+
             <!-- codecrow-test-cases:start -->
-            ### Test Scenarios
+            ### Тестові сценарії
+            <!-- codecrow-test-cases:content -->
             **Checkout succeeds** (HIGH)
             - **Expected Result:** Confirmation appears
             <!-- codecrow-test-cases:end -->
+
+            ## 4. Edge Cases
+            Try an expired card.
+
+            <!-- codecrow-environment:start -->
+            ### Середовище
+            <!-- codecrow-environment:content -->
+            No special setup is required.
+            <!-- codecrow-environment:end -->
         """)
         llm = MagicMock()
         llm.ainvoke = AsyncMock(return_value=response)
@@ -305,16 +364,30 @@ class TestIndependentTestCases:
             "diff": "+ changed behavior",
         }
 
-        repaired = await orchestrator._ensure_test_cases("# Custom QA summary", placeholders)
+        repaired = await orchestrator._ensure_shareable_sections(
+            "# Custom QA summary\n\nThe checkout flow changed.",
+            placeholders,
+        )
 
         assert repaired.startswith("# Custom QA summary")
-        assert "<!-- codecrow-test-cases:start -->" in repaired
+        assert "<!-- codecrow-test-cases:content -->" in repaired
+        assert "<!-- codecrow-environment:content -->" in repaired
         assert "**Checkout succeeds** (HIGH)" in repaired
+        assert "## 4. Edge Cases" in repaired
+        repair_prompt = llm.ainvoke.await_args.args[0][1]["content"]
+        assert "# Custom QA summary" in repair_prompt
+        assert "Each of the six markers must occur exactly once" in repair_prompt
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_rejects_a_repair_without_a_structured_scenario(self):
+    async def test_rejects_a_repair_without_both_complete_blocks(self):
         llm = MagicMock()
-        llm.ainvoke = AsyncMock(return_value=MagicMock(content="General testing notes"))
+        llm.ainvoke = AsyncMock(return_value=MagicMock(content="""
+            <!-- codecrow-test-cases:start -->
+            ### Tests
+            <!-- codecrow-test-cases:content -->
+            **Checkout succeeds** (HIGH)
+            <!-- codecrow-test-cases:end -->
+        """))
         orchestrator = QaDocOrchestrator(llm=llm)
         placeholders = {
             "output_language": "English",
@@ -330,8 +403,8 @@ class TestIndependentTestCases:
             "diff": "+ changed behavior",
         }
 
-        with pytest.raises(ValueError, match="no structured scenarios"):
-            await orchestrator._ensure_test_cases("# Custom QA summary", placeholders)
+        with pytest.raises(ValueError, match="missing complete test-case or environment"):
+            await orchestrator._ensure_shareable_sections("# Custom QA summary", placeholders)
 
 
 # ── QaDocOrchestrator._build_placeholders ────────────────────────

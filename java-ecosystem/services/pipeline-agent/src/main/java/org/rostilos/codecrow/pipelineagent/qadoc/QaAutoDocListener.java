@@ -385,8 +385,8 @@ public class QaAutoDocListener {
             return;
         }
 
-        // 10. Keep the QA guide in Jira, replacing only its large test-case
-        // section with the public preview URL.
+        // 10. Keep the compact QA guide in Jira, replacing the test-case and
+        // environment/setup bodies with their public-preview URLs.
         String commentBody;
         try {
             String previewUrl = qaDocPublicPreviewService.createPreviewUrl(persistedDocument.get());

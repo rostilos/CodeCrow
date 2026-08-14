@@ -2,6 +2,7 @@ package org.rostilos.codecrow.pipelineagent.qadoc;
 
 import org.rostilos.codecrow.core.model.qadoc.QaDocDocument;
 import org.rostilos.codecrow.core.model.qadoc.QaDocState;
+import org.rostilos.codecrow.core.service.qadoc.QaDocContentParser;
 
 import java.time.OffsetDateTime;
 import java.util.Locale;
@@ -25,6 +26,7 @@ public final class QaDocHandoffRetryPolicy {
                 || expectedTaskId.isBlank()
                 || document.getMarkdownContent() == null
                 || document.getMarkdownContent().isBlank()
+                || !QaDocContentParser.hasCompleteShareableSections(document.getMarkdownContent())
                 || !Objects.equals(normalize(document.getCommitHash()), normalize(currentCommitHash))
                 || !Objects.equals(
                         normalizeTaskId(document.getTaskId()),

@@ -107,7 +107,7 @@ class RagConfigTest {
     }
 
     @Test
-    void explicitIndexedBranchesShouldOverrideLegacyPushPatterns() {
+    void explicitIndexedBranchesAreTheOnlyRetainedNonPrimaryBranches() {
         RagConfig config = new RagConfig(
                 true,
                 "master",
@@ -119,19 +119,18 @@ class RagConfigTest {
                 true);
 
         assertThat(config.getEffectiveIndexedBranches()).containsExactly("develop", "support/1.x");
-        assertThat(config.shouldHaveBranchIndex("develop", List.of("feature/**"))).isTrue();
-        assertThat(config.shouldHaveBranchIndex("feature/one", List.of("feature/**"))).isFalse();
+        assertThat(config.shouldHaveBranchIndex("develop")).isTrue();
+        assertThat(config.shouldHaveBranchIndex("feature/one")).isFalse();
         assertThat(config.isTransientBranchIndexesEnabled()).isTrue();
     }
 
     @Test
-    void legacyConfigurationShouldContinueUsingPushPatterns() {
+    void configurationWithoutRetainedBranchesDoesNotInheritBranchAnalysisPatterns() {
         RagConfig config = new RagConfig(true, "master", null, null, true, 30);
 
-        assertThat(config.hasExplicitIndexedBranches()).isFalse();
-        assertThat(config.shouldHaveBranchIndex("develop", List.of("develop", "support/**"))).isTrue();
-        assertThat(config.shouldHaveBranchIndex("support/1.x", List.of("develop", "support/**"))).isTrue();
-        assertThat(config.shouldHaveBranchIndex("feature/one", List.of("develop", "support/**"))).isFalse();
+        assertThat(config.getEffectiveIndexedBranches()).isEmpty();
+        assertThat(config.shouldHaveBranchIndex("develop")).isFalse();
+        assertThat(config.shouldHaveBranchIndex("support/1.x")).isFalse();
         assertThat(config.isTransientBranchIndexesEnabled()).isFalse();
     }
 
@@ -141,7 +140,7 @@ class RagConfigTest {
                 true, "master", null, null, false, 30, List.of("develop"), true);
 
         assertThat(config.isTransientBranchIndexesEnabled()).isFalse();
-        assertThat(config.shouldHaveBranchIndex("develop", List.of("develop"))).isFalse();
+        assertThat(config.shouldHaveBranchIndex("develop")).isFalse();
     }
 
     @Test

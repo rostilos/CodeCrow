@@ -25,9 +25,9 @@ public class QaDocPublicPreviewService {
         if (document == null || document.getId() == null) {
             throw new IllegalArgumentException("A persisted QA document is required for public preview.");
         }
-        if (QaDocContentParser.parseMarkedTestCases(document.getMarkdownContent()).isEmpty()) {
+        if (!QaDocContentParser.hasCompleteShareableSections(document.getMarkdownContent())) {
             throw new IllegalArgumentException(
-                    "A marked QA test-case section is required for public preview.");
+                    "Complete marked QA test-case and environment sections are required for public preview.");
         }
         IssuedPublicShare share = publicShareLinkService.issue(
                 QaDocPublicShareResource.DOCUMENT,

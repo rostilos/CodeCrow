@@ -839,6 +839,67 @@ class BranchAnalysisProcessorTest {
         }
 
         @Test
+        @DisplayName("should let RAG service report the precise successful outcome")
+        void shouldNotSynthesizeRagUpdatedFromBooleanSuccess() {
+            BranchProcessRequest request = createRequest();
+            request.commitHash = "current-commit";
+            request.targetBranchName = "main";
+            String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
+            List<Map<String, Object>> events = new ArrayList<>();
+
+            when(project.getId()).thenReturn(1L);
+            when(ragOperationsService.isRagEnabled(project)).thenReturn(true);
+            when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
+            when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
+            when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
+            when(ragOperationsService.triggerIncrementalUpdate(
+                    eq(project), eq("main"), eq("current-commit"), eq(rawDiff), any()))
+                    .thenReturn(true);
+
+            ReflectionTestUtils.invokeMethod(
+                    processor,
+                    "performIncrementalRagUpdate",
+                    request,
+                    project,
+                    rawDiff,
+                    (Consumer<Map<String, Object>>) events::add,
+                    false);
+
+            assertThat(events)
+                    .noneSatisfy(event ->
+                            assertThat(event).containsEntry("state", "rag_update_complete"));
+        }
+
+        @Test
+        @DisplayName("should reconcile an empty base-branch diff through the durable RAG operation")
+        void shouldDelegateEmptyBaseBranchDiff() {
+            BranchProcessRequest request = createRequest();
+            request.commitHash = "empty-range-commit";
+            request.targetBranchName = "main";
+
+            when(project.getId()).thenReturn(1L);
+            when(ragOperationsService.isRagEnabled(project)).thenReturn(true);
+            when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
+            when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
+            when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
+            when(ragOperationsService.triggerIncrementalUpdate(
+                    eq(project), eq("main"), eq("empty-range-commit"), eq(""), any()))
+                    .thenReturn(true);
+
+            ReflectionTestUtils.invokeMethod(
+                    processor,
+                    "performIncrementalRagUpdate",
+                    request,
+                    project,
+                    "",
+                    (Consumer<Map<String, Object>>) ignored -> { },
+                    false);
+
+            verify(ragOperationsService).triggerIncrementalUpdate(
+                    eq(project), eq("main"), eq("empty-range-commit"), eq(""), any());
+        }
+
+        @Test
         @DisplayName("should call updateBranchIndex for non-main branch RAG update")
         void shouldCallUpdateBranchIndexForNonMainBranch() throws Exception {
             BranchProcessRequest request = createRequest();

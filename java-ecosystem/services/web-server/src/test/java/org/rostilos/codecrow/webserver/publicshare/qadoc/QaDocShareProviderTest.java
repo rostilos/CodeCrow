@@ -41,12 +41,16 @@ class QaDocShareProviderTest {
 
                 <!-- codecrow-test-cases:start -->
                 ### Test Scenarios
+                <!-- codecrow-test-cases:content -->
                 **Save the form** (HIGH)
                 - **Expected Result:** The confirmation appears
                 <!-- codecrow-test-cases:end -->
 
+                <!-- codecrow-environment:start -->
                 ## 6. Setup and Environment Notes
+                <!-- codecrow-environment:content -->
                 - Enable saved cards in the QA environment.
+                <!-- codecrow-environment:end -->
                 """);
         CodeAnalysis analysis = mock(CodeAnalysis.class);
         when(analysis.getProject()).thenReturn(project);
@@ -116,9 +120,16 @@ class QaDocShareProviderTest {
         document.setMarkdownContent("""
                 <!-- codecrow-test-cases:start -->
                 ### Test Scenarios
+                <!-- codecrow-test-cases:content -->
                 **Save the form** (HIGH)
                 - **Expected Result:** The confirmation appears
                 <!-- codecrow-test-cases:end -->
+
+                <!-- codecrow-environment:start -->
+                ### Environment
+                <!-- codecrow-environment:content -->
+                No special setup is required.
+                <!-- codecrow-environment:end -->
                 """);
         CodeAnalysis analysis = mock(CodeAnalysis.class);
         when(analysis.getProject()).thenReturn(analysisProject);

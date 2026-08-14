@@ -86,12 +86,19 @@ class QaDocCommandProcessorTest {
 
             <!-- codecrow-test-cases:start -->
             ### 3. Test Scenarios
+            <!-- codecrow-test-cases:content -->
             **Reject an invalid password** (HIGH)
             - **Expected Result:** Test steps here
             <!-- codecrow-test-cases:end -->
 
             ### 4. Edge Cases
             Verify an empty password.
+
+            <!-- codecrow-environment:start -->
+            ### 6. Environment and Setup Notes
+            <!-- codecrow-environment:content -->
+            No special setup is required.
+            <!-- codecrow-environment:end -->
             """;
 
     @BeforeEach

@@ -16,6 +16,7 @@ import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.BranchAnalysisConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndex;
@@ -774,6 +775,31 @@ class RagOperationsServiceImplTest {
     }
 
     @Test
+    void createOrUpdateBranchIndexRejectsBranchAnalysisPatternWithoutRetention() {
+        ReflectionTestUtils.setField(service, "ragApiEnabled", true);
+        testProject.setConfiguration(new ProjectConfig(
+                false,
+                "main",
+                new BranchAnalysisConfig(List.of("main"), List.of("release/**")),
+                new RagConfig(true, "main", null, null, true, 30, null, false)));
+        service = spy(service);
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+
+        service.createOrUpdateBranchIndex(
+                testProject,
+                "release/preview",
+                "main",
+                "release-commit",
+                "diff",
+                eventConsumer);
+
+        verify(service, never()).triggerIncrementalUpdate(any(), any(), any(), any(), any());
+        verify(eventConsumer).accept(argThat(event ->
+                "rag_skipped".equals(event.get("state"))));
+    }
+
+    @Test
     void testEnsureRagIndexUpToDate_WhenNotEnabled() {
         ReflectionTestUtils.setField(service, "ragApiEnabled", false);
         @SuppressWarnings("unchecked")
@@ -1334,21 +1360,98 @@ class RagOperationsServiceImplTest {
     }
 
     @Test
-    void testTriggerIncrementalUpdate_EmptyDiff_NoFilesChanged() {
+    void newerCommitWithEmptyRangeCreatesJobAndAdvancesCheckpoint() throws Exception {
         setupRagEnabled();
+        setupVcsBinding();
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+        Job job = mock(Job.class);
+        when(job.getId()).thenReturn(82L);
+
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(true);
+        when(incrementalRagUpdateService.parseDiffForRag(""))
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(
+                        Set.of(), Set.of(), Set.of()));
+        when(analysisJobService.createRagIndexJob(
+                testProject, false, JobTriggerSource.WEBHOOK, "main", "abc"))
+                .thenReturn(job);
+        when(analysisLockService.acquireLock(
+                any(), eq("main"), any(), eq("abc"), isNull()))
+                .thenReturn(Optional.of("lock-key"));
+        when(incrementalRagUpdateService.performIncrementalUpdate(
+                any(), any(), anyString(), anyString(), anyString(), anyString(),
+                anySet(), anySet(), anySet()))
+                .thenReturn(Map.of("status", "completed"));
+
+        boolean result =
+                service.triggerIncrementalUpdate(testProject, "main", "abc", "", eventConsumer);
+
+        assertThat(result).isTrue();
+        verify(analysisJobService).startJob(job);
+        verify(analysisLockService).acquireLock(
+                any(), eq("main"), any(), eq("abc"), isNull());
+        verify(ragIndexTrackingService).markUpdatingStarted(
+                testProject, "main", "abc", 82L);
+        verify(legacyRagUpdateCompletionService).complete(
+                eq(testProject), eq("main"), eq("abc"), eq(82L),
+                any(), eq(true), eq(0), eq(0), isNull(), eq(Set.of()));
+        verify(analysisJobService).recordExternallyCompletedJob(
+                eq(job), eq("rag_complete"), contains("checkpoint advanced"));
+        verify(eventConsumer).accept(argThat(event ->
+                "rag_complete".equals(event.get("state"))
+                        && String.valueOf(event.get("message"))
+                            .contains("checkpoint advanced")));
+    }
+
+    @Test
+    void alreadyCurrentLegacyCommitDoesNotCreateAJobOrClaimAnUpdate() {
+        setupRagEnabled();
+        RagIndexStatus completedStatus = new RagIndexStatus();
+        completedStatus.setIndexedCommitHash("abc");
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
+                .thenReturn(true);
+        when(ragIndexTrackingService.getIndexStatus(testProject))
+                .thenReturn(Optional.of(completedStatus));
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
-        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(true);
-        when(incrementalRagUpdateService.parseDiffForRag("empty"))
-                .thenReturn(new IncrementalRagUpdateService.DiffResult(java.util.Collections.<String>emptySet(),
-                        java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet()));
-
-        boolean result =
-                service.triggerIncrementalUpdate(testProject, "main", "abc", "empty", eventConsumer);
+        boolean result = service.triggerIncrementalUpdate(
+                testProject, "main", "abc", "stale caller diff", eventConsumer);
 
         assertThat(result).isTrue();
-        verifyNoInteractions(analysisLockService);
+        verifyNoInteractions(analysisJobService, analysisLockService, vcsClientProvider);
+        verify(incrementalRagUpdateService, never()).parseDiffForRag(anyString());
+        verify(eventConsumer).accept(argThat(event ->
+                "rag_current".equals(event.get("state"))
+                        && String.valueOf(event.get("message"))
+                            .contains("already represents")));
+    }
+
+    @Test
+    void nonEmptyUnrecognizedDiffCreatesFailedJobAndRetainsCheckpoint() {
+        setupRagEnabled();
+        Job job = mock(Job.class);
+        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject))
+                .thenReturn(true);
+        when(incrementalRagUpdateService.parseDiffForRag("provider payload"))
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(
+                        Set.of(), Set.of(), Set.of()));
+        when(analysisJobService.createRagIndexJob(
+                testProject, false, JobTriggerSource.WEBHOOK, "main", "abc"))
+                .thenReturn(job);
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+
+        boolean result = service.triggerIncrementalUpdate(
+                testProject, "main", "abc", "provider payload", eventConsumer);
+
+        assertThat(result).isFalse();
+        verify(analysisJobService).startJob(job);
+        verify(analysisJobService).failJob(
+                eq(job), contains("no recognizable file changes"));
+        verifyNoInteractions(analysisLockService, legacyRagUpdateCompletionService);
+        verify(eventConsumer).accept(argThat(event ->
+                "rag_error".equals(event.get("state"))));
     }
 
     @Test
@@ -1604,6 +1707,31 @@ class RagOperationsServiceImplTest {
     }
 
     @Test
+    void branchPushPatternDoesNotAuthorizeRetainedRagIndexUpdate() {
+        ReflectionTestUtils.setField(service, "ragApiEnabled", true);
+        RagConfig ragConfig = new RagConfig(
+                true, "main", null, null, true, 30, null, false);
+        ProjectConfig config = new ProjectConfig(
+                false,
+                "main",
+                new BranchAnalysisConfig(List.of("main"), List.of("release/**")),
+                ragConfig);
+        testProject.setConfiguration(config);
+        when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+
+        boolean result = service.updateBranchIndex(
+                testProject, "release/preview", eventConsumer);
+
+        assertThat(result).isFalse();
+        verifyNoInteractions(vcsClientProvider);
+        verify(eventConsumer).accept(argThat(event ->
+                "rag_skipped".equals(event.get("state"))
+                        && event.get("message").toString().contains("not configured")));
+    }
+
+    @Test
     void updateBranchIndexEmptyDiffSeedsExactSnapshot() throws Exception {
         RagBranchIndexRegistryService registry = mock(RagBranchIndexRegistryService.class);
         BranchIndexGenerationBuildService builder = mock(BranchIndexGenerationBuildService.class);
@@ -1723,6 +1851,7 @@ class RagOperationsServiceImplTest {
 
     @Test
     void testEnsureRagIndexUpToDate_MainBranch_Outdated() throws Exception {
+        service = spy(service);
         setupRagEnabled();
         setupVcsBinding();
         when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
@@ -1732,36 +1861,44 @@ class RagOperationsServiceImplTest {
         RagIndexStatus status = mock(RagIndexStatus.class);
         when(status.getIndexedCommitHash()).thenReturn("old-commit");
         when(ragIndexTrackingService.getIndexStatus(testProject)).thenReturn(Optional.of(status));
-        when(mockVcs.getBranchDiff("my-workspace", "my-repo", "old-commit", "new-commit")).thenReturn("diff");
-        // triggerIncrementalUpdate is called internally but shouldPerform returns false
-        when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(false);
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
-
-        service.ensureRagIndexUpToDate(testProject, "main", eventConsumer);
-
-        verify(mockVcs).getBranchDiff("my-workspace", "my-repo", "old-commit", "new-commit");
-    }
-
-    @Test
-    void testEnsureRagIndexUpToDate_MainBranch_NullDiff() throws Exception {
-        setupRagEnabled();
-        setupVcsBinding();
-        when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
-        VcsClient mockVcs = mock(VcsClient.class);
-        when(vcsClientProvider.getClient(any(VcsConnection.class))).thenReturn(mockVcs);
-        when(mockVcs.getLatestCommitHash("my-workspace", "my-repo", "main")).thenReturn("new-commit");
-        RagIndexStatus status = mock(RagIndexStatus.class);
-        when(status.getIndexedCommitHash()).thenReturn("old-commit");
-        when(ragIndexTrackingService.getIndexStatus(testProject)).thenReturn(Optional.of(status));
-        when(mockVcs.getBranchDiff("my-workspace", "my-repo", "old-commit", "new-commit")).thenReturn(null);
-        @SuppressWarnings("unchecked")
-        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+        doReturn(true).when(service).triggerIncrementalUpdate(
+                testProject, "main", "new-commit", "", eventConsumer);
 
         boolean result = service.ensureRagIndexUpToDate(testProject, "main", eventConsumer);
 
         assertThat(result).isTrue();
-        verify(ragIndexTrackingService).markUpdatingCompleted(testProject, "main", "new-commit", 0, 0, null);
+        verify(service).triggerIncrementalUpdate(
+                testProject, "main", "new-commit", "", eventConsumer);
+        verify(mockVcs, never()).getBranchDiff(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void outdatedMainCheckpointCannotBeAdvancedOutsideDurableTrigger() throws Exception {
+        service = spy(service);
+        setupRagEnabled();
+        setupVcsBinding();
+        when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
+        VcsClient mockVcs = mock(VcsClient.class);
+        when(vcsClientProvider.getClient(any(VcsConnection.class))).thenReturn(mockVcs);
+        when(mockVcs.getLatestCommitHash("my-workspace", "my-repo", "main")).thenReturn("new-commit");
+        RagIndexStatus status = mock(RagIndexStatus.class);
+        when(status.getIndexedCommitHash()).thenReturn("old-commit");
+        when(ragIndexTrackingService.getIndexStatus(testProject)).thenReturn(Optional.of(status));
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+        doReturn(false).when(service).triggerIncrementalUpdate(
+                testProject, "main", "new-commit", "", eventConsumer);
+
+        boolean result = service.ensureRagIndexUpToDate(testProject, "main", eventConsumer);
+
+        assertThat(result).isFalse();
+        verify(service).triggerIncrementalUpdate(
+                testProject, "main", "new-commit", "", eventConsumer);
+        verify(ragIndexTrackingService, never()).markUpdatingCompleted(
+                any(), anyString(), anyString(), any(), any(), any());
+        verify(mockVcs, never()).getBranchDiff(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -1858,6 +1995,7 @@ class RagOperationsServiceImplTest {
 
     @Test
     void testEnsureRagIndexUpToDate_DifferentBranch_Outdated() throws Exception {
+        service = spy(service);
         setupRagEnabled();
         setupVcsBinding();
         when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
@@ -1874,20 +2012,22 @@ class RagOperationsServiceImplTest {
         branchIndex.setCommitHash("f1");
         when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "feature"))
                 .thenReturn(Optional.of(branchIndex));
-        when(mockVcs.getBranchDiff("my-workspace", "my-repo", "f1", "f2")).thenReturn("incremental diff");
-        // triggerIncrementalUpdate called internally - shouldPerform returns false so
-        // it exits early
-        lenient().when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(false);
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+        doReturn(false).when(service).triggerIncrementalUpdate(
+                testProject, "feature", "f2", "", eventConsumer);
 
         boolean result = service.ensureRagIndexUpToDate(testProject, "feature", eventConsumer);
 
-        assertThat(result).isTrue();
+        assertThat(result).isFalse();
+        verify(service).triggerIncrementalUpdate(
+                testProject, "feature", "f2", "", eventConsumer);
+        verify(mockVcs, never()).getBranchDiff(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
-    void testEnsureRagIndexUpToDate_DifferentBranch_NullDiff() throws Exception {
+    void outdatedBranchCheckpointCannotBeSavedOutsideDurableTrigger() throws Exception {
+        service = spy(service);
         setupRagEnabled();
         setupVcsBinding();
         when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
@@ -1904,15 +2044,18 @@ class RagOperationsServiceImplTest {
         branchIndex.setCommitHash("f1");
         when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "feature"))
                 .thenReturn(Optional.of(branchIndex));
-        when(mockVcs.getBranchDiff("my-workspace", "my-repo", "f1", "f2")).thenReturn(null);
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
+        doReturn(true).when(service).triggerIncrementalUpdate(
+                testProject, "feature", "f2", "", eventConsumer);
 
         boolean result = service.ensureRagIndexUpToDate(testProject, "feature", eventConsumer);
 
         assertThat(result).isTrue();
-        // Verify that getBranchDiff was called with the commit hashes
-        verify(mockVcs).getBranchDiff("my-workspace", "my-repo", "f1", "f2");
+        verify(service).triggerIncrementalUpdate(
+                testProject, "feature", "f2", "", eventConsumer);
+        verify(ragBranchIndexRepository, never()).save(branchIndex);
+        verify(mockVcs, never()).getBranchDiff(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
