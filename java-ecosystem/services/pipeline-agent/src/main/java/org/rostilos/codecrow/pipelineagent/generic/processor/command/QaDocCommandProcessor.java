@@ -397,8 +397,8 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                     "message", "Posting QA-document preview links to " + taskId + "..."
             ));
 
-            // 8. Keep the QA guide in Jira, replacing only its large test-case
-            // section with the public preview URL.
+            // 8. Keep the compact QA guide in Jira, replacing the test-case and
+            // environment/setup bodies with their public-preview URLs.
             String commentBody = qaDocPublicPreviewService.buildTaskComment(qaDocument, previewUrl);
             TaskCommentVisibility visibility = toTaskCommentVisibility(qaConfig.commentVisibility());
             String action;

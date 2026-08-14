@@ -188,17 +188,28 @@ public class BranchIndexMaintenanceService {
         boolean publicationCompleted = false;
         try {
             var config = project.getConfiguration().ragConfig();
+            List<String> includePatterns = config.includePatterns() != null
+                    ? config.includePatterns() : List.of();
+            List<String> excludePatterns = config.excludePatterns() != null
+                    ? config.excludePatterns() : List.of();
             if (config.includePatterns() == null || config.excludePatterns() == null) {
-                throw new IllegalStateException("RAG include/exclude patterns are unavailable");
+                log.info(
+                        "Optional RAG path patterns are unset; using empty filters: project={}, branch={}",
+                        project.getId(), branch);
+                emitEvent(events, Map.of(
+                        "type", "progress",
+                        "stage", "branch_config",
+                        "branch", branch,
+                        "message", "No custom RAG path filters are configured; indexing all supported files"));
             }
             admittedBuild = buildAdmissionService.admit(
                     project,
-                branch,
-                revision,
-                kind,
-                JobTriggerSource.UI,
-                lock.get(),
-                BranchIndexBuildAdmissionService.BuildOrigin.OPERATOR);
+                    branch,
+                    revision,
+                    kind,
+                    JobTriggerSource.UI,
+                    lock.get(),
+                    BranchIndexBuildAdmissionService.BuildOrigin.OPERATOR);
             job = admittedBuild.job();
             Job admittedJob = job;
             jobService.logToJob(
@@ -216,8 +227,8 @@ public class BranchIndexMaintenanceService {
                     branch,
                     revision,
                     kind,
-                    config.includePatterns(),
-                    config.excludePatterns(),
+                    includePatterns,
+                    excludePatterns,
                     admittedBuild.preparedBuild(), event -> {
                         Map<String, Object> forwarded = new LinkedHashMap<>(event);
                         forwarded.put("type", "progress");

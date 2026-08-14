@@ -324,13 +324,29 @@ public class RagOperationsServiceImpl implements RagOperationsService {
             Set<String> modifiedFiles = Set.of();
             Set<String> deletedFiles = Set.of();
             int addedOrModifiedSize = 0;
+            boolean checkpointOnlyAdvance = false;
+            boolean unrecognizedLegacyDiff = false;
 
-            // Preserve the legacy checkpoint flow, including its no-op return
-            // before a job or lock is created. Exact generations are resolved
-            // below only after this update owns the branch RAG lock.
+            // Legacy collections reconcile from their own completed checkpoint.
+            // A same-revision request is a true no-op. A newer revision with an
+            // empty range must still own a durable job and advance its checkpoint
+            // so later pushes do not repeatedly start from stale state.
             if (!exactGenerationMode) {
-                String effectiveRawDiff = resolveDiffFromCompletedCheckpoint(
+                LegacyDiffResolution diffResolution = resolveDiffFromCompletedCheckpoint(
                         project, branchName, commitHash, rawDiff);
+                if (diffResolution.alreadyCurrent()) {
+                    String message = String.format(
+                            "RAG index for branch '%s' already represents commit %s",
+                            branchName, commitHash);
+                    log.info(message);
+                    emitEvent(eventConsumer, Map.of(
+                            "type", "info",
+                            "state", "rag_current",
+                            "message", message));
+                    return true;
+                }
+
+                String effectiveRawDiff = diffResolution.rawDiff();
                 log.info("RAG checkpoint reconciliation complete; parsing effective diff...");
                 IncrementalRagUpdateService.DiffResult diffResult =
                         incrementalRagUpdateService.parseDiffForRag(effectiveRawDiff);
@@ -342,11 +358,16 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 log.info("Diff parsed: added={}, modified={}, deleted={}",
                         addedFiles, modifiedFiles, deletedFiles);
                 if (addedOrModifiedSize == 0 && deletedFiles.isEmpty()) {
-                    log.info("Skipping RAG incremental update - no files changed in diff");
-                    return true;
+                    checkpointOnlyAdvance = effectiveRawDiff == null
+                            || effectiveRawDiff.isBlank();
+                    unrecognizedLegacyDiff = !checkpointOnlyAdvance;
+                    log.info(checkpointOnlyAdvance
+                                    ? "No files changed; a durable RAG job will advance the checkpoint"
+                                    : "Non-empty RAG diff did not contain recognizable file changes");
+                } else {
+                    log.info("RAG incremental update: {} files to add/update, {} files to delete",
+                            addedOrModifiedSize, deletedFiles.size());
                 }
-                log.info("RAG incremental update: {} files to add/update, {} files to delete",
-                        addedOrModifiedSize, deletedFiles.size());
             }
 
             if (!exactGenerationMode) {
@@ -357,6 +378,10 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                         String.format(
                                 "Starting incremental RAG update for branch '%s' (commit: %s) - %d files to update, %d to delete",
                                 branchName, commitHash, addedOrModifiedSize, deletedFiles.size()));
+                if (unrecognizedLegacyDiff) {
+                    throw new IOException(
+                            "RAG checkpoint diff was non-empty but contained no recognizable file changes");
+                }
             }
 
             Optional<String> ragLockKey = analysisLockService.acquireLock(
@@ -599,13 +624,20 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                     }
                 }
 
-                String completionMessage = exactGenerationMode
-                        ? String.format(
-                                "Exact RAG snapshot activated: %d documents, %d chunks",
-                                documentCount, chunkCount != null ? chunkCount : 0)
-                        : String.format(
-                                "RAG index updated: %d files updated, %d deleted, %d non-text files skipped",
-                                filesUpdated, filesDeleted, filesSkipped);
+                String completionMessage;
+                if (exactGenerationMode) {
+                    completionMessage = String.format(
+                            "Exact RAG snapshot activated: %d documents, %d chunks",
+                            documentCount, chunkCount != null ? chunkCount : 0);
+                } else if (checkpointOnlyAdvance) {
+                    completionMessage = String.format(
+                            "RAG checkpoint advanced for branch '%s' to commit %s; no files changed",
+                            branchName, commitHash);
+                } else {
+                    completionMessage = String.format(
+                            "RAG index updated: %d files updated, %d deleted, %d non-text files skipped",
+                            filesUpdated, filesDeleted, filesSkipped);
+                }
                 emitEvent(eventConsumer, Map.of(
                         "type", "status",
                         "state", "rag_complete",
@@ -759,7 +791,7 @@ public class RagOperationsServiceImpl implements RagOperationsService {
      * The caller's branch-analysis diff is used only when no completed
      * checkpoint exists yet for this branch.
      */
-    private String resolveDiffFromCompletedCheckpoint(
+    private LegacyDiffResolution resolveDiffFromCompletedCheckpoint(
             Project project,
             String branchName,
             String commitHash,
@@ -785,11 +817,11 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         if (checkpoint == null) {
             log.info("No completed RAG checkpoint for branch {}; using supplied initial diff",
                     branchName);
-            return suppliedDiff;
+            return new LegacyDiffResolution(suppliedDiff, false);
         }
         if (checkpoint.equals(commitHash)) {
             log.info("RAG checkpoint already represents branch {} commit {}", branchName, commitHash);
-            return "";
+            return new LegacyDiffResolution("", true);
         }
 
         VcsRepoBinding vcsRepoBinding = project.getVcsRepoBinding();
@@ -805,7 +837,10 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 branchName, checkpoint, commitHash);
         String catchUpDiff = vcsClient.getBranchDiff(
                 workspaceSlug, repoSlug, checkpoint, commitHash);
-        return catchUpDiff != null ? catchUpDiff : "";
+        return new LegacyDiffResolution(catchUpDiff != null ? catchUpDiff : "", false);
+    }
+
+    private record LegacyDiffResolution(String rawDiff, boolean alreadyCurrent) {
     }
 
     // ==========================================================================
@@ -870,8 +905,21 @@ public class RagOperationsServiceImpl implements RagOperationsService {
             String branchCommit,
             String rawDiff,
             Consumer<Map<String, Object>> eventConsumer) {
-        // With single-collection architecture, we just do incremental update
-        // No separate collection needed - branch data goes into shared collection
+        if (!isRagEnabled(project)) {
+            return;
+        }
+        if (!branchName.equals(getBaseBranch(project))
+                && !shouldHaveBranchIndex(project, branchName)) {
+            log.info("Skipping branch index mutation for non-retained branch: project={}, branch={}",
+                    project.getId(), branchName);
+            emitEvent(eventConsumer, Map.of(
+                    "type", "info",
+                    "state", "rag_skipped",
+                    "message", "Branch is not configured as a retained RAG branch"));
+            return;
+        }
+        // Dispatch only after this branch-push compatibility entry point has
+        // enforced durable ownership. The trigger selects legacy or exact mode.
         triggerIncrementalUpdate(project, branchName, branchCommit, rawDiff, eventConsumer);
     }
 
@@ -1487,24 +1535,17 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         log.info("Main RAG index outdated for project={}: indexed={}, current={}",
                 project.getId(), indexedCommit, currentCommit);
 
-        // Fetch diff between indexed commit and current commit
-        String rawDiff = vcsClient.getBranchDiff(workspaceSlug, repoSlug, indexedCommit, currentCommit);
-
-        if (rawDiff == null || rawDiff.isEmpty()) {
-            log.debug("No diff between {} and {} - index is up to date", indexedCommit, currentCommit);
-            ragIndexTrackingService.markUpdatingCompleted(project, branchName, currentCommit, 0, 0, null);
-            return true;
-        }
-
         emitEvent(eventConsumer, Map.of(
                 "type", "status",
                 "state", "rag_update",
                 "message", String.format("Updating RAG index from %s to %s",
                         indexedCommit.substring(0, 7), currentCommit.substring(0, 7))));
 
-        // Trigger incremental update
+        // The locked trigger owns the checkpoint-to-target compare, durable
+        // child job, and terminal checkpoint transition. In particular, an
+        // empty compare must not update the checkpoint directly here.
         return triggerIncrementalUpdate(
-                project, branchName, currentCommit, rawDiff, eventConsumer);
+                project, branchName, currentCommit, "", eventConsumer);
     }
 
     /**
@@ -1575,32 +1616,18 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         log.info("Branch index outdated for project={}, branch={}: indexed={}, current={} - fetching incremental diff",
                 project.getId(), targetBranch, indexedCommit, currentCommit);
 
-        // Fetch diff between last indexed commit and current commit (incremental)
-        String rawDiff = vcsClient.getBranchDiff(workspaceSlug, repoSlug, indexedCommit, currentCommit);
-        log.info("Incremental diff for branch '{}' ({} -> {}): bytes={}",
-                targetBranch, indexedCommit.substring(0, 7), currentCommit.substring(0, 7),
-                rawDiff != null ? rawDiff.length() : 0);
-
-        if (rawDiff == null || rawDiff.isEmpty()) {
-            log.info("No diff between {} and {} - updating commit hash only", indexedCommit, currentCommit);
-            // Update commit hash
-            branchIndex.setCommitHash(currentCommit);
-            branchIndex.setUpdatedAt(OffsetDateTime.now());
-            ragBranchIndexRepository.save(branchIndex);
-            return true;
-        }
-
         emitEvent(eventConsumer, Map.of(
                 "type", "status",
                 "state", "branch_update",
                 "message",
-                String.format("Updating branch %s index (incremental: %d bytes)", targetBranch, rawDiff.length())));
+                String.format("Reconciling branch %s index from %s to %s",
+                        targetBranch, indexedCommit, currentCommit)));
 
-        // Trigger incremental update for this branch
-        log.info("Triggering incremental branch update for '{}' with {} bytes diff",
-                targetBranch, rawDiff.length());
+        // The trigger reacquires the complete range from this branch's durable
+        // checkpoint and owns both the job and checkpoint transition.
+        log.info("Triggering incremental branch reconciliation for '{}'", targetBranch);
         return triggerIncrementalUpdate(
-                project, targetBranch, currentCommit, rawDiff, eventConsumer);
+                project, targetBranch, currentCommit, "", eventConsumer);
     }
 
     /**

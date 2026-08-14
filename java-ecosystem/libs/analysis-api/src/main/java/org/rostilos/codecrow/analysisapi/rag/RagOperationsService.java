@@ -100,23 +100,20 @@ public interface RagOperationsService {
     }
     
     /**
-     * Check if a branch should have indexed context based on project configuration.
-     * Branch indexes are created for branches that match branchPushPatterns in BranchAnalysisConfig.
-     * 
+     * Check if a branch is explicitly configured for a retained RAG index.
+     * Branch analysis configuration is a separate concern and never grants RAG
+     * snapshot ownership.
+     *
      * @param project The project to check
      * @param branchName The branch name to evaluate
-     * @return true if branch should have indexed context
+     * @return true if the branch is explicitly configured for retained indexed context
      */
     default boolean shouldHaveBranchIndex(Project project, String branchName) {
         var config = project.getConfiguration();
         if (config == null || config.ragConfig() == null) {
             return false;
         }
-        // Get branch push patterns from branch analysis config
-        var branchPushPatterns = config.branchAnalysis() != null 
-            ? config.branchAnalysis().branchPushPatterns() 
-            : null;
-        return config.ragConfig().shouldHaveBranchIndex(branchName, branchPushPatterns);
+        return config.ragConfig().shouldHaveBranchIndex(branchName);
     }
 
     /**

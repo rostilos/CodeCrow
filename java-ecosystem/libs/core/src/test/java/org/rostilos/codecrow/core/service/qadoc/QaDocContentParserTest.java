@@ -3,72 +3,89 @@ package org.rostilos.codecrow.core.service.qadoc;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class QaDocContentParserTest {
 
     @Test
-    void separatesMarkedTestCasesFromOverviewAndPreservesStructuredDetails() {
+    void separatesExactSentinelBlocksWithoutInterpretingLocalizedHeadings() {
         String markdown = """
                 # QA Guide
 
-                ## What Changed
-                A user-visible flow changed.
+                ## Що змінилося
+                Змінився процес оформлення.
 
                 <!-- codecrow-test-cases:start -->
-                ## 3. Test Scenarios by Area
-
-                ### Checkout
-                **Complete checkout** (HIGH)
-                - **Preconditions:** A product is in the cart
-                - **Steps:**
-                  1. Submit the order
-                - **Expected Result:** The confirmation is shown
-
-                **Reject an empty address** (MEDIUM)
-                - **Expected Result:** A validation message is shown
+                ## 3. Будь-яка локалізована назва
+                <!-- codecrow-test-cases:content -->
+                ### Оформлення
+                **Успішне оформлення** (HIGH)
+                - **Передумови:** Товар у кошику
+                - **Кроки:**
+                  1. Підтвердити замовлення
+                - **Очікуваний результат:** Замовлення створено
                 <!-- codecrow-test-cases:end -->
 
-                ## Regression Risks
-                Verify saved carts.
+                ## 4. Граничні випадки
+                Перевірити порожній кошик.
+
+                ## 5. Регресійні ризики
+                Перевірити збережений кошик.
+
+                <!-- codecrow-environment:start -->
+                ## 6. Довільна назва підготовки
+                <!-- codecrow-environment:content -->
+                - Використати тестовий платіжний профіль.
+                <!-- codecrow-environment:end -->
                 """;
 
         QaDocContent result = QaDocContentParser.parse(markdown);
 
         assertThat(result.overviewMarkdown())
-                .contains("What Changed", "Regression Risks")
-                .doesNotContain("Complete checkout", "codecrow-test-cases");
-        assertThat(result.environmentMarkdown()).isNull();
-        assertThat(result.testCases()).hasSize(2);
-        assertThat(result.testCases().get(0))
+                .contains("Що змінилося", "Граничні випадки", "Регресійні ризики")
+                .doesNotContain(
+                        "Будь-яка локалізована назва",
+                        "Успішне оформлення",
+                        "Довільна назва підготовки",
+                        "платіжний профіль",
+                        "codecrow-");
+        assertThat(result.testCases()).singleElement()
                 .extracting(QaDocTestCase::title, QaDocTestCase::priority, QaDocTestCase::functionalArea)
-                .containsExactly("Complete checkout", "HIGH", "Checkout");
-        assertThat(result.testCases().get(0).descriptionMarkdown())
-                .contains("Preconditions", "Submit the order", "Expected Result");
+                .containsExactly("Успішне оформлення", "HIGH", "Оформлення");
+        assertThat(result.environmentMarkdown())
+                .isEqualTo("- Використати тестовий платіжний профіль.");
     }
 
     @Test
-    void extractsLegacyEnglishTestScenarioSections() {
+    void doesNotInferShareableSectionsFromHeadingText() {
         QaDocContent result = QaDocContentParser.parse("""
-                ### 1. Change Summary
-                Summary
-                ### 3. Test Scenarios
+                ## 3. Test Scenarios
                 **Open settings** (LOW)
                 - **Expected Result:** Settings appear
-                ### 4. Edge Cases
-                Try an empty state.
+
+                ## 6. Environment and Setup Notes
+                Use staging.
                 """);
 
-        assertThat(result.testCases()).singleElement()
-                .extracting(QaDocTestCase::title)
-                .isEqualTo("Open settings");
-        assertThat(result.overviewMarkdown()).doesNotContain("Open settings");
+        assertThat(result.testCases()).isEmpty();
+        assertThat(result.environmentMarkdown()).isNull();
+        assertThat(result.overviewMarkdown())
+                .contains("Test Scenarios", "Open settings", "Environment and Setup Notes", "Use staging");
     }
 
     @Test
-    void publicParsingRequiresMarkersAndAStructuredScenario() {
+    void publicParsingRequiresEveryExactTestCaseSentinelAndAStructuredScenario() {
         assertThat(QaDocContentParser.parseMarkedTestCases("""
                 <!-- codecrow-test-cases:start -->
-                Secret overview text without a scenario
+                ### Test Scenarios
+                **Missing content sentinel** (HIGH)
+                <!-- codecrow-test-cases:end -->
+                """)).isEmpty();
+        assertThat(QaDocContentParser.parseMarkedTestCases("""
+                <!-- codecrow-test-cases:start -->
+                ### Test Scenarios
+                <!-- codecrow-test-cases:content -->
+                General notes without a structured scenario.
                 <!-- codecrow-test-cases:end -->
                 """)).isEmpty();
         assertThat(QaDocContentParser.parseMarkedTestCases("""
@@ -78,8 +95,8 @@ class QaDocContentParserTest {
     }
 
     @Test
-    void replacesOnlyTheMarkedTestCaseBodyAndKeepsTheNumberedSection() {
-        String result = QaDocContentParser.replaceShareableSections("""
+    void replacesOnlyExactBlocksWithLinksAndPreservesAllOtherSectionsAndFooter() {
+        String markdown = """
                 ### 1. Change Summary
                 Checkout now supports gift cards.
 
@@ -87,165 +104,176 @@ class QaDocContentParserTest {
                 Web checkout only.
 
                 <!-- codecrow-test-cases:start -->
-                ### 3. Test Scenarios
-
-                **Pay with a gift card** (HIGH)
-                - **Steps:** Enter a valid gift card.
-                - **Expected Result:** The balance is applied.
+                ### 3. Тестові сценарії
+                <!-- codecrow-test-cases:content -->
+                ### Оформлення
+                **Оплатити подарунковою карткою** (HIGH)
+                - **Expected Result:** Баланс застосовано.
                 <!-- codecrow-test-cases:end -->
 
-                ### 4. Edge Cases
+                ### 4. Edge Cases and Negative Testing
                 Test an expired gift card.
-                """,
+
+                ### 5. Regression Risks
+                Verify saved cards.
+
+                <!-- codecrow-environment:start -->
+                ### 6. Налаштування середовища
+                <!-- codecrow-environment:content -->
+                Use the QA payment environment.
+                <!-- codecrow-environment:end -->
+
+                ---
+                *🐦 Generated by [CodeCrow](https://codecrow.app) QA Auto-Documentation*
+                <!-- codecrow-qa-autodoc:prs=17 -->
+                """;
+
+        String result = QaDocContentParser.replaceShareableSections(
+                markdown,
                 "https://codecrow.cloud/share#token=ccs_public-token&tab=test-cases",
                 "https://codecrow.cloud/share#token=ccs_public-token&tab=environment");
 
         assertThat(result)
                 .contains("### 1. Change Summary", "Checkout now supports gift cards")
                 .contains("### 2. Scope", "Web checkout only")
-                .contains("### 3. Test Scenarios\n\nhttps://codecrow.cloud/share#token=ccs_public-token")
-                .contains("### 4. Edge Cases", "Test an expired gift card")
-                .doesNotContain("Pay with a gift card", "The balance is applied");
+                .contains("### 3. Тестові сценарії\n\n"
+                        + "https://codecrow.cloud/share#token=ccs_public-token&tab=test-cases")
+                .contains("### 4. Edge Cases and Negative Testing", "Test an expired gift card")
+                .contains("### 5. Regression Risks", "Verify saved cards")
+                .contains("### 6. Налаштування середовища\n\n"
+                        + "https://codecrow.cloud/share#token=ccs_public-token&tab=environment")
+                .contains("Generated by [CodeCrow]", "<!-- codecrow-qa-autodoc:prs=17 -->")
+                .doesNotContain(
+                        "Оплатити подарунковою карткою",
+                        "Баланс застосовано",
+                        "Use the QA payment environment",
+                        "codecrow-test-cases:",
+                        "codecrow-environment:");
     }
 
     @Test
-    void preservesLaterPeerSectionsWhenTheModelPlacesTheEndMarkerTooLate() {
-        String markdown = """
-                ### 1. Change Summary
-                Checkout changed.
+    void parseStripsGeneratedFooterButLeavesMiddleSectionsUntouched() {
+        QaDocContent parsed = QaDocContentParser.parse("""
+                ### 1. Summary
+                Summary.
 
                 <!-- codecrow-test-cases:start -->
-                ### 3. Test Scenarios
-                ### Checkout
-                **Pay with a gift card** (HIGH)
-                - **Expected Result:** The balance is applied.
-
-                ### 4. Edge Cases and Negative Testing
-                - Try an expired gift card.
-
-                ### 5. Regression Risks
-                - Existing card payments.
-
-                ### 6. Environment and Setup Notes
-                - Use the QA payment environment.
-                <!-- codecrow-test-cases:end -->
-                """;
-
-        QaDocContent parsed = QaDocContentParser.parse(markdown);
-        String comment = QaDocContentParser.replaceShareableSections(
-                markdown,
-                "https://codecrow.cloud/share#token=ccs_public-token&tab=test-cases",
-                "https://codecrow.cloud/share#token=ccs_public-token&tab=environment");
-
-        assertThat(parsed.testCases()).singleElement()
-                .extracting(QaDocTestCase::title, QaDocTestCase::functionalArea)
-                .containsExactly("Pay with a gift card", "Checkout");
-        assertThat(parsed.overviewMarkdown())
-                .contains(
-                        "### 4. Edge Cases and Negative Testing",
-                        "### 5. Regression Risks")
-                .doesNotContain(
-                        "Pay with a gift card",
-                        "codecrow-test-cases",
-                        "### 6. Environment and Setup Notes",
-                        "Use the QA payment environment");
-        assertThat(parsed.environmentMarkdown())
-                .isEqualTo("- Use the QA payment environment.");
-        assertThat(comment)
-                .contains("### 3. Test Scenarios\n\nhttps://codecrow.cloud/share#token=ccs_public-token&tab=test-cases")
-                .contains(
-                        "### 4. Edge Cases and Negative Testing",
-                        "Try an expired gift card",
-                        "### 5. Regression Risks",
-                        "Existing card payments",
-                        "### 6. Environment and Setup Notes",
-                        "https://codecrow.cloud/share#token=ccs_public-token&tab=environment")
-                .doesNotContain(
-                        "Pay with a gift card",
-                        "The balance is applied",
-                        "Use the QA payment environment")
-                .contains("tab=test-cases\n<!-- codecrow-test-cases:end -->\n\n### 4.");
-    }
-
-    @Test
-    void replacesEnvironmentBodyAndPreservesTheGeneratedFooter() {
-        String markdown = """
-                ### 1. Change Summary
-                Checkout changed.
-
-                <!-- codecrow-test-cases:start -->
-                ### 3. Test Scenarios
-                **Pay successfully** (HIGH)
-                - **Expected Result:** Payment succeeds.
+                ### 3. Tests
+                <!-- codecrow-test-cases:content -->
+                **Works** (HIGH)
+                - **Expected Result:** It works.
                 <!-- codecrow-test-cases:end -->
 
                 ### 4. Edge Cases
-                Try an expired card.
+                Edge content.
 
                 ### 5. Regression Risks
-                Verify saved cards.
+                Regression content.
 
-                ### 6. Environment and Setup Notes
-                Use the QA payment environment.
+                <!-- codecrow-environment:start -->
+                ### 6. Setup
+                <!-- codecrow-environment:content -->
+                No special setup is required.
+                <!-- codecrow-environment:end -->
 
                 ---
                 *🐦 Generated by [CodeCrow](https://codecrow.app) QA Auto-Documentation*
                 <!-- codecrow-qa-autodoc:prs=17 -->
+                """);
+
+        assertThat(parsed.overviewMarkdown())
+                .contains("Summary", "Edge Cases", "Edge content", "Regression Risks", "Regression content")
+                .doesNotContain("Generated by", "codecrow-qa-autodoc", "### 3. Tests", "### 6. Setup");
+        assertThat(parsed.environmentMarkdown()).isEqualTo("No special setup is required.");
+    }
+
+    @Test
+    void rejectsJiraReplacementWhenEitherSentinelBlockIsIncomplete() {
+        String missingEnvironmentBlock = """
+                <!-- codecrow-test-cases:start -->
+                ### 3. Tests
+                <!-- codecrow-test-cases:content -->
+                **Works** (HIGH)
+                - **Expected Result:** It works.
+                <!-- codecrow-test-cases:end -->
+
+                ### 6. Environment and Setup Notes
+                Private environment content must never be posted.
                 """;
-        QaDocContent parsed = QaDocContentParser.parse(markdown);
-        String comment = QaDocContentParser.replaceShareableSections(
-                markdown,
-                "https://codecrow.cloud/share#token=ccs_public-token&tab=test-cases",
-                "https://codecrow.cloud/share#token=ccs_public-token&tab=environment");
 
-        assertThat(parsed.overviewMarkdown())
-                .contains("Change Summary", "Edge Cases", "Regression Risks")
-                .doesNotContain("Generated by", "codecrow-qa-autodoc");
-        assertThat(parsed.environmentMarkdown()).isEqualTo("Use the QA payment environment.");
-        assertThat(comment)
-                .contains("### 4. Edge Cases", "Try an expired card")
-                .contains("### 5. Regression Risks", "Verify saved cards")
-                .contains("### 6. Environment and Setup Notes\n\n"
-                        + "https://codecrow.cloud/share#token=ccs_public-token&tab=environment")
-                .contains("Generated by [CodeCrow]", "<!-- codecrow-qa-autodoc:prs=17 -->")
-                .doesNotContain("Use the QA payment environment.");
+        assertThatThrownBy(() -> QaDocContentParser.replaceShareableSections(
+                missingEnvironmentBlock,
+                "test-link",
+                "environment-link"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("environment/setup");
     }
 
     @Test
-    void separatesSetupAndEnvironmentNotesFromAnUnmarkedDocument() {
-        QaDocContent parsed = QaDocContentParser.parse("""
-                # QA Testing Guide — Checkout
+    void rejectsDuplicateSentinelsInsteadOfGuessingWhichBlockToUse() {
+        String duplicatedTestStart = """
+                <!-- codecrow-test-cases:start -->
+                <!-- codecrow-test-cases:start -->
+                ### 3. Tests
+                <!-- codecrow-test-cases:content -->
+                **Works** (HIGH)
+                - **Expected Result:** It works.
+                <!-- codecrow-test-cases:end -->
 
-                ## 1. What Changed
-                Saved cards can now be selected at checkout.
+                <!-- codecrow-environment:start -->
+                ### 6. Setup
+                <!-- codecrow-environment:content -->
+                No special setup.
+                <!-- codecrow-environment:end -->
+                """;
 
-                ## 6. Setup and Environment Notes
-                - Enable the saved-card feature flag.
-                - Use a customer with an existing payment method.
-                """);
-
-        assertThat(parsed.overviewMarkdown())
-                .contains("What Changed", "Saved cards")
-                .doesNotContain("Setup and Environment Notes", "feature flag");
-        assertThat(parsed.environmentMarkdown())
-                .contains("Enable the saved-card feature flag", "existing payment method")
-                .doesNotContain("## 6.");
+        assertThat(QaDocContentParser.hasCompleteShareableSections(duplicatedTestStart)).isFalse();
+        assertThat(QaDocContentParser.parseMarkedTestCases(duplicatedTestStart)).isEmpty();
     }
 
     @Test
-    void preservesSectionsAfterEnvironmentNotesInTheOverview() {
-        QaDocContent parsed = QaDocContentParser.parse("""
-                ## Overview
-                Summary.
+    void rejectsBodyTextPlacedInTheHeadingSlot() {
+        String invalid = """
+                <!-- codecrow-test-cases:start -->
+                ### 3. Tests
+                This must not leak into Jira before the link.
+                <!-- codecrow-test-cases:content -->
+                **Works** (HIGH)
+                <!-- codecrow-test-cases:end -->
 
-                ## Environment and Setup Notes
-                Use staging.
+                <!-- codecrow-environment:start -->
+                ### 6. Setup
+                <!-- codecrow-environment:content -->
+                No special setup.
+                <!-- codecrow-environment:end -->
+                """;
 
-                ## Appendix
-                Contact the QA lead.
-                """);
+        assertThat(QaDocContentParser.hasCompleteShareableSections(invalid)).isFalse();
+        assertThatThrownBy(() -> QaDocContentParser.replaceShareableSections(
+                invalid,
+                "test-link",
+                "environment-link"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("test-case");
+    }
 
-        assertThat(parsed.environmentMarkdown()).isEqualTo("Use staging.");
-        assertThat(parsed.overviewMarkdown()).contains("Overview", "Appendix", "Contact the QA lead");
+    @Test
+    void recognizesACompleteShareableDocumentOnlyWhenBothBlocksAreValid() {
+        String complete = """
+                <!-- codecrow-test-cases:start -->
+                ### 3. Tests
+                <!-- codecrow-test-cases:content -->
+                **Works** (HIGH)
+                - **Expected Result:** It works.
+                <!-- codecrow-test-cases:end -->
+
+                <!-- codecrow-environment:start -->
+                ### 6. Setup
+                <!-- codecrow-environment:content -->
+                No special setup.
+                <!-- codecrow-environment:end -->
+                """;
+
+        assertThat(QaDocContentParser.hasCompleteShareableSections(complete)).isTrue();
     }
 }

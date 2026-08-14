@@ -40,6 +40,23 @@ class QaDocHandoffRetryPolicyTest {
     }
 
     @Test
+    void doesNotReuseALegacyDocumentWithoutTheCompleteSentinelContract() {
+        QaDocDocument document = document("commit-a", OffsetDateTime.now());
+        document.setMarkdownContent("""
+                <!-- codecrow-test-cases:start -->
+                ### 3. Test Scenarios
+                **Legacy scenario** (HIGH)
+                <!-- codecrow-test-cases:end -->
+
+                ### 6. Environment and Setup Notes
+                Use staging.
+                """);
+
+        assertThat(QaDocHandoffRetryPolicy.shouldReuse(
+                document, null, "commit-a", "TASK-1")).isFalse();
+    }
+
+    @Test
     void doesNotReuseDocumentGeneratedForAnotherTask() {
         QaDocDocument document = document("commit-a", OffsetDateTime.now());
 
@@ -51,7 +68,22 @@ class QaDocHandoffRetryPolicyTest {
         QaDocDocument document = new QaDocDocument(null, 17L);
         document.setCommitHash(commit);
         document.setGeneratedAt(generatedAt);
-        document.setMarkdownContent("# QA document");
+        document.setMarkdownContent("""
+                # QA document
+
+                <!-- codecrow-test-cases:start -->
+                ### 3. Test Scenarios
+                <!-- codecrow-test-cases:content -->
+                **Valid scenario** (HIGH)
+                - **Expected Result:** It works.
+                <!-- codecrow-test-cases:end -->
+
+                <!-- codecrow-environment:start -->
+                ### 6. Environment and Setup Notes
+                <!-- codecrow-environment:content -->
+                No special setup is required.
+                <!-- codecrow-environment:end -->
+                """);
         document.setTaskId("TASK-1");
         return document;
     }

@@ -36,13 +36,24 @@ from utils.prompts.constants_qa_doc import (
     QA_STAGE_3_AGGREGATION_PROMPT,
     QA_STAGE_3_DELTA_PROMPT,
     QA_STAGE_3_PREVIOUS_DOC_SECTION,
-    QA_DOC_TEST_CASES_REPAIR_PROMPT,
+    QA_DOC_SECTION_BOUNDARY_REPAIR_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
 
 # Threshold: if total diff is under this many chars, skip multi-stage and do single-pass
 SINGLE_PASS_THRESHOLD = 8_000  # ~2k tokens — small PRs don't need multi-stage
+
+TEST_CASE_SENTINELS = (
+    "<!-- codecrow-test-cases:start -->",
+    "<!-- codecrow-test-cases:content -->",
+    "<!-- codecrow-test-cases:end -->",
+)
+ENVIRONMENT_SENTINELS = (
+    "<!-- codecrow-environment:start -->",
+    "<!-- codecrow-environment:content -->",
+    "<!-- codecrow-environment:end -->",
+)
 
 
 class QaDocOrchestrator(BaseOrchestrator):
@@ -148,7 +159,7 @@ class QaDocOrchestrator(BaseOrchestrator):
             logger.warning("QA doc generation produced empty/short output")
             return {"documentation_needed": False, "documentation": None}
 
-        documentation = await self._ensure_test_cases(documentation, placeholders)
+        documentation = await self._ensure_shareable_sections(documentation, placeholders)
         documentation = self._normalize_document_title(
             documentation,
             placeholders["pr_title"],
@@ -382,7 +393,7 @@ class QaDocOrchestrator(BaseOrchestrator):
 
                 try:
                     response = await self.llm.ainvoke([
-                        {"role": "system", "content": QA_DOC_SYSTEM_PROMPT},
+                        {"role": "system", "content": QA_DOC_SYSTEM_PROMPT.format(**placeholders)},
                         {"role": "user", "content": prompt},
                     ])
                     text = self._extract_text(response)
@@ -483,7 +494,7 @@ class QaDocOrchestrator(BaseOrchestrator):
 
         try:
             response = await self.llm.ainvoke([
-                {"role": "system", "content": QA_DOC_SYSTEM_PROMPT},
+                {"role": "system", "content": QA_DOC_SYSTEM_PROMPT.format(**placeholders)},
                 {"role": "user", "content": prompt},
             ])
             content = self._extract_text(response)
@@ -548,7 +559,7 @@ class QaDocOrchestrator(BaseOrchestrator):
             )
 
             response = await self.llm.ainvoke([
-                {"role": "system", "content": QA_DOC_SYSTEM_PROMPT},
+                {"role": "system", "content": QA_DOC_SYSTEM_PROMPT.format(**placeholders)},
                 {"role": "user", "content": prompt},
             ])
             return self._extract_text(response)
@@ -609,7 +620,7 @@ class QaDocOrchestrator(BaseOrchestrator):
             )
 
             response = await self.llm.ainvoke([
-                {"role": "system", "content": QA_DOC_SYSTEM_PROMPT},
+                {"role": "system", "content": QA_DOC_SYSTEM_PROMPT.format(**placeholders)},
                 {"role": "user", "content": prompt},
             ])
             return self._extract_text(response)
@@ -626,7 +637,7 @@ class QaDocOrchestrator(BaseOrchestrator):
             return await _attempt(BUDGET_TIGHT)
 
         response = await self.llm.ainvoke([
-            {"role": "system", "content": QA_DOC_SYSTEM_PROMPT},
+            {"role": "system", "content": QA_DOC_SYSTEM_PROMPT.format(**placeholders)},
             {"role": "user", "content": prompt},
         ])
         return self._extract_text(response)
@@ -681,7 +692,7 @@ class QaDocOrchestrator(BaseOrchestrator):
             user_prompt = update_preamble + "\n\n" + user_prompt
 
         messages = [
-            {"role": "system", "content": QA_DOC_SYSTEM_PROMPT},
+            {"role": "system", "content": QA_DOC_SYSTEM_PROMPT.format(**sp_placeholders)},
             {"role": "user", "content": user_prompt},
         ]
         response = await self.llm.ainvoke(messages)
@@ -699,20 +710,14 @@ class QaDocOrchestrator(BaseOrchestrator):
 
         return content
 
-    async def _ensure_test_cases(
+    async def _ensure_shareable_sections(
         self,
         documentation: str,
         placeholders: Dict[str, str],
     ) -> str:
-        """Guarantee an independently extractable test-case section.
-
-        Normal generation is instructed to emit stable invisible markers. If a
-        custom template or model response omits them, one focused repair call
-        generates only the missing section without narrowing the requested test
-        coverage.
-        """
-        if self._contains_extractable_test_cases(documentation):
-            return self._normalize_test_case_markers(documentation)
+        """Require exact, language-independent boundaries for both shareable sections."""
+        if self._has_complete_shareable_sections(documentation):
+            return documentation
 
         repair_placeholders = dict(placeholders)
         raw_diff = repair_placeholders.get("diff", "")
@@ -723,123 +728,73 @@ class QaDocOrchestrator(BaseOrchestrator):
                 + f"\n\n... (diff truncated — {len(raw_diff)} chars total, "
                   f"showing first {max_repair_diff})"
             )
+        repair_placeholders["documentation"] = documentation
 
-        logger.warning("QA doc omitted extractable test cases; running focused repair generation")
-        prompt = QA_DOC_TEST_CASES_REPAIR_PROMPT.format(**repair_placeholders)
+        logger.warning(
+            "QA doc violated the shareable-section sentinel contract; "
+            "running structural repair generation"
+        )
+        prompt = QA_DOC_SECTION_BOUNDARY_REPAIR_PROMPT.format(**repair_placeholders)
+        system_prompt = QA_DOC_SYSTEM_PROMPT.format(
+            output_language=repair_placeholders.get("output_language", "English")
+        )
         response = await self.llm.ainvoke([
-            {"role": "system", "content": QA_DOC_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ])
-        generated = self._extract_text(response).strip()
-        if not generated:
-            raise ValueError("Test-case generation returned no content")
+        repaired = self._extract_text(response).strip()
+        if not repaired:
+            raise ValueError("QA documentation sentinel repair returned no content")
+        if not self._has_complete_shareable_sections(repaired):
+            raise ValueError(
+                "QA documentation is missing complete test-case or environment sentinel sections"
+            )
+        return repaired
 
-        start_marker = "<!-- codecrow-test-cases:start -->"
-        end_marker = "<!-- codecrow-test-cases:end -->"
-        start = generated.find(start_marker)
-        end = generated.find(end_marker, start + len(start_marker)) if start >= 0 else -1
-        if start >= 0 and end >= 0:
-            test_case_section = generated[start:end + len(end_marker)]
-        else:
-            test_case_section = f"{start_marker}\n{generated}\n{end_marker}"
-
-        if not self._contains_extractable_test_cases(test_case_section):
-            raise ValueError("Test-case generation returned no structured scenarios")
-
-        return self._normalize_test_case_markers(
-            documentation.rstrip() + "\n\n" + test_case_section.strip()
-        )
-
-    @staticmethod
-    def _normalize_test_case_markers(documentation: str) -> str:
-        """Keep later peer sections outside the test-case disclosure boundary.
-
-        A model can occasionally place the closing marker at the end of the
-        document despite the prompt. Move it before the next heading at the
-        Test Scenarios heading level so sections such as Edge Cases,
-        Regression Risks, and Environment Notes remain independent.
-        """
-        start_marker = "<!-- codecrow-test-cases:start -->"
-        end_marker = "<!-- codecrow-test-cases:end -->"
-        start = documentation.find(start_marker)
-        if start < 0:
-            return documentation
-        content_start = start + len(start_marker)
-        end = documentation.find(end_marker, content_start)
-        if end < 0:
-            return documentation
-
-        marked_content = documentation[content_start:end]
-        test_heading = re.search(
-            r"(?mi)^\s*(#{2,6})\s+(?:\d+\.\s*)?"
-            r"Test Scenarios(?:\s+by Area)?\s*$",
-            marked_content,
-        )
-        if test_heading is None:
-            return documentation
-
-        heading_level = len(test_heading.group(1))
-        following = marked_content[test_heading.end():]
-        peer_heading = None
-        for candidate in re.finditer(
-            r"(?m)^\s*(#{2,6})\s+(.+?)\s*$",
-            following,
-        ):
-            candidate_level = len(candidate.group(1))
-            candidate_title = candidate.group(2).strip()
-            numbered_section = re.match(r"^\d+\.\s+.+$", candidate_title) is not None
-            known_later_section = re.match(
-                r"(?i)^(?:Edge Cases(?: and Negative Testing)?|Negative Testing|"
-                r"Regression Risks|Environment(?: and Setup Notes)?|Setup Notes).*$",
-                candidate_title,
-            ) is not None
-            if (
-                candidate_level < heading_level
-                or (
-                    candidate_level == heading_level
-                    and (numbered_section or known_later_section)
-                )
-            ):
-                peer_heading = test_heading.end() + candidate.start()
-                break
-        if peer_heading is None:
-            return documentation
-
-        test_content = marked_content[:peer_heading].strip()
-        later_sections = marked_content[peer_heading:].strip()
-        after_marker = documentation[end + len(end_marker):].strip()
-
-        normalized = (
-            documentation[:content_start].rstrip()
-            + "\n"
-            + test_content
-            + "\n"
-            + end_marker
-            + "\n\n"
-            + later_sections
-        )
-        if after_marker:
-            normalized += "\n\n" + after_marker
-        return normalized.strip()
-
-    @staticmethod
-    def _contains_extractable_test_cases(documentation: Optional[str]) -> bool:
-        if not documentation:
+    @classmethod
+    def _has_complete_shareable_sections(cls, documentation: Optional[str]) -> bool:
+        test_cases = cls._extract_sentinel_section(documentation, TEST_CASE_SENTINELS)
+        environment = cls._extract_sentinel_section(documentation, ENVIRONMENT_SENTINELS)
+        if test_cases is None or environment is None or test_cases[1] > environment[0]:
             return False
-        start_marker = "<!-- codecrow-test-cases:start -->"
-        end_marker = "<!-- codecrow-test-cases:end -->"
-        start = documentation.find(start_marker)
-        if start < 0:
-            return False
-        content_start = start + len(start_marker)
-        end = documentation.find(end_marker, content_start)
-        if end < 0:
-            return False
-        marked_content = documentation[content_start:end]
         return re.search(
             r"(?mi)^\s*\*\*.+?\*\*\s*\((?:HIGH|MEDIUM|LOW)\)",
-            marked_content,
+            test_cases[3],
         ) is not None
+
+    @classmethod
+    def _contains_extractable_test_cases(cls, documentation: Optional[str]) -> bool:
+        test_cases = cls._extract_sentinel_section(documentation, TEST_CASE_SENTINELS)
+        if test_cases is None:
+            return False
+        return re.search(
+            r"(?mi)^\s*\*\*.+?\*\*\s*\((?:HIGH|MEDIUM|LOW)\)",
+            test_cases[3],
+        ) is not None
+
+    @staticmethod
+    def _extract_sentinel_section(
+        documentation: Optional[str],
+        sentinels: tuple[str, str, str],
+    ) -> Optional[tuple[int, int, str, str]]:
+        """Extract one exact sentinel block without interpreting its localized heading."""
+        if not documentation:
+            return None
+        start_marker, content_marker, end_marker = sentinels
+        if any(documentation.count(marker) != 1 for marker in sentinels):
+            return None
+
+        start = documentation.find(start_marker)
+        content_start = documentation.find(content_marker, start + len(start_marker))
+        end = documentation.find(end_marker, content_start + len(content_marker))
+        if start < 0 or content_start < 0 or end < 0:
+            return None
+
+        heading = documentation[start + len(start_marker):content_start].strip()
+        content = documentation[content_start + len(content_marker):end].strip()
+        if not heading.startswith("#") or "\n" in heading or not content:
+            return None
+        return start, end + len(end_marker), heading, content
 
     @staticmethod
     def _normalize_document_title(documentation: str, fallback_title: str) -> str:

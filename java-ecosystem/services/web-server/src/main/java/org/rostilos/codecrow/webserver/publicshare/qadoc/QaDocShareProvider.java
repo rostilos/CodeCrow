@@ -63,10 +63,10 @@ public class QaDocShareProvider implements PublicShareResourceProvider {
     }
 
     private Optional<QaDocPublicPreview> toPublicPreview(QaDocDocument document) {
-        var testCases = QaDocContentParser.parseMarkedTestCases(document.getMarkdownContent());
-        if (testCases.isEmpty()) {
+        if (!QaDocContentParser.hasCompleteShareableSections(document.getMarkdownContent())) {
             return Optional.empty();
         }
+        var testCases = QaDocContentParser.parseMarkedTestCases(document.getMarkdownContent());
         QaDocContent content = QaDocContentParser.parse(document.getMarkdownContent());
 
         String projectName = document.getProject() == null

@@ -20,7 +20,7 @@ import java.util.List;
  *   source changes come from the exact PR overlay rather than a second branch.
  * - branchRetentionDays: how long to keep branch index metadata before auto-cleanup (default: 90 days)
  * - indexedBranches: explicit non-primary branches whose complete snapshots are retained.
- *   A null/empty value preserves the legacy branchPushPatterns interpretation.
+ *   Branch analysis patterns do not implicitly retain RAG snapshots.
  * - transientBranchIndexesEnabled: whether an analyzed PR target that is not retained
  *   may receive a revision-pinned temporary snapshot.
  */
@@ -58,8 +58,9 @@ public record RagConfig(
     }
 
     /**
-     * Backward-compatible constructor for configurations written before explicit
-     * retained and transient branch ownership was introduced.
+     * Compatibility constructor for configurations written before explicit
+     * retained and transient branch ownership was introduced. Such configurations
+     * retain no non-primary RAG branches until they are selected explicitly.
      */
     public RagConfig(
             boolean enabled,
@@ -88,11 +89,6 @@ public record RagConfig(
         return branchRetentionDays != null ? branchRetentionDays : DEFAULT_BRANCH_RETENTION_DAYS;
     }
 
-    public boolean hasExplicitIndexedBranches() {
-        return indexedBranches != null && indexedBranches.stream()
-                .anyMatch(value -> value != null && !value.isBlank());
-    }
-
     @JsonIgnore
     public List<String> getEffectiveIndexedBranches() {
         if (indexedBranches == null) {
@@ -111,36 +107,16 @@ public record RagConfig(
     }
     
     /**
-     * Check if a branch should have indexed context based on branchPushPatterns.
-     * @param branchName the branch to check
-     * @param branchPushPatterns patterns from BranchAnalysisConfig
-     * @return true if branch matches any pattern and multi-branch is enabled
+     * Check whether a branch is explicitly configured for a retained RAG index.
+     * Branch-analysis patterns intentionally have no effect on this decision.
+     *
+     * @param branchName the exact branch name to check
+     * @return true if the branch is explicitly retained and multi-branch indexing is enabled
      */
-    public boolean shouldHaveBranchIndex(String branchName, List<String> branchPushPatterns) {
+    public boolean shouldHaveBranchIndex(String branchName) {
         if (!isMultiBranchEnabled() || branchName == null || branchName.isBlank()) {
             return false;
         }
-        if (hasExplicitIndexedBranches()) {
-            return getEffectiveIndexedBranches().contains(branchName.trim());
-        }
-        if (branchPushPatterns == null || branchPushPatterns.isEmpty()) {
-            return false;
-        }
-        return branchPushPatterns.stream()
-            .anyMatch(pattern -> matchesBranchPattern(branchName, pattern));
-    }
-    
-    /**
-     * Match a branch name against a glob pattern.
-     */
-    public static boolean matchesBranchPattern(String branchName, String pattern) {
-        if (pattern == null || branchName == null) return false;
-        // Convert glob pattern to regex
-        String regex = pattern
-            .replace(".", "\\.")
-            .replace("**", "§§")  // Temp placeholder for **
-            .replace("*", "[^/]*")
-            .replace("§§", ".*");
-        return branchName.matches(regex);
+        return getEffectiveIndexedBranches().contains(branchName.trim());
     }
 }
