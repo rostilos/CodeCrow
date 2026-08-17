@@ -24,6 +24,7 @@ from service.qa_documentation.base_orchestrator import (
 from utils.task_context_builder import build_task_context_for_prompt
 from utils.prompts.constants_qa_doc import (
     QA_DOC_SYSTEM_PROMPT,
+    QA_DOC_ANALYSIS_SYSTEM_PROMPT,
     QA_DOC_RELEVANCE_CHECK_PROMPT,
     QA_DOC_RAW_PROMPT,
     QA_DOC_BASE_PROMPT,
@@ -302,6 +303,7 @@ class QaDocOrchestrator(BaseOrchestrator):
         """Run Stage 1: per-batch file analysis (parallel, max 5 concurrent)."""
         total_batches = len(batches)
         enrichment_lookup = self.build_enrichment_lookup(enrichment_data)
+        analysis_system_prompt = QA_DOC_ANALYSIS_SYSTEM_PROMPT.format(**placeholders)
 
         MAX_CONCURRENCY = 5
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
@@ -382,7 +384,7 @@ class QaDocOrchestrator(BaseOrchestrator):
                     file_contents=file_contents_str,
                 )
 
-                est_tokens = (len(prompt) + len(QA_DOC_SYSTEM_PROMPT)) // 4
+                est_tokens = (len(prompt) + len(analysis_system_prompt)) // 4
                 logger.info(
                     "Stage 1 batch %d/%d: prompt_size=%d chars (~%dK tokens), "
                     "files_with_content=%d/%d",
@@ -393,7 +395,7 @@ class QaDocOrchestrator(BaseOrchestrator):
 
                 try:
                     response = await self.llm.ainvoke([
-                        {"role": "system", "content": QA_DOC_SYSTEM_PROMPT.format(**placeholders)},
+                        {"role": "system", "content": analysis_system_prompt},
                         {"role": "user", "content": prompt},
                     ])
                     text = self._extract_text(response)
@@ -454,6 +456,8 @@ class QaDocOrchestrator(BaseOrchestrator):
         placeholders: Dict[str, str],
     ) -> Dict[str, Any]:
         """Run Stage 2: cross-file impact analysis."""
+        analysis_system_prompt = QA_DOC_ANALYSIS_SYSTEM_PROMPT.format(**placeholders)
+
         # Build dependency info from enrichment
         dependency_info = "No dependency data available."
         if enrichment_data and enrichment_data.relationships:
@@ -475,7 +479,7 @@ class QaDocOrchestrator(BaseOrchestrator):
             dependency_info=dependency_info,
             changed_files_list=", ".join(changed_file_paths[:50]),
         )
-        overhead = len(probe) + len(QA_DOC_SYSTEM_PROMPT) + 2000
+        overhead = len(probe) + len(analysis_system_prompt) + 2000
         s1_budget = max(MAX_STAGE2_CHARS - overhead, 20_000)
         stage_1_str = self._slim_stage_results(stage_1_results, max_chars=s1_budget)
 
@@ -486,7 +490,7 @@ class QaDocOrchestrator(BaseOrchestrator):
             dependency_info=dependency_info,
             changed_files_list=", ".join(changed_file_paths[:50]),
         )
-        total_chars = len(prompt) + len(QA_DOC_SYSTEM_PROMPT)
+        total_chars = len(prompt) + len(analysis_system_prompt)
         logger.info(
             "Stage 2: prompt=%dK chars (~%dK tokens), s1_budget=%dK",
             total_chars // 1000, total_chars // 4000, s1_budget // 1000,
@@ -494,7 +498,7 @@ class QaDocOrchestrator(BaseOrchestrator):
 
         try:
             response = await self.llm.ainvoke([
-                {"role": "system", "content": QA_DOC_SYSTEM_PROMPT.format(**placeholders)},
+                {"role": "system", "content": analysis_system_prompt},
                 {"role": "user", "content": prompt},
             ])
             content = self._extract_text(response)
