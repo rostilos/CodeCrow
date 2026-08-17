@@ -96,6 +96,8 @@ public class ProjectConfig {
     private AnalysisLimitsConfig analysisLimits;
     @JsonProperty("analysisScope")
     private AnalysisScopeConfig analysisScope;
+    @JsonProperty("analysisProfile")
+    private AnalysisProfileConfig analysisProfile;
     @JsonProperty("projectRules")
     private ProjectRulesConfig projectRules;
     @JsonProperty("taskManagement")
@@ -257,6 +259,10 @@ public class ProjectConfig {
         return analysisScope != null ? analysisScope : new AnalysisScopeConfig();
     }
 
+    public AnalysisProfileConfig analysisProfile() {
+        return analysisProfile != null ? analysisProfile : new AnalysisProfileConfig(null, null);
+    }
+
     // Setters for Jackson
     public void setUseLocalMcp(boolean useLocalMcp) {
         this.useLocalMcp = useLocalMcp;
@@ -335,6 +341,10 @@ public class ProjectConfig {
 
     public void setAnalysisScope(AnalysisScopeConfig analysisScope) {
         this.analysisScope = analysisScope;
+    }
+
+    public void setAnalysisProfile(AnalysisProfileConfig analysisProfile) {
+        this.analysisProfile = analysisProfile;
     }
 
     public void setProjectRules(ProjectRulesConfig projectRules) {

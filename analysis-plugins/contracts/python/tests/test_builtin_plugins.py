@@ -239,6 +239,63 @@ def test_magento_is_not_selected_for_an_unrelated_composer_php_repository():
     assert capabilities.repository_plugins == ("json", "php")
 
 
+def test_manual_magento_selection_is_authoritative_without_markers():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    facts = RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=(
+            "magento/src/etc/app/code/Vendor/Module/Model/Thing.php",
+            "unrelated/pom.xml",
+        ),
+        project_type="magento",
+        source_root="magento/src/etc",
+    )
+
+    capabilities = ProjectSelector(catalog.registry).select(facts)
+
+    assert capabilities.repository_plugins == ("php", "magento")
+    assert capabilities.detection_evidence["magento"] == (
+        "manual-project-type:magento",
+        "root:magento/src/etc",
+    )
+    assert "spring" not in capabilities.repository_plugins
+
+
+def test_auto_detection_correlates_magento_markers_at_an_arbitrary_nested_root():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    facts = RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=(
+            "magento/src/etc/app/code/Vendor/Module/Model/Thing.php",
+            "magento/src/etc/app/etc/config.php",
+            "magento/src/etc/bin/magento",
+            "magento/src/etc/composer.json",
+        ),
+    )
+
+    capabilities = ProjectSelector(catalog.registry).select(facts)
+
+    assert capabilities.repository_plugins == ("json", "php", "magento")
+    assert "root:magento/src/etc" in capabilities.detection_evidence["magento"]
+
+
+def test_auto_detection_does_not_join_magento_markers_from_different_roots():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    facts = RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=(
+            "one/app/etc/config.php",
+            "src/Thing.php",
+            "three/composer.json",
+            "two/bin/magento",
+        ),
+    )
+
+    capabilities = ProjectSelector(catalog.registry).select(facts)
+
+    assert "magento" not in capabilities.repository_plugins
+
+
 def test_only_selected_repository_plugins_require_snapshots():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)

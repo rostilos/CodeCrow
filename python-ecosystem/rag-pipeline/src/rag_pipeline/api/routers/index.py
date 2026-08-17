@@ -342,6 +342,8 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
             preserve_other_branches=request.preserve_other_branches,
             include_patterns=request.include_patterns,
             exclude_patterns=request.exclude_patterns,
+            project_type=request.project_type,
+            source_root=request.source_root,
             **optional_generation_args,
         )
         return stats
@@ -422,6 +424,8 @@ def index_repository_stream(request: IndexRequest):
                 preserve_other_branches=request.preserve_other_branches,
                 include_patterns=request.include_patterns,
                 exclude_patterns=request.exclude_patterns,
+                project_type=request.project_type,
+                source_root=request.source_root,
                 progress_callback=progress,
                 **optional_generation_args,
             )

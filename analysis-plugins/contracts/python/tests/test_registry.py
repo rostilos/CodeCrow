@@ -255,9 +255,10 @@ def test_project_selection_matches_the_shared_cross_runtime_projection():
         "file:app/etc/config.php",
         "file:bin/magento",
         "file:composer.json",
+        "root:.",
     )
     assert selected.fingerprint == (
-        "sha256:6a888ce52e94cba767c754ff096d29c13637244976edcb97d9a68f44eeb43b10"
+        "sha256:82da50c6916ad2b50e268523e6226aeaee6f9bb8e76fd868aed5419503946eaf"
     )
     assert ProjectSelector(registry).validate(selected, "abc1234") == selected
 

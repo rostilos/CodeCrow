@@ -91,6 +91,48 @@ class TestIndexRequest:
                 commit="abc123",
             )
 
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_manual_project_profile_accepts_arbitrary_nested_source_root(self):
+        req = IndexRequest(
+            repo_path="/tmp/repo",
+            workspace="ws",
+            project="proj",
+            branch="main",
+            commit="abc123",
+            project_type="magento",
+            source_root=r"magento\src\etc",
+        )
+
+        assert req.project_type == "magento"
+        assert req.source_root == "magento/src/etc"
+
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_auto_project_profile_normalizes_to_marker_detection(self):
+        req = IndexRequest(
+            repo_path="/tmp/repo",
+            workspace="ws",
+            project="proj",
+            branch="main",
+            commit="abc123",
+            project_type=" AUTO ",
+        )
+
+        assert req.project_type is None
+
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    @pytest.mark.parametrize("source_root", ["/magento", "magento/", "../magento", "magento//src"])
+    def test_source_root_must_be_a_repository_relative_directory(self, source_root):
+        with pytest.raises(ValueError, match="source_root"):
+            IndexRequest(
+                repo_path="/tmp/repo",
+                workspace="ws",
+                project="proj",
+                branch="main",
+                commit="abc123",
+                project_type="magento",
+                source_root=source_root,
+            )
+
 
 class TestIncrementalFileRequests:
 

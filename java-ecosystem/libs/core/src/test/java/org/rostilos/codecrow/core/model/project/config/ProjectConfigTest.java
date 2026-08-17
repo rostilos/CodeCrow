@@ -44,6 +44,14 @@ class ProjectConfigTest {
             assertThat(config.taskContextAnalysisEnabled()).isTrue();
             assertThat(config.isTaskContextAnalysisEnabled()).isTrue();
         }
+
+        @Test
+        @DisplayName("should default analysis profile to marker auto-detection")
+        void shouldDefaultAnalysisProfileToAutomatic() {
+            ProjectConfig config = new ProjectConfig();
+            assertThat(config.analysisProfile().isAutomatic()).isTrue();
+            assertThat(config.analysisProfile().sourceRoot()).isNull();
+        }
     }
 
     @Nested

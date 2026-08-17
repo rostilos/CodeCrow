@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.pipelineagent.generic.service;
 
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
+import org.rostilos.codecrow.core.model.project.config.AnalysisProfileConfig;
 import org.rostilos.codecrow.plugins.ContentMarker;
 import org.rostilos.codecrow.plugins.ContentPatternMarker;
 import org.rostilos.codecrow.plugins.FileDisposition;
@@ -56,36 +57,55 @@ public class ProjectCapabilitySelectionService {
             String repository,
             String commit,
             List<String> changedFiles) {
+        return plan(vcsClient, workspace, repository, commit, changedFiles, null);
+    }
+
+    public SelectionPlan plan(
+            VcsClient vcsClient,
+            String workspace,
+            String repository,
+            String commit,
+            List<String> changedFiles,
+            AnalysisProfileConfig analysisProfile) {
         TreeSet<String> paths = new TreeSet<>();
         if (changedFiles != null) {
             changedFiles.stream().map(ProjectCapabilitySelectionService::normalize)
                     .forEach(paths::add);
         }
 
+        String projectType = analysisProfile != null ? analysisProfile.projectType() : null;
+        String sourceRoot = analysisProfile != null ? analysisProfile.sourceRoot() : null;
         TreeSet<String> markerPaths = new TreeSet<>();
         TreeSet<ContentPatternMarker> patternMarkers = new TreeSet<>();
-        for (PluginDescriptor descriptor : registry.descriptors()) {
-            markerPaths.addAll(descriptor.detection().filesAll());
-            markerPaths.addAll(descriptor.detection().filesAny());
-            descriptor.detection().contentMarkers().stream()
-                    .map(ContentMarker::path)
-                    .forEach(markerPaths::add);
-            descriptor.detection().alternatives().forEach(alternative -> {
-                markerPaths.addAll(alternative.filesAll());
-                markerPaths.addAll(alternative.filesAny());
-                alternative.contentMarkers().stream()
+        if (projectType == null) {
+            for (PluginDescriptor descriptor : registry.descriptors()) {
+                markerPaths.addAll(descriptor.detection().filesAll());
+                markerPaths.addAll(descriptor.detection().filesAny());
+                descriptor.detection().contentMarkers().stream()
                         .map(ContentMarker::path)
                         .forEach(markerPaths::add);
-                patternMarkers.addAll(alternative.contentPatternMarkers());
-            });
+                descriptor.detection().alternatives().forEach(alternative -> {
+                    markerPaths.addAll(alternative.filesAll());
+                    markerPaths.addAll(alternative.filesAny());
+                    alternative.contentMarkers().stream()
+                            .map(ContentMarker::path)
+                            .forEach(markerPaths::add);
+                    patternMarkers.addAll(alternative.contentPatternMarkers());
+                });
+            }
         }
-        if (markerPaths.size() > MAX_MARKER_FILES) {
+        TreeSet<String> resolvedMarkerPaths = sourceRoot == null
+                ? markerPaths
+                : markerPaths.stream()
+                        .map(path -> sourceRoot + "/" + path)
+                        .collect(java.util.stream.Collectors.toCollection(TreeSet::new));
+        if (resolvedMarkerPaths.size() > MAX_MARKER_FILES) {
             throw new IllegalStateException("plugin marker declarations exceed the host budget");
         }
 
         Map<String, String> markerContents = new LinkedHashMap<>();
         int consumed = 0;
-        for (String markerPath : markerPaths) {
+        for (String markerPath : resolvedMarkerPaths) {
             try {
                 String content = vcsClient.getFileContent(
                         workspace, repository, markerPath, commit);
@@ -105,7 +125,9 @@ public class ProjectCapabilitySelectionService {
         }
 
         ProjectCapabilities preliminary = selector.select(
-                new RepositoryFacts(commit, List.copyOf(paths), markerContents));
+                new RepositoryFacts(
+                        commit, List.copyOf(paths), markerContents,
+                        projectType, sourceRoot));
         List<String> enrichmentPaths = filterEnrichmentPaths(preliminary, changedFiles);
         return new SelectionPlan(
                 commit,
@@ -114,7 +136,9 @@ public class ProjectCapabilitySelectionService {
                 List.copyOf(patternMarkers),
                 consumed,
                 preliminary,
-                enrichmentPaths);
+                enrichmentPaths,
+                projectType,
+                sourceRoot);
     }
 
     /**
@@ -135,7 +159,12 @@ public class ProjectCapabilitySelectionService {
             for (ContentPatternMarker marker : plan.patternMarkers()) {
                 var matchingFile = enrichment.fileContents().stream()
                         .filter(file -> !file.skipped() && file.content() != null)
-                        .filter(file -> PluginGlob.matches(marker.pathPattern(), normalize(file.path())))
+                        .filter(file -> {
+                            String relative = relativeToRoot(
+                                    normalize(file.path()), plan.sourceRoot());
+                            return relative != null
+                                    && PluginGlob.matches(marker.pathPattern(), relative);
+                        })
                         .filter(file -> file.content().contains(marker.contains()))
                         .findFirst();
                 if (matchingFile.isEmpty()) continue;
@@ -152,7 +181,8 @@ public class ProjectCapabilitySelectionService {
         }
 
         return selector.select(new RepositoryFacts(
-                plan.commit(), List.copyOf(paths), markerContents));
+                plan.commit(), List.copyOf(paths), markerContents,
+                plan.projectType(), plan.sourceRoot()));
     }
 
     /**
@@ -198,6 +228,12 @@ public class ProjectCapabilitySelectionService {
         return normalized;
     }
 
+    private static String relativeToRoot(String path, String root) {
+        if (root == null || root.isBlank()) return path;
+        String prefix = root + "/";
+        return path.startsWith(prefix) ? path.substring(prefix.length()) : null;
+    }
+
     public record SelectionPlan(
             String commit,
             List<String> repositoryPaths,
@@ -205,7 +241,9 @@ public class ProjectCapabilitySelectionService {
             List<ContentPatternMarker> patternMarkers,
             int markerBytes,
             ProjectCapabilities preliminaryCapabilities,
-            List<String> enrichmentPaths) {
+            List<String> enrichmentPaths,
+            String projectType,
+            String sourceRoot) {
         public SelectionPlan {
             if (commit == null || commit.isBlank()) {
                 throw new IllegalArgumentException("selection commit is required");

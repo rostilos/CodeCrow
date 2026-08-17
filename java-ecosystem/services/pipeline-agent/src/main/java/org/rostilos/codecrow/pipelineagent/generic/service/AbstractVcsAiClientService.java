@@ -183,7 +183,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         }
 
         CapabilityEnrichment capabilityEnrichment = prepareCapabilityEnrichment(
-                repository, currentCommit, preparedDiff.changedFiles(), "pull request");
+                project, repository, currentCommit, preparedDiff.changedFiles(), "pull request");
         PrEnrichmentDataDto enrichment = capabilityEnrichment.enrichment();
         ProjectCapabilities projectCapabilities = capabilityEnrichment.capabilities();
         Map<String, String> taskContext = resolveTaskContext(
@@ -287,7 +287,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         branchRequest.commitHash = resolvedCommit;
         List<String> safeChangedFiles = changedFiles != null ? changedFiles : List.of();
         CapabilityEnrichment capabilityEnrichment = prepareCapabilityEnrichment(
-                repository, resolvedCommit, safeChangedFiles, "direct push");
+                project, repository, resolvedCommit, safeChangedFiles, "direct push");
         PrEnrichmentDataDto enrichment = capabilityEnrichment.enrichment();
 
         AiAnalysisRequestImpl.Builder<?> builder = baseBuilder(
@@ -370,6 +370,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
     }
 
     private CapabilityEnrichment prepareCapabilityEnrichment(
+            Project project,
             RepositoryInfo repository,
             String commit,
             List<String> changedFiles,
@@ -383,7 +384,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             VcsClient vcsClient = vcsClientProvider.getClient(repository.connection());
             var plan = capabilitySelectionService.plan(
                     vcsClient, repository.workspace(), repository.repoSlug(), commit,
-                    changedFiles);
+                    changedFiles,
+                    project.getEffectiveConfig().analysisProfile());
             PrEnrichmentDataDto enrichment = enrichFiles(
                     repository, commit, plan.enrichmentPaths(), operation);
             ProjectCapabilities capabilities = capabilitySelectionService.complete(

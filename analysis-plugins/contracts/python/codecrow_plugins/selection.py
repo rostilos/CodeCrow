@@ -11,51 +11,118 @@ from .registry import PluginRegistry
 MAX_DETECTION_EVIDENCE_PER_PLUGIN = 64
 
 
-def _group_evidence(group: DetectionAlternative, facts: RepositoryFacts) -> tuple[str, ...] | None:
-    paths = set(facts.paths)
-    files_all_match = not group.files_all or all(path in paths for path in group.files_all)
-    files_any_match = not group.files_any or any(path in paths for path in group.files_any)
-    pattern_hits_all = {
-        pattern: tuple(path for path in facts.paths if PurePosixPath(path).match(pattern))
-        for pattern in group.path_patterns_all
+def _suffix_roots(paths: tuple[str, ...], relative: str) -> set[str]:
+    return {
+        "" if path == relative else path[: -(len(relative) + 1)]
+        for path in paths
+        if path == relative or path.endswith("/" + relative)
     }
-    pattern_hits_any = {
-        pattern: tuple(path for path in facts.paths if PurePosixPath(path).match(pattern))
-        for pattern in group.path_patterns_any
-    }
-    patterns_all_match = all(pattern_hits_all[pattern] for pattern in group.path_patterns_all)
-    patterns_any_match = not group.path_patterns_any or any(pattern_hits_any.values())
-    marker_hits = tuple(
-        marker
-        for marker in group.content_markers
-        if marker.path in facts.marker_contents
-        and marker.contains in facts.marker_contents[marker.path]
-    )
-    pattern_marker_hits = tuple(
-        (marker, path)
-        for marker in group.content_pattern_markers
-        for path, content in facts.marker_contents.items()
-        if PurePosixPath(path).match(marker.path_pattern) and marker.contains in content
-    )
-    markers_match = not group.content_markers or len(marker_hits) == len(group.content_markers)
-    pattern_markers_match = all(
-        any(hit_marker == marker for hit_marker, _ in pattern_marker_hits)
-        for marker in group.content_pattern_markers
-    )
-    if not (files_all_match and files_any_match and patterns_all_match and patterns_any_match and markers_match and pattern_markers_match):
-        return None
 
-    evidence: set[str] = set()
-    evidence.update(f"file:{path}" for path in group.files_all)
-    evidence.update(f"file:{path}" for path in group.files_any if path in paths)
-    for pattern, matched_paths in (*pattern_hits_all.items(), *pattern_hits_any.items()):
-        evidence.update(f"pattern:{pattern}:{path}" for path in matched_paths)
-    evidence.update(f"content:{marker.path}:{marker.contains}" for marker in marker_hits)
-    evidence.update(
-        f"content-pattern:{marker.path_pattern}:{path}:{marker.contains}"
-        for marker, path in pattern_marker_hits
+
+def _under_root(path: str, root: str) -> str | None:
+    if not root:
+        return path
+    prefix = root + "/"
+    return path[len(prefix):] if path.startswith(prefix) else None
+
+
+def _group_evidence(group: DetectionAlternative, facts: RepositoryFacts) -> tuple[str, ...] | None:
+    candidate_sets = [
+        _suffix_roots(facts.paths, relative)
+        for relative in group.files_all
+    ]
+    candidate_sets.extend(
+        {
+            root
+            for path, content in facts.marker_contents.items()
+            if marker.contains in content
+            for root in _suffix_roots((path,), marker.path)
+        }
+        for marker in group.content_markers
     )
-    return tuple(sorted(evidence)[:MAX_DETECTION_EVIDENCE_PER_PLUGIN])
+    if candidate_sets:
+        candidate_roots = set.intersection(*candidate_sets)
+    elif group.files_any:
+        candidate_roots = set().union(*(
+            _suffix_roots(facts.paths, relative)
+            for relative in group.files_any
+        ))
+    else:
+        candidate_roots = {facts.source_root or ""}
+    if facts.source_root is not None:
+        candidate_roots.intersection_update({facts.source_root})
+
+    for root in sorted(candidate_roots, key=lambda value: (value.count("/"), value)):
+        file_all_hits = tuple(
+            f"{root}/{relative}" if root else relative
+            for relative in group.files_all
+        )
+        file_any_hits = tuple(
+            path
+            for relative in group.files_any
+            for path in (f"{root}/{relative}" if root else relative,)
+            if path in facts.paths
+        )
+        if group.files_any and not file_any_hits:
+            continue
+        pattern_hits_all = {
+            pattern: tuple(
+                path for path in facts.paths
+                if (relative := _under_root(path, root)) is not None
+                and PurePosixPath(relative).match(pattern)
+            )
+            for pattern in group.path_patterns_all
+        }
+        pattern_hits_any = {
+            pattern: tuple(
+                path for path in facts.paths
+                if (relative := _under_root(path, root)) is not None
+                and PurePosixPath(relative).match(pattern)
+            )
+            for pattern in group.path_patterns_any
+        }
+        if any(not hits for hits in pattern_hits_all.values()):
+            continue
+        if group.path_patterns_any and not any(pattern_hits_any.values()):
+            continue
+        marker_hits = tuple(
+            (marker, f"{root}/{marker.path}" if root else marker.path)
+            for marker in group.content_markers
+            if marker.contains in facts.marker_contents.get(
+                f"{root}/{marker.path}" if root else marker.path,
+                "",
+            )
+        )
+        if len(marker_hits) != len(group.content_markers):
+            continue
+        pattern_marker_hits = tuple(
+            (marker, path)
+            for marker in group.content_pattern_markers
+            for path, content in facts.marker_contents.items()
+            if (relative := _under_root(path, root)) is not None
+            and PurePosixPath(relative).match(marker.path_pattern)
+            and marker.contains in content
+        )
+        if any(
+            not any(hit_marker == marker for hit_marker, _ in pattern_marker_hits)
+            for marker in group.content_pattern_markers
+        ):
+            continue
+
+        evidence: set[str] = {f"root:{root or '.'}"}
+        evidence.update(f"file:{path}" for path in file_all_hits)
+        evidence.update(f"file:{path}" for path in file_any_hits)
+        for pattern, matched_paths in (*pattern_hits_all.items(), *pattern_hits_any.items()):
+            evidence.update(f"pattern:{pattern}:{path}" for path in matched_paths)
+        evidence.update(
+            f"content:{path}:{marker.contains}" for marker, path in marker_hits
+        )
+        evidence.update(
+            f"content-pattern:{marker.path_pattern}:{path}:{marker.contains}"
+            for marker, path in pattern_marker_hits
+        )
+        return tuple(sorted(evidence)[:MAX_DETECTION_EVIDENCE_PER_PLUGIN])
+    return None
 
 
 def _rule_evidence(descriptor: PluginDescriptor, facts: RepositoryFacts) -> tuple[str, ...] | None:
@@ -94,6 +161,8 @@ class ProjectSelector:
         self._registry = registry
 
     def select(self, facts: RepositoryFacts) -> ProjectCapabilities:
+        if facts.project_type is not None:
+            return self._select_explicit(facts)
         selected: list[str] = []
         evidence: dict[str, tuple[str, ...]] = {}
         file_plugins: dict[str, tuple[str, ...]] = {}
@@ -134,6 +203,53 @@ class ProjectSelector:
             detection_evidence=evidence,
             unavailable_capabilities=(),
             fingerprint=fingerprint,
+            descriptor_fingerprint=self._registry.fingerprint_for(selected),
+        )
+
+    def _select_explicit(self, facts: RepositoryFacts) -> ProjectCapabilities:
+        requested = self._registry.descriptor(facts.project_type)
+        language_ids = {
+            descriptor.id
+            for descriptor in self._registry.descriptors
+            if descriptor.kind is PluginKind.LANGUAGE
+            and any(
+                PurePosixPath(path).suffix.lower() in descriptor.detection.extensions
+                for path in facts.paths
+            )
+        }
+        resolved = self._registry.resolve((*language_ids, requested.id))
+        selected = tuple(descriptor.id for descriptor in resolved)
+        evidence = {
+            plugin_id: tuple(sorted({
+                (
+                    f"manual-project-type:{requested.id}"
+                    if plugin_id == requested.id
+                    else f"manual-project-type-dependency:{requested.id}"
+                ),
+                f"root:{facts.source_root or '.'}",
+            }))
+            for plugin_id in selected
+        }
+        active_languages = tuple(
+            descriptor for descriptor in resolved
+            if descriptor.kind is PluginKind.LANGUAGE
+        )
+        file_plugins = {
+            path: matches
+            for path in facts.paths
+            if (matches := tuple(
+                descriptor.id for descriptor in active_languages
+                if PurePosixPath(path).suffix.lower() in descriptor.detection.extensions
+            ))
+        }
+        return ProjectCapabilities(
+            repository_plugins=selected,
+            file_plugins=file_plugins,
+            detection_evidence=evidence,
+            unavailable_capabilities=(),
+            fingerprint=self._fingerprint(
+                facts.revision, selected, file_plugins, evidence
+            ),
             descriptor_fingerprint=self._registry.fingerprint_for(selected),
         )
 

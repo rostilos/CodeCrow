@@ -162,6 +162,8 @@ def _load_exact_repository_facts(
             revision=decoded["revision"],
             paths=tuple(decoded["paths"]),
             marker_contents=decoded.get("markerContents", {}),
+            project_type=decoded.get("projectType"),
+            source_root=decoded.get("sourceRoot"),
         )
     except Exception as exception:
         raise IncrementalIndexPreconditionError(

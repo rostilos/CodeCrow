@@ -319,6 +319,8 @@ class RepositoryIndexer:
                 "revision": repository_facts.revision,
                 "paths": list(repository_facts.paths),
                 "markerContents": dict(repository_facts.marker_contents),
+                "projectType": repository_facts.project_type,
+                "sourceRoot": repository_facts.source_root,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -505,6 +507,8 @@ class RepositoryIndexer:
         operation_id: Optional[str] = None,
         activation_guard: Optional[Callable[[], None]] = None,
         progress_callback: Optional[Callable[[dict], None]] = None,
+        project_type: Optional[str] = None,
+        source_root: Optional[str] = None,
     ) -> IndexStats:
         """Index entire repository for a branch using atomic swap strategy."""
         def report_progress(
@@ -621,6 +625,8 @@ class RepositoryIndexer:
                 commit,
                 repository_file_list,
                 self.plugin_catalog.registry,
+                project_type=project_type,
+                source_root=source_root,
             )
             capabilities = self.plugin_selector.select(repository_facts)
             implementation_fingerprint = (
@@ -681,7 +687,11 @@ class RepositoryIndexer:
 
         analysis_handle = None
         if self.plugin_runtime is not None and capabilities is not None:
-            analysis_handle = self.plugin_runtime.start_repository_analysis(capabilities, commit)
+            analysis_handle = self.plugin_runtime.start_repository_analysis(
+                capabilities,
+                commit,
+                source_root=repository_facts.source_root if repository_facts else None,
+            )
         
         # Validate limits
         if self.config.max_files_per_index > 0 and total_files > self.config.max_files_per_index:
@@ -1800,6 +1810,7 @@ class FileOperations:
                 revision,
                 snapshots=snapshots,
                 mode=RepositoryAnalysisMode.PERSISTENT_INCREMENTAL,
+                source_root=repository_facts.source_root if repository_facts else None,
             )
             handle.ingest(artifacts)
             analysis, diagnostics = handle.finish()

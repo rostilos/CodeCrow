@@ -490,6 +490,26 @@ class RagPipelineClientTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void testIndexRepository_ForwardsAuthoritativeAnalysisProfile() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setBody("{\"document_count\":42}")
+                .addHeader("Content-Type", "application/json"));
+
+        client.indexRepository(
+                repositoryPath.toString(), "ws", "proj", "main", "abc123",
+                null, null, "new-generation", false, false, null,
+                "magento", "magento/src/etc");
+
+        RecordedRequest request = mockWebServer.takeRequest();
+        Map<String, Object> payload = objectMapper.readValue(
+                request.getBody().readUtf8(), Map.class);
+        assertThat(payload)
+                .containsEntry("project_type", "magento")
+                .containsEntry("source_root", "magento/src/etc");
+    }
+
+    @Test
     void testIndexRepository_WhenDisabled() throws Exception {
         RagPipelineClient disabledClient = new RagPipelineClient(
                 mockWebServer.url("/").toString(), false, 5, 10, 20, "");

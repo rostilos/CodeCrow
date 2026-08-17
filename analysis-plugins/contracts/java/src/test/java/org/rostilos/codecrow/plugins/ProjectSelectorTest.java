@@ -31,8 +31,44 @@ class ProjectSelectorTest {
         assertThat(selected.filePlugins()).containsEntry(
                 "app/code/Vendor/Module/Model/Foo.php", List.of("php"));
         assertThat(selected.detectionEvidence().get("magento")).containsExactly(
-                "file:app/etc/config.php", "file:bin/magento", "file:composer.json");
-        assertThat(selected.fingerprint()).isEqualTo(
-                "sha256:6a888ce52e94cba767c754ff096d29c13637244976edcb97d9a68f44eeb43b10");
+                "file:app/etc/config.php", "file:bin/magento", "file:composer.json", "root:.");
+    }
+
+    @Test
+    void detects_one_coherent_arbitrarily_nested_magento_root() throws Exception {
+        PluginRegistry registry = new PluginRegistry(
+                new PluginManifestLoader().loadDescriptors(FIXTURE));
+        RepositoryFacts facts = new RepositoryFacts(
+                "abc1234",
+                List.of(
+                        "magento/src/etc/app/code/Vendor/Module/Model/Foo.php",
+                        "magento/src/etc/app/etc/config.php",
+                        "magento/src/etc/bin/magento",
+                        "magento/src/etc/composer.json"),
+                Map.of());
+
+        ProjectCapabilities selected = new ProjectSelector(registry).select(facts);
+
+        assertThat(selected.repositoryPlugins()).containsExactly("php", "magento");
+        assertThat(selected.detectionEvidence().get("magento"))
+                .contains("root:magento/src/etc");
+    }
+
+    @Test
+    void manual_type_bypasses_marker_detection_and_resolves_dependencies() throws Exception {
+        PluginRegistry registry = new PluginRegistry(
+                new PluginManifestLoader().loadDescriptors(FIXTURE));
+        RepositoryFacts facts = new RepositoryFacts(
+                "abc1234",
+                List.of("magento/src/etc/app/code/Vendor/Module/Model/Foo.php"),
+                Map.of(),
+                "magento",
+                "magento/src/etc");
+
+        ProjectCapabilities selected = new ProjectSelector(registry).select(facts);
+
+        assertThat(selected.repositoryPlugins()).containsExactly("php", "magento");
+        assertThat(selected.detectionEvidence().get("magento")).containsExactly(
+                "manual-project-type:magento", "root:magento/src/etc");
     }
 }

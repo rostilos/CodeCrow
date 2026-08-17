@@ -31,6 +31,19 @@ def _validate_file_paths(paths: List[str]) -> List[str]:
     return paths
 
 
+def _validate_source_root(path: Optional[str]) -> Optional[str]:
+    if path is None or not path.strip() or path.strip() == ".":
+        return None
+    normalized = path.strip().replace("\\", "/")
+    if (
+        normalized.startswith("/")
+        or normalized.endswith("/")
+        or any(segment in {"", ".", ".."} for segment in normalized.split("/"))
+    ):
+        raise ValueError("source_root must be a normalized repository-relative directory")
+    return normalized
+
+
 # ── Index models ──
 
 class IndexRequest(BaseModel):
@@ -52,11 +65,28 @@ class IndexRequest(BaseModel):
     transfer_repo_ownership: bool = False
     include_patterns: Optional[List[str]] = None
     exclude_patterns: Optional[List[str]] = None
+    project_type: Optional[str] = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9-]{0,63}$",
+    )
+    source_root: Optional[str] = None
 
     @field_validator("repo_path")
     @classmethod
     def validate_repo_path(cls, v: str) -> str:
         return _validate_repo_path(v)
+
+    @field_validator("project_type", mode="before")
+    @classmethod
+    def validate_project_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not str(v).strip() or str(v).strip().casefold() == "auto":
+            return None
+        return str(v).strip().casefold()
+
+    @field_validator("source_root")
+    @classmethod
+    def validate_source_root(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_source_root(v)
 
 
 class UpdateFilesRequest(BaseModel):

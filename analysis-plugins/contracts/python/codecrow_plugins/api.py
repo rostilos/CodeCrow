@@ -279,6 +279,8 @@ class RepositoryFacts:
     revision: str
     paths: tuple[str, ...]
     marker_contents: Mapping[str, str] = field(default_factory=dict)
+    project_type: str | None = None
+    source_root: str | None = None
 
     def __post_init__(self) -> None:
         _non_blank(self.revision, "revision")
@@ -295,6 +297,23 @@ class RepositoryFacts:
                 raise ValueError("marker content must be text")
             normalized_markers[path] = content
         object.__setattr__(self, "marker_contents", MappingProxyType(normalized_markers))
+        project_type = (
+            self.project_type.strip().casefold()
+            if isinstance(self.project_type, str) and self.project_type.strip()
+            else None
+        )
+        if project_type == "auto":
+            project_type = None
+        if project_type is not None:
+            _plugin_id(project_type)
+        source_root = (
+            normalize_path(self.source_root.strip().replace("\\", "/"))
+            if isinstance(self.source_root, str)
+            and self.source_root.strip() not in {"", "."}
+            else None
+        )
+        object.__setattr__(self, "project_type", project_type)
+        object.__setattr__(self, "source_root", source_root)
 
 
 @dataclass(frozen=True)

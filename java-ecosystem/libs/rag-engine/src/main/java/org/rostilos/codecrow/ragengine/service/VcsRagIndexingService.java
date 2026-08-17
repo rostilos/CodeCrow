@@ -260,17 +260,24 @@ public class VcsRagIndexingService {
 
                     // Push job to Redis queue
                     String jobId = UUID.randomUUID().toString();
-                    Map<String, Object> requestPayload = Map.of(
-                            "repo_path", tempDir.toAbsolutePath().toString(),
-                            "workspace", project.getWorkspace().getName(),
-                            "project", project.getNamespace(),
-                            "branch", branch,
-                            "commit", commitHash,
-                            "source_tree_sha256", sourceTreeSha256,
-                            "preserve_other_branches", config.ragConfig().isMultiBranchEnabled(),
-                            "cleanup_repo_path", true,
-                            "include_patterns", includePatterns != null ? includePatterns : java.util.List.of(),
-                            "exclude_patterns", excludePatterns != null ? excludePatterns : java.util.List.of());
+                    Map<String, Object> requestPayload = new java.util.LinkedHashMap<>();
+                    requestPayload.put("repo_path", tempDir.toAbsolutePath().toString());
+                    requestPayload.put("workspace", project.getWorkspace().getName());
+                    requestPayload.put("project", project.getNamespace());
+                    requestPayload.put("branch", branch);
+                    requestPayload.put("commit", commitHash);
+                    requestPayload.put("source_tree_sha256", sourceTreeSha256);
+                    requestPayload.put("preserve_other_branches", config.ragConfig().isMultiBranchEnabled());
+                    requestPayload.put("cleanup_repo_path", true);
+                    requestPayload.put("include_patterns", includePatterns != null ? includePatterns : java.util.List.of());
+                    requestPayload.put("exclude_patterns", excludePatterns != null ? excludePatterns : java.util.List.of());
+                    var analysisProfile = config.analysisProfile();
+                    if (analysisProfile.projectType() != null) {
+                        requestPayload.put("project_type", analysisProfile.projectType());
+                    }
+                    if (analysisProfile.sourceRoot() != null) {
+                        requestPayload.put("source_root", analysisProfile.sourceRoot());
+                    }
 
                     Map<String, Object> jobPayload = Map.of(
                             "job_id", jobId,

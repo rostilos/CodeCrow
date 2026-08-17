@@ -28,6 +28,7 @@ public final class ProjectSelector {
     }
 
     public ProjectCapabilities select(RepositoryFacts facts) {
+        if (facts.projectType() != null) return selectExplicit(facts);
         List<String> selected = new ArrayList<>();
         Map<String, List<String>> evidence = new TreeMap<>();
         for (PluginDescriptor descriptor : registry.descriptors()) {
@@ -62,6 +63,48 @@ public final class ProjectSelector {
                 registry.fingerprintFor(selected));
     }
 
+    private ProjectCapabilities selectExplicit(RepositoryFacts facts) {
+        PluginDescriptor requested = registry.descriptor(facts.projectType());
+        TreeSet<String> requestedIds = new TreeSet<>();
+        requestedIds.add(requested.id());
+        for (PluginDescriptor descriptor : registry.descriptors()) {
+            if (descriptor.kind() != PluginKind.LANGUAGE) continue;
+            if (facts.paths().stream().anyMatch(path ->
+                    descriptor.detection().extensions().contains(extension(path)))) {
+                requestedIds.add(descriptor.id());
+            }
+        }
+        List<PluginDescriptor> resolved = registry.resolve(requestedIds);
+        List<String> selected = resolved.stream().map(PluginDescriptor::id).toList();
+        Map<String, List<String>> evidence = new TreeMap<>();
+        for (String pluginId : selected) {
+            evidence.put(pluginId, new TreeSet<>(List.of(
+                    pluginId.equals(requested.id())
+                            ? "manual-project-type:" + requested.id()
+                            : "manual-project-type-dependency:" + requested.id(),
+                    "root:" + (facts.sourceRoot() == null ? "." : facts.sourceRoot())
+            )).stream().toList());
+        }
+        Map<String, List<String>> filePlugins = new TreeMap<>();
+        List<PluginDescriptor> languages = resolved.stream()
+                .filter(descriptor -> descriptor.kind() == PluginKind.LANGUAGE)
+                .toList();
+        for (String path : facts.paths()) {
+            List<String> matches = languages.stream()
+                    .filter(descriptor -> descriptor.detection().extensions().contains(extension(path)))
+                    .map(PluginDescriptor::id)
+                    .toList();
+            if (!matches.isEmpty()) filePlugins.put(path, matches);
+        }
+        return new ProjectCapabilities(
+                selected,
+                filePlugins,
+                evidence,
+                List.of(),
+                fingerprint(facts.revision(), selected, filePlugins, evidence),
+                registry.fingerprintFor(selected));
+    }
+
     private List<String> match(PluginDescriptor descriptor, RepositoryFacts facts) {
         DetectionRules rules = descriptor.detection();
         List<String> extensionHits = facts.paths().stream()
@@ -93,52 +136,106 @@ public final class ProjectSelector {
 
     private List<String> matchGroup(DetectionAlternative group, RepositoryFacts facts) {
         Set<String> paths = Set.copyOf(facts.paths());
-        if (!paths.containsAll(group.filesAll())) return null;
-        if (!group.filesAny().isEmpty() && group.filesAny().stream().noneMatch(paths::contains)) return null;
-
-        Map<String, List<String>> allPatternHits = new TreeMap<>();
-        for (String pattern : group.pathPatternsAll()) {
-            List<String> hits = facts.paths().stream().filter(path -> PluginGlob.matches(pattern, path)).toList();
-            if (hits.isEmpty()) return null;
-            allPatternHits.put(pattern, hits);
+        List<Set<String>> rootSets = new ArrayList<>();
+        group.filesAll().forEach(relative -> rootSets.add(suffixRoots(facts.paths(), relative)));
+        group.contentMarkers().forEach(marker -> rootSets.add(facts.markerContents().entrySet().stream()
+                .filter(entry -> entry.getValue().contains(marker.contains()))
+                .flatMap(entry -> suffixRoots(List.of(entry.getKey()), marker.path()).stream())
+                .collect(java.util.stream.Collectors.toSet())));
+        Set<String> candidateRoots = new TreeSet<>();
+        if (!rootSets.isEmpty()) {
+            candidateRoots.addAll(rootSets.get(0));
+            rootSets.subList(1, rootSets.size()).forEach(candidateRoots::retainAll);
+        } else if (!group.filesAny().isEmpty()) {
+            group.filesAny().forEach(relative -> candidateRoots.addAll(suffixRoots(facts.paths(), relative)));
+        } else {
+            candidateRoots.add(facts.sourceRoot() == null ? "" : facts.sourceRoot());
         }
-        Map<String, List<String>> anyPatternHits = new TreeMap<>();
-        for (String pattern : group.pathPatternsAny()) {
-            List<String> hits = facts.paths().stream().filter(path -> PluginGlob.matches(pattern, path)).toList();
-            anyPatternHits.put(pattern, hits);
-        }
-        if (!group.pathPatternsAny().isEmpty()
-                && anyPatternHits.values().stream().allMatch(List::isEmpty)) return null;
-
-        List<ContentMarker> markerHits = group.contentMarkers().stream()
-                .filter(marker -> facts.markerContents().containsKey(marker.path()))
-                .filter(marker -> facts.markerContents().get(marker.path()).contains(marker.contains()))
-                .toList();
-        if (markerHits.size() != group.contentMarkers().size()) return null;
-        Map<ContentPatternMarker, List<String>> patternMarkerHits = new TreeMap<>();
-        for (ContentPatternMarker marker : group.contentPatternMarkers()) {
-            List<String> hits = facts.markerContents().entrySet().stream()
-                    .filter(entry -> PluginGlob.matches(marker.pathPattern(), entry.getKey()))
-                    .filter(entry -> entry.getValue().contains(marker.contains()))
-                    .map(Map.Entry::getKey)
-                    .toList();
-            if (hits.isEmpty()) return null;
-            patternMarkerHits.put(marker, hits);
+        if (facts.sourceRoot() != null) {
+            candidateRoots.retainAll(Set.of(facts.sourceRoot()));
         }
 
-        TreeSet<String> evidence = new TreeSet<>();
-        group.filesAll().forEach(path -> evidence.add("file:" + path));
-        group.filesAny().stream().filter(paths::contains).forEach(path -> evidence.add("file:" + path));
-        for (var entry : allPatternHits.entrySet()) {
-            entry.getValue().forEach(path -> evidence.add("pattern:" + entry.getKey() + ":" + path));
+        for (String root : candidateRoots) {
+            List<String> filesAll = group.filesAll().stream()
+                    .map(relative -> rooted(root, relative)).toList();
+            if (!paths.containsAll(filesAll)) continue;
+            List<String> filesAny = group.filesAny().stream()
+                    .map(relative -> rooted(root, relative)).filter(paths::contains).toList();
+            if (!group.filesAny().isEmpty() && filesAny.isEmpty()) continue;
+
+            Map<String, List<String>> allPatternHits = patternHits(group.pathPatternsAll(), facts.paths(), root);
+            if (allPatternHits.values().stream().anyMatch(List::isEmpty)) continue;
+            Map<String, List<String>> anyPatternHits = patternHits(group.pathPatternsAny(), facts.paths(), root);
+            if (!group.pathPatternsAny().isEmpty()
+                    && anyPatternHits.values().stream().allMatch(List::isEmpty)) continue;
+
+            Map<ContentMarker, String> markerHits = new LinkedHashMap<>();
+            for (ContentMarker marker : group.contentMarkers()) {
+                String path = rooted(root, marker.path());
+                if (!facts.markerContents().getOrDefault(path, "").contains(marker.contains())) break;
+                markerHits.put(marker, path);
+            }
+            if (markerHits.size() != group.contentMarkers().size()) continue;
+            Map<ContentPatternMarker, List<String>> patternMarkerHits = new TreeMap<>();
+            for (ContentPatternMarker marker : group.contentPatternMarkers()) {
+                List<String> hits = facts.markerContents().entrySet().stream()
+                        .filter(entry -> relativeToRoot(entry.getKey(), root) != null)
+                        .filter(entry -> PluginGlob.matches(marker.pathPattern(), relativeToRoot(entry.getKey(), root)))
+                        .filter(entry -> entry.getValue().contains(marker.contains()))
+                        .map(Map.Entry::getKey).toList();
+                if (hits.isEmpty()) break;
+                patternMarkerHits.put(marker, hits);
+            }
+            if (patternMarkerHits.size() != group.contentPatternMarkers().size()) continue;
+
+            TreeSet<String> evidence = new TreeSet<>();
+            evidence.add("root:" + (root.isEmpty() ? "." : root));
+            filesAll.forEach(path -> evidence.add("file:" + path));
+            filesAny.forEach(path -> evidence.add("file:" + path));
+            for (var entry : allPatternHits.entrySet()) entry.getValue().forEach(path ->
+                    evidence.add("pattern:" + entry.getKey() + ":" + path));
+            for (var entry : anyPatternHits.entrySet()) entry.getValue().forEach(path ->
+                    evidence.add("pattern:" + entry.getKey() + ":" + path));
+            markerHits.forEach((marker, path) ->
+                    evidence.add("content:" + path + ":" + marker.contains()));
+            patternMarkerHits.forEach((marker, hits) -> hits.forEach(path -> evidence.add(
+                    "content-pattern:" + marker.pathPattern() + ":" + path + ":" + marker.contains())));
+            return List.copyOf(evidence);
         }
-        for (var entry : anyPatternHits.entrySet()) {
-            entry.getValue().forEach(path -> evidence.add("pattern:" + entry.getKey() + ":" + path));
+        return null;
+    }
+
+    private static Set<String> suffixRoots(List<String> paths, String relative) {
+        TreeSet<String> roots = new TreeSet<>();
+        for (String path : paths) {
+            if (path.equals(relative)) roots.add("");
+            else if (path.endsWith("/" + relative)) {
+                roots.add(path.substring(0, path.length() - relative.length() - 1));
+            }
         }
-        markerHits.forEach(marker -> evidence.add("content:" + marker.path() + ":" + marker.contains()));
-        patternMarkerHits.forEach((marker, hits) -> hits.forEach(path -> evidence.add(
-                "content-pattern:" + marker.pathPattern() + ":" + path + ":" + marker.contains())));
-        return List.copyOf(evidence);
+        return roots;
+    }
+
+    private static String rooted(String root, String relative) {
+        return root.isEmpty() ? relative : root + "/" + relative;
+    }
+
+    private static String relativeToRoot(String path, String root) {
+        if (root.isEmpty()) return path;
+        String prefix = root + "/";
+        return path.startsWith(prefix) ? path.substring(prefix.length()) : null;
+    }
+
+    private static Map<String, List<String>> patternHits(
+            List<String> patterns, List<String> paths, String root) {
+        Map<String, List<String>> result = new TreeMap<>();
+        for (String pattern : patterns) {
+            result.put(pattern, paths.stream()
+                    .filter(path -> relativeToRoot(path, root) != null)
+                    .filter(path -> PluginGlob.matches(pattern, relativeToRoot(path, root)))
+                    .toList());
+        }
+        return result;
     }
 
     private String fingerprint(

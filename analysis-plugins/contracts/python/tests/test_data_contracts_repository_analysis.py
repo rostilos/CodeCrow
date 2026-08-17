@@ -23,24 +23,18 @@ def _facts(analysis):
     }
 
 
-def test_cross_language_contract_reference_removal_keeps_exact_consumers():
+def test_graphql_reference_removal_keeps_only_the_exact_schema_path():
     files = {
-        "contract/invoice-payload.txt": (
-            "Invoice payload contract\n"
-            "amountMinor: integer amount in the currency minor unit\n"
-            "currency: ISO 4217 currency code\n"
+        "schema/catalog.graphqls": (
+            "type Query { products: Products }\n"
+            "type Products { items: [Product] }\n"
+            "type Product { product_type: String sku: String }\n"
         ),
-        "backend/InvoicePayload.java": (
-            "return Map.of(\"amountMinor\", amountMinor, \"currency\", currency);\n"
+        "app/design/frontend/Acme/theme/templates/product.phtml": (
+            "<script>const request = `query ProductList { "
+            "products { items { product_type sku } } }`;</script>\n"
         ),
-        "worker/invoice_ledger.py": (
-            "def amount(payload):\n"
-            "    return payload[\"amountMinor\"]\n"
-        ),
-        "worker/test_invoice_ledger.py": (
-            "def test_amount():\n"
-            "    assert amount({\"amountMinor\": 1299}) == 1299\n"
-        ),
+        "unrelated/other.phtml": "$block->getData('product_type');\n",
     }
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)
@@ -49,11 +43,7 @@ def test_cross_language_contract_reference_removal_keeps_exact_consumers():
         paths=tuple(sorted(files)),
     ))
 
-    assert capabilities.repository_plugins == (
-        "data-contracts",
-        "java",
-        "python",
-    )
+    assert "data-contracts" in capabilities.repository_plugins
 
     base = runtime.start_repository_analysis(capabilities, REVISION)
     base.ingest(tuple(
@@ -64,9 +54,13 @@ def test_cross_language_contract_reference_removal_keeps_exact_consumers():
     assert diagnostics == ()
     assert any(
         fact.kind == "data-contract-reference"
-        and fact.path == "backend/InvoicePayload.java"
+        and fact.path == "app/design/frontend/Acme/theme/templates/product.phtml"
         and fact.target
-        == "contract/invoice-payload.txt::amountMinor"
+        == "schema/catalog.graphqls::Product.product_type"
+        for fact in _facts(base_analysis)
+    )
+    assert not any(
+        fact.path == "unrelated/other.phtml"
         for fact in _facts(base_analysis)
     )
 
@@ -76,8 +70,8 @@ def test_cross_language_contract_reference_removal_keeps_exact_consumers():
         snapshots=base_analysis.snapshots,
     )
     overlay.ingest((FileArtifact(
-        "backend/InvoicePayload.java",
-        'return Map.of("amount", amountMinor, "currency", currency);\n',
+        "app/design/frontend/Acme/theme/templates/product.phtml",
+        "<script>const request = `query ProductList { products { items { sku } } }`;</script>\n",
     ),))
     overlay_analysis, diagnostics = overlay.finish()
     assert diagnostics == ()
@@ -86,24 +80,21 @@ def test_cross_language_contract_reference_removal_keeps_exact_consumers():
         fact
         for fact in _facts(overlay_analysis)
         if fact.kind == "data-contract-pr-removed-reference"
-        and fact.path == "backend/InvoicePayload.java"
-        and dict(fact.attributes)["field"] == "amountMinor"
+        and fact.path == "app/design/frontend/Acme/theme/templates/product.phtml"
+        and dict(fact.attributes)["field"] == "product_type"
     )
     assert removed.related_paths == (
-        "contract/invoice-payload.txt",
-        "worker/invoice_ledger.py",
-        "worker/test_invoice_ledger.py",
+        "schema/catalog.graphqls",
     )
 
 
 def test_data_contract_snapshot_and_output_are_deterministic():
     files = {
-        "schemas/user.schema.json": (
+        "schemas/base.schema.json": (
             '{"type":"object","properties":{"userId":{"type":"string"}}}'
         ),
-        "src/user.ts": (
-            "export interface User { userId: string }\n"
-            "export const id = (user: User) => user.userId;\n"
+        "schemas/user.schema.json": (
+            '{"allOf":[{"$ref":"base.schema.json#/properties/userId"}]}'
         ),
     }
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
@@ -127,3 +118,43 @@ def test_data_contract_snapshot_and_output_are_deterministic():
     assert first_diagnostics == ()
     assert second_diagnostics == ()
     assert first == second
+
+
+def test_graphql_operations_inside_host_multiline_literals_are_structural():
+    files = {
+        "schema/invoice.graphqls": (
+            "type Query { invoice: InvoicePayload! }\n"
+            "type InvoicePayload { amountMinor: Int! currency: String! }\n"
+        ),
+        "worker/invoice.py": '''QUERY = """
+query InvoiceLedger {
+  invoice { amountMinor currency }
+}
+"""
+''',
+    }
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    runtime = PluginRuntime(catalog)
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
+        revision=REVISION,
+        paths=tuple(sorted(files)),
+    ))
+
+    handle = runtime.start_repository_analysis(capabilities, REVISION)
+    handle.ingest(tuple(
+        FileArtifact(path, content)
+        for path, content in sorted(files.items())
+    ))
+    analysis, diagnostics = handle.finish()
+
+    assert diagnostics == ()
+    facts = _facts(analysis)
+    assert {
+        fact.target
+        for fact in facts
+        if fact.path == "worker/invoice.py"
+    } == {
+        "schema/invoice.graphqls::Query.invoice",
+        "schema/invoice.graphqls::InvoicePayload.amountMinor",
+        "schema/invoice.graphqls::InvoicePayload.currency",
+    }

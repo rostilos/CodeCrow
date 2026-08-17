@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 
 from codecrow_plugins import ArchitecturePacket, GraphFact, PluginDiagnostic
 
@@ -34,7 +33,7 @@ def is_magento_config_xml(path: str) -> bool:
     candidate = f"/{normalized}"
     if marker not in candidate:
         return False
-    tail = candidate.split(marker, 1)[1].split("/")
+    tail = candidate.rsplit(marker, 1)[1].split("/")
     return (
         len(tail) == 1
         or (len(tail) == 2 and tail[0] in MAGENTO_AREAS)

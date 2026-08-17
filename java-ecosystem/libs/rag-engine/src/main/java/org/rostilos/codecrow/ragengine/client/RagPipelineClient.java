@@ -152,6 +152,28 @@ public class RagPipelineClient {
             boolean publishLegacyProjectAlias,
             String reuseCollectionTarget
     ) throws IOException {
+        return indexRepository(
+                repoPath, projectWorkspace, projectNamespace, branch, commit,
+                includePatterns, excludePatterns, collectionTarget,
+                publishBranchAlias, publishLegacyProjectAlias,
+                reuseCollectionTarget, null, null);
+    }
+
+    public Map<String, Object> indexRepository(
+            String repoPath,
+            String projectWorkspace,
+            String projectNamespace,
+            String branch,
+            String commit,
+            List<String> includePatterns,
+            List<String> excludePatterns,
+            String collectionTarget,
+            boolean publishBranchAlias,
+            boolean publishLegacyProjectAlias,
+            String reuseCollectionTarget,
+            String projectType,
+            String sourceRoot
+    ) throws IOException {
         if (!ragEnabled) {
             log.debug("RAG indexing disabled, skipping repository indexing");
             return Map.of("status", "skipped", "reason", "RAG disabled");
@@ -185,6 +207,7 @@ public class RagPipelineClient {
         if (excludePatterns != null && !excludePatterns.isEmpty()) {
             payload.put("exclude_patterns", excludePatterns);
         }
+        putAnalysisProfile(payload, projectType, sourceRoot);
 
         String url = ragApiUrl + "/index/repository";
         return postLongRunning(url, payload);
@@ -279,6 +302,32 @@ public class RagPipelineClient {
             Runnable ownershipAdmissionConsumer,
             Consumer<Map<String, Object>> progressConsumer
     ) throws IOException {
+        return indexRepository(
+                repoPath, projectWorkspace, projectNamespace, branch, commit,
+                includePatterns, excludePatterns, collectionTarget,
+                publishBranchAlias, publishLegacyProjectAlias,
+                transferRepositoryOwnership, reuseCollectionTarget,
+                ownershipAdmissionConsumer, progressConsumer, null, null);
+    }
+
+    public Map<String, Object> indexRepository(
+            String repoPath,
+            String projectWorkspace,
+            String projectNamespace,
+            String branch,
+            String commit,
+            List<String> includePatterns,
+            List<String> excludePatterns,
+            String collectionTarget,
+            boolean publishBranchAlias,
+            boolean publishLegacyProjectAlias,
+            boolean transferRepositoryOwnership,
+            String reuseCollectionTarget,
+            Runnable ownershipAdmissionConsumer,
+            Consumer<Map<String, Object>> progressConsumer,
+            String projectType,
+            String sourceRoot
+    ) throws IOException {
         if (!ragEnabled) {
             log.debug("RAG indexing disabled, skipping repository indexing");
             return Map.of("status", "skipped", "reason", "RAG disabled");
@@ -312,9 +361,22 @@ public class RagPipelineClient {
         if (excludePatterns != null && !excludePatterns.isEmpty()) {
             payload.put("exclude_patterns", excludePatterns);
         }
+        putAnalysisProfile(payload, projectType, sourceRoot);
         return postLongRunningSse(
                 ragApiUrl + "/index/repository/stream", payload,
                 ownershipAdmissionConsumer, progressConsumer);
+    }
+
+    private static void putAnalysisProfile(
+            Map<String, Object> payload,
+            String projectType,
+            String sourceRoot) {
+        if (projectType != null && !projectType.isBlank()) {
+            payload.put("project_type", projectType);
+        }
+        if (sourceRoot != null && !sourceRoot.isBlank()) {
+            payload.put("source_root", sourceRoot);
+        }
     }
 
     public Map<String, Object> updateFiles(

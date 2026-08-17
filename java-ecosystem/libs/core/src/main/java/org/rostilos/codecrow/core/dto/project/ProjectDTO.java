@@ -41,6 +41,8 @@ public record ProjectDTO(
         Integer maxAnalysisTokenLimit,
         Boolean useMcpTools,
         Boolean taskContextAnalysisEnabled,
+        String projectType,
+        String sourceRoot,
         ProjectRulesConfigDTO projectRulesConfig,
         TaskManagementConfigDTO taskManagementConfig,
         QaAutoDocConfigDTO qaAutoDocConfig) {
@@ -194,6 +196,8 @@ public record ProjectDTO(
                 maxAnalysisTokenLimit,
                 useMcpTools,
                 taskContextAnalysisEnabled,
+                config != null ? config.analysisProfile().projectType() : null,
+                config != null ? config.analysisProfile().sourceRoot() : null,
                 projectRulesConfigDTO,
                 taskManagementConfigDTO,
                 qaAutoDocConfigDTO);
