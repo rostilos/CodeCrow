@@ -11,6 +11,22 @@ from .registry import PluginRegistry
 MAX_DETECTION_EVIDENCE_PER_PLUGIN = 64
 
 
+def _under_source_root(path: str, source_root: str | None) -> bool:
+    return (
+        source_root is None
+        or path == source_root
+        or path.startswith(source_root + "/")
+    )
+
+
+def _source_paths(facts: RepositoryFacts) -> tuple[str, ...]:
+    return tuple(
+        path
+        for path in facts.paths
+        if _under_source_root(path, facts.source_root)
+    )
+
+
 def _suffix_roots(paths: tuple[str, ...], relative: str) -> set[str]:
     return {
         "" if path == relative else path[: -(len(relative) + 1)]
@@ -128,7 +144,9 @@ def _group_evidence(group: DetectionAlternative, facts: RepositoryFacts) -> tupl
 def _rule_evidence(descriptor: PluginDescriptor, facts: RepositoryFacts) -> tuple[str, ...] | None:
     rules = descriptor.detection
     extension_hits = tuple(
-        path for path in facts.paths if PurePosixPath(path).suffix.lower() in rules.extensions
+        path
+        for path in _source_paths(facts)
+        if PurePosixPath(path).suffix.lower() in rules.extensions
     )
     groups: list[DetectionAlternative] = []
     if rules.files_all or rules.files_any or rules.content_markers:
@@ -181,7 +199,7 @@ class ProjectSelector:
             for plugin_id in selected
             if self._registry.descriptor(plugin_id).kind is PluginKind.LANGUAGE
         ]
-        for path in facts.paths:
+        for path in _source_paths(facts):
             extension = PurePosixPath(path).suffix.lower()
             matches = tuple(
                 descriptor.id
@@ -214,7 +232,7 @@ class ProjectSelector:
             if descriptor.kind is PluginKind.LANGUAGE
             and any(
                 PurePosixPath(path).suffix.lower() in descriptor.detection.extensions
-                for path in facts.paths
+                for path in _source_paths(facts)
             )
         }
         resolved = self._registry.resolve((*language_ids, requested.id))
@@ -236,7 +254,7 @@ class ProjectSelector:
         )
         file_plugins = {
             path: matches
-            for path in facts.paths
+            for path in _source_paths(facts)
             if (matches := tuple(
                 descriptor.id for descriptor in active_languages
                 if PurePosixPath(path).suffix.lower() in descriptor.detection.extensions

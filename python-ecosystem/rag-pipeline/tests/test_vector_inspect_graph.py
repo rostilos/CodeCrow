@@ -3,9 +3,11 @@ from types import SimpleNamespace
 from rag_pipeline.api.routers.inspect import (
     _architecture_lookup_paths,
     _build_graph,
+    _dependency_neighbor_filters,
     _relation_lookup_names,
     _to_graph_node,
 )
+from rag_pipeline.api.models import VectorInspectFilters
 
 
 def _node(
@@ -127,6 +129,33 @@ def test_relation_lookup_names_collects_dependency_tokens_by_branch():
 
     assert "main" in names
     assert {"org.example.Service", "Service", "run", "Worker"} <= set(names["main"])
+
+
+def test_dependency_neighbor_filters_preserve_language_and_pr_scope():
+    source = _node(
+        "source",
+        "Source",
+        metadata={"calls": ["run"]},
+    )
+    filters = VectorInspectFilters(
+        branches=["main"],
+        languages=["php"],
+        pr_number=42,
+        include_pr=False,
+    )
+
+    neighbor_filters = list(_dependency_neighbor_filters([source], filters))
+
+    assert neighbor_filters
+    for neighbor_filter in neighbor_filters:
+        conditions = {condition.key: condition for condition in neighbor_filter.must}
+        assert conditions["branch"].match.value == "main"
+        assert conditions["language"].match.value == "php"
+        assert conditions["pr_number"].match.value == 42
+        assert any(
+            condition.key == "pr" and condition.match.value is True
+            for condition in neighbor_filter.must_not
+        )
 
 
 def test_relation_lookup_names_and_paths_include_plugin_fact_boundaries():

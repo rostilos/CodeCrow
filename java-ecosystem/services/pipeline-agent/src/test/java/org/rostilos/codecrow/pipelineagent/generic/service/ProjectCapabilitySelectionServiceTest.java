@@ -104,6 +104,40 @@ class ProjectCapabilitySelectionServiceTest {
                 "0123456789abcdef");
     }
 
+    @Test
+    void automatic_selection_reads_markers_below_inferred_nested_root()
+            throws Exception {
+        var runtime = new PluginRuntime(List.of(new RootedMarkerPlugin()));
+        var service = new ProjectCapabilitySelectionService(runtime);
+        var vcsClient = mock(VcsClient.class);
+        when(vcsClient.getFileContent(
+                "workspace",
+                "repository",
+                "magento/src/framework.marker",
+                "0123456789abcdef"))
+                .thenReturn("framework=true");
+
+        var plan = service.plan(
+                vcsClient,
+                "workspace",
+                "repository",
+                "0123456789abcdef",
+                List.of(
+                        "magento/src/framework.marker",
+                        "magento/src/src/Thing.fixture"));
+
+        assertThat(plan.preliminaryCapabilities().repositoryPlugins())
+                .containsExactly("rooted-marker");
+        assertThat(plan.preliminaryCapabilities().detectionEvidence()
+                .get("rooted-marker"))
+                .contains("root:magento/src");
+        verify(vcsClient).getFileContent(
+                "workspace",
+                "repository",
+                "magento/src/framework.marker",
+                "0123456789abcdef");
+    }
+
     private static final class FixturePolicyPlugin implements FilePolicyPlugin {
         private final PluginDescriptor descriptor = new PluginDescriptor(
                 "fixture-policy",

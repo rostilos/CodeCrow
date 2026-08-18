@@ -44,11 +44,7 @@ public record RepositoryFacts(
         if (sourceRoot != null && (sourceRoot.isBlank() || ".".equals(sourceRoot.trim()))) {
             sourceRoot = null;
         } else if (sourceRoot != null) {
-            String normalized = PluginValues.normalizePath(sourceRoot.trim().replace('\\', '/'));
-            if (!normalized.equals(sourceRoot.trim().replace('\\', '/'))) {
-                throw new IllegalArgumentException("source root must already be normalized");
-            }
-            sourceRoot = normalized;
+            sourceRoot = PluginValues.normalizePath(sourceRoot.trim().replace('\\', '/'));
         }
     }
 }

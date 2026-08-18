@@ -20,7 +20,11 @@ from codecrow_plugins import (
     RepositorySnapshot,
     SymbolDefinition,
 )
-from codecrow_plugins.graphql import parse_operations, parse_schema
+from codecrow_plugins.graphql import (
+    parse_operations,
+    parse_schema,
+    parse_schema_root_types,
+)
 
 from .architecture import (
     MAGENTO_AREAS,
@@ -6333,19 +6337,19 @@ class MagentoRepositoryResolver:
                         declaration.line,
                         attrs(directive=type_resolver.name),
                     ), self._symbol_path(resolver_class))
-                for field in declaration.fields:
-                    field_key = f"{type_name}.{field.name}"
+                for declared_field in declaration.fields:
+                    field_key = f"{type_name}.{declared_field.name}"
                     packet.add(GraphFact(
                         "magento-graphql-field",
                         type_name,
                         "has-field",
-                        field.name,
+                        declared_field.name,
                         path,
-                        field.line,
-                        attrs(dataType=field.target_type),
+                        declared_field.line,
+                        attrs(dataType=declared_field.target_type),
                     ))
                     resolver = next((
-                        directive for directive in field.directives
+                        directive for directive in declared_field.directives
                         if directive.name in {"resolver", "typeResolver"}
                         and directive.argument("class")
                     ), None)
@@ -6357,7 +6361,7 @@ class MagentoRepositoryResolver:
                             "resolved-by",
                             resolver_class,
                             path,
-                            field.line,
+                            declared_field.line,
                             attrs(directive=resolver.name),
                         ), self._symbol_path(resolver_class))
 
@@ -6373,18 +6377,31 @@ class MagentoRepositoryResolver:
             tuple[str, str],
             list[tuple[str, str, int]],
         ] = {}
+        root_types: dict[str, set[str]] = {}
         for schema_path, content in sorted(self.artifacts.items()):
             if not schema_path.casefold().endswith(".graphqls"):
                 continue
             module = self._module_for_path(schema_path, modules)
             if module is None or not module.enabled:
                 continue
+            for operation, type_name in parse_schema_root_types(content):
+                root_types.setdefault(operation, set()).add(type_name)
             for definition in parse_schema(content):
-                for field in definition.fields:
+                for declared_field in definition.fields:
                     declarations.setdefault(
-                        (definition.name, field.name),
+                        (definition.name, declared_field.name),
                         [],
-                    ).append((schema_path, field.target_type, field.line))
+                    ).append((
+                        schema_path,
+                        declared_field.target_type,
+                        declared_field.line,
+                    ))
+
+        resolved_root_types = {
+            operation: next(iter(type_names))
+            for operation, type_names in root_types.items()
+            if len(type_names) == 1
+        }
 
         client_suffixes = (
             ".phtml", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".html",
@@ -6392,7 +6409,11 @@ class MagentoRepositoryResolver:
         for client_path, content in sorted(self.artifacts.items()):
             if not client_path.casefold().endswith(client_suffixes):
                 continue
-            for selection in parse_operations(content):
+            for selection in parse_operations(
+                content,
+                embedded_only=True,
+                root_types=resolved_root_types,
+            ):
                 owner = selection.root
                 resolved: tuple[str, str, int] | None = None
                 resolved_owner = ""
@@ -7268,12 +7289,7 @@ class MagentoRepositorySession:
         }
         if roots:
             return tuple(sorted(roots, key=lambda value: (value.count("/"), value)))
-        module_roots = {
-            _module_root(path)
-            for path in self.artifacts
-            if path == "etc/module.xml" or path.endswith("/etc/module.xml")
-        }
-        return tuple(sorted(module_roots)) or ("",)
+        return ("",)
 
     def _scoped_artifacts(self, root: str) -> dict[str, str]:
         if not root:
@@ -7344,7 +7360,7 @@ class MagentoRepositorySession:
             RepositoryContext(
                 context.plugin_id,
                 context.kind,
-                self._prefix_path(root, context.path),
+                path(context.path),
                 context.content,
                 context.attributes,
             )

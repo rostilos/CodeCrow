@@ -492,6 +492,7 @@ public class ProjectConfig {
                 Objects.equals(maxAnalysisTokenLimit, that.maxAnalysisTokenLimit) &&
                 Objects.equals(analysisLimits, that.analysisLimits) &&
                 Objects.equals(analysisScope, that.analysisScope) &&
+                Objects.equals(analysisProfile(), that.analysisProfile()) &&
                 Objects.equals(projectRules, that.projectRules) &&
                 Objects.equals(taskManagement, that.taskManagement) &&
                 Objects.equals(qaAutoDoc, that.qaAutoDoc);
@@ -502,7 +503,7 @@ public class ProjectConfig {
         return Objects.hash(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, taskContextAnalysisEnabled, installationMethod,
                 commentCommands, maxAnalysisTokenLimit, analysisLimits, analysisScope,
-                projectRules, taskManagement, qaAutoDoc);
+                analysisProfile(), projectRules, taskManagement, qaAutoDoc);
     }
 
     @Override

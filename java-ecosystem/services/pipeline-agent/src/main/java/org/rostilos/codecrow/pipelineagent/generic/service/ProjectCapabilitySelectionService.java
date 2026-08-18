@@ -94,11 +94,27 @@ public class ProjectCapabilitySelectionService {
                 });
             }
         }
-        TreeSet<String> resolvedMarkerPaths = sourceRoot == null
-                ? markerPaths
-                : markerPaths.stream()
-                        .map(path -> sourceRoot + "/" + path)
-                        .collect(java.util.stream.Collectors.toCollection(TreeSet::new));
+        TreeSet<String> candidateRoots = new TreeSet<>();
+        if (sourceRoot != null) {
+            candidateRoots.add(sourceRoot);
+        } else {
+            candidateRoots.add("");
+            for (String repositoryPath : paths) {
+                for (String markerPath : markerPaths) {
+                    if (repositoryPath.equals(markerPath)) {
+                        candidateRoots.add("");
+                    } else if (repositoryPath.endsWith("/" + markerPath)) {
+                        candidateRoots.add(repositoryPath.substring(
+                                0,
+                                repositoryPath.length() - markerPath.length() - 1));
+                    }
+                }
+            }
+        }
+        TreeSet<String> resolvedMarkerPaths = candidateRoots.stream()
+                .flatMap(root -> markerPaths.stream().map(path ->
+                        root.isEmpty() ? path : root + "/" + path))
+                .collect(java.util.stream.Collectors.toCollection(TreeSet::new));
         if (resolvedMarkerPaths.size() > MAX_MARKER_FILES) {
             throw new IllegalStateException("plugin marker declarations exceed the host budget");
         }

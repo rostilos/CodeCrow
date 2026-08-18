@@ -548,17 +548,49 @@ def _dependency_neighbor_filters(
     filters: VectorInspectFilters,
 ) -> Iterable[Filter]:
     """Build bounded filters that fetch likely dependency targets for graph edges."""
+    def scoped_conditions(branch: str) -> Tuple[List[FieldCondition], List[FieldCondition]]:
+        must: List[FieldCondition] = []
+        must_not: List[FieldCondition] = []
+        if branch:
+            must.append(FieldCondition(key="branch", match=MatchValue(value=branch)))
+        elif filters.branches:
+            branch_match = (
+                MatchValue(value=filters.branches[0])
+                if len(filters.branches) == 1
+                else MatchAny(any=filters.branches)
+            )
+            must.append(FieldCondition(key="branch", match=branch_match))
+        if filters.languages:
+            language_match = (
+                MatchValue(value=filters.languages[0])
+                if len(filters.languages) == 1
+                else MatchAny(any=filters.languages)
+            )
+            must.append(FieldCondition(key="language", match=language_match))
+        if filters.pr_number is not None:
+            must.append(FieldCondition(
+                key="pr_number",
+                match=MatchValue(value=filters.pr_number),
+            ))
+        if not filters.include_pr:
+            must_not.append(FieldCondition(key="pr", match=MatchValue(value=True)))
+        return must, must_not
+
     for branch, paths in _architecture_lookup_paths(nodes).items():
         if filters.branches and branch and branch not in filters.branches:
             continue
-        base_must = []
-        if branch:
-            base_must.append(FieldCondition(key="branch", match=MatchValue(value=branch)))
+        base_must, base_must_not = scoped_conditions(branch)
         for start in range(0, len(paths), 60):
-            yield Filter(must=[
-                *base_must,
-                FieldCondition(key="path", match=MatchAny(any=paths[start:start + 60])),
-            ])
+            yield Filter(
+                must=[
+                    *base_must,
+                    FieldCondition(
+                        key="path",
+                        match=MatchAny(any=paths[start:start + 60]),
+                    ),
+                ],
+                must_not=base_must_not or None,
+            )
 
     for branch, names in _relation_lookup_names(nodes).items():
         if not names:
@@ -566,15 +598,22 @@ def _dependency_neighbor_filters(
         if filters.branches and branch and branch not in filters.branches:
             continue
 
-        base_must = []
-        if branch:
-            base_must.append(FieldCondition(key="branch", match=MatchValue(value=branch)))
+        base_must, base_must_not = scoped_conditions(branch)
 
         for start in range(0, len(names), 60):
             batch = names[start:start + 60]
-            yield Filter(must=[*base_must, FieldCondition(key="primary_name", match=MatchAny(any=batch))])
-            yield Filter(must=[*base_must, FieldCondition(key="semantic_names", match=MatchAny(any=batch))])
-            yield Filter(must=[*base_must, FieldCondition(key="methods", match=MatchAny(any=batch[:40]))])
+            for key, values in (
+                ("primary_name", batch),
+                ("semantic_names", batch),
+                ("methods", batch[:40]),
+            ):
+                yield Filter(
+                    must=[
+                        *base_must,
+                        FieldCondition(key=key, match=MatchAny(any=values)),
+                    ],
+                    must_not=base_must_not or None,
+                )
 
 
 def _hydrate_dependency_neighbors(

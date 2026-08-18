@@ -126,6 +126,17 @@
           "id": "POLY-CONTRACT-001",
           "line": 13,
           "summary": "The partial payload rename emits amount while the fixed contract and Python ledger consumer still require amountMinor."
+        },
+        {
+          "evidenceFiles": [
+            "contract/invoice.graphqls",
+            "worker/invoice_ledger.py",
+            "worker/test_invoice_ledger.py"
+          ],
+          "file": "web/src/invoice.ts",
+          "id": "POLY-CONTRACT-002",
+          "line": 7,
+          "summary": "The TypeScript query and payload rename amountMinor to amount while the fixed contract and Python ledger consumer still require amountMinor."
         }
       ],
       "frameworks": [],

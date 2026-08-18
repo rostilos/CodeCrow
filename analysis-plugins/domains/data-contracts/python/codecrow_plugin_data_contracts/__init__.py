@@ -4,6 +4,7 @@ import base64
 import gzip
 import json
 import posixpath
+import re
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Mapping
@@ -21,7 +22,11 @@ from codecrow_plugins import (
     ValidationDecision,
     ValidationResult,
 )
-from codecrow_plugins.graphql import parse_operations, parse_schema
+from codecrow_plugins.graphql import (
+    parse_operations,
+    parse_schema,
+    parse_schema_root_types,
+)
 
 
 _SNAPSHOT_KIND = "data-contract-reference-graph"
@@ -37,6 +42,9 @@ _RELATION_KINDS = {
     "data-contract-reference",
     "data-contract-pr-removed-reference",
 }
+_JSON_REF = re.compile(
+    r'(?<!\\)"\$ref"\s*:\s*(?P<value>"(?:\\.|[^"\\])*")',
+)
 
 
 @dataclass(frozen=True, order=True)
@@ -60,6 +68,7 @@ class ReferenceOccurrence:
 class ContractFileRecord:
     path: str
     is_contract: bool
+    root_types: tuple[tuple[str, str], ...] = ()
     declarations: tuple[FieldOccurrence, ...] = ()
     references: tuple[ReferenceOccurrence, ...] = ()
 
@@ -86,10 +95,17 @@ def _graphql_declarations(content: str) -> tuple[FieldOccurrence, ...]:
     )[:_MAX_CANDIDATES_PER_FILE])
 
 
-def _graphql_references(content: str) -> tuple[ReferenceOccurrence, ...]:
+def _graphql_references(
+    content: str,
+    *,
+    embedded_only: bool,
+) -> tuple[ReferenceOccurrence, ...]:
     return tuple(
         ReferenceOccurrence("graphql", item.root, item.segments, item.line)
-        for item in parse_operations(content)[:_MAX_CANDIDATES_PER_FILE]
+        for item in parse_operations(
+            content,
+            embedded_only=embedded_only,
+        )[:_MAX_CANDIDATES_PER_FILE]
     )
 
 
@@ -98,23 +114,24 @@ def _json_references(content: str) -> tuple[ReferenceOccurrence, ...]:
         root = json.loads(content)
     except (TypeError, ValueError):
         return ()
-    values: set[str] = set()
-
-    def visit(value: object) -> None:
-        if isinstance(value, dict):
-            reference = value.get("$ref")
-            if isinstance(reference, str) and reference.strip():
-                values.add(reference.strip())
-            for child in value.values():
-                visit(child)
-        elif isinstance(value, list):
-            for child in value:
-                visit(child)
-
-    visit(root)
+    if not isinstance(root, (dict, list)):
+        return ()
+    occurrences: set[ReferenceOccurrence] = set()
+    for match in _JSON_REF.finditer(content):
+        try:
+            reference = json.loads(match.group("value"))
+        except ValueError:
+            continue
+        if not isinstance(reference, str) or not reference.strip():
+            continue
+        occurrences.add(ReferenceOccurrence(
+            "json-ref",
+            "",
+            (reference.strip(),),
+            content.count("\n", 0, match.start("value")) + 1,
+        ))
     return tuple(sorted(
-        ReferenceOccurrence("json-ref", "", (value,), 1)
-        for value in values
+        occurrences,
     ))
 
 
@@ -130,12 +147,20 @@ def _record(artifact: FileArtifact) -> ContractFileRecord | None:
     )
     references: tuple[ReferenceOccurrence, ...] = ()
     if not lowered.endswith(".graphqls"):
-        references = _graphql_references(artifact.content)
+        references = _graphql_references(
+            artifact.content,
+            embedded_only=not lowered.endswith((".graphql", ".graphqls")),
+        )
     if lowered.endswith(".json"):
         references = tuple(sorted({*references, *_json_references(artifact.content)}))
     return ContractFileRecord(
         path=artifact.path,
         is_contract=contract,
+        root_types=(
+            parse_schema_root_types(artifact.content)
+            if lowered.endswith((".graphqls", ".graphql")) and contract
+            else ()
+        ),
         declarations=tuple(declarations),
         references=tuple(references),
     )
@@ -145,6 +170,7 @@ def _record_mapping(record: ContractFileRecord) -> dict[str, object]:
     return {
         "path": record.path,
         "isContract": record.is_contract,
+        "rootTypes": dict(record.root_types),
         "declarations": [
             {
                 "name": item.name,
@@ -173,13 +199,18 @@ def _record_from_mapping(value: object) -> ContractFileRecord:
 
     def declarations() -> tuple[FieldOccurrence, ...]:
         raw = value.get("declarations", [])
+        if not isinstance(raw, list):
+            raise ValueError("data-contract snapshot declarations must be a list")
         return tuple(sorted(
             FieldOccurrence(
                 str(item["name"]),
                 int(item["line"]),
                 str(item.get("owner", "")),
                 str(item.get("targetType", "")),
-                str(item.get("contractKind", "graphql")),
+                str(item.get(
+                    "contractKind",
+                    "graphql" if "owner" in item else "legacy-name",
+                )),
             )
             for item in raw
             if isinstance(item, dict)
@@ -187,20 +218,38 @@ def _record_from_mapping(value: object) -> ContractFileRecord:
 
     def references() -> tuple[ReferenceOccurrence, ...]:
         raw = value.get("references", [])
+        if not isinstance(raw, list):
+            raise ValueError("data-contract snapshot references must be a list")
         return tuple(sorted(
             ReferenceOccurrence(
-                str(item.get("contractKind", "")),
+                str(item.get(
+                    "contractKind",
+                    "legacy-name" if "name" in item else "",
+                )),
                 str(item.get("root", "")),
-                tuple(str(segment) for segment in item.get("segments", [])),
+                (
+                    (str(item["name"]),)
+                    if "name" in item and "segments" not in item
+                    else tuple(
+                        str(segment) for segment in item.get("segments", [])
+                    )
+                ),
                 int(item["line"]),
             )
             for item in raw
             if isinstance(item, dict)
         ))
 
+    raw_root_types = value.get("rootTypes", {})
+    if not isinstance(raw_root_types, dict):
+        raise ValueError("data-contract snapshot rootTypes must be an object")
     return ContractFileRecord(
         path=str(value["path"]),
         is_contract=bool(value["isContract"]),
+        root_types=tuple(sorted(
+            (str(operation), str(type_name))
+            for operation, type_name in raw_root_types.items()
+        )),
         declarations=declarations(),
         references=references(),
     )
@@ -277,6 +326,42 @@ class ContractGraphSession:
         }
 
     @staticmethod
+    def _legacy_declarations(
+        records: Mapping[str, ContractFileRecord],
+    ) -> dict[str, tuple[tuple[str, int], ...]]:
+        result: dict[str, set[tuple[str, int]]] = {}
+        for record in records.values():
+            if not record.is_contract:
+                continue
+            for occurrence in record.declarations:
+                result.setdefault(occurrence.name, set()).add(
+                    (record.path, occurrence.line)
+                )
+        return {
+            name: tuple(sorted(values))
+            for name, values in sorted(result.items())
+        }
+
+    @staticmethod
+    def _graphql_roots(
+        records: Mapping[str, ContractFileRecord],
+    ) -> dict[str, str]:
+        declared: dict[str, set[str]] = {}
+        for record in records.values():
+            for operation, type_name in record.root_types:
+                declared.setdefault(operation, set()).add(type_name)
+        defaults = {
+            "query": "Query",
+            "mutation": "Mutation",
+            "subscription": "Subscription",
+        }
+        return {
+            defaults[operation]: next(iter(type_names))
+            for operation, type_names in declared.items()
+            if operation in defaults and len(type_names) == 1
+        }
+
+    @staticmethod
     def _json_reference_target(source_path: str, reference: str) -> tuple[str, str]:
         file_part, separator, fragment = reference.partition("#")
         if not file_part:
@@ -294,6 +379,8 @@ class ContractGraphSession:
         records: Mapping[str, ContractFileRecord],
     ) -> tuple[ArchitecturePacket, ...]:
         declarations = self._declarations(records)
+        legacy_declarations = self._legacy_declarations(records)
+        graphql_roots = self._graphql_roots(records)
         contract_paths = {
             record.path for record in records.values() if record.is_contract
         }
@@ -305,7 +392,11 @@ class ContractGraphSession:
             paths = {record.path}
             for occurrence in record.references:
                 if occurrence.contract_kind == "graphql":
-                    owner = occurrence.root
+                    operation_root = graphql_roots.get(
+                        occurrence.root,
+                        occurrence.root,
+                    )
+                    owner = operation_root
                     resolved = None
                     for field in occurrence.segments:
                         candidates = declarations.get((owner, field), ())
@@ -321,7 +412,7 @@ class ContractGraphSession:
                     paths.add(contract_path)
                     facts.add(GraphFact(
                         "data-contract-reference",
-                        f"{record.path}::{occurrence.root}"
+                        f"{record.path}::{operation_root}"
                         f".{'.'.join(occurrence.segments)}",
                         "selects-graphql-field",
                         f"{contract_path}::{field_owner}.{field}",
@@ -335,6 +426,26 @@ class ContractGraphSession:
                         ),
                         related_paths=(contract_path,),
                     ))
+                elif (
+                    occurrence.contract_kind == "legacy-name"
+                    and occurrence.segments
+                ):
+                    field = occurrence.segments[0]
+                    for contract_path, _ in legacy_declarations.get(field, ()):
+                        paths.add(contract_path)
+                        facts.add(GraphFact(
+                            "data-contract-reference",
+                            record.path,
+                            "references-declared-field",
+                            f"{contract_path}::{field}",
+                            record.path,
+                            occurrence.line,
+                            attributes=(
+                                ("contractKind", "legacy-name"),
+                                ("field", field),
+                            ),
+                            related_paths=(contract_path,),
+                        ))
                 elif occurrence.contract_kind == "json-ref":
                     target_path, fragment = self._json_reference_target(
                         record.path, occurrence.segments[0]
@@ -374,7 +485,6 @@ class ContractGraphSession:
             fact.relation,
             fact.target,
             fact.path,
-            fact.line,
             fact.attributes,
             fact.related_paths,
         )

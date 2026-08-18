@@ -44,7 +44,7 @@ public final class ProjectSelector {
                 .map(registry::descriptor)
                 .filter(descriptor -> descriptor.kind() == PluginKind.LANGUAGE)
                 .toList();
-        for (String path : facts.paths()) {
+        for (String path : sourcePaths(facts)) {
             String extension = extension(path);
             List<String> matches = languages.stream()
                     .filter(descriptor -> descriptor.detection().extensions().contains(extension))
@@ -69,7 +69,7 @@ public final class ProjectSelector {
         requestedIds.add(requested.id());
         for (PluginDescriptor descriptor : registry.descriptors()) {
             if (descriptor.kind() != PluginKind.LANGUAGE) continue;
-            if (facts.paths().stream().anyMatch(path ->
+            if (sourcePaths(facts).stream().anyMatch(path ->
                     descriptor.detection().extensions().contains(extension(path)))) {
                 requestedIds.add(descriptor.id());
             }
@@ -89,7 +89,7 @@ public final class ProjectSelector {
         List<PluginDescriptor> languages = resolved.stream()
                 .filter(descriptor -> descriptor.kind() == PluginKind.LANGUAGE)
                 .toList();
-        for (String path : facts.paths()) {
+        for (String path : sourcePaths(facts)) {
             List<String> matches = languages.stream()
                     .filter(descriptor -> descriptor.detection().extensions().contains(extension(path)))
                     .map(PluginDescriptor::id)
@@ -107,7 +107,7 @@ public final class ProjectSelector {
 
     private List<String> match(PluginDescriptor descriptor, RepositoryFacts facts) {
         DetectionRules rules = descriptor.detection();
-        List<String> extensionHits = facts.paths().stream()
+        List<String> extensionHits = sourcePaths(facts).stream()
                 .filter(path -> rules.extensions().contains(extension(path)))
                 .toList();
         List<DetectionAlternative> groups = new ArrayList<>();
@@ -132,6 +132,14 @@ public final class ProjectSelector {
             if (extensionHits.isEmpty() && !groupMatched) return null;
         } else if (!groupMatched) return null;
         return evidence.stream().limit(MAX_EVIDENCE_PER_PLUGIN).toList();
+    }
+
+    private static List<String> sourcePaths(RepositoryFacts facts) {
+        if (facts.sourceRoot() == null) return facts.paths();
+        String prefix = facts.sourceRoot() + "/";
+        return facts.paths().stream()
+                .filter(path -> path.equals(facts.sourceRoot()) || path.startsWith(prefix))
+                .toList();
     }
 
     private List<String> matchGroup(DetectionAlternative group, RepositoryFacts facts) {
