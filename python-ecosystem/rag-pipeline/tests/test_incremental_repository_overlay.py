@@ -13,6 +13,7 @@ from codecrow_plugins import (
     PluginRuntime,
     ProjectSelector,
     RepositoryAnalysis,
+    RepositoryFacts,
     RepositorySnapshot,
     build_repository_facts,
 )
@@ -37,6 +38,57 @@ class _NoSemanticEmbedding:
 class _StaticEmbedding:
     def get_text_embedding_batch(self, texts):
         return [[1.0, 0.0, 0.0, 0.0] for _ in texts]
+
+
+def test_repository_facts_round_trip_authoritative_analysis_profile():
+    catalog = discover_builtin_plugins()
+    facts = RepositoryFacts(
+        revision="base",
+        paths=("magento/src/etc/app/code/Acme/Checkout/Model/Cart.php",),
+        project_type="magento",
+        source_root="magento/src/etc",
+    )
+    capabilities = ProjectSelector(catalog.registry).select(facts)
+    client = QdrantClient(":memory:")
+    collection = "repository"
+    client.create_collection(
+        collection_name=collection,
+        vectors_config=VectorParams(size=4, distance=Distance.COSINE),
+    )
+    point_ops = PointOperations(
+        client,
+        _StaticEmbedding(),
+        batch_size=50,
+        embedding_dim=4,
+    )
+    nodes = RepositoryIndexer._repository_facts_nodes(
+        facts,
+        capabilities,
+        "ws",
+        "project",
+        "main",
+        "base",
+        catalog.implementation_fingerprint(capabilities.repository_plugins),
+    )
+    successful, failed = point_ops.process_and_upsert_chunks(
+        nodes,
+        collection,
+        "ws",
+        "project",
+        "main",
+    )
+    assert successful == len(nodes)
+    assert failed == 0
+
+    restored, plugin_ids, *_identity = load_repository_facts(
+        client,
+        collection,
+        "main",
+    )
+
+    assert restored.project_type == "magento"
+    assert restored.source_root == "magento/src/etc"
+    assert plugin_ids == ("php", "magento")
 
 
 def _splitter_mock():

@@ -102,11 +102,11 @@
     },
     {
       "baseFiles": {
-        "backend/src/main/java/example/InvoicePayload.java": "package example;\n\nimport java.util.Map;\n\npublic final class InvoicePayload {\n    public Map<String, Object> serialize(long amountMinor, String currency) {\n        return Map.of(\"amountMinor\", amountMinor, \"currency\", currency);\n    }\n}\n",
-        "contract/invoice-payload.txt": "Invoice payload contract\namountMinor: integer amount in the currency's minor unit\ncurrency: ISO 4217 currency code\n",
-        "web/src/invoice.ts": "export interface InvoicePayload {\n  amountMinor: number;\n  currency: string;\n}\n\nexport const displayAmount = (payload: InvoicePayload): string =>\n  `${payload.currency} ${(payload.amountMinor / 100).toFixed(2)}`;\n",
-        "worker/invoice_ledger.py": "def ledger_amount(payload):\n    return int(payload[\"amountMinor\"])\n",
-        "worker/test_invoice_ledger.py": "from invoice_ledger import ledger_amount\n\n\ndef test_uses_minor_unit_contract():\n    assert ledger_amount({\"amountMinor\": 1299, \"currency\": \"EUR\"}) == 1299\n"
+        "backend/src/main/java/example/InvoicePayload.java": "package example;\n\nimport java.util.Map;\n\npublic final class InvoicePayload {\n    private static final String QUERY = \"\"\"\n        query InvoicePayloadQuery {\n          invoice { amountMinor currency }\n        }\n        \"\"\";\n\n    public Map<String, Object> serialize(long amountMinor, String currency) {\n        return Map.of(\"amountMinor\", amountMinor, \"currency\", currency);\n    }\n}\n",
+        "contract/invoice.graphqls": "type Query { invoice: InvoicePayload! }\ntype InvoicePayload { amountMinor: Int! currency: String! }\n",
+        "web/src/invoice.ts": "export const INVOICE_QUERY = `\nquery InvoicePayloadQuery {\n  invoice { amountMinor currency }\n}`;\n\nexport interface InvoicePayload {\n  amountMinor: number;\n  currency: string;\n}\n\nexport const displayAmount = (payload: InvoicePayload): string =>\n  `${payload.currency} ${(payload.amountMinor / 100).toFixed(2)}`;\n",
+        "worker/invoice_ledger.py": "INVOICE_QUERY = \"\"\"\nquery InvoiceLedger {\n  invoice { amountMinor currency }\n}\n\"\"\"\n\n\ndef ledger_amount(payload):\n    return int(payload[\"amountMinor\"])\n",
+        "worker/test_invoice_ledger.py": "from invoice_ledger import ledger_amount\n\nLEDGER_QUERY = \"\"\"\nquery InvoiceLedgerContract {\n  invoice { amountMinor currency }\n}\n\"\"\"\n\n\ndef test_uses_minor_unit_contract():\n    assert ledger_amount({\"amountMinor\": 1299, \"currency\": \"EUR\"}) == 1299\n"
       },
       "candidatePlugins": [
         "data-contracts",
@@ -118,21 +118,31 @@
       "expectedDefects": [
         {
           "evidenceFiles": [
-            "contract/invoice-payload.txt",
+            "contract/invoice.graphqls",
             "worker/invoice_ledger.py",
             "worker/test_invoice_ledger.py"
           ],
           "file": "backend/src/main/java/example/InvoicePayload.java",
           "id": "POLY-CONTRACT-001",
-          "line": 7,
+          "line": 13,
           "summary": "The partial payload rename emits amount while the fixed contract and Python ledger consumer still require amountMinor."
+        },
+        {
+          "evidenceFiles": [
+            "contract/invoice.graphqls",
+            "worker/invoice_ledger.py",
+            "worker/test_invoice_ledger.py"
+          ],
+          "file": "web/src/invoice.ts",
+          "id": "POLY-CONTRACT-002",
+          "line": 7,
+          "summary": "The TypeScript query and payload rename amountMinor to amount while the fixed contract and Python ledger consumer still require amountMinor."
         }
       ],
       "frameworks": [],
       "headReplacements": {
-        "backend/src/main/java/example/InvoicePayload.java": "package example;\n\nimport java.util.Map;\n\npublic final class InvoicePayload {\n    public Map<String, Object> serialize(long amountMinor, String currency) {\n        return Map.of(\"amount\", amountMinor, \"currency\", currency);\n    }\n}\n",
-        "web/src/invoice.ts": "export interface InvoicePayload {\n  amount: number;\n  currency: string;\n}\n\nexport const displayAmount = (payload: InvoicePayload): string =>\n  `${payload.currency} ${(payload.amount / 100).toFixed(2)}`;\n",
-        "worker/invoice_ledger.py": "def ledger_amount(payload):\n    amount_minor = payload[\"amountMinor\"]\n    return int(amount_minor)\n"
+        "backend/src/main/java/example/InvoicePayload.java": "package example;\n\nimport java.util.Map;\n\npublic final class InvoicePayload {\n    private static final String QUERY = \"\"\"\n        query InvoicePayloadQuery {\n          invoice { amount currency }\n        }\n        \"\"\";\n\n    public Map<String, Object> serialize(long amountMinor, String currency) {\n        return Map.of(\"amount\", amountMinor, \"currency\", currency);\n    }\n}\n",
+        "web/src/invoice.ts": "export const INVOICE_QUERY = `\nquery InvoicePayloadQuery {\n  invoice { amount currency }\n}`;\n\nexport interface InvoicePayload {\n  amount: number;\n  currency: string;\n}\n\nexport const displayAmount = (payload: InvoicePayload): string =>\n  `${payload.currency} ${(payload.amount / 100).toFixed(2)}`;\n"
       },
       "languages": [
         "java",

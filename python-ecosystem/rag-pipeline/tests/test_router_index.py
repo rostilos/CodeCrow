@@ -144,6 +144,8 @@ class TestIndexRepository:
         req.preserve_other_branches = False
         req.include_patterns = None
         req.exclude_patterns = None
+        req.project_type = "magento"
+        req.source_root = "magento/src/etc"
 
         result = index_repository(req, MagicMock())
         assert result.document_count == 10
@@ -156,6 +158,8 @@ class TestIndexRepository:
             preserve_other_branches=False,
             include_patterns=None,
             exclude_patterns=None,
+            project_type="magento",
+            source_root="magento/src/etc",
         )
 
     @patch("rag_pipeline.api.routers.index._get_singletons")
@@ -174,6 +178,8 @@ class TestIndexRepository:
         req.commit = "abc"
         req.include_patterns = None
         req.exclude_patterns = None
+        req.project_type = None
+        req.source_root = None
 
         with pytest.raises(HTTPException) as exc_info:
             index_repository(req, MagicMock())
@@ -195,6 +201,8 @@ class TestIndexRepository:
         req.commit = "abc"
         req.include_patterns = None
         req.exclude_patterns = None
+        req.project_type = None
+        req.source_root = None
 
         with pytest.raises(HTTPException) as exc_info:
             index_repository(req, MagicMock())
@@ -230,6 +238,8 @@ class TestIndexRepository:
         req.preserve_other_branches = False
         req.include_patterns = None
         req.exclude_patterns = None
+        req.project_type = None
+        req.source_root = None
         req.source_tree_sha256 = None
         req.collection_target = "target"
         req.reuse_collection_target = "prior-target"
@@ -345,6 +355,8 @@ class TestIndexRepository:
         req.preserve_other_branches = False
         req.include_patterns = None
         req.exclude_patterns = None
+        req.project_type = None
+        req.source_root = None
         req.source_tree_sha256 = None
         req.collection_target = "target"
         response = index_repository_stream(req)
@@ -499,6 +511,8 @@ class TestIndexRepository:
         req.preserve_other_branches = False
         req.include_patterns = None
         req.exclude_patterns = None
+        req.project_type = None
+        req.source_root = None
         req.source_tree_sha256 = None
         req.collection_target = "target"
         req.transfer_repo_ownership = False

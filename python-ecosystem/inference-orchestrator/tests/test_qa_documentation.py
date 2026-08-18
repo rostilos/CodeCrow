@@ -19,7 +19,10 @@ from service.qa_documentation.base_orchestrator import (
     emit_progress,
     emit_error,
 )
-from utils.prompts.constants_qa_doc import QA_DOC_CUSTOM_PROMPT
+from utils.prompts.constants_qa_doc import (
+    QA_DOC_ANALYSIS_SYSTEM_PROMPT,
+    QA_DOC_CUSTOM_PROMPT,
+)
 
 
 # ── emit_status / emit_progress / emit_error ─────────────────────
@@ -216,6 +219,72 @@ class TestSlimStageResults:
         data = {"a": 1}
         result = QaDocOrchestrator._slim_stage_results(data)
         assert " " not in result  # Compact separators
+
+
+class TestIntermediateAnalysisPrompt:
+    @staticmethod
+    def _placeholders():
+        return {
+            "project_name": "Storefront",
+            "pr_number": "42",
+            "pr_title": "Improve checkout",
+            "task_key": "SHOP-42",
+            "task_summary": "Improve checkout",
+            "source_branch": "feature/checkout",
+            "target_branch": "main",
+            "task_context": "No additional task context.",
+            "output_language": "Ukrainian",
+        }
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_stage_1_uses_json_only_system_contract(self):
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock(return_value=MagicMock(content=json.dumps({
+            "batch_id": 1,
+            "file_analyses": [{"file_path": "src/checkout.py"}],
+        })))
+        orchestrator = QaDocOrchestrator(llm=llm)
+
+        results = await orchestrator._execute_stage_1(
+            batches=BaseOrchestrator._simple_batch(["src/checkout.py"]),
+            diff=(
+                "diff --git a/src/checkout.py b/src/checkout.py\n"
+                "--- a/src/checkout.py\n+++ b/src/checkout.py\n@@ -1 +1 @@\n-old\n+new\n"
+            ),
+            enrichment_data=None,
+            placeholders=self._placeholders(),
+        )
+
+        messages = llm.ainvoke.await_args.args[0]
+        system_prompt = messages[0]["content"]
+        assert system_prompt == QA_DOC_ANALYSIS_SYSTEM_PROMPT.format(**self._placeholders())
+        assert "return one valid JSON object only" in system_prompt
+        assert "codecrow-test-cases" not in system_prompt
+        assert results[0]["file_analyses"][0]["file_path"] == "src/checkout.py"
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_stage_2_uses_json_only_system_contract(self):
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock(return_value=MagicMock(content=json.dumps({
+            "cross_file_scenarios": [],
+            "cascading_risks": [],
+            "uncovered_acceptance_criteria": [],
+        })))
+        orchestrator = QaDocOrchestrator(llm=llm)
+
+        result = await orchestrator._execute_stage_2(
+            stage_1_results=[{"batch_id": 1, "file_analyses": []}],
+            enrichment_data=None,
+            changed_file_paths=["src/checkout.py"],
+            placeholders=self._placeholders(),
+        )
+
+        messages = llm.ainvoke.await_args.args[0]
+        system_prompt = messages[0]["content"]
+        assert system_prompt == QA_DOC_ANALYSIS_SYSTEM_PROMPT.format(**self._placeholders())
+        assert "return one valid JSON object only" in system_prompt
+        assert "codecrow-environment" not in system_prompt
+        assert result["cross_file_scenarios"] == []
 
 
 class TestIndependentTestCases:

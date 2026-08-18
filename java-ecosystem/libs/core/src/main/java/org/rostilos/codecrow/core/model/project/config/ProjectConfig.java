@@ -96,6 +96,8 @@ public class ProjectConfig {
     private AnalysisLimitsConfig analysisLimits;
     @JsonProperty("analysisScope")
     private AnalysisScopeConfig analysisScope;
+    @JsonProperty("analysisProfile")
+    private AnalysisProfileConfig analysisProfile;
     @JsonProperty("projectRules")
     private ProjectRulesConfig projectRules;
     @JsonProperty("taskManagement")
@@ -257,6 +259,10 @@ public class ProjectConfig {
         return analysisScope != null ? analysisScope : new AnalysisScopeConfig();
     }
 
+    public AnalysisProfileConfig analysisProfile() {
+        return analysisProfile != null ? analysisProfile : new AnalysisProfileConfig(null, null);
+    }
+
     // Setters for Jackson
     public void setUseLocalMcp(boolean useLocalMcp) {
         this.useLocalMcp = useLocalMcp;
@@ -335,6 +341,10 @@ public class ProjectConfig {
 
     public void setAnalysisScope(AnalysisScopeConfig analysisScope) {
         this.analysisScope = analysisScope;
+    }
+
+    public void setAnalysisProfile(AnalysisProfileConfig analysisProfile) {
+        this.analysisProfile = analysisProfile;
     }
 
     public void setProjectRules(ProjectRulesConfig projectRules) {
@@ -482,6 +492,7 @@ public class ProjectConfig {
                 Objects.equals(maxAnalysisTokenLimit, that.maxAnalysisTokenLimit) &&
                 Objects.equals(analysisLimits, that.analysisLimits) &&
                 Objects.equals(analysisScope, that.analysisScope) &&
+                Objects.equals(analysisProfile(), that.analysisProfile()) &&
                 Objects.equals(projectRules, that.projectRules) &&
                 Objects.equals(taskManagement, that.taskManagement) &&
                 Objects.equals(qaAutoDoc, that.qaAutoDoc);
@@ -492,7 +503,7 @@ public class ProjectConfig {
         return Objects.hash(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, taskContextAnalysisEnabled, installationMethod,
                 commentCommands, maxAnalysisTokenLimit, analysisLimits, analysisScope,
-                projectRules, taskManagement, qaAutoDoc);
+                analysisProfile(), projectRules, taskManagement, qaAutoDoc);
     }
 
     @Override

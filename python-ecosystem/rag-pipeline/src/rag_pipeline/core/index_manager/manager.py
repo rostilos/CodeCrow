@@ -337,6 +337,8 @@ class RAGIndexManager:
         publish_branch_alias: bool = False,
         publish_legacy_project_alias: bool = False,
         progress_callback: Optional[Callable[[dict], None]] = None,
+        project_type: Optional[str] = None,
+        source_root: Optional[str] = None,
     ) -> IndexStats:
         """Index entire repository for a branch using atomic swap strategy."""
         if collection_target is None and (
@@ -401,6 +403,8 @@ class RAGIndexManager:
                 operation_id=lease.token,
                 activation_guard=lease.assert_owned,
                 progress_callback=progress_callback,
+                project_type=project_type,
+                source_root=source_root,
             )
 
     def get_revision_preflight(

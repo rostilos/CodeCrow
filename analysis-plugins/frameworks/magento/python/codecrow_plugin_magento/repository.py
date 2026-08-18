@@ -6,10 +6,11 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
 
 from codecrow_plugins import (
+    ArchitecturePacket,
     FileArtifact,
     GraphFact,
     PluginDiagnostic,
@@ -18,6 +19,11 @@ from codecrow_plugins import (
     RepositoryContext,
     RepositorySnapshot,
     SymbolDefinition,
+)
+from codecrow_plugins.graphql import (
+    parse_operations,
+    parse_schema,
+    parse_schema_root_types,
 )
 
 from .architecture import (
@@ -56,18 +62,8 @@ _REGISTRATION = re.compile(
 _THEME_REGISTRATION = re.compile(
     r"ComponentRegistrar::THEME\s*,\s*['\"](?P<name>[^'\"]+)['\"]"
 )
-_GRAPHQL_TYPE = re.compile(
-    r"(?P<kind>type|interface|input|enum|union|scalar)\s+"
-    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?P<directives>[^\n{]*)"
-)
-_GRAPHQL_FIELD = re.compile(
-    r"(?m)^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*"
-    r"(?:\([^)]*\))?\s*:\s*(?P<type>[\[\]!A-Za-z0-9_]+)"
-    r"(?P<directives>[^\n}]*)"
-)
-_GRAPHQL_RESOLVER = re.compile(
-    r"@(?P<directive>resolver|typeResolver)\s*"
-    r"\(\s*class\s*:\s*['\"](?P<class>[^'\"]+)['\"]"
+_PHTML_BLOCK_CALL = re.compile(
+    r"\$block\s*->\s*(?P<method>[A-Za-z_][A-Za-z0-9_]*)\s*\("
 )
 _DEPLOYMENT_DEFAULT_CONNECTION = "deployment-default"
 _BROKER_DEFAULT_EXCHANGE = "broker-default-exchange"
@@ -271,6 +267,7 @@ class MagentoRepositoryResolver:
                 )),
                 ("declarative schema", lambda: self._schema(modules)),
                 ("GraphQL", lambda: self._graphql(modules)),
+                ("GraphQL clients", lambda: self._graphql_clients(modules)),
                 ("extension attributes", lambda: (
                     self._extension_attributes(modules)
                 )),
@@ -2533,6 +2530,97 @@ class MagentoRepositoryResolver:
                             self._symbol_path(element.get("class", "")),
                             *template_paths,
                         )
+                        block_class = element.get("class", "").strip()
+                        block_symbol = self._unique_symbol_casefold(block_class)
+                        if selected_template_path and block_class:
+                            related = tuple(sorted(filter(None, (
+                                path,
+                                block_symbol.path if block_symbol else "",
+                            ))))
+                            packet.add(GraphFact(
+                                "magento-template-block-binding",
+                                selected_template_path,
+                                "rendered-by-block-class",
+                                block_class,
+                                selected_template_path,
+                                1,
+                                attrs(
+                                    area=area,
+                                    handle=handle,
+                                    layoutPath=path,
+                                ),
+                                related_paths=related,
+                            ))
+                            if block_symbol is not None:
+                                template_content = self.artifacts.get(
+                                    selected_template_path, ""
+                                )
+                                for call in _PHTML_BLOCK_CALL.finditer(
+                                    template_content
+                                ):
+                                    declaration = self._method_symbol(
+                                        block_symbol, call.group("method")
+                                    )
+                                    if declaration is None:
+                                        continue
+                                    declaring_symbol, declared_method = declaration
+                                    packet.add(GraphFact(
+                                        "magento-template-block-method-call",
+                                        selected_template_path,
+                                        "calls-block-method",
+                                        f"{declaring_symbol.qualified_name}::{declared_method}",
+                                        selected_template_path,
+                                        template_content.count(
+                                            "\n", 0, call.start()
+                                        ) + 1,
+                                        attrs(
+                                            area=area,
+                                            blockClass=block_class,
+                                            handle=handle,
+                                            layoutPath=path,
+                                        ),
+                                        related_paths=tuple(sorted({
+                                            path,
+                                            declaring_symbol.path,
+                                        })),
+                                    ))
+                            for arguments_node in (
+                                child for child in element
+                                if tag(child) == "arguments"
+                            ):
+                                for argument in (
+                                    child for child in arguments_node
+                                    if tag(child) == "argument"
+                                ):
+                                    argument_type = next((
+                                        value
+                                        for key, value in argument.attrib.items()
+                                        if key == "type" or key.endswith("}type")
+                                    ), "")
+                                    object_class = (argument.text or "").strip()
+                                    if argument_type != "object" or not object_class:
+                                        continue
+                                    object_symbol = self._unique_symbol_casefold(
+                                        object_class
+                                    )
+                                    packet.add(GraphFact(
+                                        "magento-template-view-model-binding",
+                                        selected_template_path,
+                                        "receives-layout-object",
+                                        object_class,
+                                        selected_template_path,
+                                        1,
+                                        attrs(
+                                            argument=argument.get("name", ""),
+                                            area=area,
+                                            handle=handle,
+                                            layoutPath=path,
+                                        ),
+                                        related_paths=tuple(sorted(filter(None, (
+                                            path,
+                                            object_symbol.path if object_symbol else "",
+                                        )))),
+                                    ))
 
         for (area, route_id), entries_by_module in sorted(route_modules.items()):
             entries, route_order_complete = self._ordered_route_modules(
@@ -6221,12 +6309,8 @@ class MagentoRepositoryResolver:
             module = self._module_for_path(path, modules)
             if module is None or not module.enabled:
                 continue
-            declarations = list(_GRAPHQL_TYPE.finditer(content))
-            for index, declaration in enumerate(declarations):
-                start = declaration.end()
-                end = declarations[index + 1].start() if index + 1 < len(declarations) else len(content)
-                body = content[start:end]
-                type_name = declaration.group("name")
+            for declaration in parse_schema(content):
+                type_name = declaration.name
                 packet = self.graph.packet("magento-graphql", type_name, module=module.name if module else "")
                 packet.add(GraphFact(
                     "magento-graphql-type",
@@ -6234,42 +6318,137 @@ class MagentoRepositoryResolver:
                     "declared-in",
                     path,
                     path,
-                    content.count("\n", 0, declaration.start()) + 1,
-                    attrs(kind=declaration.group("kind")),
+                    declaration.line,
+                    attrs(kind=declaration.kind),
                 ))
-                type_resolver = _GRAPHQL_RESOLVER.search(declaration.group("directives"))
-                if type_resolver:
+                type_resolver = next((
+                    directive for directive in declaration.directives
+                    if directive.name in {"resolver", "typeResolver"}
+                    and directive.argument("class")
+                ), None)
+                if type_resolver is not None:
+                    resolver_class = type_resolver.argument("class") or ""
                     packet.add(GraphFact(
                         "magento-graphql-type-resolver",
                         type_name,
                         "resolved-by",
-                        type_resolver.group("class"),
+                        resolver_class,
                         path,
-                        content.count("\n", 0, declaration.start()) + 1,
-                        attrs(directive=type_resolver.group("directive")),
-                    ), self._symbol_path(type_resolver.group("class")))
-                for field_match in _GRAPHQL_FIELD.finditer(body):
-                    field_key = f"{type_name}.{field_match.group('name')}"
+                        declaration.line,
+                        attrs(directive=type_resolver.name),
+                    ), self._symbol_path(resolver_class))
+                for declared_field in declaration.fields:
+                    field_key = f"{type_name}.{declared_field.name}"
                     packet.add(GraphFact(
                         "magento-graphql-field",
                         type_name,
                         "has-field",
-                        field_match.group("name"),
+                        declared_field.name,
                         path,
-                        content.count("\n", 0, start + field_match.start()) + 1,
-                        attrs(dataType=field_match.group("type")),
+                        declared_field.line,
+                        attrs(dataType=declared_field.target_type),
                     ))
-                    resolver = _GRAPHQL_RESOLVER.search(field_match.group("directives"))
-                    if resolver:
+                    resolver = next((
+                        directive for directive in declared_field.directives
+                        if directive.name in {"resolver", "typeResolver"}
+                        and directive.argument("class")
+                    ), None)
+                    if resolver is not None:
+                        resolver_class = resolver.argument("class") or ""
                         packet.add(GraphFact(
                             "magento-graphql-resolver",
                             field_key,
                             "resolved-by",
-                            resolver.group("class"),
+                            resolver_class,
                             path,
-                            content.count("\n", 0, start + field_match.start()) + 1,
-                            attrs(directive=resolver.group("directive")),
-                        ), self._symbol_path(resolver.group("class")))
+                            declared_field.line,
+                            attrs(directive=resolver.name),
+                        ), self._symbol_path(resolver_class))
+
+    def _graphql_clients(self, modules: tuple[ModuleRecord, ...]) -> None:
+        """Link embedded operations to the unique schema fields they select.
+
+        Magento's GraphQL boundary is a typed traversal, not a shared-word
+        relationship. Each segment must resolve from its current GraphQL owner
+        to exactly one enabled schema declaration; ambiguity or a missing field
+        makes the plugin abstain from that segment and every deeper segment.
+        """
+        declarations: dict[
+            tuple[str, str],
+            list[tuple[str, str, int]],
+        ] = {}
+        root_types: dict[str, set[str]] = {}
+        for schema_path, content in sorted(self.artifacts.items()):
+            if not schema_path.casefold().endswith(".graphqls"):
+                continue
+            module = self._module_for_path(schema_path, modules)
+            if module is None or not module.enabled:
+                continue
+            for operation, type_name in parse_schema_root_types(content):
+                root_types.setdefault(operation, set()).add(type_name)
+            for definition in parse_schema(content):
+                for declared_field in definition.fields:
+                    declarations.setdefault(
+                        (definition.name, declared_field.name),
+                        [],
+                    ).append((
+                        schema_path,
+                        declared_field.target_type,
+                        declared_field.line,
+                    ))
+
+        resolved_root_types = {
+            operation: next(iter(type_names))
+            for operation, type_names in root_types.items()
+            if len(type_names) == 1
+        }
+
+        client_suffixes = (
+            ".phtml", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".html",
+        )
+        for client_path, content in sorted(self.artifacts.items()):
+            if not client_path.casefold().endswith(client_suffixes):
+                continue
+            for selection in parse_operations(
+                content,
+                embedded_only=True,
+                root_types=resolved_root_types,
+            ):
+                owner = selection.root
+                resolved: tuple[str, str, int] | None = None
+                resolved_owner = ""
+                for segment in selection.segments:
+                    candidates = declarations.get((owner, segment), ())
+                    if len(candidates) != 1:
+                        resolved = None
+                        break
+                    resolved_owner = owner
+                    resolved = candidates[0]
+                    owner = resolved[1]
+                if resolved is None:
+                    continue
+                schema_path, target_type, declaration_line = resolved
+                selection_key = ".".join((selection.root, *selection.segments))
+                packet = self.graph.packet(
+                    "magento-graphql-client",
+                    f"{client_path}:{selection_key}",
+                    operationRoot=selection.root,
+                )
+                packet.add(GraphFact(
+                    "magento-graphql-operation-field",
+                    f"{client_path}::{selection_key}",
+                    "selects-schema-field",
+                    f"{schema_path}::{resolved_owner}.{selection.segments[-1]}",
+                    client_path,
+                    selection.line,
+                    attrs(
+                        schemaPath=schema_path,
+                        schemaLine=declaration_line,
+                        targetType=target_type,
+                        resolution="exact-typed-graphql-traversal",
+                        semanticRole="topology",
+                    ),
+                ), schema_path)
 
     def _extension_attributes(self, modules: tuple[ModuleRecord, ...]) -> None:
         schema_paths: dict[str, set[str]] = {}
@@ -6649,6 +6828,32 @@ class MagentoRepositoryResolver:
         symbol = self._symbol(qualified_name.split("::", 1)[0])
         return symbol.path if symbol else ""
 
+    def _method_symbol(
+        self,
+        symbol: SymbolDefinition,
+        method: str,
+    ) -> tuple[SymbolDefinition, str] | None:
+        queue = [symbol]
+        seen: set[str] = set()
+        while queue:
+            candidate = queue.pop(0)
+            if candidate.qualified_name in seen:
+                continue
+            seen.add(candidate.qualified_name)
+            declaration = self._method_attributes(candidate, method)
+            if (
+                declaration is not None
+                and declaration[1].get("visibility", "public") == "public"
+            ):
+                declared, _ = declaration
+                return candidate, declared
+            queue.extend(
+                parent
+                for parent_name in candidate.parents
+                if (parent := self._unique_symbol_casefold(parent_name)) is not None
+            )
+        return None
+
     def _theme_for_path(
         self,
         path: str,
@@ -6878,6 +7083,7 @@ class MagentoRepositorySession:
     plugin_id: str
     revision: str
     artifacts: dict[str, str] = field(default_factory=dict)
+    source_root: str | None = None
 
     @classmethod
     def restore(cls, plugin_id: str, revision: str, snapshots) -> "MagentoRepositorySession":
@@ -6912,6 +7118,9 @@ class MagentoRepositorySession:
             content,
         )
 
+    def set_source_root(self, source_root: str | None) -> None:
+        self.source_root = source_root
+
     def ingest(self, artifacts: tuple[FileArtifact, ...]) -> None:
         for artifact in artifacts:
             path = artifact.path
@@ -6942,7 +7151,9 @@ class MagentoRepositorySession:
             )
             is_graphql = path.endswith(".graphqls")
             is_requirejs = filename == "requirejs-config.js"
-            is_app_config = path == "app/etc/config.php"
+            is_app_config = path == "app/etc/config.php" or path.endswith(
+                "/app/etc/config.php"
+            )
             if (
                 is_config
                 or is_schema_whitelist
@@ -6960,8 +7171,46 @@ class MagentoRepositorySession:
 
     def finish(self, dependencies: RepositoryAnalysis):
         started = time.monotonic()
-        resolver = MagentoRepositoryResolver(self.plugin_id, self.artifacts, dependencies.symbols)
-        analysis, diagnostics = resolver.resolve()
+        roots = self._analysis_roots()
+        analyses: list[RepositoryAnalysis] = []
+        diagnostics: list[PluginDiagnostic] = []
+        invalid_paths: set[str] = set()
+        for root in roots:
+            scoped = self._scoped_artifacts(root)
+            scoped_symbols = self._scoped_symbols(root, dependencies.symbols)
+            scoped_paths = {*scoped, *(symbol.path for symbol in scoped_symbols)}
+            resolver = MagentoRepositoryResolver(
+                self.plugin_id,
+                scoped,
+                scoped_symbols,
+            )
+            analysis, scoped_diagnostics = resolver.resolve()
+            analyses.append(self._prefix_analysis(analysis, root, scoped_paths))
+            diagnostics.extend(
+                PluginDiagnostic(
+                    code=item.code,
+                    message=item.message,
+                    plugin_id=item.plugin_id,
+                    path=(
+                        self._prefix_path(root, item.path)
+                        if item.path in scoped_paths
+                        else item.path
+                    ),
+                    recoverable=item.recoverable,
+                )
+                for item in scoped_diagnostics
+            )
+            invalid_paths.update(
+                self._prefix_path(root, path) for path in resolver.invalid_paths
+            )
+        analysis = RepositoryAnalysis(
+            symbols=tuple(sorted({item for part in analyses for item in part.symbols})),
+            packets=tuple(sorted({item for part in analyses for item in part.packets})),
+            contexts=tuple(sorted({item for part in analyses for item in part.contexts})),
+            diagnostics=tuple(
+                item for part in analyses for item in part.diagnostics
+            ),
+        )
         if diagnostics:
             for diagnostic in diagnostics:
                 logger.warning(
@@ -6971,7 +7220,7 @@ class MagentoRepositorySession:
                     diagnostic.path or "<repository>",
                     diagnostic.message,
                 )
-        for path in resolver.invalid_paths:
+        for path in invalid_paths:
             self.artifacts.pop(path, None)
         related_paths = {
             path for packet in analysis.packets for path in packet.paths
@@ -6988,7 +7237,10 @@ class MagentoRepositorySession:
                 content,
             )
             for path, content in self.artifacts.items()
-            if path.startswith("vendor/")
+            if any(
+                path.startswith(f"{root}/vendor/" if root else "vendor/")
+                for root in roots
+            )
             and path in related_paths
             and content.strip()
             and path.casefold().endswith((".phtml", ".js", ".mjs", ".ts", ".html"))
@@ -7019,3 +7271,107 @@ class MagentoRepositorySession:
                 for diagnostic in diagnostics
             ),
         ))
+
+    def _analysis_roots(self) -> tuple[str, ...]:
+        if self.source_root is not None:
+            return (self.source_root,)
+        application_markers = (
+            "app/etc/config.php",
+            "app/etc/di.xml",
+            "app/etc/env.php",
+            "bin/magento",
+        )
+        roots = {
+            "" if path == marker else path[: -(len(marker) + 1)]
+            for path in self.artifacts
+            for marker in application_markers
+            if path == marker or path.endswith("/" + marker)
+        }
+        if roots:
+            return tuple(sorted(roots, key=lambda value: (value.count("/"), value)))
+        return ("",)
+
+    def _scoped_artifacts(self, root: str) -> dict[str, str]:
+        if not root:
+            return dict(self.artifacts)
+        prefix = root + "/"
+        return {
+            path[len(prefix):]: content
+            for path, content in self.artifacts.items()
+            if path.startswith(prefix)
+        }
+
+    @staticmethod
+    def _scoped_symbols(
+        root: str,
+        symbols: tuple[SymbolDefinition, ...],
+    ) -> tuple[SymbolDefinition, ...]:
+        if not root:
+            return symbols
+        prefix = root + "/"
+        return tuple(sorted(
+            replace(symbol, path=symbol.path[len(prefix):])
+            for symbol in symbols
+            if symbol.path.startswith(prefix)
+        ))
+
+    @staticmethod
+    def _prefix_path(root: str, path: str) -> str:
+        return f"{root}/{path}" if root else path
+
+    def _prefix_analysis(
+        self,
+        analysis: RepositoryAnalysis,
+        root: str,
+        scoped_paths: set[str],
+    ) -> RepositoryAnalysis:
+        if not root:
+            return analysis
+
+        def path(value: str) -> str:
+            return self._prefix_path(root, value) if value in scoped_paths else value
+
+        packets = tuple(sorted(
+            ArchitecturePacket(
+                plugin_id=packet.plugin_id,
+                kind=packet.kind,
+                key=packet.key,
+                paths=tuple(sorted({path(value) for value in packet.paths})),
+                facts=tuple(sorted(
+                    GraphFact(
+                        kind=fact.kind,
+                        source=fact.source,
+                        relation=fact.relation,
+                        target=fact.target,
+                        path=path(fact.path),
+                        line=fact.line,
+                        attributes=fact.attributes,
+                        related_paths=tuple(sorted({
+                            path(value) for value in fact.related_paths
+                        })),
+                    )
+                    for fact in packet.facts
+                )),
+                attributes=packet.attributes,
+            )
+            for packet in analysis.packets
+        ))
+        contexts = tuple(sorted(
+            RepositoryContext(
+                context.plugin_id,
+                context.kind,
+                path(context.path),
+                context.content,
+                context.attributes,
+            )
+            for context in analysis.contexts
+        ))
+        return RepositoryAnalysis(
+            symbols=tuple(sorted(
+                replace(symbol, path=path(symbol.path))
+                for symbol in analysis.symbols
+            )),
+            packets=packets,
+            contexts=contexts,
+            diagnostics=analysis.diagnostics,
+        )

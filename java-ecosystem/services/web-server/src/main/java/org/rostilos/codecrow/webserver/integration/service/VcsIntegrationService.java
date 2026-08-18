@@ -4,6 +4,7 @@ import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.project.config.AnalysisProfileConfig;
 import org.rostilos.codecrow.core.model.vcs.*;
 import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
@@ -1811,6 +1812,8 @@ public class VcsIntegrationService {
         }
         
         ProjectConfig config = new ProjectConfig(false, mainBranch);
+        config.setAnalysisProfile(new AnalysisProfileConfig(
+                request.getProjectType(), request.getSourceRoot()));
         // Ensure main branch is always in analysis patterns
         config.ensureMainBranchInPatterns();
         project.setConfiguration(config);

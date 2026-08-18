@@ -193,7 +193,7 @@ class TestIndexPRFiles:
         im = _make_index_manager()
         im.qdrant_client.scroll.return_value = ([existing], None)
         mock_get.return_value = im
-        mock_load_snapshots.return_value = ((), (), None, None, None)
+        mock_load_snapshots.return_value = ((), (), None, None, None, None)
 
         from rag_pipeline.api.routers.pr import index_pr_files
 
@@ -218,7 +218,7 @@ class TestIndexPRFiles:
         im = _make_index_manager()
         im.qdrant_client.scroll.return_value = ([existing], None)
         mock_get.return_value = im
-        mock_load_snapshots.return_value = ((), (), None, None, None)
+        mock_load_snapshots.return_value = ((), (), None, None, None, None)
         req = _request([])
 
         from rag_pipeline.api.routers.pr import index_pr_files
@@ -312,6 +312,7 @@ class TestIndexPRFiles:
             "sha256:capabilities",
             DESCRIPTOR_FINGERPRINT,
             IMPLEMENTATION_FINGERPRINT,
+            None,
         )
         mock_build_capabilities.return_value = _capabilities("java")
         partial = SimpleNamespace(
@@ -452,6 +453,7 @@ class TestIndexPRFiles:
             "sha256:capabilities",
             DESCRIPTOR_FINGERPRINT,
             IMPLEMENTATION_FINGERPRINT,
+            None,
         )
         mock_build_capabilities.return_value = _capabilities("java", "spring")
         req = _request([])
@@ -483,6 +485,7 @@ class TestIndexPRFiles:
             "sha256:old",
             DESCRIPTOR_FINGERPRINT,
             IMPLEMENTATION_FINGERPRINT,
+            None,
         )
         mock_build_capabilities.return_value = _capabilities(
             "java",
@@ -542,6 +545,7 @@ class TestIndexPRFiles:
             "sha256:target",
             DESCRIPTOR_FINGERPRINT,
             IMPLEMENTATION_FINGERPRINT,
+            SimpleNamespace(source_root="module"),
         )
         php = SimpleNamespace(
             path="module/registration.php",
@@ -578,6 +582,7 @@ class TestIndexPRFiles:
             "head-commit",
             snapshots=(),
             mode=RepositoryAnalysisMode.PR_OVERLAY,
+            source_root="module",
         )
 
     @patch("rag_pipeline.api.routers.pr.build_overlay_capabilities")
@@ -598,6 +603,7 @@ class TestIndexPRFiles:
             "sha256:target",
             DESCRIPTOR_FINGERPRINT,
             IMPLEMENTATION_FINGERPRINT,
+            None,
         )
         mock_build_capabilities.return_value = _capabilities("json", "php")
         php = SimpleNamespace(
@@ -637,6 +643,7 @@ class TestIndexPRFiles:
             "sha256:target-branch",
             DESCRIPTOR_FINGERPRINT,
             IMPLEMENTATION_FINGERPRINT,
+            None,
         )
         mock_build_capabilities.return_value = _capabilities(
             "bash",
@@ -697,6 +704,7 @@ class TestIndexPRFiles:
             "sha256:capabilities",
             DESCRIPTOR_FINGERPRINT,
             IMPLEMENTATION_FINGERPRINT,
+            None,
         )
         mock_build_capabilities.return_value = _capabilities(
             "json",
@@ -727,7 +735,7 @@ class TestIndexPRFiles:
     ):
         im = _make_index_manager()
         mock_get.return_value = im
-        mock_load_snapshots.return_value = ((), (), None, None, None)
+        mock_load_snapshots.return_value = ((), (), None, None, None, None)
         req = _request([])
         req.repository_plugins = ["java"]
         req.plugin_detection_evidence = {"java": ("fixture:java",)}
@@ -759,6 +767,7 @@ class TestIndexPRFiles:
             "sha256:capabilities",
             DESCRIPTOR_FINGERPRINT,
             "sha256:" + "3" * 64,
+            None,
         )
         req = _request([])
         req.repository_plugins = ["java"]
@@ -787,6 +796,7 @@ class TestIndexPRFiles:
             (),
             ("java",),
             "sha256:capabilities",
+            None,
             None,
             None,
         )

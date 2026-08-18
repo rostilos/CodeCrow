@@ -255,9 +255,10 @@ def test_project_selection_matches_the_shared_cross_runtime_projection():
         "file:app/etc/config.php",
         "file:bin/magento",
         "file:composer.json",
+        "root:.",
     )
     assert selected.fingerprint == (
-        "sha256:6a888ce52e94cba767c754ff096d29c13637244976edcb97d9a68f44eeb43b10"
+        "sha256:82da50c6916ad2b50e268523e6226aeaee6f9bb8e76fd868aed5419503946eaf"
     )
     assert ProjectSelector(registry).validate(selected, "abc1234") == selected
 
@@ -306,6 +307,43 @@ def test_cross_runtime_capability_validation_rejects_stale_or_invalid_projection
             ),
             "abc1234",
         )
+
+
+def test_source_root_excludes_languages_and_files_outside_the_boundary():
+    registry = PluginRegistry(load_descriptors(FIXTURE))
+    paths = (
+        "app/etc/config.php",
+        "bin/magento",
+        "composer.json",
+        "packages/store/src/Foo.php",
+        "tools/Outside.java",
+    )
+    marker_contents = {
+        "composer.json": '{"require":{"magento/framework":"*"}}',
+    }
+
+    automatic = ProjectSelector(registry).select(RepositoryFacts(
+        revision="abc1234",
+        paths=paths,
+        marker_contents=marker_contents,
+        source_root="packages/store",
+    ))
+    explicit = ProjectSelector(registry).select(RepositoryFacts(
+        revision="abc1234",
+        paths=paths,
+        marker_contents=marker_contents,
+        project_type="magento",
+        source_root="packages/store",
+    ))
+
+    assert automatic.repository_plugins == ("php",)
+    assert automatic.file_plugins == {
+        "packages/store/src/Foo.php": ("php",),
+    }
+    assert explicit.repository_plugins == ("php", "magento")
+    assert explicit.file_plugins == {
+        "packages/store/src/Foo.php": ("php",),
+    }
 
 
 def test_projected_capabilities_bind_combined_revision_evidence():

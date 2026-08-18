@@ -12,6 +12,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("ProjectConfig")
 class ProjectConfigTest {
 
+    @Test
+    @DisplayName("analysis profile participates in equality and hashing")
+    void analysisProfileParticipatesInEqualityAndHashing() {
+        ProjectConfig automatic = new ProjectConfig();
+        ProjectConfig explicitAutomatic = new ProjectConfig();
+        explicitAutomatic.setAnalysisProfile(new AnalysisProfileConfig(null, null));
+        ProjectConfig magento = new ProjectConfig();
+        magento.setAnalysisProfile(new AnalysisProfileConfig("magento", "shop"));
+
+        assertThat(automatic).isEqualTo(explicitAutomatic);
+        assertThat(automatic.hashCode()).isEqualTo(explicitAutomatic.hashCode());
+        assertThat(automatic).isNotEqualTo(magento);
+        assertThat(automatic.hashCode()).isNotEqualTo(magento.hashCode());
+    }
+
     @Nested
     @DisplayName("Default Constructor")
     class DefaultConstructorTests {
@@ -43,6 +58,14 @@ class ProjectConfigTest {
             ProjectConfig config = new ProjectConfig();
             assertThat(config.taskContextAnalysisEnabled()).isTrue();
             assertThat(config.isTaskContextAnalysisEnabled()).isTrue();
+        }
+
+        @Test
+        @DisplayName("should default analysis profile to marker auto-detection")
+        void shouldDefaultAnalysisProfileToAutomatic() {
+            ProjectConfig config = new ProjectConfig();
+            assertThat(config.analysisProfile().isAutomatic()).isTrue();
+            assertThat(config.analysisProfile().sourceRoot()).isNull();
         }
     }
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -369,8 +370,9 @@ def _artifacts() -> dict[str, str]:
 def _resolve(
     artifacts: dict[str, str] | None = None,
     symbols: tuple[SymbolDefinition, ...] | None = None,
+    catalog: PluginCatalog | None = None,
 ):
-    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    catalog = catalog or PluginCatalog.discover(PLUGINS_ROOT)
     plugin = catalog.implementation("magento")
     start = plugin.start_repository_analysis("0123456789abcdef")
     assert start.status is OutcomeStatus.HANDLED
@@ -1284,6 +1286,278 @@ def test_magento_repository_analysis_builds_effective_architecture_graph():
     assert any(fact.kind == "magento-di-effective-plugin" and fact.relation == "disables-interceptor" for fact in facts)
     assert any(fact.kind == "magento-object-resolution" and fact.target.endswith("FrontendCart") for fact in facts)
     assert any(fact.kind == "magento-effective-observer" and fact.relation == "disables-observer" for fact in facts)
+
+
+def test_magento_graphql_parser_ignores_arguments_and_description_words():
+    analysis = _resolve(
+        artifacts={
+            "app/etc/config.php": "<?php return ['modules' => ['Acme_GraphQl' => 1]];",
+            "app/code/Acme/GraphQl/etc/module.xml": (
+                '<config><module name="Acme_GraphQl" /></config>'
+            ),
+            "app/code/Acme/GraphQl/etc/schema.graphqls": r'''
+                """Product type ID is documentation, not a declaration."""
+                extend type Query {
+                  products(search: String, pageSize: Int): Products
+                    @resolver(class: "Acme\GraphQl\Model\Resolver\Products")
+                }
+                type Products { items: [Product!]! }
+                type Product { product_type: String! }
+            ''',
+            "app/code/Acme/GraphQl/view/frontend/templates/products.phtml": r'''
+                <?php $type = $block->getData('product_type'); ?>
+                <script type="application/graphql">
+                  query Products($search: String!) {
+                    products(search: $search) {
+                      items { product_type }
+                    }
+                  }
+                </script>
+            ''',
+        },
+        symbols=(),
+    )
+    facts = tuple(fact for packet in analysis.packets for fact in packet.facts)
+
+    fields = {
+        (fact.source, fact.target)
+        for fact in facts
+        if fact.kind == "magento-graphql-field"
+    }
+    assert fields == {
+        ("Product", "product_type"),
+        ("Products", "items"),
+        ("Query", "products"),
+    }
+    resolver = next(
+        fact for fact in facts if fact.kind == "magento-graphql-resolver"
+    )
+    assert resolver.source == "Query.products"
+    assert resolver.target == "Acme\\GraphQl\\Model\\Resolver\\Products"
+
+    client_facts = tuple(
+        fact
+        for fact in facts
+        if fact.kind == "magento-graphql-operation-field"
+    )
+    assert tuple(fact.relation for fact in client_facts) == (
+        "selects-schema-field",
+        "selects-schema-field",
+        "selects-schema-field",
+    )
+    assert {fact.target for fact in client_facts} == {
+        "app/code/Acme/GraphQl/etc/schema.graphqls::Query.products",
+        "app/code/Acme/GraphQl/etc/schema.graphqls::Products.items",
+        "app/code/Acme/GraphQl/etc/schema.graphqls::Product.product_type",
+    }
+    assert all(
+        fact.path
+        == "app/code/Acme/GraphQl/view/frontend/templates/products.phtml"
+        for fact in client_facts
+    )
+
+
+def test_magento_graphql_client_resolves_custom_query_root():
+    analysis = _resolve(
+        artifacts={
+            "app/code/Acme/GraphQl/etc/module.xml": (
+                '<config><module name="Acme_GraphQl" /></config>'
+            ),
+            "app/code/Acme/GraphQl/etc/schema.graphqls": """
+                schema { query: StorefrontQuery }
+                type StorefrontQuery { products: Products }
+                type Products { total_count: Int! }
+            """,
+            "app/code/Acme/GraphQl/view/frontend/templates/products.phtml": """
+                <script type="application/graphql">
+                  { products { total_count } }
+                </script>
+            """,
+        },
+        symbols=(),
+    )
+
+    targets = {
+        fact.target
+        for packet in analysis.packets
+        for fact in packet.facts
+        if fact.kind == "magento-graphql-operation-field"
+    }
+
+    assert targets == {
+        "app/code/Acme/GraphQl/etc/schema.graphqls::StorefrontQuery.products",
+        "app/code/Acme/GraphQl/etc/schema.graphqls::Products.total_count",
+    }
+
+
+def test_module_only_repository_keeps_cross_module_relationships():
+    interface_path = "app/code/Acme/Contracts/Api/CartInterface.php"
+    implementation_path = "app/code/Acme/Checkout/Model/Cart.php"
+    analysis = _resolve(
+        artifacts={
+            "app/code/Acme/Contracts/etc/module.xml": (
+                '<config><module name="Acme_Contracts" /></config>'
+            ),
+            "app/code/Acme/Checkout/etc/module.xml": (
+                '<config><module name="Acme_Checkout"><sequence>'
+                '<module name="Acme_Contracts" />'
+                '</sequence></module></config>'
+            ),
+            "app/code/Acme/Checkout/etc/di.xml": r"""
+                <config><preference
+                  for="Acme\Contracts\Api\CartInterface"
+                  type="Acme\Checkout\Model\Cart" /></config>
+            """,
+        },
+        symbols=tuple(sorted((
+            SymbolDefinition(
+                "Acme\\Contracts\\Api\\CartInterface",
+                "interface",
+                interface_path,
+            ),
+            SymbolDefinition(
+                "Acme\\Checkout\\Model\\Cart",
+                "class",
+                implementation_path,
+            ),
+        ))),
+    )
+
+    preference_packet = next(
+        packet
+        for packet in analysis.packets
+        if any(
+            fact.kind == "magento-di-effective-preference"
+            for fact in packet.facts
+        )
+    )
+
+    assert {interface_path, implementation_path} <= set(preference_packet.paths)
+
+
+def test_magento_manual_nested_root_keeps_canonical_fact_paths():
+    root = "magento/src/etc"
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    plugin = catalog.implementation("magento")
+    session = plugin.start_repository_analysis("0123456789abcdef").value
+    session.set_source_root(root)
+    session.ingest(tuple(
+        FileArtifact(path, content)
+        for path, content in sorted({
+            f"{root}/app/etc/config.php": (
+                "<?php return ['modules' => ['Acme_Checkout' => 1]];"
+            ),
+            f"{root}/app/code/Acme/Checkout/etc/module.xml": (
+                '<config><module name="Acme_Checkout" /></config>'
+            ),
+            f"{root}/app/code/Acme/Checkout/etc/di.xml": r'''
+                <config><preference for="Acme\Checkout\Api\CartInterface"
+                  type="Acme\Checkout\Model\Cart" /></config>
+            ''',
+        }.items()
+    )))
+    nested_symbols = tuple(
+        replace(symbol, path=f"{root}/{symbol.path}")
+        for symbol in _symbols()
+    )
+    outcome = session.finish(RepositoryAnalysis(symbols=nested_symbols))
+    facts = tuple(
+        fact for packet in outcome.value.packets for fact in packet.facts
+    )
+
+    preference = next(
+        fact for fact in facts
+        if fact.kind == "magento-di-effective-preference"
+    )
+    assert preference.path == (
+        f"{root}/app/code/Acme/Checkout/etc/di.xml"
+    )
+    assert f"{root}/app/code/Acme/Checkout/Model/Cart.php" in {
+        path
+        for packet in outcome.value.packets
+        for path in packet.paths
+    }
+    assert all(
+        not fact.path.startswith(f"{root}/{root}/")
+        for fact in facts
+    )
+
+
+def test_layout_binds_selected_phtml_to_exact_block_method_and_view_model(
+    monkeypatch,
+):
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    plugin = catalog.implementation("magento")
+    session = plugin.start_repository_analysis("0123456789abcdef").value
+    repository_module = sys.modules[session.__class__.__module__]
+    monkeypatch.setattr(
+        repository_module,
+        "extract_template_global_references",
+        lambda content: (),
+    )
+    monkeypatch.setattr(
+        repository_module,
+        "extract_template_event_references",
+        lambda content: (),
+    )
+    artifacts = {
+        "app/etc/config.php": "<?php return ['modules' => ['Acme_Checkout' => 1]];",
+        "app/code/Acme/Checkout/etc/module.xml": (
+            '<config><module name="Acme_Checkout" /></config>'
+        ),
+        "app/code/Acme/Checkout/view/frontend/layout/checkout_index_index.xml": r'''
+            <page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><body>
+              <block class="Acme\Checkout\Block\Cart" name="cart"
+                template="Acme_Checkout::cart.phtml">
+                <arguments><argument name="view_model" xsi:type="object">Acme\Checkout\ViewModel\Cart</argument></arguments>
+              </block>
+            </body></page>
+        ''',
+        "app/code/Acme/Checkout/view/frontend/templates/cart.phtml": (
+            "<?= $block->getCartId() ?>\n"
+            "<?= $block->privateHelper() ?>\n"
+            "<?= $block->unknownDynamicMethod() ?>\n"
+        ),
+    }
+    symbols = (
+        SymbolDefinition(
+            "Acme\\Checkout\\Block\\Cart",
+            "class",
+            "app/code/Acme/Checkout/Block/Cart.php",
+            methods=("getCartId", "privateHelper"),
+            attributes=(("method:privateHelper:visibility", "private"),),
+        ),
+        SymbolDefinition(
+            "Acme\\Checkout\\ViewModel\\Cart",
+            "class",
+            "app/code/Acme/Checkout/ViewModel/Cart.php",
+        ),
+    )
+    analysis = _resolve(
+        artifacts=artifacts,
+        symbols=symbols,
+        catalog=catalog,
+    )
+    facts = tuple(fact for packet in analysis.packets for fact in packet.facts)
+
+    assert any(
+        fact.kind == "magento-template-block-binding"
+        and fact.path.endswith("templates/cart.phtml")
+        and fact.target == "Acme\\Checkout\\Block\\Cart"
+        for fact in facts
+    )
+    method_calls = tuple(
+        fact for fact in facts
+        if fact.kind == "magento-template-block-method-call"
+    )
+    assert [fact.target for fact in method_calls] == [
+        "Acme\\Checkout\\Block\\Cart::getCartId"
+    ]
+    assert any(
+        fact.kind == "magento-template-view-model-binding"
+        and fact.target == "Acme\\Checkout\\ViewModel\\Cart"
+        for fact in facts
+    )
 
 
 def test_magento_config_php_order_is_authoritative_for_effective_merges():

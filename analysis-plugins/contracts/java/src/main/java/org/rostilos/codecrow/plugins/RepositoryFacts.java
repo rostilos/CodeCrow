@@ -6,7 +6,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-public record RepositoryFacts(String revision, List<String> paths, Map<String, String> markerContents) {
+public record RepositoryFacts(
+        String revision,
+        List<String> paths,
+        Map<String, String> markerContents,
+        String projectType,
+        String sourceRoot) {
+    public RepositoryFacts(String revision, List<String> paths, Map<String, String> markerContents) {
+        this(revision, paths, markerContents, null, null);
+    }
+
     public RepositoryFacts {
         revision = PluginValues.requireNonBlank(revision, "revision");
         paths = PluginValues.sortedUnique(paths, "repository paths");
@@ -26,5 +35,16 @@ public record RepositoryFacts(String revision, List<String> paths, Map<String, S
             });
         }
         markerContents = Collections.unmodifiableMap(new LinkedHashMap<>(normalizedMarkers));
+        if (projectType != null && (projectType.isBlank() || "auto".equalsIgnoreCase(projectType.trim()))) {
+            projectType = null;
+        } else if (projectType != null) {
+            projectType = PluginValues.requirePluginId(
+                    projectType.trim().toLowerCase(java.util.Locale.ROOT), "project type");
+        }
+        if (sourceRoot != null && (sourceRoot.isBlank() || ".".equals(sourceRoot.trim()))) {
+            sourceRoot = null;
+        } else if (sourceRoot != null) {
+            sourceRoot = PluginValues.normalizePath(sourceRoot.trim().replace('\\', '/'));
+        }
     }
 }

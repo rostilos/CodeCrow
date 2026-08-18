@@ -229,10 +229,12 @@ def index_pr_files(request: PRIndexRequest):
             stored_fingerprint,
             _stored_descriptor_fingerprint,
             _stored_implementation_fingerprint,
+            stored_repository_facts,
         ) = load_repository_snapshots(
             index_manager.qdrant_client,
             collection_name,
             target_branch,
+            include_facts=True,
         )
         requested_plugin_ids = tuple(request.repository_plugins)
         if requested_plugin_ids:
@@ -612,6 +614,11 @@ def index_pr_files(request: PRIndexRequest):
                 analysis_revision,
                 snapshots=snapshots,
                 mode=RepositoryAnalysisMode.PR_OVERLAY,
+                source_root=(
+                    stored_repository_facts.source_root
+                    if stored_repository_facts is not None
+                    else None
+                ),
             )
             artifacts = tuple(sorted(
                 (

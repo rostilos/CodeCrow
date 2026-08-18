@@ -42,7 +42,13 @@ def scroll_branch_points(
     return points
 
 
-def load_repository_snapshots(client, collection_name: str, branch: str):
+def load_repository_snapshots(
+    client,
+    collection_name: str,
+    branch: str,
+    *,
+    include_facts: bool = False,
+):
     """Load snapshots and the selected capabilities for one indexed branch."""
     from codecrow_plugins import RepositorySnapshot
 
@@ -139,13 +145,14 @@ def load_repository_snapshots(client, collection_name: str, branch: str):
             branch,
         )
 
-    return (
+    result = (
         tuple(snapshots),
         tuple(plugin_ids or ()),
         fingerprint,
         descriptor_fingerprint,
         implementation_fingerprint,
     )
+    return (*result, _repository_facts) if include_facts else result
 
 
 def load_repository_facts(client, collection_name: str, branch: str):
@@ -216,6 +223,8 @@ def load_repository_facts(client, collection_name: str, branch: str):
             revision=decoded["revision"],
             paths=tuple(decoded["paths"]),
             marker_contents=decoded.get("markerContents", {}),
+            project_type=decoded.get("projectType"),
+            source_root=decoded.get("sourceRoot"),
         )
     except Exception as exception:
         raise IncrementalIndexPreconditionError(

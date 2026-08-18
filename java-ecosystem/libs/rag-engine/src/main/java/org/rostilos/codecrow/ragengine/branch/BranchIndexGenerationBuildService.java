@@ -279,34 +279,71 @@ public class BranchIndexGenerationBuildService {
                     || kind == RagBranchIndexKind.DURABLE;
             boolean publishLegacyProjectAlias = kind == RagBranchIndexKind.PRIMARY;
             Map<String, Object> result;
+            var analysisProfile = project.getEffectiveConfig().analysisProfile();
+            String projectType = analysisProfile.projectType();
+            String sourceRoot = analysisProfile.sourceRoot();
+            boolean profileConfigured = projectType != null || sourceRoot != null;
             if (progressEvents == null) {
-                result = prepared.sourceCollectionTarget() == null
-                        ? pipelineClient.indexRepository(
+                if (prepared.sourceCollectionTarget() == null) {
+                    result = profileConfigured
+                            ? pipelineClient.indexRepository(
                                 snapshot.toString(), project.getWorkspace().getName(),
                                 project.getNamespace(), branch, revision, includePatterns,
                                 excludePatterns, prepared.collectionTarget(),
-                                false, false)
-                        : pipelineClient.indexRepository(
+                                false, false, null, projectType, sourceRoot)
+                            : pipelineClient.indexRepository(
+                                snapshot.toString(), project.getWorkspace().getName(),
+                                project.getNamespace(), branch, revision, includePatterns,
+                                excludePatterns, prepared.collectionTarget(),
+                                false, false);
+                } else {
+                    result = profileConfigured
+                            ? pipelineClient.indexRepository(
+                                snapshot.toString(), project.getWorkspace().getName(),
+                                project.getNamespace(), branch, revision, includePatterns,
+                                excludePatterns, prepared.collectionTarget(),
+                                false, false, prepared.sourceCollectionTarget(),
+                                projectType, sourceRoot)
+                            : pipelineClient.indexRepository(
                                 snapshot.toString(), project.getWorkspace().getName(),
                                 project.getNamespace(), branch, revision, includePatterns,
                                 excludePatterns, prepared.collectionTarget(),
                                 false, false, prepared.sourceCollectionTarget());
+                }
             } else {
-                result = prepared.sourceCollectionTarget() == null
-                        ? pipelineClient.indexRepository(
+                if (prepared.sourceCollectionTarget() == null) {
+                    result = profileConfigured
+                            ? pipelineClient.indexRepository(
+                                snapshot.toString(), project.getWorkspace().getName(),
+                                project.getNamespace(), branch, revision, includePatterns,
+                                excludePatterns, prepared.collectionTarget(),
+                                false, false, true, null,
+                                () -> snapshotOwnershipTransferred.set(true),
+                                progressEvents, projectType, sourceRoot)
+                            : pipelineClient.indexRepository(
                                 snapshot.toString(), project.getWorkspace().getName(),
                                 project.getNamespace(), branch, revision, includePatterns,
                                 excludePatterns, prepared.collectionTarget(),
                                 false, false, true,
                                 () -> snapshotOwnershipTransferred.set(true),
-                                progressEvents)
-                        : pipelineClient.indexRepository(
+                                progressEvents);
+                } else {
+                    result = profileConfigured
+                            ? pipelineClient.indexRepository(
+                                snapshot.toString(), project.getWorkspace().getName(),
+                                project.getNamespace(), branch, revision, includePatterns,
+                                excludePatterns, prepared.collectionTarget(),
+                                false, false, true, prepared.sourceCollectionTarget(),
+                                () -> snapshotOwnershipTransferred.set(true),
+                                progressEvents, projectType, sourceRoot)
+                            : pipelineClient.indexRepository(
                                 snapshot.toString(), project.getWorkspace().getName(),
                                 project.getNamespace(), branch, revision, includePatterns,
                                 excludePatterns, prepared.collectionTarget(),
                                 false, false, true, prepared.sourceCollectionTarget(),
                                 () -> snapshotOwnershipTransferred.set(true),
                                 progressEvents);
+                }
             }
             Object manifest = result.get("generation_manifest_sha256");
             if (!(manifest instanceof String digest) || digest.isBlank()) {

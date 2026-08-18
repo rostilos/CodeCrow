@@ -43,6 +43,14 @@ GRAPH_TEXT_LIMIT = 280
 DETAIL_TEXT_LIMIT = 8000
 MAX_OVERVIEW_SCAN = 20000
 RELATION_FIELDS = ("imports", "calls", "referenced_types", "extends", "implements")
+ARCHITECTURE_GRAPH_METADATA_FIELDS = (
+    "architecture_plugin", "architecture_kind", "architecture_source_path",
+    "architecture_paths",
+)
+MAX_GRAPH_FACTS_PER_NODE = 40
+MAX_ARCHITECTURE_PATHS_PER_BRANCH = 240
+MAX_ARCHITECTURE_TARGETS_PER_FACT = 8
+MAX_ARCHITECTURE_TARGETS_PER_NODE = 80
 DEFINITION_FIELDS = (
     "methods", "properties", "parameters", "return_type", "variables",
     "constants", "type_parameters",
@@ -213,8 +221,6 @@ def _node_title(payload: Dict[str, Any]) -> str:
 
 
 def _node_kind(payload: Dict[str, Any]) -> str:
-    if payload.get("pr"):
-        return "pr_chunk"
     if payload.get("architecture_context"):
         return "architecture_context"
     if payload.get("architecture_source"):
@@ -225,6 +231,8 @@ def _node_kind(payload: Dict[str, Any]) -> str:
         return "repository_facts"
     if payload.get("repository_generation_manifest"):
         return "repository_generation_manifest"
+    if payload.get("pr"):
+        return "pr_chunk"
     if payload.get("node_type"):
         return str(payload["node_type"])
     if payload.get("content_type"):
@@ -242,12 +250,72 @@ def _node_group(payload: Dict[str, Any]) -> str:
     return "unknown"
 
 
+def _metadata_source(value: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = value.get("metadata")
+    return metadata if isinstance(metadata, dict) else value
+
+
+def _plugin_graph_facts(value: Dict[str, Any]) -> List[Dict[str, Any]]:
+    raw_facts = _metadata_source(value).get("plugin_graph_facts")
+    if not isinstance(raw_facts, list):
+        return []
+    return [fact for fact in raw_facts if isinstance(fact, dict)][:MAX_GRAPH_FACTS_PER_NODE]
+
+
+def _is_architecture_fact_source(value: Dict[str, Any]) -> bool:
+    metadata = _metadata_source(value)
+    return (
+        value.get("kind") == "architecture_context"
+        or metadata.get("architecture_context") is True
+        or bool(metadata.get("architecture_kind"))
+    )
+
+
+def _is_repository_path(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value.strip())
+        and not value.startswith("__analysis_architecture__/")
+        and not value.startswith("__analysis_state__/")
+    )
+
+
+def _architecture_paths(value: Dict[str, Any], max_paths: int = 240) -> List[str]:
+    metadata = _metadata_source(value)
+    paths: List[str] = []
+    seen: Set[str] = set()
+
+    def add(candidate: Any):
+        if not _is_repository_path(candidate):
+            return
+        path = str(candidate).strip()
+        if path not in seen and len(paths) < max_paths:
+            seen.add(path)
+            paths.append(path)
+
+    add(metadata.get("architecture_source_path"))
+    for path in _as_list(metadata.get("architecture_paths")):
+        add(path)
+    for fact in _plugin_graph_facts(value):
+        add(fact.get("path"))
+        for path in _as_list(fact.get("related_paths")):
+            add(path)
+    return paths
+
+
 def _relation_metadata(payload: Dict[str, Any]) -> Dict[str, Any]:
     metadata = {}
     for key in (*RELATION_FIELDS, *DEFINITION_FIELDS, "decorators", "modifiers"):
         values = _as_list(payload.get(key))
         if values:
             metadata[key] = values[:60]
+    for key in ARCHITECTURE_GRAPH_METADATA_FIELDS:
+        value = payload.get(key)
+        if value not in (None, "", []):
+            metadata[key] = value[:240] if isinstance(value, list) else value
+    facts = _plugin_graph_facts(payload)
+    if facts:
+        metadata["plugin_graph_facts"] = facts
     return metadata
 
 
@@ -408,34 +476,71 @@ def _relation_lookup_names(nodes: List[Dict[str, Any]], max_names: int = 240) ->
     names_by_branch: Dict[str, List[str]] = defaultdict(list)
     seen_by_branch: Dict[str, Set[str]] = defaultdict(set)
 
+    def add_value(branch: str, value: Any):
+        for raw_value in _iter_strings(value):
+            candidates = [_display_relation_label(raw_value), _normalize_token(raw_value)]
+            candidates.extend(TOKEN_RE.findall(raw_value))
+            candidates.extend(
+                re.split(r"[.#:/\\]", candidate)[-1]
+                for candidate in list(candidates)
+                if candidate
+            )
+            for candidate in candidates:
+                candidate = candidate.strip()
+                if not candidate or candidate.lower() in COMMON_RELATION_TOKENS:
+                    continue
+                if candidate not in seen_by_branch[branch]:
+                    seen_by_branch[branch].add(candidate)
+                    names_by_branch[branch].append(candidate)
+                    if len(names_by_branch[branch]) >= max_names:
+                        return
+
     for node in nodes:
         branch = str(node.get("branch") or "")
         metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
         for field in RELATION_FIELDS:
             for value in _iter_strings(metadata.get(field)):
-                candidates = [_display_relation_label(value), _normalize_token(value)]
-                candidates.extend(TOKEN_RE.findall(value))
-                for candidate in candidates:
-                    candidate = candidate.strip()
-                    if not candidate or candidate.lower() in COMMON_RELATION_TOKENS:
-                        continue
-                    simple = _normalize_token(candidate)
-                    for name in (candidate, simple):
-                        if not name or name.lower() in COMMON_RELATION_TOKENS:
-                            continue
-                        if name not in seen_by_branch[branch]:
-                            seen_by_branch[branch].add(name)
-                            names_by_branch[branch].append(name)
-                            if len(names_by_branch[branch]) >= max_names:
-                                break
-                    if len(names_by_branch[branch]) >= max_names:
-                        break
+                add_value(branch, value)
                 if len(names_by_branch[branch]) >= max_names:
                     break
             if len(names_by_branch[branch]) >= max_names:
                 break
+        if len(names_by_branch[branch]) >= max_names:
+            continue
+        architecture_facts = (
+            _plugin_graph_facts(node)
+            if _is_architecture_fact_source(node)
+            else []
+        )
+        for fact in architecture_facts:
+            add_value(branch, fact.get("source"))
+            if len(names_by_branch[branch]) >= max_names:
+                break
+            add_value(branch, fact.get("target"))
+            if len(names_by_branch[branch]) >= max_names:
+                break
 
     return names_by_branch
+
+
+def _architecture_lookup_paths(
+    nodes: List[Dict[str, Any]],
+    max_paths: int = MAX_ARCHITECTURE_PATHS_PER_BRANCH,
+) -> Dict[str, List[str]]:
+    paths_by_branch: Dict[str, List[str]] = defaultdict(list)
+    seen_by_branch: Dict[str, Set[str]] = defaultdict(set)
+    for node in nodes:
+        if not _is_architecture_fact_source(node):
+            continue
+        branch = str(node.get("branch") or "")
+        for path in _architecture_paths(node, max_paths=max_paths):
+            if path in seen_by_branch[branch]:
+                continue
+            seen_by_branch[branch].add(path)
+            paths_by_branch[branch].append(path)
+            if len(paths_by_branch[branch]) >= max_paths:
+                break
+    return paths_by_branch
 
 
 def _dependency_neighbor_filters(
@@ -443,21 +548,72 @@ def _dependency_neighbor_filters(
     filters: VectorInspectFilters,
 ) -> Iterable[Filter]:
     """Build bounded filters that fetch likely dependency targets for graph edges."""
+    def scoped_conditions(branch: str) -> Tuple[List[FieldCondition], List[FieldCondition]]:
+        must: List[FieldCondition] = []
+        must_not: List[FieldCondition] = []
+        if branch:
+            must.append(FieldCondition(key="branch", match=MatchValue(value=branch)))
+        elif filters.branches:
+            branch_match = (
+                MatchValue(value=filters.branches[0])
+                if len(filters.branches) == 1
+                else MatchAny(any=filters.branches)
+            )
+            must.append(FieldCondition(key="branch", match=branch_match))
+        if filters.languages:
+            language_match = (
+                MatchValue(value=filters.languages[0])
+                if len(filters.languages) == 1
+                else MatchAny(any=filters.languages)
+            )
+            must.append(FieldCondition(key="language", match=language_match))
+        if filters.pr_number is not None:
+            must.append(FieldCondition(
+                key="pr_number",
+                match=MatchValue(value=filters.pr_number),
+            ))
+        if not filters.include_pr:
+            must_not.append(FieldCondition(key="pr", match=MatchValue(value=True)))
+        return must, must_not
+
+    for branch, paths in _architecture_lookup_paths(nodes).items():
+        if filters.branches and branch and branch not in filters.branches:
+            continue
+        base_must, base_must_not = scoped_conditions(branch)
+        for start in range(0, len(paths), 60):
+            yield Filter(
+                must=[
+                    *base_must,
+                    FieldCondition(
+                        key="path",
+                        match=MatchAny(any=paths[start:start + 60]),
+                    ),
+                ],
+                must_not=base_must_not or None,
+            )
+
     for branch, names in _relation_lookup_names(nodes).items():
         if not names:
             continue
         if filters.branches and branch and branch not in filters.branches:
             continue
 
-        base_must = []
-        if branch:
-            base_must.append(FieldCondition(key="branch", match=MatchValue(value=branch)))
+        base_must, base_must_not = scoped_conditions(branch)
 
         for start in range(0, len(names), 60):
             batch = names[start:start + 60]
-            yield Filter(must=[*base_must, FieldCondition(key="primary_name", match=MatchAny(any=batch))])
-            yield Filter(must=[*base_must, FieldCondition(key="semantic_names", match=MatchAny(any=batch))])
-            yield Filter(must=[*base_must, FieldCondition(key="methods", match=MatchAny(any=batch[:40]))])
+            for key, values in (
+                ("primary_name", batch),
+                ("semantic_names", batch),
+                ("methods", batch[:40]),
+            ):
+                yield Filter(
+                    must=[
+                        *base_must,
+                        FieldCondition(key=key, match=MatchAny(any=values)),
+                    ],
+                    must_not=base_must_not or None,
+                )
 
 
 def _hydrate_dependency_neighbors(
@@ -713,6 +869,45 @@ def _virtual_node(
     }
 
 
+def _is_default_graph_node(node: Dict[str, Any]) -> bool:
+    if node.get("virtual"):
+        return False
+    if node.get("kind") in {
+        "architecture_context",
+        "architecture_source",
+        "repository_snapshot",
+        "repository_facts",
+        "repository_generation_manifest",
+    }:
+        return False
+    return _is_repository_path(node.get("path"))
+
+
+def _plugin_fact_label(fact: Dict[str, Any]) -> str:
+    parts = [
+        _display_relation_label(fact.get("source")),
+        _display_relation_label(fact.get("relation")),
+        _display_relation_label(fact.get("target")),
+    ]
+    return _truncate_text(" ".join(part for part in parts if part), 180)
+
+
+def _architecture_evidence_node(source: Dict[str, Any], path: str) -> Dict[str, Any]:
+    branch = str(source.get("branch") or "")
+    node = _virtual_node(
+        _safe_synthetic_id("file", branch, path),
+        _file_title(path),
+        "file",
+        branch or "architecture evidence",
+        branch=branch,
+        path=path,
+        language=source.get("language"),
+    )
+    node["preview"] = "Repository path referenced by plugin architecture metadata"
+    node["metadata"]["architecture_evidence"] = True
+    return node
+
+
 def _build_graph(
     nodes: List[Dict[str, Any]],
     max_edges: int = 1200,
@@ -720,6 +915,7 @@ def _build_graph(
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     edges: Dict[str, Dict[str, Any]] = {}
     virtual_nodes: Dict[str, Dict[str, Any]] = {}
+    file_virtual_ids: Dict[Tuple[str, str], str] = {}
 
     def add_edge(source: str, target: str, kind: str, weight: float = 1.0, token: Optional[str] = None):
         if source == target or len(edges) >= max_edges:
@@ -748,7 +944,15 @@ def _build_graph(
         edges[key] = edge
 
     def add_virtual(node: Dict[str, Any]) -> Optional[str]:
-        if node["id"] in virtual_nodes:
+        existing = virtual_nodes.get(node["id"])
+        if existing:
+            if int(node.get("metricCount") or 0) > int(existing.get("metricCount") or 0):
+                metadata = {
+                    **(existing.get("metadata") or {}),
+                    **(node.get("metadata") or {}),
+                }
+                existing.update(node)
+                existing["metadata"] = metadata
             return node["id"]
         if len(virtual_nodes) >= max_virtual_nodes:
             return None
@@ -780,6 +984,19 @@ def _build_graph(
         _add_tokens(type_index, _node_type_values(node), node)
         _add_tokens(member_index, _node_member_values(node), node)
 
+    # Reserve one real repository-path node per architecture boundary before
+    # structural file/symbol nodes consume the bounded virtual-node budget.
+    for node in nodes:
+        if not _is_architecture_fact_source(node) or not _plugin_graph_facts(node):
+            continue
+        evidence_paths = _architecture_paths(node, max_paths=1)
+        if not evidence_paths:
+            continue
+        path = evidence_paths[0]
+        evidence_id = add_virtual(_architecture_evidence_node(node, path))
+        if evidence_id:
+            file_virtual_ids[(str(node.get("branch") or ""), path)] = evidence_id
+
     for (branch, path), file_nodes in by_file.items():
         language = _first_string([node.get("language") or node.get("filetype") for node in file_nodes])
         file_id = add_virtual(_virtual_node(
@@ -792,6 +1009,8 @@ def _build_graph(
             language=language,
             metric_count=len(file_nodes),
         ))
+        if file_id:
+            file_virtual_ids[(branch, path)] = file_id
         ordered = sorted(
             file_nodes,
             key=lambda n: (
@@ -840,6 +1059,85 @@ def _build_graph(
         "type": type_index,
         "member": member_index,
     }
+
+    for node in nodes:
+        if not _is_architecture_fact_source(node):
+            continue
+        facts = _plugin_graph_facts(node)
+        if not facts:
+            continue
+
+        branch = str(node.get("branch") or "")
+        linked_targets: Set[str] = set()
+        for fact in facts:
+            label = _plugin_fact_label(fact)
+            fact_targets: Set[str] = set()
+
+            def link(target_id: Optional[str]) -> bool:
+                if not target_id:
+                    return False
+                if target_id in fact_targets:
+                    add_edge(node["id"], target_id, "metadata_reference", 2.05, token=label)
+                    return True
+                if (
+                    len(fact_targets) >= MAX_ARCHITECTURE_TARGETS_PER_FACT
+                    or (
+                        target_id not in linked_targets
+                        and len(linked_targets) >= MAX_ARCHITECTURE_TARGETS_PER_NODE
+                    )
+                ):
+                    return False
+                fact_targets.add(target_id)
+                linked_targets.add(target_id)
+                add_edge(node["id"], target_id, "metadata_reference", 2.05, token=label)
+                return True
+
+            for endpoint in (fact.get("source"), fact.get("target")):
+                for target in _lookup_relation_targets(
+                    node,
+                    endpoint,
+                    indexes,
+                    ("type", "member"),
+                    relation_kind="metadata_reference",
+                    max_targets=2,
+                ):
+                    if _is_default_graph_node(target):
+                        link(target["id"])
+
+            endpoint_tokens = set(_candidate_tokens([
+                fact.get("source"),
+                fact.get("target"),
+            ]))
+            fact_paths = _architecture_paths(
+                {"plugin_graph_facts": [fact]},
+                max_paths=8,
+            ) or _architecture_paths(node, max_paths=8)
+            for path in fact_paths:
+                path_candidates = [
+                    candidate
+                    for candidate in by_file.get((branch, path), [])
+                    if candidate["id"] != node["id"] and _is_default_graph_node(candidate)
+                ]
+                path_candidates.sort(key=lambda candidate: (
+                    0 if endpoint_tokens.intersection(_candidate_tokens([
+                        *_node_type_values(candidate),
+                        *_node_member_values(candidate),
+                    ])) else 1,
+                    candidate.get("startLine")
+                    if isinstance(candidate.get("startLine"), int) else 10**9,
+                    candidate["id"],
+                ))
+                for candidate in path_candidates[:2]:
+                    if not link(candidate["id"]):
+                        break
+
+                file_id = file_virtual_ids.get((branch, path))
+                if not file_id:
+                    file_id = add_virtual(_architecture_evidence_node(node, path))
+                    if file_id:
+                        file_virtual_ids[(branch, path)] = file_id
+                link(file_id)
+
     for node in nodes:
         for field, config in RELATION_EDGE_CONFIG.items():
             edge_kind = str(config["kind"])
@@ -1037,6 +1335,16 @@ def _neighbor_filters_for(payload: Dict[str, Any]) -> Iterable[Optional[Filter]]
     if path:
         yield Filter(must=[*base_must, FieldCondition(key="path", match=MatchValue(value=path))])
 
+    architecture_paths = _architecture_paths(payload, max_paths=120)
+    for start in range(0, len(architecture_paths), 60):
+        yield Filter(must=[
+            *base_must,
+            FieldCondition(
+                key="path",
+                match=MatchAny(any=architecture_paths[start:start + 60]),
+            ),
+        ])
+
     names = []
     if payload.get("primary_name"):
         names.append(payload["primary_name"])
@@ -1051,34 +1359,21 @@ def _neighbor_filters_for(payload: Dict[str, Any]) -> Iterable[Optional[Filter]]
     if payload.get("namespace"):
         yield Filter(must=[*base_must, FieldCondition(key="namespace", match=MatchValue(value=payload["namespace"]))])
 
-    relation_names: List[str] = []
-    seen_names: Set[str] = set()
-    for field in RELATION_FIELDS:
-        for value in _iter_strings(payload.get(field)):
-            for candidate in (_display_relation_label(value), _normalize_token(value)):
-                candidate = candidate.strip()
-                if not candidate or candidate.lower() in COMMON_RELATION_TOKENS:
-                    continue
-                if candidate not in seen_names:
-                    seen_names.add(candidate)
-                    relation_names.append(candidate)
-            for token in TOKEN_RE.findall(value):
-                simple = _normalize_token(token)
-                if simple and simple.lower() not in COMMON_RELATION_TOKENS and simple not in seen_names:
-                    seen_names.add(simple)
-                    relation_names.append(simple)
-                if len(relation_names) >= 40:
-                    break
-            if len(relation_names) >= 40:
-                break
-        if len(relation_names) >= 40:
-            break
+    lookup_node = {
+        "branch": str(branch or ""),
+        "kind": _node_kind(payload),
+        "metadata": _relation_metadata(payload),
+    }
+    relation_names = _relation_lookup_names([lookup_node], max_names=60).get(
+        str(branch or ""),
+        [],
+    )
 
     if relation_names:
-        relation_names = relation_names[:40]
+        relation_names = relation_names[:60]
         yield Filter(must=[*base_must, FieldCondition(key="primary_name", match=MatchAny(any=relation_names))])
         yield Filter(must=[*base_must, FieldCondition(key="semantic_names", match=MatchAny(any=relation_names))])
-        yield Filter(must=[*base_must, FieldCondition(key="methods", match=MatchAny(any=relation_names[:30]))])
+        yield Filter(must=[*base_must, FieldCondition(key="methods", match=MatchAny(any=relation_names[:40]))])
 
 
 @router.post("/inspect/{workspace}/{project}/points/{point_id}")

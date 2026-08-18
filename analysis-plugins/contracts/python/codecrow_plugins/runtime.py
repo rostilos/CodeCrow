@@ -55,6 +55,7 @@ class PluginRuntime:
         revision: str,
         snapshots: tuple[RepositorySnapshot, ...] = (),
         mode: RepositoryAnalysisMode = RepositoryAnalysisMode.FULL_INDEX,
+        source_root: str | None = None,
     ) -> "RepositoryAnalysisHandle":
         sessions: list[tuple[str, object]] = []
         diagnostics: list[PluginDiagnostic] = []
@@ -98,6 +99,17 @@ class PluginRuntime:
                     except Exception as exception:
                         diagnostics.append(PluginDiagnostic(
                             code="plugin-repository-mode-exception",
+                            message=f"{type(exception).__name__}: {exception}",
+                            plugin_id=plugin_id,
+                        ))
+                        continue
+                configure_root = getattr(outcome.value, "set_source_root", None)
+                if configure_root is not None:
+                    try:
+                        configure_root(source_root)
+                    except Exception as exception:
+                        diagnostics.append(PluginDiagnostic(
+                            code="plugin-repository-root-exception",
                             message=f"{type(exception).__name__}: {exception}",
                             plugin_id=plugin_id,
                         ))

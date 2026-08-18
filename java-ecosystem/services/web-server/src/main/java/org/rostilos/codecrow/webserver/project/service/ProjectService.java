@@ -43,6 +43,7 @@ import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGate
 import org.rostilos.codecrow.core.model.project.config.BranchAnalysisConfig;
 import org.rostilos.codecrow.core.model.project.config.AnalysisLimitsConfig;
 import org.rostilos.codecrow.core.model.project.config.AnalysisScopeConfig;
+import org.rostilos.codecrow.core.model.project.config.AnalysisProfileConfig;
 import org.rostilos.codecrow.core.model.project.config.CommandAuthorizationMode;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
@@ -255,6 +256,8 @@ public class ProjectService implements IProjectService {
             mainBranch = request.getMainBranch();
         }
         ProjectConfig config = new ProjectConfig(false, mainBranch);
+        config.setAnalysisProfile(new AnalysisProfileConfig(
+                request.getProjectType(), request.getSourceRoot()));
         // Ensure main branch is always included in analysis patterns
         config.ensureMainBranchInPatterns();
         newProject.setConfiguration(config);
@@ -404,6 +407,22 @@ public class ProjectService implements IProjectService {
                 cfg.setMainBranch(request.getMainBranch());
             }
             cfg.ensureMainBranchInPatterns();
+            project.setConfiguration(cfg);
+        }
+
+        if (request.hasAnalysisProfileUpdate()) {
+            var cfg = project.getConfiguration();
+            if (cfg == null) {
+                cfg = new ProjectConfig();
+            }
+            var currentProfile = cfg.analysisProfile();
+            cfg.setAnalysisProfile(new AnalysisProfileConfig(
+                    request.hasProjectTypeUpdate()
+                            ? request.getProjectType()
+                            : currentProfile.projectType(),
+                    request.hasSourceRootUpdate()
+                            ? request.getSourceRoot()
+                            : currentProfile.sourceRoot()));
             project.setConfiguration(cfg);
         }
 
@@ -986,6 +1005,7 @@ public class ProjectService implements IProjectService {
         target.setQaAutoDoc(source.qaAutoDoc());
         target.setAnalysisLimits(source.analysisLimits());
         target.setAnalysisScope(source.analysisScope());
+        target.setAnalysisProfile(source.analysisProfile());
     }
 
     @Transactional

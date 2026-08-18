@@ -48,6 +48,8 @@ public class RepoOnboardRequest {
     
 
     private Boolean branchAnalysisEnabled = true;
+    private String projectType;
+    private String sourceRoot;
     
 
     public Long getVcsConnectionId() {
@@ -147,5 +149,21 @@ public class RepoOnboardRequest {
     
     public void setBranchAnalysisEnabled(Boolean branchAnalysisEnabled) {
         this.branchAnalysisEnabled = branchAnalysisEnabled;
+    }
+
+    public String getProjectType() {
+        return projectType;
+    }
+
+    public void setProjectType(String projectType) {
+        this.projectType = projectType;
+    }
+
+    public String getSourceRoot() {
+        return sourceRoot;
+    }
+
+    public void setSourceRoot(String sourceRoot) {
+        this.sourceRoot = sourceRoot;
     }
 }

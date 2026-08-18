@@ -242,13 +242,30 @@ class ExactFixtureRag:
             )
         self.requests.append(tuple(sorted(requested)))
 
+        selected_packets: list[tuple[Any, bool]] = []
+        selected_indexes: set[int] = set()
+        reachable_paths = set(requested)
+        changed = True
+        while changed:
+            changed = False
+            for index, (packet, is_pr) in enumerate(self._packets):
+                if index in selected_indexes:
+                    continue
+                packet_paths = set(packet.paths)
+                if not packet_paths.intersection(reachable_paths):
+                    continue
+                selected_indexes.add(index)
+                selected_packets.append((packet, is_pr))
+                reachable_paths.update(packet_paths)
+                changed = True
+
         chunks: list[dict[str, Any]] = []
         related_paths: set[str] = set()
-        for packet, is_pr in self._packets:
+        for packet, is_pr in selected_packets:
             packet_paths = set(packet.paths)
             matched = sorted(packet_paths.intersection(requested))
             if not matched:
-                continue
+                matched = sorted(packet_paths.intersection(reachable_paths))
             related_paths.update(packet_paths - requested)
             identity = (
                 f"{packet.plugin_id}\0{packet.kind}\0{packet.key}\0"

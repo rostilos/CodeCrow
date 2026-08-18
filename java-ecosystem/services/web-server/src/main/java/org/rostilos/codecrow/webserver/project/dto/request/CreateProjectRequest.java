@@ -37,6 +37,8 @@ public class CreateProjectRequest {
     private String defaultBranch;
     
     private Long aiConnectionId;
+    private String projectType;
+    private String sourceRoot;
 
     public String getName() {
         return name;
@@ -93,5 +95,13 @@ public class CreateProjectRequest {
     
     public Long getAiConnectionId() {
         return aiConnectionId;
+    }
+
+    public String getProjectType() {
+        return projectType;
+    }
+
+    public String getSourceRoot() {
+        return sourceRoot;
     }
 }
