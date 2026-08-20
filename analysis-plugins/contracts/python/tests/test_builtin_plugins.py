@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,20 @@ from codecrow_plugins import (
 
 
 PLUGINS_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_manifest_schema_does_not_accept_an_absent_pattern_marker_as_evidence():
+    schema = json.loads(
+        (PLUGINS_ROOT / "contracts" / "manifest" / "plugin.schema.json")
+        .read_text(encoding="utf-8")
+    )
+    alternatives = schema["$defs"]["detectionAlternative"]["anyOf"]
+    pattern_branch = next(
+        branch for branch in alternatives
+        if "contentPatternMarkers" in branch.get("properties", {})
+    )
+
+    assert pattern_branch["required"] == ["contentPatternMarkers"]
 
 
 def test_python_host_accepts_an_empty_plugin_root(tmp_path: Path):
@@ -150,6 +165,154 @@ def test_selected_language_plugins_own_their_syntax_declarations():
         assert syntax.query_resource == "python/resources/rag-chunks.scm"
 
 
+def test_source_root_bounds_language_and_framework_per_file_contributions():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    runtime = PluginRuntime(catalog)
+    inside = "services/shop/app/views.py"
+    outside = "tools/views.py"
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=(inside, outside),
+        project_type="django",
+        source_root="services/shop",
+    ))
+    source = (
+        "from django.views.decorators.http import require_GET\n"
+        "@require_GET\n"
+        "def health(request):\n"
+        "    return None\n"
+    )
+
+    inside_facts, inside_diagnostics = runtime.graph_facts(
+        FileArtifact(inside, source),
+        capabilities,
+    )
+    outside_facts, outside_diagnostics = runtime.graph_facts(
+        FileArtifact(outside, source),
+        capabilities,
+    )
+    contribution, review_diagnostics = runtime.review_contribution(
+        (inside, outside),
+        capabilities,
+    )
+
+    assert inside_diagnostics == ()
+    assert outside_diagnostics == ()
+    assert {fact.kind for fact in inside_facts} >= {
+        "django-view",
+        "python-callable",
+    }
+    assert outside_facts == ()
+    assert review_diagnostics == ()
+    assert {request.identifier for request in contribution.evidence_requests} == {
+        inside,
+    }
+
+
+def test_inferred_framework_root_uses_plugin_relative_identifiers_and_repository_paths():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    runtime = PluginRuntime(catalog)
+    inside = "services/shop/shop/models.py"
+    outside = "tools/models.py"
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=(
+            "services/shop/manage.py",
+            "services/shop/project/settings.py",
+            "services/shop/project/urls.py",
+            inside,
+            outside,
+        ),
+    ))
+    source = "from django.db import models\nclass Order(models.Model):\n    pass\n"
+
+    inside_facts, inside_diagnostics = runtime.graph_facts(
+        FileArtifact(inside, source),
+        capabilities,
+    )
+    outside_facts, outside_diagnostics = runtime.graph_facts(
+        FileArtifact(outside, source),
+        capabilities,
+    )
+
+    model = next(fact for fact in inside_facts if fact.kind == "django-model")
+    assert inside_diagnostics == ()
+    assert model.target == "shop.models.Order"
+    assert model.path == inside
+    assert outside_diagnostics == ()
+    assert not any(fact.kind.startswith("django-") for fact in outside_facts)
+
+
+def test_evidence_cap_keeps_framework_root_and_never_widens_dispatch():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    runtime = PluginRuntime(catalog)
+    root = "services/shop"
+    inside = f"{root}/shop/models.py"
+    outside = "tools/models.py"
+    paths = tuple(sorted({
+        f"{root}/manage.py",
+        f"{root}/project/urls.py",
+        inside,
+        outside,
+        *(f"{root}/apps/app{index:02d}/settings.py" for index in range(70)),
+    }))
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=paths,
+    ))
+    source = "from django.db import models\nclass Order(models.Model):\n    pass\n"
+
+    outside_facts, diagnostics = runtime.graph_facts(
+        FileArtifact(outside, source),
+        capabilities,
+    )
+
+    django_evidence = capabilities.detection_evidence["django"]
+    assert len(django_evidence) == 64
+    assert f"root:{root}" in django_evidence
+    assert diagnostics == ()
+    assert not any(fact.kind.startswith("django-") for fact in outside_facts)
+
+    incomplete = ProjectCapabilities(
+        repository_plugins=capabilities.repository_plugins,
+        file_plugins=capabilities.file_plugins,
+        detection_evidence={
+            **capabilities.detection_evidence,
+            "django": tuple(
+                item for item in django_evidence
+                if not item.startswith("root:")
+            ),
+        },
+        fingerprint="sha256:" + ("0" * 64),
+        descriptor_fingerprint=capabilities.descriptor_fingerprint,
+    )
+    inside_facts, incomplete_diagnostics = runtime.graph_facts(
+        FileArtifact(inside, source),
+        incomplete,
+    )
+
+    assert incomplete_diagnostics == ()
+    assert not any(fact.kind.startswith("django-") for fact in inside_facts)
+
+    legacy_manual = ProjectCapabilities(
+        repository_plugins=capabilities.repository_plugins,
+        file_plugins=capabilities.file_plugins,
+        detection_evidence={
+            **capabilities.detection_evidence,
+            "django": ("manual-project-type:django",),
+        },
+        fingerprint="sha256:" + ("0" * 64),
+        descriptor_fingerprint=capabilities.descriptor_fingerprint,
+    )
+    manual_facts, manual_diagnostics = runtime.graph_facts(
+        FileArtifact(inside, source),
+        legacy_manual,
+    )
+
+    assert manual_diagnostics == ()
+    assert any(fact.kind == "django-model" for fact in manual_facts)
+
+
 def test_unassigned_file_uses_neutral_syntax_fallback_in_polyglot_repository():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)
@@ -213,8 +376,10 @@ def test_discovers_and_selects_php_and_magento_deterministically():
 
     assert set(catalog.registry.ordered_ids) == {
         "bash", "c", "c-sharp", "cpp", "css", "go", "haskell", "html",
-        "data-contracts", "fastapi", "hyva", "java", "javascript", "json", "magento", "php", "python", "ruby", "spring",
-        "rust", "scala", "tsx", "typescript",
+        "data-contracts", "django", "ember", "express", "fastapi", "hyva",
+        "java", "javascript", "json", "magento", "nextjs", "php", "python",
+        "quarkus", "rails", "ruby", "spring", "rust", "scala", "tsx",
+        "typescript",
     }
     assert capabilities.repository_plugins == ("json", "php", "magento")
     assert capabilities.file_plugins == {

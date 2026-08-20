@@ -139,7 +139,11 @@
         {"properties": {"filesAny": {"minItems": 1}}},
         {"properties": {"pathPatternsAll": {"minItems": 1}}},
         {"properties": {"pathPatternsAny": {"minItems": 1}}},
-        {"properties": {"contentMarkers": {"minItems": 1}}}
+        {"properties": {"contentMarkers": {"minItems": 1}}},
+        {
+          "required": ["contentPatternMarkers"],
+          "properties": {"contentPatternMarkers": {"minItems": 1}}
+        }
       ]
     }
   }

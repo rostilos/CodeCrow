@@ -39,9 +39,15 @@
         </resources>
     </build>
     <modules>
+        <module>django/java</module>
+        <module>ember/java</module>
+        <module>express/java</module>
         <module>fastapi/java</module>
         <module>hyva/java</module>
         <module>magento/java</module>
+        <module>nextjs/java</module>
+        <module>quarkus/java</module>
+        <module>rails/java</module>
         <module>spring/java</module>
     </modules>
 </project>

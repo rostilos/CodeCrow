@@ -156,6 +156,32 @@ public interface VcsClient {
     String getFileContent(String workspaceId, String repoIdOrSlug, String filePath, String branchOrCommit) throws IOException;
 
     /**
+     * List every regular repository file at a pinned commit snapshot.
+     * Symbolic links and submodule/subrepository entries are not regular
+     * files for this inventory.
+     *
+     * <p>The result must be complete. Implementations must throw instead of
+     * returning a truncated inventory when the provider or {@code maxFiles}
+     * cannot represent the whole tree. Callers use this only as optional
+     * deterministic enrichment and can then fall back to narrower evidence.</p>
+     *
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @param commit immutable commit-object hash
+     * @param maxFiles maximum complete inventory size accepted by the caller
+     * @return normalized repository-relative regular-file paths
+     */
+    default List<String> listRepositoryFiles(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commit,
+            int maxFiles
+    ) throws IOException {
+        throw new UnsupportedOperationException(
+                "Complete repository file listing is not supported by this provider");
+    }
+
+    /**
      * Get the latest commit hash for a branch.
      * @param workspaceId the external workspace/org ID
      * @param repoIdOrSlug the repository ID or slug

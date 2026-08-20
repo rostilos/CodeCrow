@@ -19,13 +19,16 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * VcsClient implementation for Bitbucket Cloud.
@@ -36,6 +39,9 @@ public class BitbucketCloudClient implements VcsClient {
     private static final Logger log = LoggerFactory.getLogger(BitbucketCloudClient.class);
     private static final String API_BASE = "https://api.bitbucket.org/2.0";
     private static final int DEFAULT_PAGE_SIZE = 50;
+    private static final int MAX_TREE_REQUESTS = 10_000;
+    private static final long MAX_TREE_ENTRIES = 2_000_000L;
+    private static final long MIN_TREE_ENTRIES = 256L;
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json");
     
     private final OkHttpClient httpClient;
@@ -567,6 +573,107 @@ public class BitbucketCloudClient implements VcsClient {
             
             return body.string();
         }
+    }
+
+    @Override
+    public List<String> listRepositoryFiles(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commit,
+            int maxFiles
+    ) throws IOException {
+        if (maxFiles <= 0) throw new IllegalArgumentException("maxFiles must be positive");
+        TreeSet<String> files = new TreeSet<>();
+        Deque<String> directories = new ArrayDeque<>();
+        Set<String> visitedDirectories = new LinkedHashSet<>();
+        directories.add("");
+        long maxEntries = Math.min(
+                MAX_TREE_ENTRIES,
+                Math.max(MIN_TREE_ENTRIES, (long) maxFiles * 4L));
+        long traversedEntries = 0;
+        int requests = 0;
+
+        String encodedCommit = URLEncoder.encode(
+                commit, StandardCharsets.UTF_8).replace("+", "%20");
+        while (!directories.isEmpty()) {
+            String directory = directories.removeFirst();
+            if (!visitedDirectories.add(directory)) continue;
+            String encodedDirectory = URLEncoder.encode(
+                    directory, StandardCharsets.UTF_8)
+                    .replace("+", "%20")
+                    .replace("%2F", "/");
+            String url = API_BASE + "/repositories/" + workspaceId + "/"
+                    + repoIdOrSlug + "/src/" + encodedCommit + "/"
+                    + (encodedDirectory.isEmpty() ? "" : encodedDirectory + "/")
+                    + "?pagelen=100";
+            Set<String> visitedPages = new LinkedHashSet<>();
+            while (url != null) {
+                if (!visitedPages.add(url)) {
+                    throw new IOException("Repository tree pagination repeated a page");
+                }
+                requests++;
+                if (requests > MAX_TREE_REQUESTS) {
+                    throw new IOException(
+                            "Repository tree exceeds the " + MAX_TREE_REQUESTS
+                                    + "-request traversal limit");
+                }
+                Request request = new Request.Builder()
+                        .url(url)
+                        .header("Accept", "application/json")
+                        .get()
+                        .build();
+                try (Response response = httpClient.newCall(request).execute()) {
+                    if (!response.isSuccessful()) {
+                        throw createException("list repository files", response);
+                    }
+                    ResponseBody body = response.body();
+                    if (body == null) {
+                        throw new IOException("Empty repository tree response");
+                    }
+                    JsonNode page = objectMapper.readTree(body.string());
+                    JsonNode entries = page.path("values");
+                    if (!entries.isArray()) {
+                        throw new IOException("Repository tree response has no values");
+                    }
+                    traversedEntries += entries.size();
+                    if (traversedEntries > maxEntries) {
+                        throw new IOException(
+                                "Repository tree exceeds the " + maxEntries
+                                        + "-entry traversal limit");
+                    }
+                    for (JsonNode entry : entries) {
+                        String path = entry.path("path").asText("");
+                        if (path.isBlank()) continue;
+                        String type = entry.path("type").asText("");
+                        if (isRegularFile(entry)) {
+                            files.add(path);
+                            if (files.size() > maxFiles) {
+                                throw new IOException(
+                                        "Repository tree exceeds the " + maxFiles
+                                                + "-file inventory limit");
+                            }
+                        } else if ("commit_directory".equals(type)) {
+                            directories.addLast(path);
+                        }
+                    }
+                    url = page.hasNonNull("next")
+                            ? page.path("next").asText()
+                            : null;
+                }
+            }
+        }
+        return List.copyOf(files);
+    }
+
+    private static boolean isRegularFile(JsonNode entry) {
+        if (!"commit_file".equals(entry.path("type").asText(""))) return false;
+        JsonNode attributes = entry.path("attributes");
+        if (!attributes.isArray()) return true;
+        for (JsonNode attribute : attributes) {
+            String value = attribute.asText("");
+            if ("link".equals(value) || "subrepository".equals(value)) return false;
+        }
+        return true;
     }
 
     @Override

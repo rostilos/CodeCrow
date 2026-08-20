@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Collection;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -28,11 +30,32 @@ public final class ProjectSelector {
     }
 
     public ProjectCapabilities select(RepositoryFacts facts) {
-        if (facts.projectType() != null) return selectExplicit(facts);
+        return select(facts, sourcePaths(facts));
+    }
+
+    /**
+     * Select from complete repository facts while limiting per-file language
+     * ownership to the files a host will actually analyze.
+     *
+     * <p>PR hosts need unchanged marker and path-pattern evidence to select a
+     * framework, but must not turn that repository inventory into an
+     * enrichment request for every file.</p>
+     */
+    public ProjectCapabilities select(
+            RepositoryFacts facts,
+            Collection<String> fileAssignmentPaths) {
+        if (facts == null) throw new IllegalArgumentException("repository facts are required");
+        if (fileAssignmentPaths == null) {
+            throw new IllegalArgumentException("file assignment paths are required");
+        }
+        List<String> assignmentPaths = sourcePaths(
+                List.copyOf(fileAssignmentPaths), facts.sourceRoot());
+        if (facts.projectType() != null) return selectExplicit(facts, assignmentPaths);
         List<String> selected = new ArrayList<>();
         Map<String, List<String>> evidence = new TreeMap<>();
+        Set<String> repositoryPathSet = Set.copyOf(facts.paths());
         for (PluginDescriptor descriptor : registry.descriptors()) {
-            List<String> matched = match(descriptor, facts);
+            List<String> matched = match(descriptor, facts, repositoryPathSet);
             if (matched == null) continue;
             if (!selected.containsAll(descriptor.requires())) continue;
             selected.add(descriptor.id());
@@ -44,7 +67,7 @@ public final class ProjectSelector {
                 .map(registry::descriptor)
                 .filter(descriptor -> descriptor.kind() == PluginKind.LANGUAGE)
                 .toList();
-        for (String path : sourcePaths(facts)) {
+        for (String path : assignmentPaths) {
             String extension = extension(path);
             List<String> matches = languages.stream()
                     .filter(descriptor -> descriptor.detection().extensions().contains(extension))
@@ -63,13 +86,15 @@ public final class ProjectSelector {
                 registry.fingerprintFor(selected));
     }
 
-    private ProjectCapabilities selectExplicit(RepositoryFacts facts) {
+    private ProjectCapabilities selectExplicit(
+            RepositoryFacts facts,
+            List<String> assignmentPaths) {
         PluginDescriptor requested = registry.descriptor(facts.projectType());
         TreeSet<String> requestedIds = new TreeSet<>();
         requestedIds.add(requested.id());
         for (PluginDescriptor descriptor : registry.descriptors()) {
             if (descriptor.kind() != PluginKind.LANGUAGE) continue;
-            if (sourcePaths(facts).stream().anyMatch(path ->
+            if (assignmentPaths.stream().anyMatch(path ->
                     descriptor.detection().extensions().contains(extension(path)))) {
                 requestedIds.add(descriptor.id());
             }
@@ -89,7 +114,7 @@ public final class ProjectSelector {
         List<PluginDescriptor> languages = resolved.stream()
                 .filter(descriptor -> descriptor.kind() == PluginKind.LANGUAGE)
                 .toList();
-        for (String path : sourcePaths(facts)) {
+        for (String path : assignmentPaths) {
             List<String> matches = languages.stream()
                     .filter(descriptor -> descriptor.detection().extensions().contains(extension(path)))
                     .map(PluginDescriptor::id)
@@ -105,10 +130,14 @@ public final class ProjectSelector {
                 registry.fingerprintFor(selected));
     }
 
-    private List<String> match(PluginDescriptor descriptor, RepositoryFacts facts) {
+    private List<String> match(
+            PluginDescriptor descriptor,
+            RepositoryFacts facts,
+            Set<String> repositoryPaths) {
         DetectionRules rules = descriptor.detection();
         List<String> extensionHits = sourcePaths(facts).stream()
                 .filter(path -> rules.extensions().contains(extension(path)))
+                .limit(MAX_EVIDENCE_PER_PLUGIN)
                 .toList();
         List<DetectionAlternative> groups = new ArrayList<>();
         if (!rules.filesAll().isEmpty() || !rules.filesAny().isEmpty()
@@ -121,7 +150,7 @@ public final class ProjectSelector {
         extensionHits.forEach(path -> evidence.add("extension:" + path));
         boolean groupMatched = false;
         for (DetectionAlternative group : groups) {
-            List<String> matched = matchGroup(group, facts);
+            List<String> matched = matchGroup(group, facts, repositoryPaths);
             if (matched != null) {
                 groupMatched = true;
                 evidence.addAll(matched);
@@ -131,19 +160,28 @@ public final class ProjectSelector {
         if (descriptor.kind() == PluginKind.LANGUAGE) {
             if (extensionHits.isEmpty() && !groupMatched) return null;
         } else if (!groupMatched) return null;
-        return evidence.stream().limit(MAX_EVIDENCE_PER_PLUGIN).toList();
+        return boundedEvidence(evidence);
     }
 
     private static List<String> sourcePaths(RepositoryFacts facts) {
         if (facts.sourceRoot() == null) return facts.paths();
-        String prefix = facts.sourceRoot() + "/";
-        return facts.paths().stream()
-                .filter(path -> path.equals(facts.sourceRoot()) || path.startsWith(prefix))
+        return sourcePaths(facts.paths(), facts.sourceRoot());
+    }
+
+    private static List<String> sourcePaths(
+            Collection<String> paths,
+            String sourceRoot) {
+        if (sourceRoot == null) return List.copyOf(paths);
+        String prefix = sourceRoot + "/";
+        return paths.stream()
+                .filter(path -> path.equals(sourceRoot) || path.startsWith(prefix))
                 .toList();
     }
 
-    private List<String> matchGroup(DetectionAlternative group, RepositoryFacts facts) {
-        Set<String> paths = Set.copyOf(facts.paths());
+    private List<String> matchGroup(
+            DetectionAlternative group,
+            RepositoryFacts facts,
+            Set<String> paths) {
         List<Set<String>> rootSets = new ArrayList<>();
         group.filesAll().forEach(relative -> rootSets.add(suffixRoots(facts.paths(), relative)));
         group.contentMarkers().forEach(marker -> rootSets.add(facts.markerContents().entrySet().stream()
@@ -163,6 +201,8 @@ public final class ProjectSelector {
             candidateRoots.retainAll(Set.of(facts.sourceRoot()));
         }
 
+        TreeSet<String> matchedEvidence = new TreeSet<>();
+        int matchedRoots = 0;
         for (String root : candidateRoots) {
             List<String> filesAll = group.filesAll().stream()
                     .map(relative -> rooted(root, relative)).toList();
@@ -171,9 +211,12 @@ public final class ProjectSelector {
                     .map(relative -> rooted(root, relative)).filter(paths::contains).toList();
             if (!group.filesAny().isEmpty() && filesAny.isEmpty()) continue;
 
-            Map<String, List<String>> allPatternHits = patternHits(group.pathPatternsAll(), facts.paths(), root);
+            List<String> rootedPaths = pathsUnderRoot(facts.paths(), root);
+            Map<String, List<String>> allPatternHits = patternHits(
+                    group.pathPatternsAll(), rootedPaths, root);
             if (allPatternHits.values().stream().anyMatch(List::isEmpty)) continue;
-            Map<String, List<String>> anyPatternHits = patternHits(group.pathPatternsAny(), facts.paths(), root);
+            Map<String, List<String>> anyPatternHits = patternHits(
+                    group.pathPatternsAny(), rootedPaths, root);
             if (!group.pathPatternsAny().isEmpty()
                     && anyPatternHits.values().stream().allMatch(List::isEmpty)) continue;
 
@@ -208,9 +251,11 @@ public final class ProjectSelector {
                     evidence.add("content:" + path + ":" + marker.contains()));
             patternMarkerHits.forEach((marker, hits) -> hits.forEach(path -> evidence.add(
                     "content-pattern:" + marker.pathPattern() + ":" + path + ":" + marker.contains())));
-            return List.copyOf(evidence);
+            matchedEvidence.addAll(evidence);
+            matchedRoots++;
+            if (matchedRoots == MAX_EVIDENCE_PER_PLUGIN) break;
         }
-        return null;
+        return matchedEvidence.isEmpty() ? null : boundedEvidence(matchedEvidence);
     }
 
     private static Set<String> suffixRoots(List<String> paths, String relative) {
@@ -241,9 +286,35 @@ public final class ProjectSelector {
             result.put(pattern, paths.stream()
                     .filter(path -> relativeToRoot(path, root) != null)
                     .filter(path -> PluginGlob.matches(pattern, relativeToRoot(path, root)))
+                    .limit(MAX_EVIDENCE_PER_PLUGIN)
                     .toList());
         }
         return result;
+    }
+
+    private static List<String> pathsUnderRoot(List<String> paths, String root) {
+        if (root.isEmpty()) return paths;
+        String prefix = root + "/";
+        int start = Collections.binarySearch(paths, prefix);
+        if (start < 0) start = -start - 1;
+        int end = start;
+        while (end < paths.size() && paths.get(end).startsWith(prefix)) end++;
+        return paths.subList(start, end);
+    }
+
+    private static List<String> boundedEvidence(Collection<String> evidence) {
+        TreeSet<String> ordered = new TreeSet<>(evidence);
+        List<String> roots = ordered.stream()
+                .filter(item -> item.startsWith("root:"))
+                .limit(MAX_EVIDENCE_PER_PLUGIN)
+                .toList();
+        int remaining = MAX_EVIDENCE_PER_PLUGIN - roots.size();
+        TreeSet<String> retained = new TreeSet<>(roots);
+        ordered.stream()
+                .filter(item -> !item.startsWith("root:"))
+                .limit(remaining)
+                .forEach(retained::add);
+        return List.copyOf(retained);
     }
 
     private String fingerprint(

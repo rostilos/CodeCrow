@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from pathlib import PurePosixPath
 from typing import Iterable
 
 from .api import RepositoryFacts, normalize_path
+from .plugin_glob import plugin_glob_matches
 from .registry import PluginRegistry
 
 logger = logging.getLogger(__name__)
@@ -24,13 +24,13 @@ def _declared_markers(registry: PluginRegistry):
             ),
         )
     }))
-    patterns = tuple(
+    pattern_markers = tuple(sorted({
         marker
         for descriptor in registry.descriptors
         for alternative in descriptor.detection.alternatives
         for marker in alternative.content_pattern_markers
-    )
-    return exact, patterns
+    }))
+    return exact, pattern_markers
 
 
 def _under_source_root(path: str, source_root: str | None) -> bool:
@@ -39,6 +39,77 @@ def _under_source_root(path: str, source_root: str | None) -> bool:
         or path == source_root
         or path.startswith(source_root + "/")
     )
+
+
+def _potential_root_relative_paths(path: str, source_root: str | None):
+    if source_root is not None:
+        if path == source_root:
+            yield ""
+        elif path.startswith(source_root + "/"):
+            yield path[len(source_root) + 1:]
+        return
+    yield path
+    offset = path.find("/")
+    while offset >= 0:
+        yield path[offset + 1:]
+        offset = path.find("/", offset + 1)
+
+
+def _applicable_pattern_markers(
+    path: str,
+    pattern_markers,
+    source_root: str | None,
+):
+    relative_paths = tuple(_potential_root_relative_paths(path, source_root))
+    return {
+        marker
+        for marker in pattern_markers
+        if any(
+            plugin_glob_matches(marker.path_pattern, relative)
+            for relative in relative_paths
+        )
+    }
+
+
+def _fair_candidate_paths(
+    paths: tuple[str, ...],
+    exact_marker_paths: tuple[str, ...],
+    pattern_markers,
+    source_root: str | None,
+):
+    def exact_lane(marker_path):
+        return (
+            path for path in paths
+            if path == marker_path or path.endswith("/" + marker_path)
+        )
+
+    def pattern_lane(marker):
+        return (
+            path for path in paths
+            if marker in _applicable_pattern_markers(
+                path, (marker,), source_root,
+            )
+        )
+
+    lanes = [
+        exact_lane(marker_path)
+        for marker_path in exact_marker_paths
+    ]
+    lanes.extend(
+        pattern_lane(marker)
+        for marker in pattern_markers
+    )
+    seen: set[str] = set()
+    progressed = True
+    while progressed:
+        progressed = False
+        for lane in lanes:
+            path = next((candidate for candidate in lane if candidate not in seen), None)
+            if path is None:
+                continue
+            seen.add(path)
+            progressed = True
+            yield path
 
 
 def _matching_markers(path, content, exact_markers, pattern_markers):
@@ -51,8 +122,7 @@ def _matching_markers(path, content, exact_markers, pattern_markers):
     matching_patterns = {
         marker
         for marker in pattern_markers
-        if PurePosixPath(path).match(marker.path_pattern)
-        and marker.contains in content
+        if marker.contains in content
     }
     return matching_exact, matching_patterns
 
@@ -64,6 +134,7 @@ def build_repository_facts(
     registry: PluginRegistry,
     *,
     max_marker_bytes: int = 262_144,
+    max_marker_files: int = 4_096,
     project_type: str | None = None,
     source_root: str | None = None,
 ) -> RepositoryFacts:
@@ -85,20 +156,20 @@ def build_repository_facts(
 
     marker_contents: dict[str, str] = {}
     consumed_bytes = 0
-    matched_pattern_markers = set()
-    pattern_candidates = tuple(
-        path for path in normalized_paths
-        if _under_source_root(path, source_root)
-        and (
-            any(PurePosixPath(path).match(marker.path_pattern) for marker in declared_pattern_markers)
-            or any(
-                path == marker_path or path.endswith("/" + marker_path)
-                for marker_path in declared_marker_paths
-            )
-        )
+    marker_candidates = _fair_candidate_paths(
+        tuple(
+            path for path in normalized_paths
+            if _under_source_root(path, source_root)
+        ),
+        declared_marker_paths,
+        declared_pattern_markers,
+        source_root,
     )
     skipped_for_bytes = 0
-    for marker_path in tuple(dict.fromkeys((*declared_marker_paths, *pattern_candidates))):
+    skipped_for_files = 0
+    skipped_unreadable = 0
+    inspected_files = 0
+    for marker_path in marker_candidates:
         if (
             marker_path not in available
             or not _under_source_root(marker_path, source_root)
@@ -109,34 +180,44 @@ def build_repository_facts(
             for marker in declared_markers
             if marker_path == marker.path or marker_path.endswith("/" + marker.path)
         }
-        applicable_pattern_markers = {
-            marker for marker in declared_pattern_markers
-            if PurePosixPath(marker_path).match(marker.path_pattern)
-        }
-        if (
-            not applicable_exact_markers
-            and applicable_pattern_markers.issubset(matched_pattern_markers)
-        ):
+        applicable_pattern_markers = _applicable_pattern_markers(
+            marker_path,
+            declared_pattern_markers,
+            source_root,
+        )
+        if not applicable_exact_markers and not applicable_pattern_markers:
             continue
-        full_path = (root / marker_path).resolve(strict=True)
-        if root not in full_path.parents:
-            raise ValueError("plugin marker escaped the repository root")
-        size = full_path.stat().st_size
+        if inspected_files >= max_marker_files:
+            skipped_for_files = 1
+            break
+        inspected_files += 1
+        try:
+            full_path = (root / marker_path).resolve(strict=True)
+            if root not in full_path.parents:
+                skipped_unreadable += 1
+                continue
+            size = full_path.stat().st_size
+        except (OSError, RuntimeError):
+            skipped_unreadable += 1
+            continue
         if consumed_bytes + size > max_marker_bytes:
             skipped_for_bytes += 1
             continue
-        content = full_path.read_text(encoding="utf-8")
+        consumed_bytes += size
+        try:
+            content = full_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            skipped_unreadable += 1
+            continue
         matching_exact_markers, matching_pattern_markers = _matching_markers(
             marker_path,
             content,
             applicable_exact_markers,
-            applicable_pattern_markers - matched_pattern_markers,
+            applicable_pattern_markers,
         )
         if not matching_exact_markers and not matching_pattern_markers:
             continue
-        consumed_bytes += len(content.encode("utf-8"))
         marker_contents[marker_path] = content
-        matched_pattern_markers.update(matching_pattern_markers)
 
     if skipped_for_bytes:
         logger.warning(
@@ -145,6 +226,21 @@ def build_repository_facts(
             "automatic plugin-detection evidence",
             skipped_for_bytes,
             max_marker_bytes,
+        )
+    if skipped_for_files:
+        logger.warning(
+            "Skipped %s plugin marker candidate(s) after reaching the %s-file "
+            "inspection budget; repository indexing will continue with reduced "
+            "automatic plugin-detection evidence",
+            skipped_for_files,
+            max_marker_files,
+        )
+    if skipped_unreadable:
+        logger.warning(
+            "Skipped %s unavailable, unsafe, or non-UTF-8 plugin marker "
+            "candidate(s); repository indexing will continue with reduced "
+            "automatic plugin-detection evidence",
+            skipped_unreadable,
         )
 
     return RepositoryFacts(
@@ -165,6 +261,7 @@ def overlay_repository_facts(
     registry: PluginRegistry,
     *,
     max_marker_bytes: int = 262_144,
+    max_marker_files: int = 4_096,
 ) -> RepositoryFacts:
     """Apply one exact commit change set to persisted neutral detection facts.
 
@@ -214,10 +311,23 @@ def overlay_repository_facts(
             path,
             content,
             declared_markers,
-            declared_pattern_markers,
+            _applicable_pattern_markers(
+                path,
+                declared_pattern_markers,
+                baseline.source_root,
+            ),
         ))
     }
+    retained_marker_bytes = sum(
+        len(content.encode("utf-8"))
+        for content in marker_contents.values()
+    )
 
+    inspected_bytes = 0
+    inspected_files = 0
+    skipped_inspection_bytes = 0
+    skipped_inspection_files = 0
+    skipped_unreadable = 0
     for marker_path in updated:
         if not _under_source_root(marker_path, baseline.source_root):
             marker_contents.pop(marker_path, None)
@@ -227,50 +337,96 @@ def overlay_repository_facts(
             for marker in declared_markers
             if marker_path == marker.path or marker_path.endswith("/" + marker.path)
         )
-        applicable_patterns = tuple(
-            marker
-            for marker in declared_pattern_markers
-            if PurePosixPath(marker_path).match(marker.path_pattern)
-        )
+        applicable_patterns = tuple(_applicable_pattern_markers(
+            marker_path,
+            declared_pattern_markers,
+            baseline.source_root,
+        ))
         if not applicable_exact_markers and not applicable_patterns:
             continue
-        full_path = (root / marker_path).resolve(strict=True)
-        if root not in full_path.parents:
-            raise ValueError("plugin marker escaped the repository root")
-        content = full_path.read_text(encoding="utf-8")
+        if inspected_files >= max_marker_files:
+            # This is reduced evidence, not proof that an already persisted
+            # marker stopped matching. Keep the last reliable content so an
+            # incremental update cannot deactivate a plugin merely because an
+            # optional inspection budget was exhausted.
+            skipped_inspection_files += 1
+            continue
+        inspected_files += 1
+        try:
+            full_path = (root / marker_path).resolve(strict=True)
+            if root not in full_path.parents:
+                skipped_unreadable += 1
+                continue
+            size = full_path.stat().st_size
+        except (OSError, RuntimeError):
+            skipped_unreadable += 1
+            continue
+        if inspected_bytes + size > max_marker_bytes:
+            skipped_inspection_bytes += 1
+            continue
+        inspected_bytes += size
+        try:
+            content = full_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            skipped_unreadable += 1
+            continue
         if any(_matching_markers(
             marker_path,
             content,
             applicable_exact_markers,
             applicable_patterns,
         )):
-            marker_contents[marker_path] = content
+            previous = marker_contents.get(marker_path)
+            candidate_bytes = len(content.encode("utf-8"))
+            previous_bytes = (
+                len(previous.encode("utf-8"))
+                if previous is not None
+                else 0
+            )
+            candidate_total = (
+                retained_marker_bytes - previous_bytes + candidate_bytes
+            )
+            if candidate_total > max_marker_bytes:
+                # A matching update that cannot fit the persisted evidence
+                # budget is also inconclusive. Preserve its previous proven
+                # marker, if any, and omit a newly introduced marker.
+                skipped_inspection_bytes += 1
+            else:
+                marker_contents[marker_path] = content
+                retained_marker_bytes = candidate_total
         else:
-            marker_contents.pop(marker_path, None)
+            removed = marker_contents.pop(marker_path, None)
+            if removed is not None:
+                retained_marker_bytes -= len(removed.encode("utf-8"))
 
-    bounded_marker_contents: dict[str, str] = {}
-    consumed_bytes = 0
-    skipped_for_bytes = 0
-    for path, content in sorted(marker_contents.items()):
-        size = len(content.encode("utf-8"))
-        if consumed_bytes + size > max_marker_bytes:
-            skipped_for_bytes += 1
-            continue
-        bounded_marker_contents[path] = content
-        consumed_bytes += size
-    if skipped_for_bytes:
+    if skipped_inspection_bytes:
         logger.warning(
-            "Skipped %s persisted plugin marker file(s) after reaching the "
-            "%s-byte content budget during incremental update; indexing will "
-            "continue with reduced automatic plugin-detection evidence",
-            skipped_for_bytes,
+            "Skipped %s updated plugin marker candidate(s) after reaching the "
+            "%s-byte inspection budget; incremental indexing will continue with "
+            "reduced automatic plugin-detection evidence",
+            skipped_inspection_bytes,
             max_marker_bytes,
+        )
+    if skipped_inspection_files:
+        logger.warning(
+            "Skipped %s updated plugin marker candidate(s) after reaching the "
+            "%s-file inspection budget; incremental indexing will continue with "
+            "reduced automatic plugin-detection evidence",
+            skipped_inspection_files,
+            max_marker_files,
+        )
+    if skipped_unreadable:
+        logger.warning(
+            "Skipped %s unavailable, unsafe, or non-UTF-8 updated plugin "
+            "marker candidate(s); incremental indexing will continue with "
+            "reduced automatic plugin-detection evidence",
+            skipped_unreadable,
         )
 
     return RepositoryFacts(
         revision=revision,
         paths=tuple(sorted(paths)),
-        marker_contents=bounded_marker_contents,
+        marker_contents=marker_contents,
         project_type=baseline.project_type,
         source_root=baseline.source_root,
     )

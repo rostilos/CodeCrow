@@ -22,9 +22,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 
 /**
  * VcsClient implementation for GitHub.
@@ -42,6 +45,9 @@ public class GitHubClient implements VcsClient {
     private static final String GITHUB_API_VERSION_HEADER = "X-GitHub-Api-Version";
     private static final String GITHUB_ACCEPT_HEADER = "application/vnd.github+json";
     private static final String GITHUB_API_VERSION = "2022-11-28";
+    private static final int MAX_TREE_REQUESTS = 10_000;
+    private static final long MAX_TREE_ENTRIES = 2_000_000L;
+    private static final long MIN_TREE_ENTRIES = 256L;
 
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -479,6 +485,182 @@ public class GitHubClient implements VcsClient {
             }
             
             return body.string();
+        }
+    }
+
+    @Override
+    public List<String> listRepositoryFiles(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commit,
+            int maxFiles
+    ) throws IOException {
+        if (maxFiles <= 0) throw new IllegalArgumentException("maxFiles must be positive");
+        TreeTraversalBudget traversalBudget = new TreeTraversalBudget(maxFiles);
+
+        // The Git Trees endpoint is documented for a tree object ID (or a
+        // branch/tag ref), while PR selection supplies a pinned commit-object
+        // ID. Resolve that commit once so every tree request is anchored to
+        // the exact snapshot and the truncated-response fallback can start
+        // from the corresponding root tree object.
+        String rootTreeSha = getCommitTreeSha(
+                workspaceId, repoIdOrSlug, commit, traversalBudget);
+
+        JsonNode recursive = getGitTree(
+                workspaceId, repoIdOrSlug, rootTreeSha, true, traversalBudget);
+        if (!recursive.path("truncated").asBoolean(false)) {
+            TreeSet<String> files = new TreeSet<>();
+            collectGitTreeFiles(
+                    recursive, "", files, maxFiles, null, traversalBudget);
+            return List.copyOf(files);
+        }
+
+        // GitHub caps recursive tree responses. Fall back to walking each
+        // non-recursive tree object so a partial response is never presented
+        // to repository detection as a complete inventory.
+        TreeSet<String> files = new TreeSet<>();
+        Deque<GitTreeCursor> pending = new ArrayDeque<>();
+        pending.add(new GitTreeCursor("", rootTreeSha));
+        while (!pending.isEmpty()) {
+            GitTreeCursor cursor = pending.removeFirst();
+            JsonNode tree = getGitTree(
+                    workspaceId,
+                    repoIdOrSlug,
+                    cursor.reference(),
+                    false,
+                    traversalBudget);
+            collectGitTreeFiles(
+                    tree,
+                    cursor.prefix(),
+                    files,
+                    maxFiles,
+                    pending,
+                    traversalBudget);
+        }
+        return List.copyOf(files);
+    }
+
+    private String getCommitTreeSha(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commitSha,
+            TreeTraversalBudget traversalBudget
+    ) throws IOException {
+        traversalBudget.recordRequest();
+        String encodedCommit = URLEncoder.encode(commitSha, StandardCharsets.UTF_8);
+        String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug
+                + "/git/commits/" + encodedCommit;
+        Request request = createGetRequest(url);
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw createException("resolve repository commit tree", response);
+            }
+            ResponseBody body = response.body();
+            if (body == null) throw new IOException("Empty repository commit response");
+            String treeSha = objectMapper.readTree(body.string())
+                    .path("tree")
+                    .path("sha")
+                    .asText("");
+            if (treeSha.isBlank()) {
+                throw new IOException("Repository commit response has no tree object ID");
+            }
+            return treeSha;
+        }
+    }
+
+    private JsonNode getGitTree(
+            String workspaceId,
+            String repoIdOrSlug,
+            String treeReference,
+            boolean recursive,
+            TreeTraversalBudget traversalBudget
+    ) throws IOException {
+        traversalBudget.recordRequest();
+        String encodedReference = URLEncoder.encode(
+                treeReference, StandardCharsets.UTF_8);
+        String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug
+                + "/git/trees/" + encodedReference
+                + (recursive ? "?recursive=1" : "");
+        Request request = createGetRequest(url);
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw createException("list repository files", response);
+            }
+            ResponseBody body = response.body();
+            if (body == null) throw new IOException("Empty repository tree response");
+            JsonNode tree = objectMapper.readTree(body.string());
+            if (!tree.path("tree").isArray()) {
+                throw new IOException("Repository tree response has no tree entries");
+            }
+            traversalBudget.recordEntries(tree.path("tree").size());
+            return tree;
+        }
+    }
+
+    private static void collectGitTreeFiles(
+            JsonNode tree,
+            String prefix,
+            TreeSet<String> files,
+            int maxFiles,
+            Deque<GitTreeCursor> pending,
+            TreeTraversalBudget traversalBudget
+    ) throws IOException {
+        for (JsonNode entry : tree.path("tree")) {
+            String name = entry.path("path").asText("");
+            String type = entry.path("type").asText("");
+            if (name.isBlank()) continue;
+            String path = prefix.isEmpty() ? name : prefix + "/" + name;
+            if (isRegularFile(entry)) {
+                files.add(path);
+                if (files.size() > maxFiles) {
+                    throw new IOException(
+                            "Repository tree exceeds the " + maxFiles + "-file inventory limit");
+                }
+            } else if (pending != null && "tree".equals(type)) {
+                String sha = entry.path("sha").asText("");
+                if (sha.isBlank()) {
+                    throw new IOException("Repository subtree entry has no object ID: " + path);
+                }
+                pending.addLast(new GitTreeCursor(path, sha));
+            }
+        }
+    }
+
+    private static boolean isRegularFile(JsonNode entry) {
+        if (!"blob".equals(entry.path("type").asText(""))) return false;
+        String mode = entry.path("mode").asText("");
+        return "100644".equals(mode) || "100755".equals(mode);
+    }
+
+    private record GitTreeCursor(String prefix, String reference) {}
+
+    private static final class TreeTraversalBudget {
+        private final long maxEntries;
+        private long entries;
+        private int requests;
+
+        private TreeTraversalBudget(int maxFiles) {
+            maxEntries = Math.min(
+                    MAX_TREE_ENTRIES,
+                    Math.max(MIN_TREE_ENTRIES, (long) maxFiles * 4L));
+        }
+
+        private void recordRequest() throws IOException {
+            requests++;
+            if (requests > MAX_TREE_REQUESTS) {
+                throw new IOException(
+                        "Repository tree exceeds the " + MAX_TREE_REQUESTS
+                                + "-request traversal limit");
+            }
+        }
+
+        private void recordEntries(int count) throws IOException {
+            entries += count;
+            if (entries > maxEntries) {
+                throw new IOException(
+                        "Repository tree exceeds the " + maxEntries
+                                + "-entry traversal limit");
+            }
         }
     }
     

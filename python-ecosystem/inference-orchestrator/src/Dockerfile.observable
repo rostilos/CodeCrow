@@ -18,7 +18,7 @@ RUN apt-get update && \
 # when the MCP client or a runtime plugin parser cannot be imported.
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip check && \
-    python -c "from mcp.shared.context import RequestContext; from mcp_use import MCPClient; import tree_sitter_typescript"
+    python -c "from mcp.shared.context import RequestContext; from mcp_use import MCPClient; import tree_sitter_python; import tree_sitter_ruby; import tree_sitter_typescript"
 
 
 # --- Builder Stage 2: Copy and Install Application Modules ---

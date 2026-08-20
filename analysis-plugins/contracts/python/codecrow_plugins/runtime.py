@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from .api import (
     ArchitecturePacket,
     CandidateClaim,
@@ -26,6 +28,8 @@ class PluginRuntime:
     """Host-side composition. Implementations return data; the host owns policy."""
 
     MAX_FACTS_PER_FILE = 200
+    MAX_GRAPH_FACT_STRING_LENGTH = 4_096
+    MAX_GRAPH_FACT_BYTES_PER_ARTIFACT = 262_144
     MAX_RULES = 40
     MAX_EVIDENCE_REQUESTS = 80
     MAX_REPOSITORY_SYMBOLS = 250_000
@@ -126,13 +130,21 @@ class PluginRuntime:
         disposition = FileDisposition.FULL
         for plugin_id in capabilities.repository_plugins:
             descriptor = self.catalog.registry.descriptor(plugin_id)
+            plugin_root = self._plugin_root_for_path(
+                descriptor.kind,
+                plugin_id,
+                path,
+                capabilities,
+            )
+            if plugin_root is None:
+                continue
             if Capability.FILE_POLICY not in descriptor.capabilities:
                 continue
             implementation = self.catalog.implementation(plugin_id)
             contributor = getattr(implementation, "file_disposition", None)
             if contributor is None:
                 continue
-            outcome = contributor(path)
+            outcome = contributor(self._relative_to_root(path, plugin_root))
             if outcome.status is OutcomeStatus.FAILED:
                 raise RuntimeError(
                     f"plugin file policy failed for {path}: {outcome.diagnostic.code}"
@@ -157,16 +169,34 @@ class PluginRuntime:
     ) -> tuple[tuple[GraphFact, ...], tuple[PluginDiagnostic, ...]]:
         contributions: list[tuple[PluginKind, str, tuple[GraphFact, ...]]] = []
         diagnostics: list[PluginDiagnostic] = []
+        rejected: dict[str, list[int]] = {}
         for plugin_id in capabilities.repository_plugins:
             descriptor = self.catalog.registry.descriptor(plugin_id)
+            plugin_root = self._plugin_root_for_path(
+                descriptor.kind,
+                plugin_id,
+                artifact.path,
+                capabilities,
+            )
+            if plugin_root is None:
+                continue
             if not ({Capability.INDEX, Capability.GRAPH} & set(descriptor.capabilities)):
                 continue
             implementation = self.catalog.implementation(plugin_id)
             contributor = getattr(implementation, "index_file", None)
             if contributor is None:
                 continue
+            plugin_artifact = (
+                artifact
+                if not plugin_root
+                else FileArtifact(
+                    self._relative_to_root(artifact.path, plugin_root),
+                    artifact.content,
+                    artifact.deleted,
+                )
+            )
             try:
-                outcome = contributor(artifact)
+                outcome = contributor(plugin_artifact)
             except Exception as exception:
                 diagnostics.append(
                     PluginDiagnostic(
@@ -177,26 +207,99 @@ class PluginRuntime:
                 )
                 continue
             if outcome.status is OutcomeStatus.FAILED:
-                diagnostics.append(outcome.diagnostic)
+                diagnostics.append(self._rebase_diagnostic(
+                    outcome.diagnostic,
+                    plugin_root,
+                ))
             elif outcome.status is OutcomeStatus.HANDLED:
+                valid_facts = []
+                overlong_count = 0
+                for raw_fact in tuple(outcome.value):
+                    fact = self._rebase_fact(raw_fact, plugin_root)
+                    if self._fact_has_overlong_string(fact):
+                        overlong_count += 1
+                    else:
+                        valid_facts.append(fact)
+                if overlong_count:
+                    rejected.setdefault(plugin_id, [0, 0])[0] += overlong_count
                 contributions.append((
                     descriptor.kind,
                     plugin_id,
-                    self._balanced_facts(tuple(outcome.value), self.MAX_FACTS_PER_FILE),
+                    self._balanced_facts(
+                        tuple(valid_facts),
+                        self.MAX_FACTS_PER_FILE,
+                    ),
                 ))
         facts: set[GraphFact] = set()
-        for _, _, contribution in sorted(
+        serialized_bytes = 2  # The opening and closing brackets of the JSON array.
+        for _, plugin_id, contribution in sorted(
             contributions,
             key=lambda item: (
                 1 if item[0] is PluginKind.LANGUAGE else 0,
                 item[1],
             ),
         ):
-            remaining = self.MAX_FACTS_PER_FILE - len(facts)
-            if remaining <= 0:
+            if len(facts) >= self.MAX_FACTS_PER_FILE:
                 break
-            facts.update(contribution[:remaining])
+            for fact in contribution:
+                if len(facts) >= self.MAX_FACTS_PER_FILE:
+                    break
+                if fact in facts:
+                    continue
+                fact_bytes = self._serialized_fact_bytes(fact)
+                added_bytes = fact_bytes + (1 if facts else 0)
+                if (
+                    serialized_bytes + added_bytes
+                    > self.MAX_GRAPH_FACT_BYTES_PER_ARTIFACT
+                ):
+                    rejected.setdefault(plugin_id, [0, 0])[1] += 1
+                    continue
+                facts.add(fact)
+                serialized_bytes += added_bytes
+        for plugin_id, (overlong_count, byte_count) in sorted(rejected.items()):
+            reasons = []
+            if overlong_count:
+                reasons.append(
+                    f"{overlong_count} fact(s) containing a string longer than "
+                    f"{self.MAX_GRAPH_FACT_STRING_LENGTH} characters"
+                )
+            if byte_count:
+                reasons.append(
+                    f"{byte_count} fact(s) exceeding the "
+                    f"{self.MAX_GRAPH_FACT_BYTES_PER_ARTIFACT}-byte artifact budget"
+                )
+            diagnostics.append(PluginDiagnostic(
+                code="plugin-index-output-limit",
+                message="graph output rejected " + " and ".join(reasons),
+                plugin_id=plugin_id,
+                path=artifact.path,
+                recoverable=True,
+            ))
         return tuple(sorted(facts)), tuple(diagnostics)
+
+    def _fact_has_overlong_string(self, fact: GraphFact) -> bool:
+        strings = (
+            fact.kind,
+            fact.source,
+            fact.relation,
+            fact.target,
+            fact.path,
+            *(value for attribute in fact.attributes for value in attribute),
+            *fact.related_paths,
+        )
+        return any(
+            len(value) > self.MAX_GRAPH_FACT_STRING_LENGTH
+            for value in strings
+        )
+
+    @staticmethod
+    def _serialized_fact_bytes(fact: GraphFact) -> int:
+        return len(json.dumps(
+            dict(fact.as_metadata()),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8"))
 
     def syntax_contribution(
         self,
@@ -292,12 +395,24 @@ class PluginRuntime:
         groups = set()
         diagnostics: list[PluginDiagnostic] = []
         for plugin_id in capabilities.repository_plugins:
+            descriptor = self.catalog.registry.descriptor(plugin_id)
+            owned_paths = tuple(
+                path for path in paths
+                if self._plugin_root_for_path(
+                    descriptor.kind,
+                    plugin_id,
+                    path,
+                    capabilities,
+                ) is not None
+            )
+            if not owned_paths:
+                continue
             implementation = self.catalog.implementation(plugin_id)
             contributor = getattr(implementation, "review", None)
             if contributor is None:
                 continue
             try:
-                outcome = contributor(paths)
+                outcome = contributor(owned_paths)
             except Exception as exception:
                 diagnostics.append(
                     PluginDiagnostic(
@@ -366,6 +481,14 @@ class PluginRuntime:
         results: list[ValidationResult] = []
         diagnostics: list[PluginDiagnostic] = []
         for plugin_id in capabilities.repository_plugins:
+            descriptor = self.catalog.registry.descriptor(plugin_id)
+            if self._plugin_root_for_path(
+                descriptor.kind,
+                plugin_id,
+                claim.path,
+                capabilities,
+            ) is None:
+                continue
             implementation = self.catalog.implementation(plugin_id)
             validator = getattr(implementation, "validate", None)
             if validator is None:
@@ -384,6 +507,80 @@ class PluginRuntime:
             if outcome.status is OutcomeStatus.HANDLED:
                 results.append(outcome.value)
         return tuple(results), tuple(diagnostics)
+
+    @staticmethod
+    def _plugin_root_for_path(
+        kind: PluginKind,
+        plugin_id: str,
+        path: str,
+        capabilities: ProjectCapabilities,
+    ) -> str | None:
+        if kind is PluginKind.LANGUAGE:
+            return "" if plugin_id in capabilities.file_plugins.get(path, ()) else None
+        if kind is not PluginKind.FRAMEWORK:
+            return ""
+        evidence = capabilities.detection_evidence.get(plugin_id, ())
+        roots = tuple(
+            item.removeprefix("root:")
+            for item in evidence
+            if item.startswith("root:")
+        )
+        if not roots:
+            # Legacy hand-built capabilities had no evidence, while older
+            # manual projections may only carry their explicit-selection tag.
+            # Repository-derived evidence without a root is incomplete and
+            # must not widen a framework contribution to the whole repository.
+            if not evidence or any(
+                item.startswith((
+                    "manual-project-type:",
+                    "manual-project-type-dependency:",
+                ))
+                for item in evidence
+            ):
+                return ""
+            return None
+        matching = tuple(
+            "" if root == "." else root
+            for root in roots
+            if root == "." or path == root or path.startswith(root + "/")
+        )
+        return max(matching, key=lambda root: (root.count("/"), len(root))) if matching else None
+
+    @staticmethod
+    def _relative_to_root(path: str, root: str) -> str:
+        if not root:
+            return path
+        return path[len(root) + 1:]
+
+    @classmethod
+    def _rebase_fact(cls, fact: GraphFact, root: str) -> GraphFact:
+        if not root:
+            return fact
+        return GraphFact(
+            fact.kind,
+            fact.source,
+            fact.relation,
+            fact.target,
+            f"{root}/{fact.path}",
+            fact.line,
+            fact.attributes,
+            tuple(f"{root}/{path}" for path in fact.related_paths),
+        )
+
+    @staticmethod
+    def _rebase_diagnostic(
+        diagnostic: PluginDiagnostic,
+        root: str,
+    ) -> PluginDiagnostic:
+        if not root or diagnostic.path is None:
+            return diagnostic
+        return PluginDiagnostic(
+            diagnostic.code,
+            diagnostic.message,
+            diagnostic.plugin_id,
+            f"{root}/{diagnostic.path}",
+            diagnostic.recoverable,
+        )
 
 
 class RepositoryAnalysisHandle:

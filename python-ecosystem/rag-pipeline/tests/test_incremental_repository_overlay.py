@@ -1062,6 +1062,107 @@ def test_plugin_selection_transition_fails_before_qdrant_mutation(tmp_path):
     point_ops.client.get_collection(collection)
 
 
+@pytest.mark.parametrize("degradation", ("byte-budget", "invalid-utf8"))
+def test_degraded_marker_inspection_preserves_incremental_plugin_selection(
+    tmp_path,
+    degradation,
+):
+    catalog = discover_builtin_plugins()
+    selector = ProjectSelector(catalog.registry)
+    (tmp_path / "app.py").write_text(
+        "from fastapi import FastAPI\n",
+        encoding="utf-8",
+    )
+    marker = tmp_path / "requirements.txt"
+    marker.write_text("fastapi\n", encoding="utf-8")
+    facts = build_repository_facts(
+        tmp_path,
+        "base",
+        ("app.py", "requirements.txt"),
+        catalog.registry,
+    )
+    capabilities = selector.select(facts)
+    assert "fastapi" in capabilities.repository_plugins
+
+    client = QdrantClient(":memory:")
+    collection = "repository"
+    client.create_collection(
+        collection_name=collection,
+        vectors_config=VectorParams(size=4, distance=Distance.COSINE),
+    )
+    point_ops = PointOperations(
+        client,
+        _StaticEmbedding(),
+        batch_size=50,
+        embedding_dim=4,
+    )
+    state_nodes = RepositoryIndexer._repository_facts_nodes(
+        facts,
+        capabilities,
+        "ws",
+        "project",
+        "main",
+        "base",
+        catalog.implementation_fingerprint(capabilities.repository_plugins),
+    )
+    point_ops.process_and_upsert_chunks(
+        state_nodes,
+        collection,
+        "ws",
+        "project",
+        "main",
+    )
+
+    if degradation == "byte-budget":
+        marker.write_text("fastapi\n" + "#" * 300_000, encoding="utf-8")
+    else:
+        marker.write_bytes(b"\xff\xfe")
+
+    plugin_runtime = MagicMock(spec=PluginRuntime)
+    plugin_runtime.repository_analysis_plugins.return_value = ()
+    plugin_runtime.file_disposition.return_value = FileDisposition.FULL
+    splitter = _splitter_mock()
+    splitter.split_documents.side_effect = lambda documents, capabilities: [
+        TextNode(text=document.text, metadata=dict(document.metadata))
+        for document in documents
+    ]
+    operations = FileOperations(
+        client,
+        point_ops,
+        CollectionManager(client, 4),
+        MagicMock(),
+        splitter,
+        DocumentLoader(SimpleNamespace(
+            excluded_patterns=(),
+            max_file_size_bytes=1_000_000,
+        )),
+        plugin_catalog=catalog,
+        plugin_runtime=plugin_runtime,
+        plugin_selector=selector,
+    )
+
+    operations.apply_changes(
+        ["requirements.txt"],
+        [],
+        str(tmp_path),
+        "ws",
+        "project",
+        "main",
+        "changed",
+        collection,
+    )
+
+    stored_facts, plugin_ids, *_identity = load_repository_facts(
+        client,
+        collection,
+        "main",
+    )
+    assert stored_facts.marker_contents == {
+        "requirements.txt": "fastapi\n",
+    }
+    assert "fastapi" in plugin_ids
+
+
 def test_plugin_deactivation_from_mixed_update_and_delete_requires_full_reindex(
     tmp_path,
 ):

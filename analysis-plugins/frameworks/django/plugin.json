@@ -1,0 +1,52 @@
+{
+  "id": "django",
+  "kind": "framework",
+  "requires": ["python"],
+  "capabilities": ["context", "graph", "index", "planning", "prompt", "validation"],
+  "detection": {
+    "extensions": [],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": [
+      {
+        "filesAll": ["manage.py"],
+        "filesAny": [],
+        "pathPatternsAll": ["**/settings.py", "**/urls.py"],
+        "pathPatternsAny": [],
+        "contentMarkers": []
+      },
+      {
+        "filesAll": ["pyproject.toml"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": ["**/apps.py", "**/settings.py"],
+        "contentMarkers": [
+          {"path": "pyproject.toml", "contains": "jango"}
+        ]
+      },
+      {
+        "filesAll": ["requirements.txt"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": ["**/apps.py", "**/settings.py"],
+        "contentMarkers": [
+          {"path": "requirements.txt", "contains": "jango"}
+        ]
+      },
+      {
+        "filesAll": ["setup.cfg"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": ["**/apps.py", "**/settings.py"],
+        "contentMarkers": [
+          {"path": "setup.cfg", "contains": "jango"}
+        ]
+      }
+    ]
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.django.DjangoPlugin",
+    "python": "codecrow_plugin_django:create_plugin"
+  }
+}
