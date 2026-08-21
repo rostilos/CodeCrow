@@ -370,6 +370,33 @@ class RagIndexTrackingServiceTest {
         assertThat(result.getIndexedCommitHash()).isEqualTo("main-commit");
     }
 
+    @Test
+    void preparePublishedGenerationUsesItsActualActivationTime() {
+        OffsetDateTime previousTimestamp = OffsetDateTime.parse(
+                "2026-08-10T12:00:00Z");
+        OffsetDateTime generationActivatedAt = OffsetDateTime.parse(
+                "2026-08-17T15:27:17Z");
+        RagIndexStatus existing = new RagIndexStatus();
+        existing.setProject(testProject);
+        existing.setStatus(RagIndexingStatus.INDEXED);
+        existing.setLastIndexedAt(previousTimestamp);
+        when(ragIndexStatusRepository.findByProjectIdForUpdate(100L))
+                .thenReturn(Optional.of(existing));
+
+        service.preparePublishedGenerationForUpdate(
+                testProject,
+                "master",
+                "cf74934b6c7e",
+                4277,
+                39323,
+                generationActivatedAt);
+
+        assertThat(existing.getIndexedBranch()).isEqualTo("master");
+        assertThat(existing.getIndexedCommitHash()).isEqualTo("cf74934b6c7e");
+        assertThat(existing.getLastIndexedAt()).isEqualTo(generationActivatedAt);
+        verify(ragIndexStatusRepository).save(existing);
+    }
+
     // ── markIncrementalUpdateFailed ──────────────────────────────────────────
 
     @Test

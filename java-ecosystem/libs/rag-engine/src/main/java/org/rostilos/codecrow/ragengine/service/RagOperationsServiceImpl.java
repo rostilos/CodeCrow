@@ -463,7 +463,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                             ragIndexTrackingService.preparePublishedGenerationForUpdate(
                                     project, branchName, commitHash,
                                     sourceGeneration.getFileCount(),
-                                    sourceGeneration.getChunkCount());
+                                    sourceGeneration.getChunkCount(),
+                                    sourceGeneration.getActivatedAt());
                         }
                         emitEvent(eventConsumer, Map.of(
                                 "type", "info",

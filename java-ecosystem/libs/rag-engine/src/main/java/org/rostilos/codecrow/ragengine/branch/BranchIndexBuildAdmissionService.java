@@ -107,7 +107,8 @@ public class BranchIndexBuildAdmissionService {
                     branch,
                     activeSource.getRevision(),
                     activeSource.getFileCount(),
-                    activeSource.getChunkCount());
+                    activeSource.getChunkCount(),
+                    activeSource.getActivatedAt());
         }
         Job job = jobService.createRagIndexJob(
                 project,

@@ -9,7 +9,10 @@ from typing import Mapping
 _TOKEN = re.compile(
     r"(?P<space>\s+)"
     r"|(?P<comment>\#[^\r\n]*)"
-    r"|(?P<block>\"\"\"(?:.|\n)*?\"\"\")"
+    # DOTALL already makes ``.`` consume newlines.  ``(?:.|\n)`` gave the
+    # regex engine two ways to consume every newline and caused exponential
+    # backtracking on Java text blocks that were not GraphQL documents.
+    r"|(?P<block>\"\"\".*?\"\"\")"
     r"|(?P<template>`(?:\\.|[^`\\])*`)"
     r"|(?P<single>'(?:\\.|[^'\\])*')"
     r"|(?P<string>\"(?:\\.|[^\"\\])*\")"
