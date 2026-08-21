@@ -296,7 +296,8 @@ public class RagIndexTrackingService {
             String branchName,
             String commitHash,
             Integer fileCount,
-            Integer chunkCount) {
+            Integer chunkCount,
+            OffsetDateTime activatedAt) {
         RagIndexStatus status = ragIndexStatusRepository
                 .findByProjectIdForUpdate(project.getId())
                 .orElseGet(() -> {
@@ -316,7 +317,13 @@ public class RagIndexTrackingService {
         if (chunkCount != null) {
             status.setChunkCount(chunkCount);
         }
-        status.setLastIndexedAt(OffsetDateTime.now());
+        if (activatedAt != null) {
+            status.setLastIndexedAt(activatedAt);
+        } else if (status.getLastIndexedAt() == null) {
+            // Legacy generations may predate activation timestamps. Preserve
+            // an existing completed checkpoint; only initialize a missing one.
+            status.setLastIndexedAt(OffsetDateTime.now());
+        }
         status.setErrorMessage(null);
         status.setActiveJobId(null);
         status.resetFailedIncrementalCount();

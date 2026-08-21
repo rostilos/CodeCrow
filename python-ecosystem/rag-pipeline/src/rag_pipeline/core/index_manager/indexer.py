@@ -822,7 +822,49 @@ class RepositoryIndexer:
                         ),
                         key=lambda artifact: artifact.path,
                     ))
-                    analysis_handle.ingest(artifacts)
+                    def report_repository_ingest(event: dict) -> None:
+                        status = str(event.get("status", "processing"))
+                        plugin_id = str(event.get("pluginId", "unknown"))
+                        logger.info(
+                            "RAG repository plugin ingest operation_id=%s "
+                            "batch=%s/%s plugin=%s status=%s files=%s "
+                            "first_path=%s last_path=%s duration_ms=%s",
+                            operation_id,
+                            batch_num,
+                            total_batches,
+                            plugin_id,
+                            status,
+                            event.get("files"),
+                            event.get("firstPath"),
+                            event.get("lastPath"),
+                            event.get("durationMs"),
+                        )
+                        report_progress(
+                            "architecture_ingest",
+                            str(event.get(
+                                "message",
+                                "Ingesting repository architecture inputs",
+                            )),
+                            18 + round(
+                                67 * max(batch_num - 1, 0)
+                                / max(total_batches, 1)
+                            ),
+                            total_batches,
+                            architecturePlugin=plugin_id,
+                            architectureSubstage="ingest",
+                            architectureStatus=status,
+                            completedBatches=max(batch_num - 1, 0),
+                            totalBatches=total_batches,
+                            files=event.get("files"),
+                            firstPath=event.get("firstPath"),
+                            lastPath=event.get("lastPath"),
+                            substageDurationMs=event.get("durationMs"),
+                        )
+
+                    analysis_handle.ingest(
+                        artifacts,
+                        progress_callback=report_repository_ingest,
+                    )
 
                 semantic_documents = [
                     document

@@ -43,14 +43,24 @@ def test_repository_runtime_quarantines_ingest_failure_and_keeps_session():
         [("test-plugin", session)],
         [],
     )
+    progress_events = []
 
     handle.ingest((
         FileArtifact("bad.xml", "<invalid>"),
         FileArtifact("good.xml", "<valid />"),
-    ))
+    ), progress_callback=progress_events.append)
     _analysis, diagnostics = handle.finish()
 
     assert session.ingested == ["good.xml"]
+    assert [event["status"] for event in progress_events] == [
+        "started",
+        "completed",
+    ]
+    assert all(event["pluginId"] == "test-plugin" for event in progress_events)
+    assert all(event["files"] == 2 for event in progress_events)
+    assert all(event["firstPath"] == "bad.xml" for event in progress_events)
+    assert all(event["lastPath"] == "good.xml" for event in progress_events)
+    assert progress_events[-1]["durationMs"] >= 0
     assert [
         (diagnostic.code, diagnostic.path, diagnostic.recoverable)
         for diagnostic in diagnostics

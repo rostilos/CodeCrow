@@ -38,6 +38,7 @@ import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.LoggerFactory;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -484,7 +485,10 @@ class RagOperationsServiceImplTest {
                 .thenReturn(1);
         RagBranchIndexRepository.ActiveGenerationCoordinates source =
                 mock(RagBranchIndexRepository.ActiveGenerationCoordinates.class);
+        OffsetDateTime activatedAt = OffsetDateTime.parse(
+                "2026-08-17T15:27:17Z");
         when(source.getRevision()).thenReturn("target-revision");
+        when(source.getActivatedAt()).thenReturn(activatedAt);
         when(ragBranchIndexRepository.findActiveGenerationCoordinates(100L, "main"))
                 .thenReturn(Optional.of(source));
         @SuppressWarnings("unchecked")
@@ -495,7 +499,7 @@ class RagOperationsServiceImplTest {
 
         assertThat(result).isTrue();
         verify(ragIndexTrackingService).preparePublishedGenerationForUpdate(
-                testProject, "main", "target-revision", 0, 0);
+                testProject, "main", "target-revision", 0, 0, activatedAt);
         verifyNoInteractions(analysisJobService);
         verify(analysisLockService).releaseLock("rag-lock");
         verifyNoInteractions(vcsClientProvider, registry, builder);

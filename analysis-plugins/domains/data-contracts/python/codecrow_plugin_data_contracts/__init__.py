@@ -45,6 +45,12 @@ _RELATION_KINDS = {
 _JSON_REF = re.compile(
     r'(?<!\\)"\$ref"\s*:\s*(?P<value>"(?:\\.|[^"\\])*")',
 )
+_EMBEDDED_GRAPHQL_SIGNAL = re.compile(
+    r"(?:\"\"\"|[\"'`])\s*"
+    r"(?:\{|query\b|mutation\b|subscription\b)"
+    r"|<script\b[^>]*\btype\s*=\s*['\"]application/(?:graphql|gql)['\"]",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, order=True)
@@ -145,14 +151,25 @@ def _record(artifact: FileArtifact) -> ContractFileRecord | None:
         if lowered.endswith((".graphqls", ".graphql")) and contract
         else ()
     )
+    graphql_source = lowered.endswith((".graphql", ".graphqls"))
     references: tuple[ReferenceOccurrence, ...] = ()
-    if not lowered.endswith(".graphqls"):
+    if lowered.endswith(".graphql"):
         references = _graphql_references(
             artifact.content,
-            embedded_only=not lowered.endswith((".graphql", ".graphqls")),
+            embedded_only=False,
+        )
+    elif (
+        not graphql_source
+        and _EMBEDDED_GRAPHQL_SIGNAL.search(artifact.content) is not None
+    ):
+        references = _graphql_references(
+            artifact.content,
+            embedded_only=True,
         )
     if lowered.endswith(".json"):
         references = tuple(sorted({*references, *_json_references(artifact.content)}))
+    if not contract and not references:
+        return None
     return ContractFileRecord(
         path=artifact.path,
         is_contract=contract,

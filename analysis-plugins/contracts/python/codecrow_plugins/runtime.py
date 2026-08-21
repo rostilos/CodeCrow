@@ -603,7 +603,12 @@ class RepositoryAnalysisHandle:
     def active(self) -> bool:
         return bool(self._sessions)
 
-    def ingest(self, artifacts: tuple[FileArtifact, ...]) -> None:
+    def ingest(
+        self,
+        artifacts: tuple[FileArtifact, ...],
+        *,
+        progress_callback: Callable[[dict[str, object]], None] | None = None,
+    ) -> None:
         if self._finished:
             raise RuntimeError("repository analysis is already finished")
         if tuple(sorted(artifact.path for artifact in artifacts)) != tuple(
@@ -612,6 +617,20 @@ class RepositoryAnalysisHandle:
             raise ValueError("repository artifacts must be path-sorted")
         retained: list[tuple[str, object]] = []
         for plugin_id, session in self._sessions:
+            plugin_started = time.monotonic()
+            progress_details: dict[str, object] = {
+                "pluginId": plugin_id,
+                "substage": "ingest",
+                "status": "started",
+                "files": len(artifacts),
+                "message": f"Ingesting repository files with {plugin_id}",
+            }
+            if artifacts:
+                progress_details.update({
+                    "firstPath": artifacts[0].path,
+                    "lastPath": artifacts[-1].path,
+                })
+            self._report_progress(progress_callback, progress_details)
             for artifact in artifacts:
                 try:
                     session.ingest((artifact,))
@@ -623,6 +642,16 @@ class RepositoryAnalysisHandle:
                         path=artifact.path,
                         recoverable=True,
                     ))
+            duration_ms = round((time.monotonic() - plugin_started) * 1000)
+            self._report_progress(progress_callback, {
+                **progress_details,
+                "status": "completed",
+                "durationMs": duration_ms,
+                "message": (
+                    f"Ingested {len(artifacts)} repository files with "
+                    f"{plugin_id} in {duration_ms} ms"
+                ),
+            })
             retained.append((plugin_id, session))
         self._sessions = retained
 

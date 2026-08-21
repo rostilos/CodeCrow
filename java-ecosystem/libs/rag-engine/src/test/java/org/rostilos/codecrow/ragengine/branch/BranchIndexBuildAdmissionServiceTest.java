@@ -18,6 +18,8 @@ import org.rostilos.codecrow.ragengine.service.RagBranchIndexRegistryService;
 import org.rostilos.codecrow.ragengine.service.RagIndexTrackingService;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.OffsetDateTime;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
@@ -33,6 +35,7 @@ class BranchIndexBuildAdmissionServiceTest {
     private BranchIndexBuildAdmissionService service;
     private Project project;
     private RagBranchIndexRegistryService.BuildRegistration registration;
+    private OffsetDateTime sourceActivatedAt;
 
     @BeforeEach
     void setUp() {
@@ -47,6 +50,8 @@ class BranchIndexBuildAdmissionServiceTest {
                 branchIndex, "revision-a", "source-target", null, null, null);
         source.setId(19L);
         source.activate("source-manifest", 120, 240);
+        sourceActivatedAt = OffsetDateTime.parse("2026-08-17T15:27:17Z");
+        source.setActivatedAt(sourceActivatedAt);
         RagBranchIndexGeneration generation = new RagBranchIndexGeneration(
                 branchIndex, "revision-b", "physical-target", source, null, null);
         generation.setId(20L);
@@ -90,7 +95,7 @@ class BranchIndexBuildAdmissionServiceTest {
                 eq(project), eq("main"), eq(RagBranchIndexKind.PRIMARY),
                 isNull(), eq("revision-b"), startsWith("exact-full-snapshot:automatic:"));
         order.verify(trackingService).preparePublishedGenerationForUpdate(
-                project, "main", "revision-a", 120, 240);
+                project, "main", "revision-a", 120, 240, sourceActivatedAt);
         order.verify(jobService).createRagIndexJob(
                 project, false, JobTriggerSource.WEBHOOK, "main", "revision-b");
         order.verify(registryService).startBuild(30L, 77L, "lock-owner-123");
@@ -148,7 +153,7 @@ class BranchIndexBuildAdmissionServiceTest {
         verify(trackingService).markIndexingStarted(
                 project, "main", "revision-first", 78L);
         verify(trackingService, never()).preparePublishedGenerationForUpdate(
-                any(), anyString(), anyString(), any(), any());
+                any(), anyString(), anyString(), any(), any(), any());
         verify(trackingService, never()).markUpdatingStarted(
                 any(), anyString(), anyString(), any());
     }

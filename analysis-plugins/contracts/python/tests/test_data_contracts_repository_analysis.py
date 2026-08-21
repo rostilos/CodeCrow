@@ -206,6 +206,53 @@ def test_host_language_query_identifier_is_not_graphql():
     ) == ()
 
 
+def test_java_sql_text_blocks_do_not_stall_or_enter_contract_snapshot():
+    java_repository = '''
+public interface JobRepository {
+    @Query("SELECT j FROM Job j WHERE j.id = :jobId")
+    Optional<Job> findById(long jobId);
+
+    @Query(value = """
+            UPDATE job j
+               SET updated_at = :renewedAt
+             WHERE j.id = :jobId
+               AND j.status = 'RUNNING'
+               AND NOT EXISTS (
+                    SELECT 1 FROM rag_index_operation o WHERE o.job_id = j.id
+               )
+            """, nativeQuery = true)
+    int renewLease(long jobId);
+}
+'''
+    assert parse_operations(java_repository, embedded_only=True) == ()
+
+    files = {
+        "schema/job.graphqls": "type Query { job: Job } type Job { id: ID }",
+        "src/JobRepository.java": java_repository,
+    }
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    runtime = PluginRuntime(catalog)
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
+        revision=REVISION,
+        paths=tuple(sorted(files)),
+    ))
+    handle = runtime.start_repository_analysis(capabilities, REVISION)
+    handle.ingest(tuple(
+        FileArtifact(path, content)
+        for path, content in sorted(files.items())
+    ))
+
+    analysis, diagnostics = handle.finish()
+
+    assert diagnostics == ()
+    snapshot = next(
+        item for item in analysis.snapshots
+        if item.kind == "data-contract-reference-graph"
+    )
+    records = json.loads(gzip.decompress(base64.b64decode(snapshot.content)))
+    assert [record["path"] for record in records] == ["schema/job.graphqls"]
+
+
 def test_json_reference_uses_its_actual_source_line():
     files = {
         "schemas/base.schema.json": '{"type":"object"}',

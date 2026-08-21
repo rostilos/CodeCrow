@@ -48,6 +48,7 @@ public interface RagBranchIndexRepository extends JpaRepository<RagBranchIndex, 
         String getRepresentationFingerprint();
         Integer getFileCount();
         Integer getChunkCount();
+        OffsetDateTime getActivatedAt();
     }
 
     interface TransientCleanupCandidate {
@@ -71,7 +72,8 @@ public interface RagBranchIndexRepository extends JpaRepository<RagBranchIndex, 
                    g.collectionName AS collectionName,
                    g.representationFingerprint AS representationFingerprint,
                    g.fileCount AS fileCount,
-                   g.chunkCount AS chunkCount
+                   g.chunkCount AS chunkCount,
+                   g.activatedAt AS activatedAt
             FROM RagBranchIndex b
             JOIN b.activeGeneration g
             WHERE b.project.id = :projectId
