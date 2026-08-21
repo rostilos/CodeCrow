@@ -28,6 +28,7 @@ def _mock_config(**overrides):
     cfg = MagicMock()
     cfg.max_files_per_index = 0
     cfg.max_chunks_per_index = 0
+    cfg.architecture_finalization_timeout_seconds = 600
     for k, v in overrides.items():
         setattr(cfg, k, v)
     return cfg
@@ -173,8 +174,20 @@ class TestIndexRepository:
 
         assert result.document_count == 0
 
-    def test_architecture_files_are_ingested_while_generated_files_are_not_loaded(self, tmp_path):
-        from codecrow_plugins import FileDisposition, ProjectCapabilities, RepositoryAnalysis
+    def test_architecture_only_batch_is_ingested_and_reports_completion(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from codecrow_plugins import (
+            FileDisposition,
+            PluginDiagnostic,
+            ProjectCapabilities,
+            RepositoryAnalysis,
+        )
+        from rag_pipeline.core.index_manager import indexer as indexer_module
+
+        monkeypatch.setattr(indexer_module, "DOCUMENT_BATCH_SIZE", 1)
 
         config = _mock_config()
         coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader = _mock_components()
@@ -184,9 +197,19 @@ class TestIndexRepository:
             Path("generated/code/Proxy.php"),
         ]
         loader.iter_repository_files.return_value = iter(paths)
-        loader.load_file_batch.return_value = [
-            SimpleNamespace(text="<?php class Source {}", metadata={"path": "source.php"}),
-            SimpleNamespace(text="<config/>", metadata={"path": "etc/di.xml"}),
+        documents_by_path = {
+            "source.php": SimpleNamespace(
+                text="<?php class Source {}",
+                metadata={"path": "source.php"},
+            ),
+            "etc/di.xml": SimpleNamespace(
+                text="<config/>",
+                metadata={"path": "etc/di.xml"},
+            ),
+        }
+        loader.load_file_batch.side_effect = lambda batch, *_args, **_kwargs: [
+            documents_by_path[Path(path).as_posix()]
+            for path in batch
         ]
         splitter.split_documents.return_value = [MagicMock()]
         coll_mgr.create_pending_collection.return_value = "pending"
@@ -204,7 +227,15 @@ class TestIndexRepository:
             fingerprint="sha256:" + "0" * 64,
         )
         handle = MagicMock(active=True)
-        handle.finish.return_value = (RepositoryAnalysis(), ())
+        handle.finish.return_value = (
+            RepositoryAnalysis(),
+            (PluginDiagnostic(
+                code="plugin-repository-finalization-timeout",
+                message="Magento architecture exceeded its time budget",
+                plugin_id="magento",
+                recoverable=True,
+            ),),
+        )
         runtime = MagicMock()
         runtime.start_repository_analysis.return_value = handle
         runtime.file_disposition.side_effect = lambda path, _capabilities: {
@@ -217,16 +248,38 @@ class TestIndexRepository:
             plugin_catalog=MagicMock(), plugin_runtime=runtime, plugin_selector=selector,
         )
 
+        progress_events = []
         indexer.index_repository(
-            str(tmp_path), "ws", "proj", "main", "abc", "alias"
+            str(tmp_path), "ws", "proj", "main", "abc", "alias",
+            progress_callback=progress_events.append,
         )
 
-        artifacts = handle.ingest.call_args.args[0]
-        assert [artifact.path for artifact in artifacts] == ["etc/di.xml", "source.php"]
-        loaded_paths = loader.load_file_batch.call_args.args[0]
-        assert loaded_paths == [Path("source.php"), Path("etc/di.xml")]
+        ingested_paths = [
+            artifact.path
+            for invocation in handle.ingest.call_args_list
+            for artifact in invocation.args[0]
+        ]
+        assert ingested_paths == ["source.php", "etc/di.xml"]
+        loaded_paths = [
+            invocation.args[0]
+            for invocation in loader.load_file_batch.call_args_list
+        ]
+        assert loaded_paths == [[Path("source.php")], [Path("etc/di.xml")]]
         semantic_documents = splitter.split_documents.call_args.args[0]
         assert [document.metadata["path"] for document in semantic_documents] == ["source.php"]
+        batch_events = [
+            event for event in progress_events
+            if event["stage"] == "indexing" and "completedBatches" in event
+        ]
+        assert [event["completedBatches"] for event in batch_events] == [1, 2]
+        assert batch_events[-1]["architectureOnlyFiles"] == 1
+        assert batch_events[-1]["estimatedRemainingMs"] == 0
+        assert batch_events[-1]["remainingEstimateScope"] == "file_batches"
+        assert any(
+            event.get("architectureStatus") == "degraded"
+            and event.get("degraded") is True
+            for event in progress_events
+        )
 
     def test_exceeds_file_limit(self):
         config = _mock_config(max_files_per_index=5)

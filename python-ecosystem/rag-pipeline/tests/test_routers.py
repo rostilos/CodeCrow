@@ -2,6 +2,8 @@
 Tests for rag_pipeline.api.routers — system, parse, index, query, pr.
 Tests individual route handlers and helper functions.
 """
+import asyncio
+
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
@@ -20,7 +22,7 @@ class TestSystemRouter:
 
     def test_health(self):
         from rag_pipeline.api.routers.system import health
-        result = health()
+        result = asyncio.run(health())
         assert result["status"] == "healthy"
 
     @patch("rag_pipeline.api.routers.system.gc")

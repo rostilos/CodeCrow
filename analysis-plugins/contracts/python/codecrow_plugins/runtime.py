@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import time
+from typing import Callable
 
 from .api import (
     ArchitecturePacket,
@@ -624,7 +626,26 @@ class RepositoryAnalysisHandle:
             retained.append((plugin_id, session))
         self._sessions = retained
 
-    def finish(self) -> tuple[RepositoryAnalysis, tuple[PluginDiagnostic, ...]]:
+    @staticmethod
+    def _report_progress(
+        callback: Callable[[dict[str, object]], None] | None,
+        event: dict[str, object],
+    ) -> None:
+        if callback is None:
+            return
+        try:
+            callback(event)
+        except Exception:
+            # Repository progress is optional host observability. A broken
+            # observer must not change the plugin composition result.
+            return
+
+    def finish(
+        self,
+        *,
+        progress_callback: Callable[[dict[str, object]], None] | None = None,
+        deadline: float | None = None,
+    ) -> tuple[RepositoryAnalysis, tuple[PluginDiagnostic, ...]]:
         if self._finished:
             raise RuntimeError("repository analysis is already finished")
         self._finished = True
@@ -634,18 +655,125 @@ class RepositoryAnalysisHandle:
         contexts: dict[tuple[str, str, str], RepositoryContext] = {}
         current = RepositoryAnalysis()
         for plugin_id, session in self._sessions:
+            if deadline is not None and time.monotonic() >= deadline:
+                self._diagnostics.append(PluginDiagnostic(
+                    code="plugin-repository-finalization-timeout",
+                    message=(
+                        "repository analysis time budget was exhausted before "
+                        f"finalizing {plugin_id}"
+                    ),
+                    plugin_id=plugin_id,
+                    recoverable=True,
+                ))
+                self._report_progress(progress_callback, {
+                    "pluginId": plugin_id,
+                    "status": "timed_out",
+                    "message": (
+                        f"Architecture finalization timed out before {plugin_id}"
+                    ),
+                })
+                break
+
+            plugin_started = time.monotonic()
+            self._report_progress(progress_callback, {
+                "pluginId": plugin_id,
+                "status": "started",
+                "message": f"Finalizing {plugin_id} repository architecture",
+            })
             try:
+                configure_progress = getattr(
+                    session,
+                    "set_progress_callback",
+                    None,
+                )
+                if callable(configure_progress):
+                    configure_progress(progress_callback)
+                configure_deadline = getattr(
+                    session,
+                    "set_analysis_deadline",
+                    None,
+                )
+                if callable(configure_deadline):
+                    configure_deadline(deadline)
                 outcome = session.finish(current)
+            except TimeoutError as exception:
+                duration_ms = round((time.monotonic() - plugin_started) * 1000)
+                self._diagnostics.append(PluginDiagnostic(
+                    code="plugin-repository-finalization-timeout",
+                    message=str(exception),
+                    plugin_id=plugin_id,
+                    recoverable=True,
+                ))
+                self._report_progress(progress_callback, {
+                    "pluginId": plugin_id,
+                    "status": "timed_out",
+                    "durationMs": duration_ms,
+                    "message": (
+                        f"Architecture finalization timed out in {plugin_id} "
+                        f"after {duration_ms} ms"
+                    ),
+                })
+                break
             except Exception as exception:
+                duration_ms = round((time.monotonic() - plugin_started) * 1000)
                 self._diagnostics.append(PluginDiagnostic(
                     code="plugin-repository-finish-exception",
                     message=f"{type(exception).__name__}: {exception}",
                     plugin_id=plugin_id,
+                    recoverable=True,
                 ))
+                self._report_progress(progress_callback, {
+                    "pluginId": plugin_id,
+                    "status": "failed",
+                    "durationMs": duration_ms,
+                    "message": (
+                        f"Architecture finalization failed in {plugin_id} "
+                        f"after {duration_ms} ms"
+                    ),
+                })
                 continue
+            duration_ms = round((time.monotonic() - plugin_started) * 1000)
+            if deadline is not None and time.monotonic() >= deadline:
+                self._diagnostics.append(PluginDiagnostic(
+                    code="plugin-repository-finalization-timeout",
+                    message=(
+                        f"{plugin_id} repository analysis exceeded the shared "
+                        "time budget"
+                    ),
+                    plugin_id=plugin_id,
+                    recoverable=True,
+                ))
+                self._report_progress(progress_callback, {
+                    "pluginId": plugin_id,
+                    "status": "timed_out",
+                    "durationMs": duration_ms,
+                    "message": (
+                        f"Architecture finalization timed out in {plugin_id} "
+                        f"after {duration_ms} ms"
+                    ),
+                })
+                break
             if outcome.status is OutcomeStatus.FAILED:
                 self._diagnostics.append(outcome.diagnostic)
+                self._report_progress(progress_callback, {
+                    "pluginId": plugin_id,
+                    "status": "failed",
+                    "durationMs": duration_ms,
+                    "message": (
+                        f"Architecture finalization failed in {plugin_id} "
+                        f"after {duration_ms} ms"
+                    ),
+                })
                 continue
+            self._report_progress(progress_callback, {
+                "pluginId": plugin_id,
+                "status": "completed",
+                "durationMs": duration_ms,
+                "message": (
+                    f"Finalized {plugin_id} repository architecture in "
+                    f"{duration_ms} ms"
+                ),
+            })
             if outcome.status is not OutcomeStatus.HANDLED:
                 continue
             contribution = outcome.value

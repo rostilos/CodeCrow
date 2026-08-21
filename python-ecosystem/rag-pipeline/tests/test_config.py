@@ -65,10 +65,28 @@ class TestRAGConfig:
         assert config.similarity_threshold == 0.7
         assert config.max_file_size_bytes == 1024 * 1024
         assert config.qdrant_timeout_seconds == 30
+        assert config.qdrant_upsert_max_payload_bytes == 8 * 1024 * 1024
+        assert config.full_index_concurrency == 1
+        assert config.architecture_finalization_timeout_seconds == 600
 
     def test_qdrant_timeout_is_configurable(self):
         with patch.dict(os.environ, {"QDRANT_TIMEOUT_SECONDS": "45"}):
             assert RAGConfig().qdrant_timeout_seconds == 45
+
+    def test_rag_resource_limits_are_configurable(self):
+        with patch.dict(os.environ, {
+            "QDRANT_UPSERT_MAX_PAYLOAD_BYTES": "4194304",
+            "RAG_FULL_INDEX_CONCURRENCY": "2",
+        }):
+            config = RAGConfig()
+            assert config.qdrant_upsert_max_payload_bytes == 4194304
+            assert config.full_index_concurrency == 2
+
+    def test_architecture_finalization_timeout_is_configurable(self):
+        with patch.dict(os.environ, {
+            "RAG_ARCHITECTURE_FINALIZATION_TIMEOUT_SECONDS": "90",
+        }):
+            assert RAGConfig().architecture_finalization_timeout_seconds == 90
 
     def test_auto_detect_embedding_dim_ollama(self):
         config = RAGConfig(embedding_provider="ollama", ollama_model="all-minilm", embedding_dim=0)

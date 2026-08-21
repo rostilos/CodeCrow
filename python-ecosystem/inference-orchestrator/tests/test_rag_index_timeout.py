@@ -29,7 +29,7 @@ def test_pr_index_timeout_is_configurable(monkeypatch):
     http_client = AsyncMock()
     http_client.post.return_value = response
     client = RagClient(base_url="http://rag-pipeline:8001", enabled=True)
-    client._get_client = AsyncMock(return_value=http_client)
+    client._get_mutation_client = AsyncMock(return_value=http_client)
 
     result = asyncio.run(client.index_pr_files(
         "workspace",
@@ -55,7 +55,7 @@ def test_pr_index_timeout_default_covers_measured_large_overlay(monkeypatch):
     http_client = AsyncMock()
     http_client.post.return_value = response
     client = RagClient(base_url="http://rag-pipeline:8001", enabled=True)
-    client._get_client = AsyncMock(return_value=http_client)
+    client._get_mutation_client = AsyncMock(return_value=http_client)
 
     asyncio.run(client.index_pr_files(
         "workspace",

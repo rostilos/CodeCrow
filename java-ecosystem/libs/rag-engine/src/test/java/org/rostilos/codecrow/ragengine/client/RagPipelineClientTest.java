@@ -1,5 +1,8 @@
 package org.rostilos.codecrow.ragengine.client;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -8,6 +11,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -543,6 +547,38 @@ class RagPipelineClientTest {
         RecordedRequest request = mockWebServer.takeRequest();
         assertThat(request.getPath()).endsWith("/index/repository/stream");
         assertThat(request.getHeader("Accept")).isEqualTo("text/event-stream");
+    }
+
+    @Test
+    void testIndexRepository_StreamLogsLifecycleAndHeartbeat() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setBody("data: {\"type\":\"heartbeat\",\"stage\":\"architecture\","
+                        + "\"elapsedMs\":15000,\"idleMs\":15000}\n\n"
+                        + "data: {\"type\":\"complete\",\"result\":{"
+                        + "\"document_count\":2,\"chunk_count\":5}}\n\n")
+                .addHeader("Content-Type", "text/event-stream"));
+        Logger logger = (Logger) LoggerFactory.getLogger(RagPipelineClient.class);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            client.indexRepository(
+                    repositoryPath.toString(), "ws", "proj", "develop", "abc123",
+                    List.of(), List.of(), "generation-target", ignored -> { });
+        } finally {
+            logger.detachAppender(logs);
+        }
+
+        List<String> messages = logs.list.stream()
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+        assertThat(messages).anyMatch(message -> message.contains(
+                "RAG index stream starting workspace=ws project=proj branch=develop"));
+        assertThat(messages).anyMatch(message -> message.contains(
+                "RAG index stream heartbeat workspace=ws project=proj branch=develop "
+                        + "stage=architecture"));
+        assertThat(messages).anyMatch(message -> message.contains(
+                "RAG index stream completed workspace=ws project=proj branch=develop"));
     }
 
     @Test

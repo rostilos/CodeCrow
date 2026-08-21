@@ -9,6 +9,9 @@ import os
 import hashlib
 import json
 import re
+import threading
+import time
+from contextlib import contextmanager
 from typing import Callable, Optional, List
 
 from llama_index.core import Settings
@@ -108,6 +111,9 @@ class RAGIndexManager:
 
     def __init__(self, config: RAGConfig):
         self.config = config
+        self._full_index_capacity = threading.BoundedSemaphore(
+            _config_int(config, "full_index_concurrency", 1)
+        )
         self._mutation_coordinator = ProjectMutationCoordinator(
             os.getenv("REDIS_URL", "redis://redis:6379/1"),
             lease_seconds=_config_int(
@@ -202,6 +208,11 @@ class RAGIndexManager:
             self.qdrant_client,
             self.embed_model,
             batch_size=_config_int(config, "qdrant_upsert_batch_size", 128),
+            max_upsert_payload_bytes=_config_int(
+                config,
+                "qdrant_upsert_max_payload_bytes",
+                8 * 1024 * 1024,
+            ),
             embedding_batch_size=(
                 _config_int(config, "openrouter_batch_size", 50)
                 if str(config.embedding_provider).lower() == "openrouter"
@@ -312,6 +323,52 @@ class RAGIndexManager:
 
     # Repository indexing
 
+    @contextmanager
+    def _admit_full_index(
+        self,
+        workspace: str,
+        project: str,
+        branch: str,
+        progress_callback: Optional[Callable[[dict], None]],
+    ):
+        """Serialize memory-heavy full builds inside one RAG worker process."""
+        wait_started = time.monotonic()
+        acquired = self._full_index_capacity.acquire(blocking=False)
+        if not acquired:
+            logger.info(
+                "RAG full index waiting for process capacity "
+                "workspace=%s project=%s branch=%s",
+                workspace,
+                project,
+                branch,
+            )
+            if progress_callback is not None:
+                try:
+                    progress_callback({
+                        "stage": "waiting_capacity",
+                        "message": "Waiting for RAG full-index capacity",
+                        "progress": 0,
+                    })
+                except Exception as exception:
+                    logger.warning(
+                        "RAG capacity progress callback failed: %s",
+                        exception,
+                    )
+            self._full_index_capacity.acquire()
+        waited_ms = round((time.monotonic() - wait_started) * 1000)
+        logger.info(
+            "RAG full index admitted workspace=%s project=%s branch=%s "
+            "wait_ms=%s",
+            workspace,
+            project,
+            branch,
+            waited_ms,
+        )
+        try:
+            yield
+        finally:
+            self._full_index_capacity.release()
+
     def estimate_repository_size(
         self,
         repo_path: str,
@@ -347,6 +404,51 @@ class RAGIndexManager:
             raise ValueError(
                 "readable generation aliases require an immutable collection target"
             )
+        with self._admit_full_index(
+            workspace,
+            project,
+            branch,
+            progress_callback,
+        ):
+            return self._index_repository_admitted(
+                repo_path=repo_path,
+                workspace=workspace,
+                project=project,
+                branch=branch,
+                commit=commit,
+                preserve_other_branches=preserve_other_branches,
+                include_patterns=include_patterns,
+                exclude_patterns=exclude_patterns,
+                source_tree_sha256=source_tree_sha256,
+                collection_target=collection_target,
+                reuse_collection_target=reuse_collection_target,
+                publish_branch_alias=publish_branch_alias,
+                publish_legacy_project_alias=publish_legacy_project_alias,
+                progress_callback=progress_callback,
+                project_type=project_type,
+                source_root=source_root,
+            )
+
+    def _index_repository_admitted(
+        self,
+        repo_path: str,
+        workspace: str,
+        project: str,
+        branch: str,
+        commit: str,
+        preserve_other_branches: bool = False,
+        include_patterns: Optional[List[str]] = None,
+        exclude_patterns: Optional[List[str]] = None,
+        source_tree_sha256: Optional[str] = None,
+        collection_target: Optional[str] = None,
+        reuse_collection_target: Optional[str] = None,
+        publish_branch_alias: bool = False,
+        publish_legacy_project_alias: bool = False,
+        progress_callback: Optional[Callable[[dict], None]] = None,
+        project_type: Optional[str] = None,
+        source_root: Optional[str] = None,
+    ) -> IndexStats:
+        """Run a full build after process-wide capacity has been acquired."""
         alias_name = collection_target or self._get_project_collection_name(
             workspace, project
         )
@@ -383,7 +485,10 @@ class RAGIndexManager:
             project,
             "full-index",
             collection_target=collection_target,
-            publication_scope=self._publication_scope(branch, publication_aliases),
+            publication_scope=self._publication_scope(
+                branch,
+                publication_aliases,
+            ),
         ) as lease:
             return self._indexer.index_repository(
                 repo_path=repo_path,

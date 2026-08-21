@@ -32,6 +32,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["index"])
 
 
+def _stream_heartbeat_interval_seconds() -> float:
+    raw = os.environ.get("RAG_INDEX_STREAM_HEARTBEAT_SECONDS", "15")
+    try:
+        return max(1.0, float(raw))
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid RAG_INDEX_STREAM_HEARTBEAT_SECONDS=%r; using 15 seconds",
+            raw,
+        )
+        return 15.0
+
+
+INDEX_STREAM_HEARTBEAT_SECONDS = _stream_heartbeat_interval_seconds()
+
+
 class _IndexStreamWorkerRegistry:
     """Track synchronous HTTP-stream indexing beyond request cancellation."""
 
@@ -462,6 +477,12 @@ def index_repository_stream(request: IndexRequest):
         raise
 
     async def event_stream():
+        stream_started = time.monotonic()
+        last_payload_at = stream_started
+        next_heartbeat_at = (
+            stream_started + INDEX_STREAM_HEARTBEAT_SECONDS
+        )
+        last_stage = "admitted" if repository_ownership_transferred else "starting"
         try:
             if repository_ownership_transferred:
                 admitted = {
@@ -469,6 +490,10 @@ def index_repository_stream(request: IndexRequest):
                     "repositoryOwnershipTransferred": True,
                 }
                 yield f"data: {json.dumps(admitted)}\n\n"
+                last_payload_at = time.monotonic()
+                next_heartbeat_at = (
+                    last_payload_at + INDEX_STREAM_HEARTBEAT_SECONDS
+                )
             while True:
                 try:
                     payload = progress_events.get_nowait()
@@ -491,15 +516,41 @@ def index_repository_stream(request: IndexRequest):
                         else:
                             # Polling thread-safe queues avoids nesting a
                             # blocking consumer inside Starlette's thread pool.
+                            now = time.monotonic()
+                            if now >= next_heartbeat_at:
+                                heartbeat = {
+                                    "type": "heartbeat",
+                                    "stage": last_stage,
+                                    "message": "RAG indexing is still processing",
+                                    "elapsedMs": round(
+                                        (now - stream_started) * 1000
+                                    ),
+                                    "idleMs": round(
+                                        (now - last_payload_at) * 1000
+                                    ),
+                                }
+                                yield (
+                                    "data: "
+                                    f"{json.dumps(heartbeat, ensure_ascii=False)}"
+                                    "\n\n"
+                                )
+                                next_heartbeat_at = (
+                                    now + INDEX_STREAM_HEARTBEAT_SECONDS
+                                )
                             await asyncio.sleep(0.05)
                             continue
                 if event_type == "progress":
                     event = {"type": "progress", **payload}
+                    last_stage = str(payload.get("stage", last_stage))
                 elif event_type == "complete":
                     event = {"type": "complete", "result": payload}
                 else:
                     event = {"type": "error", **payload}
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                last_payload_at = time.monotonic()
+                next_heartbeat_at = (
+                    last_payload_at + INDEX_STREAM_HEARTBEAT_SECONDS
+                )
                 if event_type in {"complete", "error"}:
                     break
         finally:

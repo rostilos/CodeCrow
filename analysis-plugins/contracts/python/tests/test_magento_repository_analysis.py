@@ -390,6 +390,51 @@ def _resolve(
     return outcome.value
 
 
+def test_magento_repository_reports_timed_substages():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    plugin = catalog.implementation("magento")
+    session = plugin.start_repository_analysis("progress-test").value
+    session.ingest((FileArtifact(
+        "app/code/Acme/Checkout/etc/module.xml",
+        '<config><module name="Acme_Checkout" /></config>',
+    ),))
+    events = []
+    session.set_progress_callback(events.append)
+
+    outcome = session.finish(RepositoryAnalysis())
+
+    assert outcome.status is OutcomeStatus.HANDLED
+    assert any(
+        event.get("substage") == "module discovery"
+        and event.get("status") == "started"
+        for event in events
+    )
+    assert any(
+        event.get("substage") == "packet materialization"
+        and event.get("status") == "completed"
+        and isinstance(event.get("durationMs"), int)
+        for event in events
+    )
+
+
+def test_magento_repository_honors_host_finalization_deadline():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    plugin = catalog.implementation("magento")
+    session = plugin.start_repository_analysis("timeout-test").value
+    session.ingest((FileArtifact(
+        "app/code/Acme/Checkout/etc/module.xml",
+        '<config><module name="Acme_Checkout" /></config>',
+    ),))
+    session.set_analysis_deadline(0.0)
+
+    try:
+        session.finish(RepositoryAnalysis())
+    except TimeoutError as exception:
+        assert "module discovery" in str(exception)
+    else:
+        raise AssertionError("expired architecture deadline was not enforced")
+
+
 def _factory_artifacts(
     *,
     checkout_enabled: bool = True,

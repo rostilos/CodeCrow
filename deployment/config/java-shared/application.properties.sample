@@ -181,14 +181,14 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 #codecrow.rag.api.timeout.read=120
 # RAG indexing timeout - 4 hours for large repositories
 #codecrow.rag.api.timeout.indexing=14400
-# Per-project fan-out for an explicit Refresh all. Two independent branch
-# snapshots (for example main and develop) run in parallel without allowing a
-# project with many retained branches to occupy all service slots.
-#codecrow.rag.branch-build.parallelism=2
-# Dedicated service-wide capacity for full branch snapshot builds. This pool is
-# separate from PR, branch-analysis, webhook and inference executors. Size it to
-# the available RAG replicas and memory; it does not cap ordinary analyses.
-#codecrow.rag.branch-build.global-parallelism=4
+# SSE exact-branch streams emit heartbeats every 15 seconds; fail a silent
+# transport after one minute while allowing an active stream to run indefinitely.
+#codecrow.rag.api.timeout.stream-idle=60
+# Exact configured-branch builds are serialized by default because architecture
+# finalization shares CPU, memory, Qdrant, and embedding clients in one RAG process.
+# Raise these only after provisioning independent capacity for concurrent builds.
+#codecrow.rag.branch-build.parallelism=1
+#codecrow.rag.branch-build.global-parallelism=1
 # Repair interval for readable Qdrant current-branch aliases of active generations.
 #codecrow.rag.operator-alias.reconcile-interval-ms=300000
 #codecrow.rag.operator-alias.reconcile-initial-delay-ms=15000

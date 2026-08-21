@@ -13,7 +13,11 @@ def root():
 
 
 @router.get("/health")
-def health():
+async def health():
+    # Keep liveness on the event loop. Synchronous FastAPI handlers share a
+    # finite AnyIO worker pool, so a burst of slow indexing/Qdrant calls must
+    # not make Docker declare an otherwise running process unhealthy merely
+    # because every worker token is occupied.
     return {"status": "healthy"}
 
 

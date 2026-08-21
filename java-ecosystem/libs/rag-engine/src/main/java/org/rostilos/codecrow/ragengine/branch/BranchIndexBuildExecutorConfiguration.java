@@ -13,7 +13,7 @@ public class BranchIndexBuildExecutorConfiguration {
 
     @Bean(name = "branchIndexBuildExecutor")
     public Executor branchIndexBuildExecutor(
-            @Value("${codecrow.rag.branch-build.global-parallelism:4}") int parallelism) {
+            @Value("${codecrow.rag.branch-build.global-parallelism:1}") int parallelism) {
         int workers = Math.max(1, parallelism);
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(workers);
