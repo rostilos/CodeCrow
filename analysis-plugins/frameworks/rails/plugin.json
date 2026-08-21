@@ -1,0 +1,62 @@
+{
+  "id": "rails",
+  "kind": "framework",
+  "requires": ["ruby"],
+  "capabilities": ["context", "graph", "index", "planning", "prompt", "validation"],
+  "detection": {
+    "extensions": [],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": [
+      {
+        "filesAll": ["Gemfile", "config/routes.rb"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [
+          {"path": "Gemfile", "contains": "gem \"rails\""}
+        ]
+      },
+      {
+        "filesAll": ["Gemfile", "config/routes.rb"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [
+          {"path": "Gemfile", "contains": "gem 'rails'"}
+        ]
+      },
+      {
+        "filesAll": ["Gemfile.lock", "config/routes.rb"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [
+          {"path": "Gemfile.lock", "contains": "    rails ("}
+        ]
+      },
+      {
+        "filesAll": ["bin/rails", "config/application.rb", "config/routes.rb"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": []
+      },
+      {
+        "filesAll": ["config/routes.rb"],
+        "filesAny": [],
+        "pathPatternsAll": ["*.gemspec"],
+        "pathPatternsAny": [],
+        "contentMarkers": [],
+        "contentPatternMarkers": [
+          {"pathPattern": "lib/**/engine.rb", "contains": "Rails::Engine"}
+        ]
+      }
+    ]
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.rails.RailsPlugin",
+    "python": "codecrow_plugin_rails:create_plugin"
+  }
+}

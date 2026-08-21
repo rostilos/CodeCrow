@@ -8,6 +8,7 @@ import re
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
+from typing import Callable
 
 from codecrow_plugins import (
     ArchitecturePacket,
@@ -186,10 +187,14 @@ class MagentoRepositoryResolver:
         plugin_id: str,
         artifacts: dict[str, str],
         symbols: tuple[SymbolDefinition, ...],
+        progress_callback: Callable[[dict[str, object]], None] | None = None,
+        deadline: float | None = None,
     ) -> None:
         self.plugin_id = plugin_id
         self.artifacts = artifacts
         self.symbols = symbols
+        self.progress_callback = progress_callback
+        self.deadline = deadline
         self.symbols_by_name: dict[str, tuple[SymbolDefinition, ...]] = {}
         self.symbols_by_casefold: dict[str, tuple[SymbolDefinition, ...]] = {}
         for symbol in symbols:
@@ -216,15 +221,90 @@ class MagentoRepositoryResolver:
         self._acl_sources: dict[str, set[str]] = {}
         self._admin_controller_sources: dict[str, set[str]] = {}
 
+    def _report_progress(self, event: dict[str, object]) -> None:
+        if self.progress_callback is None:
+            return
+        try:
+            self.progress_callback(event)
+        except Exception:
+            # Repository progress is optional host observability.
+            return
+
+    def _check_deadline(self, stage_name: str) -> None:
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            raise TimeoutError(
+                "Magento repository architecture exceeded its time budget "
+                f"during {stage_name}"
+            )
+
+    def _run_stage(self, stage_name: str, stage):
+        self._check_deadline(stage_name)
+        started = time.monotonic()
+        self._report_progress({
+            "pluginId": self.plugin_id,
+            "substage": stage_name,
+            "status": "started",
+            "message": f"Building Magento architecture: {stage_name}",
+        })
+        try:
+            result = stage()
+            self._check_deadline(stage_name)
+        except Exception as exception:
+            duration_ms = round((time.monotonic() - started) * 1000)
+            status = "timed_out" if isinstance(exception, TimeoutError) else "failed"
+            logger.warning(
+                "Magento architecture substage %s status=%s duration_ms=%s: %s",
+                stage_name,
+                status,
+                duration_ms,
+                exception,
+            )
+            self._report_progress({
+                "pluginId": self.plugin_id,
+                "substage": stage_name,
+                "status": status,
+                "durationMs": duration_ms,
+                "message": (
+                    f"Magento architecture {stage_name} {status.replace('_', ' ')} "
+                    f"after {duration_ms} ms"
+                ),
+            })
+            raise
+        duration_ms = round((time.monotonic() - started) * 1000)
+        logger.info(
+            "Magento architecture substage %s status=completed duration_ms=%s",
+            stage_name,
+            duration_ms,
+        )
+        self._report_progress({
+            "pluginId": self.plugin_id,
+            "substage": stage_name,
+            "status": "completed",
+            "durationMs": duration_ms,
+            "message": (
+                f"Built Magento architecture: {stage_name} in {duration_ms} ms"
+            ),
+        })
+        return result
+
     def resolve(self) -> tuple[RepositoryAnalysis, tuple[PluginDiagnostic, ...]]:
         started = time.monotonic()
-        modules = self._modules()
+        modules = self._run_stage("module discovery", self._modules)
         if not modules:
             return RepositoryAnalysis(), tuple(self._diagnostics)
         try:
-            self._module_packets(modules)
-            themes = self._themes(modules)
-            di_states = self._di(modules)
+            self._run_stage(
+                "module packets",
+                lambda: self._module_packets(modules),
+            )
+            themes = self._run_stage(
+                "theme discovery",
+                lambda: self._themes(modules),
+            )
+            di_states = self._run_stage(
+                "dependency injection",
+                lambda: self._di(modules),
+            )
             stages = (
                 ("constructor/DI", lambda: self._constructor_packets(
                     modules,
@@ -277,7 +357,9 @@ class MagentoRepositoryResolver:
             )
             for stage_name, stage in stages:
                 try:
-                    stage()
+                    self._run_stage(stage_name, stage)
+                except TimeoutError:
+                    raise
                 except Exception as exception:
                     raise RuntimeError(
                         f"Magento {stage_name} enrichment failed: "
@@ -285,7 +367,7 @@ class MagentoRepositoryResolver:
                     ) from exception
         except RuntimeError:
             raise
-        packets = self.graph.build()
+        packets = self._run_stage("packet materialization", self.graph.build)
         logger.info(
             "Magento repository resolution: modules=%s packets=%s elapsed=%.3fs",
             len(modules),
@@ -7084,6 +7166,16 @@ class MagentoRepositorySession:
     revision: str
     artifacts: dict[str, str] = field(default_factory=dict)
     source_root: str | None = None
+    progress_callback: Callable[[dict[str, object]], None] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    analysis_deadline: float | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     @classmethod
     def restore(cls, plugin_id: str, revision: str, snapshots) -> "MagentoRepositorySession":
@@ -7120,6 +7212,27 @@ class MagentoRepositorySession:
 
     def set_source_root(self, source_root: str | None) -> None:
         self.source_root = source_root
+
+    def set_progress_callback(
+        self,
+        progress_callback: Callable[[dict[str, object]], None] | None,
+    ) -> None:
+        self.progress_callback = progress_callback
+
+    def set_analysis_deadline(self, deadline: float | None) -> None:
+        self.analysis_deadline = deadline
+
+    def _report_scoped_progress(
+        self,
+        root: str,
+        event: dict[str, object],
+    ) -> None:
+        if self.progress_callback is None:
+            return
+        self.progress_callback({
+            **event,
+            "sourceRoot": root or ".",
+        })
 
     def ingest(self, artifacts: tuple[FileArtifact, ...]) -> None:
         for artifact in artifacts:
@@ -7183,6 +7296,13 @@ class MagentoRepositorySession:
                 self.plugin_id,
                 scoped,
                 scoped_symbols,
+                progress_callback=(
+                    lambda event, root=root: self._report_scoped_progress(
+                        root,
+                        event,
+                    )
+                ),
+                deadline=self.analysis_deadline,
             )
             analysis, scoped_diagnostics = resolver.resolve()
             analyses.append(self._prefix_analysis(analysis, root, scoped_paths))

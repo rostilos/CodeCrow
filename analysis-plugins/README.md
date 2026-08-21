@@ -55,6 +55,27 @@ approval. This behavior lives entirely under `languages/javascript`; generic RAG
 and inference hosts only consume neutral snapshots, packets, and validation
 results.
 
+Framework-owned indexing is also packaged inside this boundary. Django extracts
+AppConfig, installed apps, middleware and root URL configuration, URL paths and
+includes, views, models/relations, middleware hooks, and signal receivers from
+Python. Quarkus extracts CDI beans/injection, JAX-RS resources/routes,
+configuration-property uses and application-property key/profile metadata,
+schedules, reactive channels, and Panache topology from Java. Ember.js extracts
+router maps, route/controller/component/service/model roles, service injection,
+Ember Data relationships, and conservative `.hbs` ownership/invocations;
+Express.js extracts routing and
+middleware topology, and Next.js extracts file-system routes, boundaries, data
+loaders, and Server Actions from JavaScript-family source; Rails extracts routes,
+mounts, controllers/actions, models, associations, callbacks, and Active Job
+queue/perform/retry/discard declarations from Ruby. These plugins use bounded repository
+markers and exact source constructs, abstain when a construct is dynamic or
+ambiguous, and add no model or embedding call. Their structural facts can refute
+a matching absence claim, but topology alone is not positive proof of a defect.
+Full selection may under-detect when optional marker acquisition is bounded or
+unavailable. Incremental selection retains the last reliable content for a
+changed marker that cannot be inspected; a successfully read marker that stops
+matching remains an authoritative plugin-set change and requires a full reindex.
+
 Graph-fact attributes whose keys start with
 `retrievalIdentifier:` are a neutral exact-retrieval hint. The value nominates
 an identifier inside a fact's already-proven related paths; generic RAG may

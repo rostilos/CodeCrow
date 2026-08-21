@@ -79,6 +79,7 @@ class RagClient:
         self.enabled = enabled if enabled is not None else os.environ.get("RAG_ENABLED", "true").lower() == "true"
         self.timeout = 30.0
         self._client: Optional[httpx.AsyncClient] = None
+        self._mutation_client: Optional[httpx.AsyncClient] = None
         self._service_secret = (
             os.environ.get("SERVICE_SECRET")
             or os.environ.get("CODECROW_RAG_API_SECRET", "")
@@ -91,7 +92,7 @@ class RagClient:
             logger.info("RAG client disabled")
     
     async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create an HTTP client for connection pooling (instance-level)."""
+        """Get the query/health pool, isolated from long PR mutations."""
         if self._client is None or self._client.is_closed:
             headers = {}
             if self._service_secret:
@@ -102,12 +103,34 @@ class RagClient:
                 headers=headers,
             )
         return self._client
+
+    async def _get_mutation_client(self) -> httpx.AsyncClient:
+        """Get the bounded PR overlay/cleanup connection pool."""
+        if self._mutation_client is None or self._mutation_client.is_closed:
+            headers = {}
+            if self._service_secret:
+                headers["x-service-secret"] = self._service_secret
+            self._mutation_client = httpx.AsyncClient(
+                timeout=self.timeout,
+                limits=httpx.Limits(
+                    max_connections=4,
+                    max_keepalive_connections=2,
+                ),
+                headers=headers,
+            )
+        return self._mutation_client
     
     async def close(self):
         """Close this instance's HTTP client."""
         if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
             self._client = None
+        if (
+            self._mutation_client is not None
+            and not self._mutation_client.is_closed
+        ):
+            await self._mutation_client.aclose()
+            self._mutation_client = None
 
     def _record_cleanup_failure(self, detail: str) -> None:
         if not self._cleanup_degraded:
@@ -715,7 +738,7 @@ class RagClient:
             if collection_target:
                 payload["collection_target"] = collection_target
 
-            client = await self._get_client()
+            client = await self._get_mutation_client()
             response = await client.post(
                 f"{self.base_url}/index/pr-files",
                 json=payload,
@@ -779,7 +802,7 @@ class RagClient:
             return True
 
         try:
-            client = await self._get_client()
+            client = await self._get_mutation_client()
             response = await client.delete(
                 f"{self.base_url}/index/pr-files/{workspace}/{project}/{pr_number}",
                 params=(

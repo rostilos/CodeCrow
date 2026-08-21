@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 # Memory-efficient batch sizes
 DOCUMENT_BATCH_SIZE = 50
 INSERT_BATCH_SIZE = 128
+OPAQUE_STATE_PART_SIZE = 100_000
 
 
 def _plugin_identity_metadata(
@@ -264,7 +265,7 @@ class RepositoryIndexer:
     ) -> List[TextNode]:
         """Store opaque plugin snapshots in bounded zero-vector payload nodes."""
         nodes: List[TextNode] = []
-        part_size = 400_000
+        part_size = OPAQUE_STATE_PART_SIZE
         for snapshot in analysis.snapshots:
             identity = f"{snapshot.plugin_id}\0{snapshot.kind}"
             digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
@@ -327,7 +328,7 @@ class RepositoryIndexer:
             ensure_ascii=False,
         )
         content_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        part_size = 400_000
+        part_size = OPAQUE_STATE_PART_SIZE
         parts = [
             content[offset:offset + part_size]
             for offset in range(0, len(content), part_size)
@@ -775,6 +776,7 @@ class RepositoryIndexer:
             # for admission control, so using it as the iteration bound would
             # silently truncate the resolver input whenever a plugin removes
             # files from semantic indexing.
+            completed_batch_duration_ms = 0
             for i in range(0, len(file_list), DOCUMENT_BATCH_SIZE):
                 batch_num += 1
                 file_batch = file_list[i:i + DOCUMENT_BATCH_SIZE]
@@ -803,10 +805,11 @@ class RepositoryIndexer:
                         path,
                     )
                 skipped_file_paths.update(missing_paths)
-                if not documents:
-                    continue
-
-                if analysis_handle is not None and analysis_handle.active:
+                if (
+                    documents
+                    and analysis_handle is not None
+                    and analysis_handle.active
+                ):
                     from codecrow_plugins import FileArtifact
 
                     artifacts = tuple(sorted(
@@ -826,82 +829,97 @@ class RepositoryIndexer:
                     for document in documents
                     if document.metadata["path"] in semantic_paths
                 ]
-                if not semantic_documents:
-                    del documents
-                    continue
-                
-                split_started = time.perf_counter()
-                chunks, split_skipped_paths = (
-                    self.splitter.split_documents_resilient(
-                    semantic_documents,
-                    capabilities=capabilities,
+                architecture_only_count = len(documents) - len(semantic_documents)
+                split_duration_ms = 0
+                point_pipeline_duration_ms = 0
+                batch_chunk_count = 0
+                chunks = []
+
+                if semantic_documents:
+                    split_started = time.perf_counter()
+                    chunks, split_skipped_paths = (
+                        self.splitter.split_documents_resilient(
+                            semantic_documents,
+                            capabilities=capabilities,
+                        )
                     )
-                )
-                split_duration_ms = round(
-                    (time.perf_counter() - split_started) * 1000
-                )
-                skipped_file_paths.update(split_skipped_paths)
-                document_count += (
-                    len(semantic_documents) - len(split_skipped_paths)
-                )
-                identity_metadata = _plugin_identity_metadata(
-                    capabilities,
-                    implementation_fingerprint,
-                    self.representation_fingerprint,
-                )
-                for chunk in chunks:
-                    chunk.metadata.update(identity_metadata)
-                batch_chunk_count = len(chunks)
-                chunk_count += batch_chunk_count
-                
-                # Check chunk limit
-                if self.config.max_chunks_per_index > 0 and chunk_count > self.config.max_chunks_per_index:
-                    self.collection_manager.delete_collection(pending_collection_name)
-                    raise ValueError(f"Repository exceeds chunk limit: {chunk_count}+ chunks.")
-                
-                # Process and upsert
-                point_pipeline_started = time.perf_counter()
-                success, failed = self.point_ops.process_and_upsert_chunks(
-                    chunks,
-                    pending_collection_name,
-                    workspace,
-                    project,
-                    branch,
-                    reuse_collection_name=vector_reuse_collection,
-                    operation_id=operation_id,
-                    metrics=embedding_metrics,
-                )
-                point_pipeline_duration_ms = round(
-                    (time.perf_counter() - point_pipeline_started) * 1000
-                )
-                successful_chunks += success
-                skipped_chunk_count += failed
-                if failed:
-                    logger.warning(
-                        "Skipped %s rejected chunks in batch %s; "
-                        "continuing repository indexing",
-                        failed,
-                        batch_num,
+                    split_duration_ms = round(
+                        (time.perf_counter() - split_started) * 1000
                     )
-                
+                    skipped_file_paths.update(split_skipped_paths)
+                    document_count += (
+                        len(semantic_documents) - len(split_skipped_paths)
+                    )
+                    identity_metadata = _plugin_identity_metadata(
+                        capabilities,
+                        implementation_fingerprint,
+                        self.representation_fingerprint,
+                    )
+                    for chunk in chunks:
+                        chunk.metadata.update(identity_metadata)
+                    batch_chunk_count = len(chunks)
+                    chunk_count += batch_chunk_count
+
+                    # Check chunk limit
+                    if (
+                        self.config.max_chunks_per_index > 0
+                        and chunk_count > self.config.max_chunks_per_index
+                    ):
+                        self.collection_manager.delete_collection(
+                            pending_collection_name
+                        )
+                        raise ValueError(
+                            f"Repository exceeds chunk limit: {chunk_count}+ chunks."
+                        )
+
+                    # Process and upsert
+                    point_pipeline_started = time.perf_counter()
+                    success, failed = self.point_ops.process_and_upsert_chunks(
+                        chunks,
+                        pending_collection_name,
+                        workspace,
+                        project,
+                        branch,
+                        reuse_collection_name=vector_reuse_collection,
+                        operation_id=operation_id,
+                        metrics=embedding_metrics,
+                    )
+                    point_pipeline_duration_ms = round(
+                        (time.perf_counter() - point_pipeline_started) * 1000
+                    )
+                    successful_chunks += success
+                    skipped_chunk_count += failed
+                    if failed:
+                        logger.warning(
+                            "Skipped %s rejected chunks in batch %s; "
+                            "continuing repository indexing",
+                            failed,
+                            batch_num,
+                        )
+
+                batch_duration_ms = round(
+                    (time.perf_counter() - batch_started) * 1000
+                )
                 logger.info(
                     "RAG document batch completed operation_id=%s batch=%s/%s "
-                    "semantic_files=%s chunks=%s load_duration_ms=%s "
+                    "semantic_files=%s architecture_only_files=%s chunks=%s "
+                    "load_duration_ms=%s "
                     "split_duration_ms=%s point_pipeline_duration_ms=%s "
                     "duration_ms=%s",
                     operation_id,
                     batch_num,
                     total_batches,
                     len(semantic_documents),
+                    architecture_only_count,
                     batch_chunk_count,
                     load_duration_ms,
                     split_duration_ms,
                     point_pipeline_duration_ms,
-                    round((time.perf_counter() - batch_started) * 1000),
+                    batch_duration_ms,
                 )
                 batch_progress = 18 + round(67 * batch_num / max(total_batches, 1))
-                elapsed_ms = round((time.perf_counter() - operation_started) * 1000)
-                average_batch_ms = elapsed_ms / batch_num
+                completed_batch_duration_ms += batch_duration_ms
+                average_batch_ms = completed_batch_duration_ms / batch_num
                 estimated_remaining_ms = round(
                     average_batch_ms * max(total_batches - batch_num, 0)
                 )
@@ -916,17 +934,18 @@ class RepositoryIndexer:
                     total_batches,
                     indexedChunks=successful_chunks,
                     estimatedChunks=estimated_chunks,
+                    semanticFiles=len(semantic_documents),
+                    architectureOnlyFiles=architecture_only_count,
                     completedBatches=batch_num,
                     totalBatches=total_batches,
-                    batchDurationMs=round(
-                        (time.perf_counter() - batch_started) * 1000
-                    ),
+                    batchDurationMs=batch_duration_ms,
                     estimatedRemainingMs=estimated_remaining_ms,
+                    remainingEstimateScope="file_batches",
                 )
-                
+
                 del documents
                 del chunks
-                
+
                 if batch_num % 5 == 0:
                     gc.collect()
 
@@ -935,52 +954,151 @@ class RepositoryIndexer:
             context_nodes = []
             snapshot_nodes = []
             if analysis_handle is not None:
+                configured_architecture_timeout = getattr(
+                    self.config,
+                    "architecture_finalization_timeout_seconds",
+                    600,
+                )
+                if not isinstance(configured_architecture_timeout, (int, float)):
+                    configured_architecture_timeout = 600
+                architecture_timeout_seconds = max(
+                    1.0,
+                    float(configured_architecture_timeout),
+                )
+                architecture_deadline = (
+                    time.monotonic() + architecture_timeout_seconds
+                )
                 report_progress(
                     "architecture",
                     "Building deterministic architecture context",
                     88,
+                    architectureTimeoutSeconds=architecture_timeout_seconds,
+                    estimatedRemainingMs=0,
+                    remainingEstimateScope="file_batches_complete",
                 )
-                repository_analysis, diagnostics = analysis_handle.finish()
+
+                def report_architecture_progress(event: dict) -> None:
+                    report_progress(
+                        "architecture",
+                        str(event.get(
+                            "message",
+                            "Building deterministic architecture context",
+                        )),
+                        88 if event.get("status") == "started" else 89,
+                        architectureTimeoutSeconds=architecture_timeout_seconds,
+                        architecturePlugin=event.get("pluginId"),
+                        architectureSubstage=event.get("substage"),
+                        architectureStatus=event.get("status"),
+                        sourceRoot=event.get("sourceRoot"),
+                        substageDurationMs=event.get("durationMs"),
+                    )
+
+                repository_analysis, diagnostics = analysis_handle.finish(
+                    progress_callback=report_architecture_progress,
+                    deadline=architecture_deadline,
+                )
                 skipped_file_paths.update(
                     self.accept_recoverable_repository_diagnostics(
                         diagnostics,
                         "repository architecture analysis",
                     )
                 )
+                architecture_timed_out = any(
+                    diagnostic.code
+                    == "plugin-repository-finalization-timeout"
+                    for diagnostic in diagnostics
+                )
+                if architecture_timed_out:
+                    logger.warning(
+                        "Repository architecture finalization exceeded %.1fs; "
+                        "continuing operation_id=%s without deterministic "
+                        "architecture context",
+                        architecture_timeout_seconds,
+                        operation_id,
+                    )
+                    report_progress(
+                        "architecture",
+                        (
+                            "Architecture time budget exhausted; continuing "
+                            "with semantic indexing"
+                        ),
+                        90,
+                        architectureStatus="degraded",
+                        degraded=True,
+                        architectureTimeoutSeconds=architecture_timeout_seconds,
+                    )
+                else:
+                    try:
+                        report_progress(
+                            "architecture",
+                            "Materializing deterministic architecture records",
+                            89,
+                            architectureStatus="materializing",
+                        )
+                        architecture_nodes = self._architecture_nodes(
+                            repository_analysis,
+                            capabilities,
+                            workspace,
+                            project,
+                            branch,
+                            commit,
+                            implementation_fingerprint,
+                            self.representation_fingerprint,
+                        )
+                        snapshot_nodes = self._snapshot_nodes(
+                            repository_analysis,
+                            capabilities,
+                            workspace,
+                            project,
+                            branch,
+                            commit,
+                            implementation_fingerprint,
+                            self.representation_fingerprint,
+                        )
+                        context_nodes = self._repository_context_nodes(
+                            repository_analysis,
+                            capabilities,
+                            workspace,
+                            project,
+                            branch,
+                            commit,
+                            implementation_fingerprint,
+                            self.representation_fingerprint,
+                        )
+                        analysis_nodes.extend(
+                            (*architecture_nodes, *context_nodes, *snapshot_nodes)
+                        )
+                    except Exception as exception:
+                        architecture_nodes = []
+                        snapshot_nodes = []
+                        context_nodes = []
+                        logger.warning(
+                            "Repository architecture materialization failed; "
+                            "continuing operation_id=%s with semantic indexing: %s",
+                            operation_id,
+                            exception,
+                            exc_info=True,
+                        )
+                        report_progress(
+                            "architecture",
+                            (
+                                "Architecture materialization failed; continuing "
+                                "with semantic indexing"
+                            ),
+                            90,
+                            architectureStatus="degraded",
+                            degraded=True,
+                            architectureFailure=type(exception).__name__,
+                        )
 
-                architecture_nodes = self._architecture_nodes(
-                    repository_analysis,
-                    capabilities,
-                    workspace,
-                    project,
-                    branch,
-                    commit,
-                    implementation_fingerprint,
-                    self.representation_fingerprint,
-                )
-                snapshot_nodes = self._snapshot_nodes(
-                    repository_analysis,
-                    capabilities,
-                    workspace,
-                    project,
-                    branch,
-                    commit,
-                    implementation_fingerprint,
-                    self.representation_fingerprint,
-                )
-                context_nodes = self._repository_context_nodes(
-                    repository_analysis,
-                    capabilities,
-                    workspace,
-                    project,
-                    branch,
-                    commit,
-                    implementation_fingerprint,
-                    self.representation_fingerprint,
-                )
-                analysis_nodes.extend(
-                    (*architecture_nodes, *context_nodes, *snapshot_nodes)
-                )
+                # Repository sessions retain the architecture-only source
+                # artifacts used to build snapshots, while RepositoryAnalysis
+                # retains the unsliced snapshot strings. Once bounded storage
+                # nodes exist, release both before PointStruct/Qdrant payloads
+                # are materialized to avoid holding three copies concurrently.
+                analysis_handle = None
+                del repository_analysis
+                gc.collect()
 
             facts_nodes = []
             if repository_facts is not None:
@@ -1006,6 +1124,13 @@ class RepositoryIndexer:
                     raise ValueError(
                         f"Repository exceeds chunk limit after architecture analysis: {chunk_count} chunks."
                     )
+                report_progress(
+                    "architecture",
+                    f"Persisting {architecture_count} deterministic context records",
+                    90,
+                    architectureStatus="persisting",
+                    architectureRecords=architecture_count,
+                )
                 success, failed = self.point_ops.process_and_upsert_chunks(
                     analysis_nodes,
                     pending_collection_name,
@@ -1032,6 +1157,16 @@ class RepositoryIndexer:
                     len(snapshot_nodes),
                     len(facts_nodes),
                 )
+                report_progress(
+                    "architecture",
+                    (
+                        f"Persisted {success} deterministic context records"
+                    ),
+                    91,
+                    architectureStatus="completed",
+                    architectureRecords=success,
+                    skippedArchitectureRecords=failed,
+                )
 
             generation_manifest_sha256 = None
             generation_manifest_points = 0
@@ -1039,7 +1174,7 @@ class RepositoryIndexer:
                 report_progress(
                     "sealing",
                     "Sealing persisted vectors for generation integrity",
-                    91,
+                    92,
                     indexedChunks=successful_chunks,
                     estimatedChunks=estimated_chunks,
                 )

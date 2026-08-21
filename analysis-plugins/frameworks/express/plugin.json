@@ -1,0 +1,25 @@
+{
+  "id": "express",
+  "kind": "framework",
+  "requires": ["json"],
+  "capabilities": ["context", "graph", "index", "planning", "prompt", "validation"],
+  "detection": {
+    "extensions": [],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": [
+      {
+        "filesAll": [],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [{"path": "package.json", "contains": "\"express\""}]
+      }
+    ]
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.express.ExpressPlugin",
+    "python": "codecrow_plugin_express:create_plugin"
+  }
+}

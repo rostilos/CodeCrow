@@ -387,6 +387,70 @@ def test_upsert_splits_rejected_request_until_smaller_slices_succeed():
     assert len(accepted) == 4
 
 
+def test_upsert_splits_by_serialized_payload_before_qdrant_rejects_request():
+    client = MagicMock()
+    operations = PointOperations(
+        client,
+        MagicMock(),
+        batch_size=4,
+        max_upsert_payload_bytes=900,
+        upsert_max_attempts=1,
+    )
+    points = [
+        PointStruct(
+            id=str(uuid.uuid4()),
+            vector=[0.1, 0.2, 0.3],
+            payload={"path": f"snapshot-{index}", "text": "x" * 400},
+        )
+        for index in range(4)
+    ]
+
+    successful, failed = operations.upsert_points("pending", points)
+
+    assert (successful, failed) == (4, 0)
+    assert client.upsert.call_count == 4
+    assert all(
+        len(call.kwargs["points"]) == 1
+        for call in client.upsert.call_args_list
+    )
+
+
+def test_deterministic_context_avoids_concurrent_embedding_workers():
+    client = MagicMock()
+    embed_model = MagicMock()
+    operations = PointOperations(
+        client,
+        embed_model,
+        batch_size=4,
+        embedding_batch_size=2,
+        max_embedding_workers=4,
+        embedding_dim=3,
+        upsert_max_attempts=1,
+    )
+    chunks = [
+        TextNode(
+            text="opaque-state-" + str(index),
+            metadata={"path": f"state-{index}", "repository_snapshot": True},
+        )
+        for index in range(5)
+    ]
+
+    successful, failed = operations.process_and_upsert_chunks(
+        chunks,
+        "pending",
+        "workspace",
+        "project",
+        "main",
+    )
+
+    assert (successful, failed) == (5, 0)
+    embed_model.get_text_embedding_batch.assert_not_called()
+    assert [
+        len(call.kwargs["points"])
+        for call in client.upsert.call_args_list
+    ] == [2, 2, 1]
+
+
 def test_upsert_isolates_one_rejected_point_without_losing_valid_siblings():
     class InvalidPoint(RuntimeError):
         status_code = 400

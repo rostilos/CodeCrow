@@ -5,6 +5,7 @@ import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.rostilos.codecrow.ragengine.source.RepositorySourceTreeIdentity;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -23,6 +24,7 @@ public class RagPipelineClient {
 
     private final OkHttpClient httpClient;
     private final OkHttpClient longRunningHttpClient;
+    private final OkHttpClient streamingHttpClient;
     private final ObjectMapper objectMapper;
     private final String ragApiUrl;
     private final boolean ragEnabled;
@@ -51,11 +53,31 @@ public class RagPipelineClient {
     }
 
     public RagPipelineClient(
+            String ragApiUrl,
+            boolean ragEnabled,
+            int connectTimeout,
+            int readTimeout,
+            int indexingTimeout,
+            String serviceSecret
+    ) {
+        this(
+                ragApiUrl,
+                ragEnabled,
+                connectTimeout,
+                readTimeout,
+                indexingTimeout,
+                Math.min(indexingTimeout, 60),
+                serviceSecret);
+    }
+
+    @Autowired
+    public RagPipelineClient(
             @Value("${codecrow.rag.api.url:http://rag-pipeline:8001}") String ragApiUrl,
             @Value("${codecrow.rag.api.enabled:true}") boolean ragEnabled,
             @Value("${codecrow.rag.api.timeout.connect:30}") int connectTimeout,
             @Value("${codecrow.rag.api.timeout.read:120}") int readTimeout,
             @Value("${codecrow.rag.api.timeout.indexing:14400}") int indexingTimeout,
+            @Value("${codecrow.rag.api.timeout.stream-idle:60}") int streamIdleTimeout,
             @Value("${codecrow.rag.api.secret:}") String serviceSecret
     ) {
         this.ragApiUrl = normalizeBaseUrl(ragApiUrl);
@@ -72,6 +94,12 @@ public class RagPipelineClient {
                 .connectTimeout(connectTimeout, java.util.concurrent.TimeUnit.SECONDS)
                 .readTimeout(indexingTimeout, java.util.concurrent.TimeUnit.SECONDS)
                 .writeTimeout(indexingTimeout, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+
+        this.streamingHttpClient = this.longRunningHttpClient.newBuilder()
+                .readTimeout(
+                        Math.max(1, streamIdleTimeout),
+                        java.util.concurrent.TimeUnit.SECONDS)
                 .build();
         
         this.objectMapper = new ObjectMapper();
@@ -1139,6 +1167,11 @@ public class RagPipelineClient {
             Runnable ownershipAdmissionConsumer,
             Consumer<Map<String, Object>> progressConsumer
     ) throws IOException {
+        Object workspace = payload.get("workspace");
+        Object project = payload.get("project");
+        Object branch = payload.get("branch");
+        Object commit = payload.get("commit");
+        long startedNanos = System.nanoTime();
         RequestBody body = RequestBody.create(objectMapper.writeValueAsString(payload), JSON);
         Request.Builder builder = new Request.Builder()
                 .url(url)
@@ -1146,7 +1179,10 @@ public class RagPipelineClient {
                 .post(body);
         addAuthHeader(builder);
 
-        try (Response response = longRunningHttpClient.newCall(builder.build()).execute()) {
+        log.info(
+                "RAG index stream starting workspace={} project={} branch={} commit={}",
+                workspace, project, branch, commit);
+        try (Response response = streamingHttpClient.newCall(builder.build()).execute()) {
             if (!response.isSuccessful()) {
                 String detail = response.body() != null ? response.body().string() : "{}";
                 throw new RagApiException(response.code(), detail);
@@ -1166,6 +1202,12 @@ public class RagPipelineClient {
                 Map<String, Object> event = objectMapper.readValue(json, Map.class);
                 String type = String.valueOf(event.get("type"));
                 if ("admitted".equals(type)) {
+                    log.info(
+                            "RAG index stream admitted workspace={} project={} branch={} "
+                                    + "ownership_transferred={} elapsed_ms={}",
+                            workspace, project, branch,
+                            event.get("repositoryOwnershipTransferred"),
+                            elapsedMillis(startedNanos));
                     if (Boolean.TRUE.equals(
                             event.get("repositoryOwnershipTransferred"))
                             && ownershipAdmissionConsumer != null) {
@@ -1174,7 +1216,21 @@ public class RagPipelineClient {
                     }
                     continue;
                 }
+                if ("heartbeat".equals(type)) {
+                    log.info(
+                            "RAG index stream heartbeat workspace={} project={} branch={} "
+                                    + "stage={} elapsed_ms={} idle_ms={}",
+                            workspace, project, branch, event.get("stage"),
+                            event.get("elapsedMs"), event.get("idleMs"));
+                    continue;
+                }
                 if ("progress".equals(type)) {
+                    log.info(
+                            "RAG index stream progress workspace={} project={} branch={} "
+                                    + "stage={} progress={} message={} elapsed_ms={}",
+                            workspace, project, branch, event.get("stage"),
+                            event.get("progress"), event.get("message"),
+                            elapsedMillis(startedNanos));
                     if (progressConsumer != null) {
                         progressConsumer.accept(new LinkedHashMap<>(event));
                     }
@@ -1183,6 +1239,13 @@ public class RagPipelineClient {
                 if ("complete".equals(type)) {
                     Object result = event.get("result");
                     if (result instanceof Map<?, ?> resultMap) {
+                        log.info(
+                                "RAG index stream completed workspace={} project={} branch={} "
+                                        + "commit={} documents={} chunks={} elapsed_ms={}",
+                                workspace, project, branch, commit,
+                                resultMap.get("document_count"),
+                                resultMap.get("chunk_count"),
+                                elapsedMillis(startedNanos));
                         return new LinkedHashMap<>((Map<String, Object>) resultMap);
                     }
                     throw new IOException("RAG progress stream completed without index result");
@@ -1191,8 +1254,24 @@ public class RagPipelineClient {
                     throw new IOException("RAG API error: " + event.getOrDefault("message", "unknown error"));
                 }
             }
+        } catch (IOException | RuntimeException failure) {
+            log.warn(
+                    "RAG index stream failed workspace={} project={} branch={} "
+                            + "commit={} elapsed_ms={}: {}",
+                    workspace, project, branch, commit,
+                    elapsedMillis(startedNanos), failure.getMessage());
+            throw failure;
         }
+        log.warn(
+                "RAG index stream ended without terminal result workspace={} "
+                        + "project={} branch={} commit={} elapsed_ms={}",
+                workspace, project, branch, commit, elapsedMillis(startedNanos));
         throw new IOException("RAG progress stream ended without a terminal result");
+    }
+
+    private static long elapsedMillis(long startedNanos) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                System.nanoTime() - startedNanos);
     }
 
     private static String truncateDetail(String detail) {

@@ -63,7 +63,7 @@ public class BranchIndexMaintenanceService {
             AnalysisLockService lockService,
             AnalysisJobService jobService,
             @Qualifier("branchIndexBuildExecutor") Executor branchIndexBuildExecutor,
-            @Value("${codecrow.rag.branch-build.parallelism:2}") int perProjectParallelism) {
+            @Value("${codecrow.rag.branch-build.parallelism:1}") int perProjectParallelism) {
         this.ragOperationsService = ragOperationsService;
         this.vcsClientProvider = vcsClientProvider;
         this.generationBuildService = generationBuildService;
@@ -83,9 +83,10 @@ public class BranchIndexMaintenanceService {
 
         // Obtaining a provider client can refresh a shared installation token. Do
         // that small VCS preparation phase once at a time, then let the expensive
-        // archive download and RAG mutation for every resolved branch run in
-        // parallel. Concurrent token refreshes previously allowed one branch to
-        // disappear before it had a durable job or operation to report.
+        // archive download and RAG mutation for every resolved branch run under
+        // the bounded branch-build capacity. Concurrent token refreshes previously
+        // allowed one branch to disappear before it had a durable job or operation
+        // to report.
         List<BranchBuildPlan> plans = new ArrayList<>();
         for (String branch : branches) {
             try {

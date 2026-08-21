@@ -135,7 +135,7 @@ def _capabilities_dto(
     file_plugins,
 ) -> ProjectCapabilitiesDto:
     catalog, _, selector = plugin_context._plugin_host()
-    from codecrow_plugins import ProjectCapabilities
+    from codecrow_plugins import PluginKind, ProjectCapabilities
 
     repository_plugins = tuple(repository_plugins)
     normalized_files = {
@@ -143,7 +143,13 @@ def _capabilities_dto(
         for path, plugin_ids in file_plugins.items()
     }
     evidence = {
-        plugin_id: (f"fixture:{plugin_id}",)
+        plugin_id: tuple(sorted((
+            f"fixture:{plugin_id}",
+            *(("root:.",) if (
+                catalog.registry.descriptor(plugin_id).kind
+                is PluginKind.FRAMEWORK
+            ) else ()),
+        )))
         for plugin_id in repository_plugins
     }
     fingerprint = selector._fingerprint(

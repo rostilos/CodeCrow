@@ -3,6 +3,7 @@ Tests for rag_pipeline.core.index_manager components —
 CollectionManager, BranchManager, PointOperations, StatsManager, RAGIndexManager.
 """
 import pytest
+import threading
 import uuid
 from httpx import Headers
 from qdrant_client.http.exceptions import (
@@ -597,6 +598,7 @@ class TestRAGIndexManager:
         )
         manager._indexer = MagicMock()
         manager._indexer.index_repository.return_value = MagicMock()
+        manager._full_index_capacity = threading.BoundedSemaphore(1)
         manager._mutation_coordinator = MagicMock()
         lease = MagicMock(token="operation-token")
         lease.assert_owned = MagicMock()
@@ -625,6 +627,45 @@ class TestRAGIndexManager:
         assert manager._indexer.index_repository.call_args.kwargs[
             "reuse_collection_name"
         ] == "prior-generation-physical"
+
+    def test_full_index_capacity_serializes_heavy_builds(self):
+        from rag_pipeline.core.index_manager.manager import RAGIndexManager
+
+        manager = object.__new__(RAGIndexManager)
+        manager._full_index_capacity = threading.BoundedSemaphore(1)
+        first_entered = threading.Event()
+        release_first = threading.Event()
+        second_waiting = threading.Event()
+        second_entered = threading.Event()
+
+        def first_build():
+            with manager._admit_full_index("ws", "one", "main", None):
+                first_entered.set()
+                release_first.wait(timeout=2)
+
+        def second_build():
+            def progress(event):
+                if event["stage"] == "waiting_capacity":
+                    second_waiting.set()
+
+            with manager._admit_full_index("ws", "two", "main", progress):
+                second_entered.set()
+
+        first = threading.Thread(target=first_build)
+        second = threading.Thread(target=second_build)
+        first.start()
+        assert first_entered.wait(timeout=1)
+        second.start()
+        assert second_waiting.wait(timeout=1)
+        assert not second_entered.is_set()
+
+        release_first.set()
+        first.join(timeout=1)
+        second.join(timeout=1)
+
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert second_entered.is_set()
 
     @patch("rag_pipeline.core.index_manager.manager.create_embedding_model")
     @patch("rag_pipeline.core.index_manager.manager.get_embedding_model_info")

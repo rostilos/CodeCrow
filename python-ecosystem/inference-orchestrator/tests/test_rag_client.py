@@ -393,6 +393,18 @@ class TestRagClientLifecycle:
         await c.close()
 
     @pytest.mark.asyncio(loop_scope="function")
+    async def test_query_and_mutation_connection_pools_are_isolated(self):
+        c = RagClient(base_url="http://rag:8001", enabled=True)
+
+        query_client = await c._get_client()
+        mutation_client = await c._get_mutation_client()
+
+        assert query_client is not mutation_client
+        await c.close()
+        assert query_client.is_closed
+        assert mutation_client.is_closed
+
+    @pytest.mark.asyncio(loop_scope="function")
     async def test_empty_queries_duplicates(self, enabled_client):
         r = await enabled_client.search_for_duplicates("ws", "proj", "main", [])
         assert r == []

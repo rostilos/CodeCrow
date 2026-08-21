@@ -1,0 +1,10 @@
+[
+  {"glob": "*.gemspec", "path": "blog.gemspec", "matches": true},
+  {"glob": "*.gemspec", "path": "nested/blog.gemspec", "matches": false},
+  {"glob": "lib/**/engine.rb", "path": "lib/blog/engine.rb", "matches": true},
+  {"glob": "lib/**/engine.rb", "path": "vendor/lib/blog/engine.rb", "matches": false},
+  {"glob": "**/*.java", "path": "src/main/App.java", "matches": true},
+  {"glob": "**/*.java", "path": "App.java", "matches": false},
+  {"glob": "app/?/page.tsx", "path": "app/a/page.tsx", "matches": true},
+  {"glob": "app/?/page.tsx", "path": "app/ab/page.tsx", "matches": false}
+]

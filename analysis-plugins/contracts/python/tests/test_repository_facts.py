@@ -49,6 +49,117 @@ def test_overlay_recomputes_path_and_content_detection_from_complete_inventory(
     assert "python" in selector.select(updated).repository_plugins
 
 
+def test_overlay_promotes_persisted_pattern_evidence_when_first_match_is_deleted(
+    tmp_path,
+):
+    catalog = discover_builtin_plugins()
+    selector = ProjectSelector(catalog.registry)
+    paths = ("build.gradle", "src/First.java", "src/Second.java")
+    _write(tmp_path, "build.gradle", "plugins { id 'java' }\n")
+    _write(tmp_path, "src/First.java", "import io.quarkus.runtime.Startup;\n")
+    _write(tmp_path, "src/Second.java", "import io.quarkus.scheduler.Scheduled;\n")
+
+    baseline = build_repository_facts(
+        tmp_path,
+        "base",
+        paths,
+        catalog.registry,
+    )
+
+    assert set(baseline.marker_contents) == {
+        "src/First.java",
+        "src/Second.java",
+    }
+    assert "quarkus" in selector.select(baseline).repository_plugins
+
+    updated = overlay_repository_facts(
+        baseline,
+        None,
+        "changed",
+        (),
+        ("src/First.java",),
+        catalog.registry,
+    )
+
+    assert set(updated.marker_contents) == {"src/Second.java"}
+    assert "quarkus" in selector.select(updated).repository_plugins
+
+
+def test_nested_framework_pattern_marker_is_acquired_relative_to_its_root(
+    tmp_path,
+):
+    catalog = discover_builtin_plugins()
+    selector = ProjectSelector(catalog.registry)
+    root = "services/blog"
+    paths = (
+        f"{root}/blog.gemspec",
+        f"{root}/config/routes.rb",
+        f"{root}/lib/blog/engine.rb",
+    )
+    _write(tmp_path, f"{root}/blog.gemspec", "Gem::Specification.new\n")
+    _write(tmp_path, f"{root}/config/routes.rb", "Blog::Engine.routes.draw do\nend\n")
+    _write(
+        tmp_path,
+        f"{root}/lib/blog/engine.rb",
+        "module Blog\n  class Engine < Rails::Engine\n  end\nend\n",
+    )
+
+    facts = build_repository_facts(
+        tmp_path,
+        "base",
+        paths,
+        catalog.registry,
+    )
+
+    assert facts.marker_contents == {
+        f"{root}/lib/blog/engine.rb": (
+            "module Blog\n  class Engine < Rails::Engine\n  end\nend\n"
+        ),
+    }
+    selected = selector.select(facts)
+    assert "rails" in selected.repository_plugins
+    assert f"root:{root}" in selected.detection_evidence["rails"]
+
+
+def test_overlay_activates_framework_when_new_anchors_make_persisted_pattern_relevant(
+    tmp_path,
+):
+    catalog = discover_builtin_plugins()
+    selector = ProjectSelector(catalog.registry)
+    root = "services/blog"
+    engine = f"{root}/lib/blog/engine.rb"
+    _write(
+        tmp_path,
+        engine,
+        "module Blog\n  class Engine < Rails::Engine\n  end\nend\n",
+    )
+    baseline = build_repository_facts(
+        tmp_path,
+        "base",
+        (engine,),
+        catalog.registry,
+    )
+    assert baseline.marker_contents.keys() == {engine}
+    assert "rails" not in selector.select(baseline).repository_plugins
+
+    gemspec = f"{root}/blog.gemspec"
+    routes = f"{root}/config/routes.rb"
+    _write(tmp_path, gemspec, "Gem::Specification.new\n")
+    _write(tmp_path, routes, "Blog::Engine.routes.draw do\nend\n")
+    updated = overlay_repository_facts(
+        baseline,
+        tmp_path,
+        "changed",
+        (gemspec, routes),
+        (),
+        catalog.registry,
+    )
+
+    selected = selector.select(updated)
+    assert "rails" in selected.repository_plugins
+    assert f"root:{root}" in selected.detection_evidence["rails"]
+
+
 def test_overlay_adds_exact_framework_marker_and_removes_deleted_paths(tmp_path):
     catalog = discover_builtin_plugins()
     selector = ProjectSelector(catalog.registry)
@@ -205,6 +316,141 @@ def test_marker_byte_budget_degrades_detection_without_failing_index(tmp_path, c
     assert facts.marker_contents == {}
     assert "magento" in selector.select(facts).repository_plugins
     assert "hyva" not in selector.select(facts).repository_plugins
+    assert "reduced automatic plugin-detection evidence" in caplog.text
+
+
+def test_pattern_marker_scan_budgets_non_matching_files_before_reading(
+    tmp_path,
+    caplog,
+    monkeypatch,
+):
+    catalog = discover_builtin_plugins()
+    paths = tuple(f"src/Type{index}.java" for index in range(3))
+    for path in paths:
+        _write(tmp_path, path, "final class Type {}\n")
+
+    original_read_text = Path.read_text
+    reads = []
+
+    def counted_read_text(path, *args, **kwargs):
+        reads.append(path)
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted_read_text)
+    facts = build_repository_facts(
+        tmp_path,
+        "base",
+        paths,
+        catalog.registry,
+        max_marker_bytes=1_024,
+        max_marker_files=1,
+    )
+
+    assert facts.marker_contents == {}
+    assert len(reads) == 1
+    assert "file inspection budget" in caplog.text
+
+
+def test_incremental_pattern_marker_scan_preserves_last_evidence_when_budget_is_exhausted(
+    tmp_path,
+    caplog,
+    monkeypatch,
+):
+    catalog = discover_builtin_plugins()
+    path = "src/Changed.java"
+    _write(tmp_path, "build.gradle", "plugins { id 'java' }\n")
+    _write(tmp_path, path, "final class Changed {}\n")
+    baseline = RepositoryFacts(
+        revision="base",
+        paths=("build.gradle", path),
+        marker_contents={path: "import io.quarkus.runtime.Startup;\n"},
+    )
+
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("over-budget updated marker must not be read")
+        ),
+    )
+    updated = overlay_repository_facts(
+        baseline,
+        tmp_path,
+        "changed",
+        (path,),
+        (),
+        catalog.registry,
+        max_marker_bytes=1,
+    )
+
+    assert updated.marker_contents == {
+        path: "import io.quarkus.runtime.Startup;\n",
+    }
+    assert "quarkus" in ProjectSelector(catalog.registry).select(
+        updated
+    ).repository_plugins
+    assert "byte inspection budget" in caplog.text
+
+
+@pytest.mark.parametrize("unsafe_kind", ("outside-symlink", "invalid-utf8"))
+def test_optional_marker_read_failure_degrades_without_failing_index(
+    tmp_path,
+    caplog,
+    unsafe_kind,
+):
+    catalog = discover_builtin_plugins()
+    selector = ProjectSelector(catalog.registry)
+    marker = tmp_path / "package.json"
+    if unsafe_kind == "outside-symlink":
+        outside = tmp_path.parent / f"{tmp_path.name}-outside-package.json"
+        outside.write_text('{"dependencies":{"express":"*"}}', encoding="utf-8")
+        marker.symlink_to(outside)
+    else:
+        marker.write_bytes(b"\xff\xfe")
+    _write(tmp_path, "src/app.js", "export const app = true;\n")
+
+    facts = build_repository_facts(
+        tmp_path,
+        "base",
+        ("package.json", "src/app.js"),
+        catalog.registry,
+    )
+
+    assert facts.marker_contents == {}
+    assert "express" not in selector.select(facts).repository_plugins
+    assert "reduced automatic plugin-detection evidence" in caplog.text
+
+
+def test_incremental_unreadable_marker_preserves_last_reliable_evidence(
+    tmp_path,
+    caplog,
+):
+    catalog = discover_builtin_plugins()
+    marker = tmp_path / "package.json"
+    marker.write_bytes(b"\xff\xfe")
+    baseline = RepositoryFacts(
+        revision="base",
+        paths=("package.json", "src/app.js"),
+        marker_contents={
+            "package.json": '{"dependencies":{"express":"*"}}',
+        },
+    )
+
+    updated = overlay_repository_facts(
+        baseline,
+        tmp_path,
+        "changed",
+        ("package.json",),
+        (),
+        catalog.registry,
+    )
+
+    assert updated.marker_contents == {
+        "package.json": '{"dependencies":{"express":"*"}}',
+    }
+    assert "express" in ProjectSelector(catalog.registry).select(
+        updated
+    ).repository_plugins
     assert "reduced automatic plugin-detection evidence" in caplog.text
 
 

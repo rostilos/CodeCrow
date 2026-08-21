@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -108,5 +109,98 @@ class ProjectSelectorTest {
                 "abc1234", List.of(), Map.of(), null, ".\\app/code");
 
         assertThat(facts.sourceRoot()).isEqualTo("app/code");
+    }
+
+    @Test
+    void automatic_detection_keeps_framework_root_when_evidence_exceeds_cap() {
+        PluginDescriptor language = new PluginDescriptor(
+                "fixture-language",
+                PluginKind.LANGUAGE,
+                List.of(),
+                List.of(PluginCapability.SYNTAX),
+                new DetectionRules(
+                        List.of(".fixture"), List.of(), List.of(), List.of(), List.of()),
+                Map.of());
+        PluginDescriptor framework = new PluginDescriptor(
+                "fixture-framework",
+                PluginKind.FRAMEWORK,
+                List.of("fixture-language"),
+                List.of(PluginCapability.GRAPH),
+                new DetectionRules(
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(new DetectionAlternative(
+                                List.of("framework.marker"),
+                                List.of(),
+                                List.of(),
+                                List.of("**/*.fixture"),
+                                List.of()))),
+                Map.of());
+        PluginRegistry registry = new PluginRegistry(List.of(language, framework));
+        List<String> paths = new java.util.ArrayList<>(IntStream.range(0, 70)
+                .mapToObj(index -> "services/shop/src/Thing%02d.fixture".formatted(index))
+                .toList());
+        paths.add("services/shop/framework.marker");
+        paths.add("tools/Outside.fixture");
+        paths.sort(String::compareTo);
+
+        ProjectCapabilities selected = new ProjectSelector(registry).select(
+                new RepositoryFacts("abc1234", paths, Map.of()));
+
+        assertThat(selected.repositoryPlugins())
+                .containsExactly("fixture-language", "fixture-framework");
+        assertThat(selected.detectionEvidence().get("fixture-framework"))
+                .hasSize(64)
+                .contains("root:services/shop")
+                .doesNotContain("root:.");
+    }
+
+    @Test
+    void automatic_detection_retains_every_matching_framework_root() {
+        PluginDescriptor language = new PluginDescriptor(
+                "fixture-language",
+                PluginKind.LANGUAGE,
+                List.of(),
+                List.of(PluginCapability.SYNTAX),
+                new DetectionRules(
+                        List.of(".fixture"), List.of(), List.of(), List.of(), List.of()),
+                Map.of());
+        PluginDescriptor framework = new PluginDescriptor(
+                "fixture-framework",
+                PluginKind.FRAMEWORK,
+                List.of("fixture-language"),
+                List.of(PluginCapability.GRAPH),
+                new DetectionRules(
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(new DetectionAlternative(
+                                List.of(),
+                                List.of(),
+                                List.of(),
+                                List.of(),
+                                List.of(new ContentMarker("package.json", "fixture-framework"))))),
+                Map.of());
+        PluginRegistry registry = new PluginRegistry(List.of(language, framework));
+
+        ProjectCapabilities selected = new ProjectSelector(registry).select(
+                new RepositoryFacts(
+                        "abc1234",
+                        List.of(
+                                "apps/admin/package.json",
+                                "apps/admin/source.fixture",
+                                "apps/store/package.json",
+                                "apps/store/source.fixture"),
+                        Map.of(
+                                "apps/admin/package.json", "fixture-framework",
+                                "apps/store/package.json", "fixture-framework")));
+
+        assertThat(selected.repositoryPlugins())
+                .containsExactly("fixture-language", "fixture-framework");
+        assertThat(selected.detectionEvidence().get("fixture-framework"))
+                .contains("root:apps/admin", "root:apps/store");
     }
 }

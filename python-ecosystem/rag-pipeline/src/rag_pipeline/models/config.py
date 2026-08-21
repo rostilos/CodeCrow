@@ -107,6 +107,17 @@ class RAGConfig(BaseModel):
         default_factory=lambda: int(os.getenv("QDRANT_UPSERT_BATCH_SIZE", "128")),
         ge=1,
     )
+    qdrant_upsert_max_payload_bytes: int = Field(
+        default_factory=lambda: int(os.getenv(
+            "QDRANT_UPSERT_MAX_PAYLOAD_BYTES",
+            str(8 * 1024 * 1024),
+        )),
+        ge=1024,
+    )
+    full_index_concurrency: int = Field(
+        default_factory=lambda: int(os.getenv("RAG_FULL_INDEX_CONCURRENCY", "1")),
+        ge=1,
+    )
     rag_mutation_lease_seconds: int = Field(
         default_factory=lambda: int(os.getenv("RAG_MUTATION_LEASE_SECONDS", "300")),
         ge=30,
@@ -116,6 +127,12 @@ class RAGConfig(BaseModel):
             os.getenv("RAG_MUTATION_ACQUIRE_TIMEOUT_SECONDS", "5")
         ),
         ge=0,
+    )
+    architecture_finalization_timeout_seconds: float = Field(
+        default_factory=lambda: float(
+            os.getenv("RAG_ARCHITECTURE_FINALIZATION_TIMEOUT_SECONDS", "600")
+        ),
+        ge=1,
     )
     revision_preflight_cache_entries: int = Field(
         default_factory=lambda: int(

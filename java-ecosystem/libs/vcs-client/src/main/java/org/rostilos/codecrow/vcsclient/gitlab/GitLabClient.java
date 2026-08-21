@@ -477,6 +477,17 @@ public class GitLabClient implements VcsClient {
             return body.string();
         }
     }
+
+    @Override
+    public List<String> listRepositoryFiles(
+            String workspaceId,
+            String repoIdOrSlug,
+            String commit,
+            int maxFiles
+    ) throws IOException {
+        return repositoryApi.listFiles(
+                workspaceId, repoIdOrSlug, commit, maxFiles);
+    }
     
     @Override
     public String getLatestCommitHash(String workspaceId, String repoIdOrSlug, String branchName) throws IOException {

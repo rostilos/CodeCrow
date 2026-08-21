@@ -271,6 +271,70 @@ class TestIndexRepository:
         assert events.qsize() == 1
         assert events.get_nowait() == {"completedBatches": 99}
 
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_stream_emits_heartbeat_while_indexer_is_quiet(
+        self,
+        mock_get,
+        monkeypatch,
+    ):
+        _, im = _mock_singletons()
+        release = threading.Event()
+        stats = IndexStats(
+            namespace="ns", document_count=10, chunk_count=50,
+            last_updated="2024-01-01", workspace="ws", project="proj",
+            branch="main",
+        )
+
+        def quiet_index(**_kwargs):
+            release.wait(timeout=1)
+            return stats
+
+        im.index_repository.side_effect = quiet_index
+        mock_get.return_value = (_, im)
+        import rag_pipeline.api.routers.index as index_router
+
+        monkeypatch.setattr(
+            index_router,
+            "INDEX_STREAM_HEARTBEAT_SECONDS",
+            0.01,
+        )
+        req = MagicMock()
+        req.repo_path = "/tmp/repo"
+        req.workspace = "ws"
+        req.project = "proj"
+        req.branch = "main"
+        req.commit = "abc"
+        req.preserve_other_branches = False
+        req.include_patterns = None
+        req.exclude_patterns = None
+        req.project_type = None
+        req.source_root = None
+        req.source_tree_sha256 = None
+        req.collection_target = "target"
+        req.reuse_collection_target = None
+
+        response = index_router.index_repository_stream(req)
+
+        async def consume():
+            items = []
+            iterator = response.body_iterator.__aiter__()
+            first = await iterator.__anext__()
+            items.append(first)
+            release.set()
+            async for item in iterator:
+                items.append(item)
+            return items
+
+        events = [json.loads(
+            (item.decode() if isinstance(item, bytes) else item)
+            .removeprefix("data: ").strip()
+        ) for item in asyncio.run(consume())]
+
+        assert events[0]["type"] == "heartbeat"
+        assert events[0]["stage"] == "starting"
+        assert events[0]["elapsedMs"] >= 0
+        assert events[-1]["type"] == "complete"
+
     def test_orphan_cleanup_removes_only_old_owned_stream_directories(
         self,
         tmp_path,

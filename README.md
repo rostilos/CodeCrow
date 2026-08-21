@@ -115,8 +115,9 @@ below.
 | Go (`.go`)                                                                                                               |      ✅      |             ✅             |         ✅         |         ✅         |
 | PHP / PHTML (`.php`, `.inc`, `.phtml`)                                                                                   |      ✅      |             ✅             |         ✅         |         ✅         |
 | C# (`.cs`), Rust (`.rs`)                                                                                                 |      ✅      |             ✅             |         ✅         |         —          |
-| TSX (`.tsx`)                                                                                                             |      ✅      |             ✅             |         ✅         |         —          |
-| Bash / Shell, C, C++, CSS, Haskell, HTML, JSON, Ruby, Scala                                                              |      ✅      |             ✅             |      generic       |         —          |
+| TSX (`.tsx`)                                                                                                             |      ✅      |             ✅             |         ✅         | framework-dependent |
+| Ruby (`.rb`)                                                                                                             |      ✅      |             ✅             |      generic       | framework-dependent |
+| Bash / Shell, C, C++, CSS, Haskell, HTML, JSON, Scala                                                                    |      ✅      |             ✅             |      generic       |         —          |
 | Kotlin, Swift, Lua, Perl, COBOL, Objective-C, SQL, R, SCSS, Vue/Svelte SFCs, YAML/TOML/XML, Markdown/RST, and other text |      ✅      |          fallback          |      generic       |         —          |
 
 `generic` means language-aware or text chunking without a dedicated semantic RAG
@@ -124,6 +125,9 @@ query. TSX uses the TypeScript RAG parser/query compatibility path but is not
 included in the TypeScript repository-fact session. C, C++, and Ruby ship RAG
 parser packages but currently have no dedicated semantic query, so the table
 reports their resulting generic chunk behavior rather than package availability.
+`framework-dependent` means the base language tier does not emit those facts,
+but a selected framework plugin does. Ember can additionally enrich conservative
+`.hbs` template structure; this is not a general Handlebars language plugin.
 
 Exact plugin facts are bounded, typed declarations and relationships. JavaScript,
 TypeScript, and PHP maintain repository-scoped resolution sessions; Go, Java, and
@@ -135,9 +139,15 @@ replaces model review with a preset defect-rule engine.
 | Plugin         | Requires         | Deterministic Context                                                                                                                          |
 | :------------- | :--------------- | :--------------------------------------------------------------------------------------------------------------------------------------------- |
 | Spring         | Java             | Components, combined controller routes, dependency injection, beans, configuration, and Spring Data repository inheritance                     |
+| Quarkus        | Java             | CDI beans/injection, JAX-RS resources/routes, configuration-property uses and key/profile metadata, schedules, channels, and Panache topology  |
 | FastAPI        | Python           | Applications, routers and route prefixes, HTTP/WebSocket routes, `Depends`, middleware, lifespan handlers, and exception handlers              |
+| Django         | Python           | AppConfig, installed apps/middleware/root URL configuration, URL paths/includes, views, models/relations, middleware hooks, and signal receivers |
+| Ember.js       | `json` (auto-detected via `package.json`) | Router maps, route/controller/component/service/model roles, service injection, Ember Data relationships, and `.hbs` ownership/invocations    |
+| Express.js     | `json` (auto-detected via `package.json`) | Applications and routers, HTTP routes, router mounts, middleware, and error-handler topology from JS/TS source                                 |
+| Next.js        | `json` (auto-detected via `package.json`) | File-system pages and routes, HTTP handlers, layouts, middleware, client/server boundaries, Server Actions, and data loaders from JS/TS source |
 | Magento 2      | PHP              | Module topology, DI and plugins, events, routes and ACLs, layouts, blocks, templates and themes, Web APIs, queues, schemas, and related source |
 | Hyvä           | Magento 2        | ViewModel registry, layout/template, Alpine state/event, REST/Web API, DI, and bounded PHP call-chain relations                                |
+| Ruby on Rails  | Ruby             | Routes/mounts, controllers/actions, models, associations/callbacks, and Active Job queues, `perform`, retry, and discard declarations          |
 | Data contracts | Language-neutral | Exact GraphQL, Protocol Buffers, JSON Schema, and explicit contract-path field declarations and references across languages                    |
 
 Plugins are selected automatically from bounded facts at the pinned repository

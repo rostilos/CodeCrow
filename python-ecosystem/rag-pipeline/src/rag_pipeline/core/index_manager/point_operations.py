@@ -52,6 +52,7 @@ class PointOperations:
         client: QdrantClient,
         embed_model,
         batch_size: int = 50,
+        max_upsert_payload_bytes: int = 8 * 1024 * 1024,
         embedding_batch_size: Optional[int] = None,
         max_embedding_workers: int = 1,
         embedding_dim: int | None = None,
@@ -61,6 +62,8 @@ class PointOperations:
     ):
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
+        if max_upsert_payload_bytes <= 0:
+            raise ValueError("max_upsert_payload_bytes must be positive")
         if embedding_batch_size is not None and embedding_batch_size <= 0:
             raise ValueError("embedding_batch_size must be positive")
         if max_embedding_workers <= 0:
@@ -73,6 +76,7 @@ class PointOperations:
         self.embed_model = embed_model
         # ``batch_size`` remains the public/legacy Qdrant write batch setting.
         self.batch_size = batch_size
+        self.max_upsert_payload_bytes = max_upsert_payload_bytes
         self.embedding_batch_size = embedding_batch_size or batch_size
         self.max_embedding_workers = max_embedding_workers
         self.embedding_dim = embedding_dim
@@ -421,6 +425,49 @@ class PointOperations:
         return PointWriteResult(successful, tuple(skipped_points))
 
     @staticmethod
+    def _serialized_point_size(point: PointStruct) -> int:
+        """Return the exact compact JSON size of one point on the REST wire."""
+        payload = point.model_dump(mode="json", exclude_none=True)
+        return len(json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8"))
+
+    def _payload_bounded_batches(
+        self,
+        points: List[PointStruct],
+    ) -> list[tuple[List[PointStruct], int]]:
+        """Pack points below a conservative request-body budget.
+
+        Qdrant enforces a byte limit independently of the configured point-count
+        batch. Opaque repository snapshots can be hundreds of kilobytes each,
+        so a count-only batch may otherwise allocate and transmit a 30-50 MB
+        request only to have Qdrant reject and recursively retry it.
+        """
+        if not points:
+            return []
+        # Reserve space for the REST request envelope and JSON separators.
+        request_overhead = 256
+        batches: list[tuple[List[PointStruct], int]] = []
+        current: List[PointStruct] = []
+        current_size = request_overhead
+        for point in points:
+            point_size = self._serialized_point_size(point) + 1
+            if (
+                current
+                and current_size + point_size > self.max_upsert_payload_bytes
+            ):
+                batches.append((current, current_size))
+                current = []
+                current_size = request_overhead
+            current.append(point)
+            current_size += point_size
+        if current:
+            batches.append((current, current_size))
+        return batches
+
+    @staticmethod
     def _status_code(exception: Exception) -> int | None:
         status_code = getattr(exception, "status_code", None)
         if isinstance(status_code, int):
@@ -484,6 +531,30 @@ class PointOperations:
         """Write a batch with bounded retry and rejected-request subdivision."""
         if not points:
             return PointWriteResult()
+
+        bounded_batches = self._payload_bounded_batches(points)
+        if len(bounded_batches) > 1:
+            logger.info(
+                "Splitting %s Qdrant points into %s byte-bounded requests "
+                "before write (estimated_bytes=%s limit=%s)",
+                len(points),
+                len(bounded_batches),
+                sum(size for _, size in bounded_batches),
+                self.max_upsert_payload_bytes,
+            )
+            successful = 0
+            skipped_points: list[PointStruct] = []
+            offset = batch_offset
+            for bounded_batch, _estimated_bytes in bounded_batches:
+                batch_result = self._upsert_resilient(
+                    collection_name,
+                    bounded_batch,
+                    batch_offset=offset,
+                )
+                successful += batch_result.successful
+                skipped_points.extend(batch_result.skipped_points)
+                offset += len(bounded_batch)
+            return PointWriteResult(successful, tuple(skipped_points))
 
         error = None
         for attempt in range(1, self.upsert_max_attempts + 1):
@@ -659,6 +730,49 @@ class PointOperations:
         next_batch = 0
         write_buffer: list[PointStruct] = []
         started = time.perf_counter()
+
+        # Deterministic context uses zero vectors and can contain large opaque
+        # snapshot payloads. Running those batches through the embedding pool
+        # creates several complete PointStruct batches concurrently for no
+        # benefit and was a major source of transient memory pressure. Build
+        # and persist one bounded slice at a time instead.
+        if chunk_data and all(
+            self._is_architecture_chunk(chunk)
+            for _, chunk in chunk_data
+        ):
+            for offset in range(0, len(chunk_data), self.embedding_batch_size):
+                point_batch = self.embed_and_create_points(
+                    chunk_data[offset:offset + self.embedding_batch_size],
+                    reuse_collection_name=reuse_collection_name,
+                    metrics=operation_metrics,
+                )
+                batch_result = self.upsert_points_detailed(
+                    collection_name,
+                    point_batch,
+                )
+                successful += batch_result.successful
+                failed += batch_result.failed
+                logger.info(
+                    "RAG deterministic-context batch completed "
+                    "operation_id=%s points=%s skipped=%s",
+                    operation_id,
+                    len(point_batch),
+                    batch_result.failed,
+                )
+            logger.info(
+                "RAG point pipeline completed operation_id=%s chunks=%s "
+                "successful=%s failed=%s reused=0 embedded=0 duration_ms=%s "
+                "embedding_concurrency=0 embedding_batch_size=%s "
+                "qdrant_batch_size=%s",
+                operation_id,
+                len(chunk_data),
+                successful,
+                failed,
+                round((time.perf_counter() - started) * 1000),
+                self.embedding_batch_size,
+                self.batch_size,
+            )
+            return successful, failed
 
         def submit_available(executor: ThreadPoolExecutor) -> None:
             nonlocal next_batch

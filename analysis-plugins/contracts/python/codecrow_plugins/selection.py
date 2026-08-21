@@ -2,13 +2,26 @@ from __future__ import annotations
 
 import hashlib
 import json
+from bisect import bisect_left
+from collections.abc import Iterable
 from pathlib import PurePosixPath
 from typing import Mapping
 
 from .api import DetectionAlternative, PluginDescriptor, PluginKind, ProjectCapabilities, RepositoryFacts
+from .plugin_glob import plugin_glob_matches
 from .registry import PluginRegistry
 
 MAX_DETECTION_EVIDENCE_PER_PLUGIN = 64
+
+
+def _bounded_evidence(evidence: Iterable[str]) -> tuple[str, ...]:
+    """Keep dispatch-critical roots when descriptive evidence is capped."""
+    ordered = tuple(sorted(set(evidence)))
+    roots = tuple(item for item in ordered if item.startswith("root:"))
+    non_roots = tuple(item for item in ordered if not item.startswith("root:"))
+    retained_roots = roots[:MAX_DETECTION_EVIDENCE_PER_PLUGIN]
+    remaining = MAX_DETECTION_EVIDENCE_PER_PLUGIN - len(retained_roots)
+    return tuple(sorted((*retained_roots, *non_roots[:remaining])))
 
 
 def _under_source_root(path: str, source_root: str | None) -> bool:
@@ -42,6 +55,15 @@ def _under_root(path: str, root: str) -> str | None:
     return path[len(prefix):] if path.startswith(prefix) else None
 
 
+def _paths_under_root(paths: tuple[str, ...], root: str) -> tuple[str, ...]:
+    if not root:
+        return paths
+    prefix = root + "/"
+    start = bisect_left(paths, prefix)
+    end = bisect_left(paths, prefix + "\U0010ffff", lo=start)
+    return paths[start:end]
+
+
 def _group_evidence(group: DetectionAlternative, facts: RepositoryFacts) -> tuple[str, ...] | None:
     candidate_sets = [
         _suffix_roots(facts.paths, relative)
@@ -68,7 +90,10 @@ def _group_evidence(group: DetectionAlternative, facts: RepositoryFacts) -> tupl
     if facts.source_root is not None:
         candidate_roots.intersection_update({facts.source_root})
 
-    for root in sorted(candidate_roots, key=lambda value: (value.count("/"), value)):
+    matched_evidence: set[str] = set()
+    matched_roots = 0
+    marker_items = tuple(sorted(facts.marker_contents.items()))
+    for root in sorted(candidate_roots):
         file_all_hits = tuple(
             f"{root}/{relative}" if root else relative
             for relative in group.files_all
@@ -81,19 +106,19 @@ def _group_evidence(group: DetectionAlternative, facts: RepositoryFacts) -> tupl
         )
         if group.files_any and not file_any_hits:
             continue
+        rooted_paths = _paths_under_root(facts.paths, root)
+        root_prefix_length = len(root) + 1 if root else 0
         pattern_hits_all = {
             pattern: tuple(
-                path for path in facts.paths
-                if (relative := _under_root(path, root)) is not None
-                and PurePosixPath(relative).match(pattern)
+                path for path in rooted_paths
+                if plugin_glob_matches(pattern, path[root_prefix_length:])
             )
             for pattern in group.path_patterns_all
         }
         pattern_hits_any = {
             pattern: tuple(
-                path for path in facts.paths
-                if (relative := _under_root(path, root)) is not None
-                and PurePosixPath(relative).match(pattern)
+                path for path in rooted_paths
+                if plugin_glob_matches(pattern, path[root_prefix_length:])
             )
             for pattern in group.path_patterns_any
         }
@@ -114,9 +139,9 @@ def _group_evidence(group: DetectionAlternative, facts: RepositoryFacts) -> tupl
         pattern_marker_hits = tuple(
             (marker, path)
             for marker in group.content_pattern_markers
-            for path, content in facts.marker_contents.items()
+            for path, content in marker_items
             if (relative := _under_root(path, root)) is not None
-            and PurePosixPath(relative).match(marker.path_pattern)
+            and plugin_glob_matches(marker.path_pattern, relative)
             and marker.contains in content
         )
         if any(
@@ -137,8 +162,11 @@ def _group_evidence(group: DetectionAlternative, facts: RepositoryFacts) -> tupl
             f"content-pattern:{marker.path_pattern}:{path}:{marker.contains}"
             for marker, path in pattern_marker_hits
         )
-        return tuple(sorted(evidence)[:MAX_DETECTION_EVIDENCE_PER_PLUGIN])
-    return None
+        matched_evidence.update(evidence)
+        matched_roots += 1
+        if matched_roots == MAX_DETECTION_EVIDENCE_PER_PLUGIN:
+            break
+    return _bounded_evidence(matched_evidence) if matched_evidence else None
 
 
 def _rule_evidence(descriptor: PluginDescriptor, facts: RepositoryFacts) -> tuple[str, ...] | None:
@@ -171,7 +199,7 @@ def _rule_evidence(descriptor: PluginDescriptor, facts: RepositoryFacts) -> tupl
     evidence = {f"extension:{path}" for path in extension_hits}
     for matched in group_evidence:
         evidence.update(matched)
-    return tuple(sorted(evidence)[:MAX_DETECTION_EVIDENCE_PER_PLUGIN])
+    return _bounded_evidence(evidence)
 
 
 class ProjectSelector:
