@@ -12,28 +12,11 @@ DEFAULT_MAX_FILE_SIZE_BYTES = 512 * 1024
 class RAGConfig(BaseModel):
     """Structural index configuration."""
 
-    qdrant_url: str = Field(
-        default_factory=lambda: os.getenv("QDRANT_URL", "http://qdrant:6333")
-    )
-    qdrant_api_key: str = Field(
-        default_factory=lambda: os.getenv("QDRANT_API_KEY", "")
-    )
-    qdrant_collection_prefix: str = Field(
-        default_factory=lambda: os.getenv("QDRANT_COLLECTION_PREFIX", "codecrow")
-    )
-    qdrant_timeout_seconds: int = Field(
-        default_factory=lambda: int(os.getenv("QDRANT_TIMEOUT_SECONDS", "30")),
-        ge=1,
-    )
-    qdrant_upsert_batch_size: int = Field(
-        default_factory=lambda: int(os.getenv("QDRANT_UPSERT_BATCH_SIZE", "128")),
-        ge=1,
-    )
-    qdrant_upsert_max_payload_bytes: int = Field(
-        default_factory=lambda: int(os.getenv(
-            "QDRANT_UPSERT_MAX_PAYLOAD_BYTES", str(8 * 1024 * 1024)
-        )),
-        ge=1024,
+    structural_index_root: str = Field(
+        default_factory=lambda: os.getenv(
+            "STRUCTURAL_INDEX_ROOT",
+            "/var/lib/codecrow/structural-index",
+        )
     )
 
     full_index_concurrency: int = Field(
@@ -56,25 +39,12 @@ class RAGConfig(BaseModel):
         ),
         ge=1,
     )
-    revision_preflight_cache_entries: int = Field(
+    review_generation_ttl_seconds: int = Field(
         default_factory=lambda: int(
-            os.getenv("RAG_REVISION_PREFLIGHT_CACHE_ENTRIES", "512")
+            os.getenv("RAG_REVIEW_GENERATION_TTL_SECONDS", "21600")
         ),
-        ge=1,
+        ge=300,
     )
-    revision_preflight_cache_ttl_seconds: int = Field(
-        default_factory=lambda: int(
-            os.getenv("RAG_REVISION_PREFLIGHT_CACHE_TTL_SECONDS", "0")
-        ),
-        ge=0,
-    )
-    revision_preflight_max_concurrency: int = Field(
-        default_factory=lambda: int(
-            os.getenv("RAG_REVISION_PREFLIGHT_MAX_CONCURRENCY", "2")
-        ),
-        ge=1,
-    )
-
     chunk_size: int = Field(default=8000)
     chunk_overlap: int = Field(default=200)
     max_file_size_bytes: int = Field(
@@ -102,15 +72,6 @@ class RAGConfig(BaseModel):
     max_files_per_index: int = Field(
         default_factory=lambda: int(os.getenv("RAG_MAX_FILES_PER_INDEX", "50000"))
     )
-    max_identifiers_per_query: int = Field(
-        default_factory=lambda: int(os.getenv("RAG_MAX_IDENTIFIERS_PER_QUERY", "100")),
-        description=(
-            "Maximum identifiers in one deterministic MatchAny query batch; "
-            "every batch is processed up to the global matching-point limit."
-        ),
-    )
-
-
 class IndexStats(BaseModel):
     namespace: str
     document_count: int
@@ -124,3 +85,4 @@ class IndexStats(BaseModel):
     generation_manifest_sha256: Optional[str] = None
     source_tree_sha256: Optional[str] = None
     collection_target: Optional[str] = None
+    generation_member_count: Optional[int] = None

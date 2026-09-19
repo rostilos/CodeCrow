@@ -15,6 +15,7 @@ import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexGenerationRepository;
 import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepository;
 import org.rostilos.codecrow.core.service.AnalysisJobService;
+import org.rostilos.codecrow.core.service.RepositoryIndexJobQueueService;
 import org.rostilos.codecrow.ragengine.branch.BranchIndexBuildAdmissionService;
 import org.rostilos.codecrow.ragengine.branch.BranchIndexGenerationBuildService;
 import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
@@ -27,7 +28,6 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -55,6 +55,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
     private final RagPipelineClient pipelineClient;
     private final BranchIndexGenerationBuildService generationBuildService;
     private final BranchIndexBuildAdmissionService buildAdmissionService;
+    private final RepositoryIndexJobQueueService queueService;
+    private final RagRepresentationIdentityService representationIdentityService;
 
     @Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
@@ -67,7 +69,9 @@ public class RagOperationsServiceImpl implements RagOperationsService {
             RagBranchIndexGenerationRepository generationRepository,
             RagPipelineClient pipelineClient,
             BranchIndexGenerationBuildService generationBuildService,
-            BranchIndexBuildAdmissionService buildAdmissionService) {
+            BranchIndexBuildAdmissionService buildAdmissionService,
+            RepositoryIndexJobQueueService queueService,
+            RagRepresentationIdentityService representationIdentityService) {
         this.trackingService = trackingService;
         this.lockService = lockService;
         this.jobService = jobService;
@@ -76,6 +80,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         this.pipelineClient = pipelineClient;
         this.generationBuildService = generationBuildService;
         this.buildAdmissionService = buildAdmissionService;
+        this.queueService = queueService;
+        this.representationIdentityService = representationIdentityService;
     }
 
     @Override
@@ -121,61 +127,6 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 project.getId(), branchName);
     }
 
-    @Override
-    public boolean deletePrFiles(Project project, int prNumber) {
-        if (!ragApiEnabled) {
-            return true;
-        }
-        try {
-            Set<String> targets = new LinkedHashSet<>(
-                    generationRepository.findCollectionNamesByProjectIdAndStatusIn(
-                            project.getId(),
-                            List.of(
-                                    RagBranchIndexGenerationStatus.ACTIVE,
-                                    RagBranchIndexGenerationStatus.SUPERSEDED)));
-            if (targets.isEmpty()) {
-                return true;
-            }
-
-            boolean successful = true;
-            for (String target : targets) {
-                RagPipelineClient.PrFilesDeletionOutcome outcome;
-                try {
-                    outcome = pipelineClient.deletePrFilesWithOutcome(
-                            project.getWorkspace().getName(),
-                            project.getNamespace(),
-                            prNumber,
-                            target);
-                } catch (RuntimeException failure) {
-                    log.warn(
-                            "Failed to delete PR #{} repository-index points for project={} target={}: {}",
-                            prNumber, project.getId(), target, failure.getMessage());
-                    return false;
-                }
-                if (!outcome.successful()) {
-                    successful = false;
-                    log.warn(
-                            "Failed to delete PR #{} repository-index points for project={} target={}: "
-                                    + "status={} detail={}",
-                            prNumber,
-                            project.getId(),
-                            outcome.targetLabel(),
-                            outcome.statusCode() != null
-                                    ? outcome.statusCode() : outcome.failure(),
-                            outcome.detail());
-                    if (outcome.shouldStopRemainingTargets()) {
-                        break;
-                    }
-                }
-            }
-            return successful;
-        } catch (Exception failure) {
-            log.warn("Failed to delete PR #{} repository-index points for project={}: {}",
-                    prNumber, project.getId(), failure.getMessage());
-            return false;
-        }
-    }
-
     /**
      * Compatibility entry point used by branch analysis. The diff is not an
      * indexing input: every accepted revision creates a complete immutable
@@ -190,17 +141,54 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         if (!isRagEnabled(project)) {
             return false;
         }
+        String branch = normalizeRequired(branchName, "branchName");
+        String revision = normalizeRequired(revisionValue, "revision");
+        String primary = getBaseBranch(project);
+        if (!branch.equals(primary) && !shouldHaveBranchIndex(project, branch)) {
+            emitEvent(events, Map.of(
+                    "type", "info",
+                    "state", "rag_skipped",
+                    "message", "Branch is outside the configured analysis target/push patterns"));
+            return false;
+        }
+        Job queued = queueService.enqueue(
+                project, branch, revision, JobTriggerSource.WEBHOOK);
+        emitEvent(events, Map.of(
+                "type", "status",
+                "state", "rag_queued",
+                "message", "Repository generation queued for branch '" + branch + "'",
+                "jobId", queued.getExternalId()));
+        return true;
+    }
 
+    @Override
+    public boolean executeQueuedBranchGeneration(
+            Project project,
+            String branchName,
+            String revisionValue,
+            Job queuedJob) {
+        if (!isRagEnabled(project)) {
+            if (queuedJob != null) {
+                jobService.skipJob(queuedJob, "Repository indexing is disabled");
+            }
+            return false;
+        }
+
+        Consumer<Map<String, Object>> events = null;
         String branch = normalizeRequired(branchName, "branchName");
         String revision = normalizeRequired(revisionValue, "revision");
         String primary = getBaseBranch(project);
         if (!branch.equals(primary)
-                && !shouldHaveBranchIndex(project, branch)
-                && !shouldCreateTransientBranchIndex(project, branch)) {
+                && !shouldHaveBranchIndex(project, branch)) {
+            if (queuedJob != null) {
+                jobService.skipJob(
+                        queuedJob,
+                        "Branch is outside the configured analysis target/push patterns");
+            }
             emitEvent(events, Map.of(
                     "type", "info",
                     "state", "rag_skipped",
-                    "message", "Branch is not configured for retained or temporary repository indexing"));
+                    "message", "Branch is outside the configured analysis target/push patterns"));
             return false;
         }
 
@@ -218,16 +206,24 @@ public class RagOperationsServiceImpl implements RagOperationsService {
             return false;
         }
 
-        Job job = null;
+        Job job = queuedJob;
         BranchIndexBuildAdmissionService.AdmittedBuild admission = null;
         boolean executionStarted = false;
         boolean publicationCompleted = false;
         boolean primaryBranch = branch.equals(primary);
+        boolean operatorRefresh = queuedJob != null
+                && queuedJob.getTriggerSource() == JobTriggerSource.UI;
         try {
             Optional<RagBranchIndexRepository.ActiveGenerationCoordinates> active =
                     activeGeneration(project, branch);
+            Optional<String> representationFingerprint =
+                    representationIdentityService.currentProjectFingerprint(project);
             if (active.isPresent()
-                    && revision.equals(active.get().getRevision())) {
+                    && revision.equals(active.get().getRevision())
+                    && !operatorRefresh
+                    && (representationFingerprint.isEmpty()
+                        || representationFingerprint.get().equals(
+                                active.get().getRepresentationFingerprint()))) {
                 if (primaryBranch) {
                     trackingService.preparePublishedGenerationForUpdate(
                             project,
@@ -237,11 +233,12 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                             active.get().getChunkCount(),
                             active.get().getActivatedAt());
                 }
-                emitEvent(events, Map.of(
-                        "type", "info",
-                        "state", "rag_complete",
-                        "message", "Repository index already represents branch '"
-                                + branch + "' at commit " + revision));
+                if (job != null) {
+                    jobService.completeJob(job, Map.of(
+                            "status", "reused",
+                            "branch", branch,
+                            "revision", revision));
+                }
                 return true;
             }
 
@@ -253,9 +250,15 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                     branch,
                     revision,
                     kind,
-                    JobTriggerSource.WEBHOOK,
+                    queuedJob != null && queuedJob.getTriggerSource() != null
+                            ? queuedJob.getTriggerSource()
+                            : JobTriggerSource.SCHEDULED,
                     lock.get(),
-                    BranchIndexBuildAdmissionService.BuildOrigin.AUTOMATIC);
+                    operatorRefresh
+                            ? BranchIndexBuildAdmissionService.BuildOrigin.OPERATOR
+                            : BranchIndexBuildAdmissionService.BuildOrigin.AUTOMATIC,
+                    representationFingerprint.orElse(null),
+                    queuedJob);
             job = admission.job();
             jobService.info(
                     job,
@@ -484,12 +487,9 @@ public class RagOperationsServiceImpl implements RagOperationsService {
     }
 
     private RagBranchIndexKind indexKind(Project project, String branch) {
-        if (branch.equals(getBaseBranch(project))) {
-            return RagBranchIndexKind.PRIMARY;
-        }
-        return shouldHaveBranchIndex(project, branch)
-                ? RagBranchIndexKind.DURABLE
-                : RagBranchIndexKind.TRANSIENT;
+        return branch.equals(getBaseBranch(project))
+                ? RagBranchIndexKind.PRIMARY
+                : RagBranchIndexKind.DURABLE;
     }
 
     private static VcsRepoBinding requireBinding(Project project) {

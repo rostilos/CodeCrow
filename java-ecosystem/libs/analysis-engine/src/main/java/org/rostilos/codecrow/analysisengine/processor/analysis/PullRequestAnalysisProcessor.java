@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.analysisengine.processor.analysis;
 
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
@@ -41,10 +42,13 @@ import java.security.GeneralSecurityException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Collections;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
@@ -79,6 +83,7 @@ public class PullRequestAnalysisProcessor {
     private final FileSnapshotService fileSnapshotService;
     private final PrIssueTrackingService prIssueTrackingService;
     private final AstScopeEnricher astScopeEnricher;
+    private final RagOperationsService ragOperationsService;
 
     @Autowired(required = false)
     private ScmEvidenceService scmEvidenceService;
@@ -99,6 +104,7 @@ public class PullRequestAnalysisProcessor {
             FileSnapshotService fileSnapshotService,
             PrIssueTrackingService prIssueTrackingService,
             AstScopeEnricher astScopeEnricher,
+            RagOperationsService ragOperationsService,
             @Autowired(required = false) ApplicationEventPublisher eventPublisher
     ) {
         this.codeAnalysisService = codeAnalysisService;
@@ -114,6 +120,7 @@ public class PullRequestAnalysisProcessor {
         this.fileSnapshotService = fileSnapshotService;
         this.prIssueTrackingService = prIssueTrackingService;
         this.astScopeEnricher = astScopeEnricher;
+        this.ragOperationsService = ragOperationsService;
     }
 
     public interface EventConsumer {
@@ -215,6 +222,7 @@ public class PullRequestAnalysisProcessor {
             }
 
             AiAnalysisRequest aiRequest = aiRequests.get(0);
+            observeTargetBranchGeneration(project, aiRequest, consumer);
             String diffFingerprint = computeReviewIdentity(aiRequest);
             boolean promptDryRun = PromptDryRunMode.isEnabledForProject(project.getId());
 
@@ -247,16 +255,28 @@ public class PullRequestAnalysisProcessor {
             }
 
             Map<String, Object> aiResponse;
+            Map<String, String> proposedFileContents = extractFileContents(aiRequest);
             Optional<LocalRepositorySnapshotService.PreparedSnapshot> localSnapshot = Optional.empty();
             if (!promptDryRun
                     && aiRequest.getUseMcpTools()) {
                 VcsRepoInfo repository = ProjectVcsInfoRetriever.getVcsInfo(project);
-                localSnapshot = localRepositorySnapshotService.prepare(
+                List<String> proposedTreeChangedFiles = proposedTreeChangedFiles(aiRequest);
+                List<String> proposedTreeDeletedFiles = proposedTreeDeletedFiles(aiRequest);
+                proposedFileContents = completeProposedFileContents(
+                        project,
+                        aiRequest,
+                        proposedFileContents,
+                        proposedTreeChangedFiles,
+                        proposedTreeDeletedFiles);
+                localSnapshot = localRepositorySnapshotService.prepareForReview(
                         repository.getVcsConnection(),
                         repository.getRepoWorkspace(),
                         repository.getRepoSlug(),
                         request.getTargetBranchName(),
-                        aiRequest.getTargetHeadCommitHash());
+                        aiRequest.getTargetHeadCommitHash(),
+                        proposedFileContents,
+                        proposedTreeChangedFiles,
+                        proposedTreeDeletedFiles);
             }
 
             if (localSnapshot.isPresent()) {
@@ -291,7 +311,7 @@ public class PullRequestAnalysisProcessor {
             }
 
             // === Extract file contents from enrichment data for line hash computation ===
-            Map<String, String> fileContents = new java.util.HashMap<>(extractFileContents(aiRequest));
+            Map<String, String> fileContents = new java.util.HashMap<>(proposedFileContents);
             java.util.Set<String> allChangedFiles = new java.util.HashSet<>(aiRequest.getChangedFiles());
 
             // === VCS fallback: when enrichment data is empty (disabled, failed, or
@@ -433,6 +453,33 @@ public class PullRequestAnalysisProcessor {
         }
     }
 
+    private void observeTargetBranchGeneration(
+            Project project,
+            AiAnalysisRequest request,
+            EventConsumer consumer) {
+        String targetBranch = request.getTargetBranchName();
+        String targetRevision = request.getTargetHeadCommitHash();
+        if (targetBranch == null || targetBranch.isBlank()
+                || targetRevision == null || targetRevision.isBlank()) {
+            return;
+        }
+        try {
+            ragOperationsService.refreshBranchGeneration(
+                    project,
+                    targetBranch,
+                    targetRevision,
+                    event -> emitEvent(consumer, event));
+        } catch (RuntimeException unavailable) {
+            log.info(
+                    "PR target repository-index refresh deferred: project={}, branch={}, detail={}",
+                    project.getId(), targetBranch, unavailable.getMessage());
+            emitEvent(consumer, Map.of(
+                    "type", "warning",
+                    "state", "rag_deferred",
+                    "message", "Target-branch repository context will refresh asynchronously"));
+        }
+    }
+
     private static void requireActiveLease(AnalysisLockService.LockLease lease) throws IOException {
         if (lease == null || lease.isOwnershipLost()) {
             throw lostLeaseException();
@@ -501,9 +548,96 @@ public class PullRequestAnalysisProcessor {
     }
 
     /**
-     * Fetch file contents directly from VCS when enrichment data is empty.
-     * This is the fallback path that ensures file snapshots are always available
-     * for the source code viewer, regardless of enrichment status.
+     * Completes the proposed-tree overlay from the immutable PR source revision.
+     *
+     * <p>Enrichment remains the first source because it has already fetched most
+     * review files. Only changed, non-deleted paths without a usable body are
+     * requested from VCS. Paths that the provider still cannot return remain in
+     * the overlay manifest through {@code changedFiles}, so repository tools
+     * report them as unavailable instead of reading stale target-head source.</p>
+     */
+    private Map<String, String> completeProposedFileContents(
+            Project project,
+            AiAnalysisRequest aiRequest,
+            Map<String, String> enrichedContents,
+            List<String> proposedTreeChangedFiles,
+            List<String> proposedTreeDeletedFiles) {
+        Map<String, String> result = new LinkedHashMap<>();
+        if (enrichedContents != null) {
+            enrichedContents.forEach((path, content) -> {
+                if (path != null && content != null) {
+                    result.putIfAbsent(path, content);
+                }
+            });
+        }
+
+        Set<String> deletedFiles = proposedTreeDeletedFiles == null
+                ? Set.of()
+                : proposedTreeDeletedFiles.stream()
+                        .filter(path -> path != null && !path.isBlank())
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+        deletedFiles.forEach(result::remove);
+
+        LinkedHashSet<String> missingPaths = new LinkedHashSet<>();
+        if (proposedTreeChangedFiles != null) {
+            for (String path : proposedTreeChangedFiles) {
+                if (path != null
+                        && !path.isBlank()
+                        && !deletedFiles.contains(path)
+                        && !result.containsKey(path)) {
+                    missingPaths.add(path);
+                }
+            }
+        }
+        if (missingPaths.isEmpty()) {
+            return result;
+        }
+
+        String sourceRevision = aiRequest.getCurrentCommitHash();
+        if (sourceRevision == null || sourceRevision.isBlank()) {
+            log.warn(
+                    "Proposed-tree overlay is missing {} file body/bodies, but the immutable PR source revision is unavailable; files remain explicitly unavailable",
+                    missingPaths.size());
+            return result;
+        }
+
+        Map<String, String> fetched = fetchFileContentsFromVcs(
+                project,
+                List.copyOf(missingPaths),
+                sourceRevision);
+        fetched.forEach((path, content) -> {
+            if (missingPaths.contains(path) && content != null) {
+                result.putIfAbsent(path, content);
+            }
+        });
+
+        long unavailable = missingPaths.stream()
+                .filter(path -> !result.containsKey(path))
+                .count();
+        if (unavailable > 0) {
+            log.info(
+                    "Proposed-tree overlay could not load {}/{} missing file bodies at source revision {}; they remain explicitly unavailable",
+                    unavailable,
+                    missingPaths.size(),
+                    sourceRevision.substring(0, Math.min(12, sourceRevision.length())));
+        }
+        return result;
+    }
+
+    private List<String> proposedTreeChangedFiles(AiAnalysisRequest request) {
+        List<String> paths = request.getProposedTreeChangedFiles();
+        return paths != null ? paths : request.getChangedFiles();
+    }
+
+    private List<String> proposedTreeDeletedFiles(AiAnalysisRequest request) {
+        List<String> paths = request.getProposedTreeDeletedFiles();
+        return paths != null ? paths : request.getDeletedFiles();
+    }
+
+    /**
+     * Fetch the requested source-tree file contents directly from VCS.
+     * Used both to complete a proposed-tree review overlay and as the source
+     * viewer fallback when enrichment returned no bodies.
      *
      * @param project      the project with VCS connection info
      * @param changedFiles list of file paths to fetch
@@ -529,7 +663,7 @@ public class PullRequestAnalysisProcessor {
                     commitHash,
                     100_000 // 100 KB max per file, consistent with enrichment service
             );
-            log.info("VCS fallback: fetched {}/{} file contents for source viewer (commit={})",
+            log.info("VCS file fetch: fetched {}/{} requested bodies (commit={})",
                     contents.size(), changedFiles.size(),
                     commitHash != null ? commitHash.substring(0, Math.min(7, commitHash.length())) : "null");
             return contents;
@@ -902,17 +1036,9 @@ public class PullRequestAnalysisProcessor {
             }
 
             // Record the PR's HEAD commit as analyzed
-            boolean multiBranch = project.getConfiguration() != null
-                    && project.getConfiguration().ragConfig() != null
-                    && project.getConfiguration().ragConfig().isMultiBranchEnabled();
-            if (multiBranch) {
-                analyzedCommitService.recordPrCommitsAnalyzed(
-                        project, analyzedHashes, analysis,
-                        sourceBranch, targetBranch, targetBaseRevision);
-            } else {
-                analyzedCommitService.recordPrCommitsAnalyzed(
-                        project, List.of(commitHash), analysis);
-            }
+            analyzedCommitService.recordPrCommitsAnalyzed(
+                    project, analyzedHashes, analysis,
+                    sourceBranch, targetBranch, targetBaseRevision);
 
             log.info("Recorded PR commit {} as analyzed (branch={}, analysis={})",
                     commitHash.substring(0, Math.min(7, commitHash.length())),

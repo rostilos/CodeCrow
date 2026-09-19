@@ -117,6 +117,108 @@ class LocalRepoClientTest {
     }
 
     @Test
+    void reviewReadsUseProposedContentAndNeverSubstituteTargetSourceForChangedPaths() throws Exception {
+        Files.createDirectories(repository.resolve("src"));
+        Files.writeString(repository.resolve("src/Changed.java"), "class Changed { int oldValue; }\n");
+        Files.writeString(repository.resolve("src/Unchanged.java"), "class Unchanged {}\n");
+        Path overlay = repository.resolve("review-overlay");
+        Files.createDirectories(overlay.resolve("files/src"));
+        Files.writeString(
+                overlay.resolve("files/src/Changed.java"),
+                "class Changed { int proposedValue; }\n");
+        Files.writeString(
+                overlay.resolve("manifest.json"),
+                """
+                {"changedFiles":["src/Changed.java","src/Unavailable.java","src/Deleted.java"],"deletedFiles":["src/Deleted.java"]}
+                """);
+        VcsMcpClient remote = mock(VcsMcpClient.class);
+        LocalRepoClient client = new LocalRepoClient(
+                remote,
+                repository.toString(),
+                "team",
+                "repo",
+                "main",
+                "target-head-sha",
+                overlay.toString());
+
+        LocalRepoClient.ReviewFileContent changed = client.getReviewFileContent(
+                "team", "repo", "src/Changed.java");
+        LocalRepoClient.ReviewFileContent unchanged = client.getReviewFileContent(
+                "team", "repo", "src/Unchanged.java");
+        LocalRepoClient.ReviewFileContent deleted = client.getReviewFileContent(
+                "team", "repo", "src/Deleted.java");
+        LocalRepoClient.ReviewFileContent unavailable = client.getReviewFileContent(
+                "team", "repo", "src/Unavailable.java");
+
+        assertThat(changed.content()).contains("proposedValue");
+        assertThat(changed.source()).isEqualTo("review-overlay");
+        assertThat(unchanged.content()).isEqualTo("class Unchanged {}\n");
+        assertThat(unchanged.source()).isEqualTo("target-head");
+        assertThat(deleted.exists()).isFalse();
+        assertThat(deleted.deleted()).isTrue();
+        assertThat(unavailable.exists()).isFalse();
+        assertThat(unavailable.unavailable()).isTrue();
+        verifyNoInteractions(remote);
+    }
+
+    @Test
+    void unchangedReviewPathFallsBackOnlyToPinnedTargetRevision() throws Exception {
+        Path overlay = repository.resolve("review-overlay");
+        Files.createDirectories(overlay.resolve("files"));
+        Files.writeString(
+                overlay.resolve("manifest.json"),
+                "{\"changedFiles\":[],\"deletedFiles\":[]}");
+        VcsMcpClient remote = mock(VcsMcpClient.class);
+        when(remote.getBranchFileContent(
+                "team", "repo", "target-head-sha", "generated/Unchanged.java"))
+                .thenReturn("class Generated {}\n");
+        LocalRepoClient client = new LocalRepoClient(
+                remote,
+                repository.toString(),
+                "team",
+                "repo",
+                "main",
+                "target-head-sha",
+                overlay.toString());
+
+        LocalRepoClient.ReviewFileContent result = client.getReviewFileContent(
+                "team", "repo", "generated/Unchanged.java");
+
+        assertThat(result.content()).isEqualTo("class Generated {}\n");
+        assertThat(result.source()).isEqualTo("target-head");
+        verify(remote).getBranchFileContent(
+                "team", "repo", "target-head-sha", "generated/Unchanged.java");
+    }
+
+    @Test
+    void reviewReadsRejectAnotherRepositoryAndEscapingPaths() throws Exception {
+        Path overlay = repository.resolve("review-overlay");
+        Files.createDirectories(overlay.resolve("files"));
+        Files.writeString(
+                overlay.resolve("manifest.json"),
+                "{\"changedFiles\":[],\"deletedFiles\":[]}");
+        VcsMcpClient remote = mock(VcsMcpClient.class);
+        LocalRepoClient client = new LocalRepoClient(
+                remote,
+                repository.toString(),
+                "team",
+                "repo",
+                "main",
+                "target-head-sha",
+                overlay.toString());
+
+        assertThatThrownBy(() -> client.getReviewFileContent(
+                "other-team", "repo", "src/App.java"))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("request-bound repository");
+        assertThatThrownBy(() -> client.getReviewFileContent(
+                "team", "repo", "../secret.txt"))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("escapes the request-scoped tree");
+        verifyNoInteractions(remote);
+    }
+
+    @Test
     void listsMatchingTargetDirectoriesLocallyInStableOrder() throws Exception {
         Files.createDirectories(repository.resolve("src/main"));
         Files.writeString(repository.resolve("README.md"), "read me");

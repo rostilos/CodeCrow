@@ -15,9 +15,12 @@ from .prompt_gate_profile import stable_prompt_digest
 
 
 _FULL_OBJECT_ID = re.compile(r"^[0-9a-fA-F]{40,64}$")
+_STRUCTURAL_RETRIEVAL_STATES = frozenset({
+    "complete",
+    "bounded",
+    "unavailable",
+})
 _REQUIRED_EVENT_STATES = {
-    "pr_context_preflight_started",
-    "pr_context_preflight_completed",
     "stage_0_started",
     "stage_1_started",
     "verification_started",
@@ -95,10 +98,20 @@ def audit_prompt_dry_run(
         for state in _sequence(pipeline.get("eventStates"))
         if str(state)
     }
-    retrieval_states = [
-        str(state)
-        for state in _sequence(retrieval.get("deterministicStates"))
-    ]
+    raw_retrieval_states = retrieval.get("deterministicStates")
+    retrieval_states = (
+        [str(state) for state in raw_retrieval_states]
+        if isinstance(raw_retrieval_states, list)
+        else []
+    )
+    retrieval_states_observable = (
+        isinstance(raw_retrieval_states, list)
+        and all(
+            isinstance(state, str)
+            and state in _STRUCTURAL_RETRIEVAL_STATES
+            for state in raw_retrieval_states
+        )
+    )
 
     simulated_findings = simulation.get("simulatedFindingsProduced")
     requires_verification = (
@@ -290,7 +303,7 @@ def audit_prompt_dry_run(
         "currentSourceChars",
         "diffChars",
         "metadataChars",
-        "ragChars",
+        "structuralContextChars",
         "pluginChars",
         "projectRulesChars",
         "taskContextChars",
@@ -308,9 +321,6 @@ def audit_prompt_dry_run(
             and guard.get("boundary") == "LLMFactory.create_llm"
         ),
         "fullPipelineContext": simulation.get("fullPipelineContext") is True,
-        "prOverlayIndexingExercised": (
-            simulation.get("prIndexMutationEnabled") is True
-        ),
         "promptCountIntegrity": (
             artifact.get("promptCount") == len(prompts)
             and declared_stage_counts == dict(sorted(actual_stage_counts.items()))
@@ -373,10 +383,7 @@ def audit_prompt_dry_run(
             and hunk_receipt_ids == sorted(hunk_receipt_ids)
             and hunk_receipts_valid
         ),
-        "deterministicRetrievalComplete": (
-            bool(retrieval_states)
-            and set(retrieval_states) == {"complete"}
-        ),
+        "structuralRetrievalObservable": retrieval_states_observable,
         "noPluginDiagnostics": (
             plugin_diagnostics.get("count") == 0
             and plugin_diagnostics.get("exceptionCount") == 0
@@ -404,7 +411,16 @@ def audit_prompt_dry_run(
                 for item in stage1_assembly
             )
         ),
-        "ragEvidenceDelivered": _positive_int(quality.get("ragEvidenceEntries")),
+        "structuralPromptMetricsPresent": all(
+            isinstance(quality.get(field), int)
+            and not isinstance(quality.get(field), bool)
+            and quality[field] >= 0
+            for field in (
+                "structuralEvidenceEntries",
+                "structuralRelationMaps",
+                "boundedStructuralRelationMaps",
+            )
+        ),
         "stage1PromptBounded": (
             isinstance(stage1_max_tokens, int)
             and not isinstance(stage1_max_tokens, bool)
@@ -439,6 +455,16 @@ def audit_prompt_dry_run(
             "candidates": dict(candidates),
             "hunkReceipts": list(hunk_receipts),
             "retrieval": dict(retrieval),
+            "structuralRetrieval": {
+                "states": retrieval_states,
+                "mode": (
+                    "disabled"
+                    if not retrieval_states
+                    else "degraded"
+                    if set(retrieval_states) != {"complete"}
+                    else "complete"
+                ),
+            },
             "pluginDiagnostics": dict(plugin_diagnostics),
             "promptAssemblyDiagnostics": stage1_assembly,
             "stage1": dict(quality),

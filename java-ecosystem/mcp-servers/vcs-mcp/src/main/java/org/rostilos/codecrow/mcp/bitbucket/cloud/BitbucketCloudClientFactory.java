@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.mcp.bitbucket.cloud;
 
 import org.rostilos.codecrow.mcp.bitbucket.BitbucketConfiguration;
+import org.rostilos.codecrow.mcp.generic.McpCredentialSource;
 import org.rostilos.codecrow.mcp.generic.VcsMcpClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,15 +24,15 @@ public class BitbucketCloudClientFactory {
         String workspace = System.getProperty("workspace");
         String repoSlug = System.getProperty("repo.slug");
         
-        String accessToken = System.getProperty("accessToken");
+        String accessToken = McpCredentialSource.accessToken();
         String bearerToken;
         
         if (accessToken != null && !accessToken.isEmpty()) {
             LOGGER.info("Using provided access token for authentication");
             bearerToken = accessToken;
         } else {
-            String oAuthClient = System.getProperty("oAuthClient");
-            String oAuthSecret = System.getProperty("oAuthSecret");
+            String oAuthClient = McpCredentialSource.oauthClient();
+            String oAuthSecret = McpCredentialSource.oauthSecret();
             LOGGER.info("Using OAuth client credentials for authentication");
             bearerToken = BitbucketCloudClientImpl.negotiateBearerToken(
                     oAuthClient,
@@ -80,12 +81,12 @@ public class BitbucketCloudClientFactory {
 //
 //        }
         
-        String accessToken = System.getProperty("accessToken");
+        String accessToken = McpCredentialSource.accessToken();
         if (accessToken == null || accessToken.isEmpty()) {
-            if(System.getProperty("oAuthClient") == null) {
+            if(McpCredentialSource.oauthClient() == null) {
                 LOGGER.warn("Neither accessToken nor oAuthClient provided");
             }
-            if(System.getProperty("oAuthSecret") == null) {
+            if(McpCredentialSource.oauthSecret() == null) {
                 LOGGER.warn("Neither accessToken nor oAuthSecret provided");
             }
         }

@@ -1,5 +1,6 @@
-from types import SimpleNamespace
 import time
+from dataclasses import replace
+from types import SimpleNamespace
 
 from codecrow_plugins import (
     ArchitecturePacket,
@@ -121,9 +122,11 @@ def test_repository_runtime_reports_timeout_as_recoverable_and_stops():
 class _StaticRepositorySession:
     def __init__(self, analysis: RepositoryAnalysis):
         self.analysis = analysis
+        self.dependencies = None
         self.finished = False
 
-    def finish(self, _dependencies):
+    def finish(self, dependencies):
+        self.dependencies = dependencies
         self.finished = True
         return PluginOutcome.handled(self.analysis)
 
@@ -141,6 +144,42 @@ def _packet(key: str) -> ArchitecturePacket:
         (path,),
         (GraphFact("test-fact", key, "declares", key, path),),
     )
+
+
+def test_repository_symbol_provenance_is_not_semantic_identity_and_rebases():
+    symbol = _symbol("Orders")
+    php = replace(symbol, contributing_plugin_ids=("php",))
+    magento = replace(symbol, contributing_plugin_ids=("magento",))
+
+    assert php == magento
+    assert hash(php) == hash(magento)
+    assert replace(
+        php,
+        path="services/orders/src/Orders.py",
+    ).contributing_plugin_ids == ("php",)
+
+
+def test_repository_runtime_merges_symbol_contributors_before_composition():
+    symbol = _symbol("Orders")
+    first = _StaticRepositorySession(RepositoryAnalysis(symbols=(symbol,)))
+    second = _StaticRepositorySession(RepositoryAnalysis(symbols=(symbol,)))
+    runtime = SimpleNamespace(
+        MAX_REPOSITORY_SYMBOLS=10,
+        MAX_ARCHITECTURE_PACKETS=10,
+    )
+    handle = RepositoryAnalysisHandle(
+        runtime,
+        [("php", first), ("framework", second)],
+        [],
+    )
+
+    analysis, diagnostics = handle.finish()
+
+    assert diagnostics == ()
+    assert len(analysis.symbols) == 1
+    assert analysis.symbols[0] == symbol
+    assert analysis.symbols[0].contributing_plugin_ids == ("framework", "php")
+    assert second.dependencies.symbols[0].contributing_plugin_ids == ("php",)
 
 
 def test_repository_symbol_overflow_is_fatal_and_does_not_publish_a_slice():

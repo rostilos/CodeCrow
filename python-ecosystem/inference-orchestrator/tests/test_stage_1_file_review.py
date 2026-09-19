@@ -8,7 +8,6 @@ import asyncio
 import json
 import logging
 import re
-import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -28,31 +27,53 @@ from service.review.orchestrator.stage_1_file_review import (
     _prepare_stage1_prompt_material,
     _render_stage1_prompt,
     _estimated_prompt_tokens,
-    _build_stage1_rag_invocations,
-    _stage1_rag_evidence_bundles,
+    _build_stage1_invocations,
+    _stage1_relation_briefing_capsule,
+    _safe_stage1_relation_briefing_capsule,
+    _stage1_batch_token_limit,
+    structural_relation_evidence,
+    structural_tool_observation_evidence,
+    _structural_retrieval_state,
+    _consume_stage1_agent_tool_events,
     _format_batch_metadata_json,
     _iter_batch_enrichment_metadata,
     _extract_metadata_identifiers,
-    _flatten_deterministic_context,
-    _rag_context_has_chunks,
     Stage1RagState,
     Stage1ReviewUnitState,
-    fetch_batch_rag_context,
     execute_stage_1_file_reviews,
     review_file_batch,
     _supports_structured_output,
-    _deduplicate_pr_stale_chunks,
     _extract_calibrated_issues,
     _invoke_stage_1_batch_llm,
+    _salvage_stage1_schema_tool_outputs,
+    _Stage1BatchReviewAccumulator,
+    _Stage1DirectFallbackPrompt,
     _validate_batch_review_coverage,
+    _validate_required_agent_tool_sequence,
     create_smart_batches_wrapper,
-    DETERMINISTIC_RAG_MAX_CHUNKS,
     STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET,
     STAGE1_METADATA_CHAR_BUDGET,
+    STAGE1_AGENT_MAX_STEPS,
+    STAGE1_AGENT_MAX_OUTPUT_TOKENS,
     STAGE1_AGENT_TOOL_NAMES,
+    STAGE1_VCS_TOOL_NAMES,
 )
-from service.review.orchestrator.context_helpers import format_rag_context
 from service.review.candidate_ledger import CandidateEvidenceLedger
+from service.review.orchestrator.stage_1_tool_inventory import (
+    STAGE1_BRANCH_FILE_TOOL_NAME,
+    STAGE1_LEGACY_VCS_TOOL_NAMES,
+    STAGE1_MINIMAL_REVIEW_CONTEXT_TOOL_NAME,
+    STAGE1_REQUIRED_STRUCTURAL_TOOL_SEQUENCE,
+    STAGE1_REVIEW_CONTEXT_TOOL_NAME,
+    STAGE1_STRUCTURAL_TOOL_NAMES,
+)
+from service.review.orchestrator.stage_1_agent_telemetry import (
+    Stage1AgentTelemetryRecorder,
+)
+from service.review.orchestrator.stage_1_rag_retrieval import (
+    STAGE1_RELATION_BRIEFING_MAX_RELATIONS,
+    has_exact_proposed_tree_binding,
+)
 from model.multi_stage import (
     FileGroup,
     ReviewFile,
@@ -61,10 +82,170 @@ from model.multi_stage import (
     ReviewPlan,
 )
 from model.output_schemas import CodeReviewIssue
+from llm.reasoning_policy import ReasoningEffort
 from utils.diff_processor import DiffChangeType, DiffFile, DiffProcessor, ProcessedDiff
 
 
+def _required_structural_tool_events(*, first_observation=None):
+    """Return one successful event for every mandatory graph workflow step."""
+    default_observation = {
+        "status": "ready",
+        "snapshot": {"kind": "proposed_tree"},
+        "coverage": {"state": "complete"},
+    }
+    return tuple(
+        SimpleNamespace(
+            action=SimpleNamespace(tool=tool_name),
+            observation=(
+                first_observation
+                if index == 0 and first_observation is not None
+                else default_observation
+            ),
+        )
+        for index, tool_name in enumerate(
+            STAGE1_REQUIRED_STRUCTURAL_TOOL_SEQUENCE
+        )
+    )
+
+
 # ── chunk_files ──────────────────────────────────────────────────
+
+
+def test_required_agent_tool_sequence_requires_order_and_success():
+    required = STAGE1_REQUIRED_STRUCTURAL_TOOL_SEQUENCE
+    completed = [
+        SimpleNamespace(
+            action=SimpleNamespace(tool=name),
+            observation={"status": "ready"},
+        )
+        for name in required
+    ]
+
+    _validate_required_agent_tool_sequence(completed, required)
+
+    with pytest.raises(RuntimeError, match="workflow was incomplete"):
+        _validate_required_agent_tool_sequence(completed[:-1], required)
+    failed = list(completed)
+    failed[1] = SimpleNamespace(
+        action=SimpleNamespace(tool=required[1]),
+        observation={"status": "error", "error": "graph unavailable"},
+    )
+    with pytest.raises(RuntimeError, match="graph operation failed"):
+        _validate_required_agent_tool_sequence(failed, required)
+
+
+def test_required_agent_tool_sequence_allows_completed_repeated_steps():
+    required = STAGE1_REQUIRED_STRUCTURAL_TOOL_SEQUENCE
+    completed_with_repeats = [
+        SimpleNamespace(
+            action=SimpleNamespace(tool=name),
+            observation={"status": "ready"},
+        )
+        for name in (
+            required[0],
+            required[0],
+            required[1],
+            required[0],
+            required[2],
+            required[2],
+            required[3],
+        )
+    ]
+
+    _validate_required_agent_tool_sequence(completed_with_repeats, required)
+
+    skipped = list(completed_with_repeats)
+    skipped[2] = SimpleNamespace(
+        action=SimpleNamespace(tool=required[2]),
+        observation={"status": "ready"},
+    )
+    with pytest.raises(RuntimeError, match="workflow was violated"):
+        _validate_required_agent_tool_sequence(skipped, required)
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    (
+        (None, "unavailable"),
+        ({}, "unavailable"),
+        (
+            {
+                "status": "error",
+                "error": "request timed out",
+                "coverage": {"state": "complete"},
+            },
+            "unavailable",
+        ),
+        (
+            {
+                "status": "unavailable",
+                "coverage": {"state": "complete"},
+            },
+            "unavailable",
+        ),
+        (
+            {
+                "unavailable": True,
+                "coverage": {"state": "complete"},
+            },
+            "unavailable",
+        ),
+        (
+            {
+                "error": "transport failed",
+                "coverage": {"state": "complete"},
+            },
+            "unavailable",
+        ),
+        (
+            {
+                "status": "ready",
+                "coverage": {"state": "bounded"},
+            },
+            "bounded",
+        ),
+        ({"status": "ready", "unit": {}}, "complete"),
+        (
+            {
+                "status": "ready",
+                "context": {"coverage": {"graphState": "complete"}},
+            },
+            "complete",
+        ),
+    ),
+)
+def test_structural_retrieval_state_never_completes_degraded_observations(
+    response,
+    expected,
+):
+    assert _structural_retrieval_state(response) == expected
+
+
+@pytest.mark.parametrize("tool_name", tuple(STAGE1_STRUCTURAL_TOOL_NAMES))
+@pytest.mark.parametrize("status", ("error", "unavailable"))
+def test_structural_tool_failures_record_unavailable_retrieval(
+    tool_name,
+    status,
+):
+    rag_state = Stage1RagState()
+    _consume_stage1_agent_tool_events(
+        (
+            SimpleNamespace(
+                action=SimpleNamespace(tool=tool_name),
+                observation={
+                    "status": status,
+                    "error": "graph call failed" if status == "error" else None,
+                    "coverage": {},
+                },
+            ),
+        ),
+        visible_evidence_by_id={},
+        rag_state=rag_state,
+        context_holder={},
+    )
+
+    assert rag_state.deterministic_retrieval_states == ["unavailable"]
+
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_batch_llm_attempt_details_do_not_duplicate_owner_warning(caplog):
@@ -85,6 +266,88 @@ async def test_batch_llm_attempt_details_do_not_duplicate_owner_warning(caplog):
         record for record in caplog.records
         if record.levelno >= logging.WARNING
     ]
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_agent_result_without_confidence_does_not_trigger_direct_fallback():
+    class AgentService:
+        async def execute(self, _request):
+            return SimpleNamespace(
+                output={
+                    "reviews": [{
+                        "file": "src/a.py",
+                        "analysis_summary": "No defect found",
+                        "issues": [],
+                    }],
+                },
+                tool_events=(),
+            )
+
+    class DirectLlmMustNotRun:
+        def with_structured_output(self, _schema):
+            raise AssertionError("direct fallback must not run")
+
+    result = await _invoke_stage_1_batch_llm(
+        DirectLlmMustNotRun(),
+        "prompt",
+        ["src/a.py"],
+        agent_service=AgentService(),
+    )
+
+    assert result == []
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_complete_agent_result_reports_structured_repository_tool_error():
+    class AgentService:
+        async def execute(self, _request):
+            return SimpleNamespace(
+                output=FileReviewBatchOutput(
+                    reviews=[_clean_file_review("src/a.py")]
+                ),
+                tool_events=(SimpleNamespace(
+                    action=SimpleNamespace(
+                        tool="exploreReviewContext",
+                        tool_input={"question": "Inspect the changed path"},
+                    ),
+                    observation=json.dumps({
+                        "status": "error",
+                        "status_code": 503,
+                        "error": "review context unavailable",
+                        "snapshot": {},
+                        "evidence": {"relations": []},
+                    }),
+                ),),
+            )
+
+    class DirectLlmMustNotRun:
+        def with_structured_output(self, _schema):
+            raise AssertionError("complete agent result must remain accepted")
+
+    events = []
+    telemetry = Stage1AgentTelemetryRecorder(
+        batch_number=1,
+        batch_paths=("src/a.py",),
+        agent_requested=True,
+    )
+    result = await _invoke_stage_1_batch_llm(
+        DirectLlmMustNotRun(),
+        "prompt",
+        ["src/a.py"],
+        agent_service=AgentService(),
+        event_callback=events.append,
+        agent_telemetry=telemetry,
+    )
+
+    assert result == []
+    assert [event["state"] for event in events] == [
+        "stage_1_agent_degraded",
+    ]
+    assert "exploreReviewContext" in events[0]["message"]
+    payload = telemetry.payload()
+    assert payload["degraded"] is True
+    assert payload["toolSequence"][0]["status"] == "failed"
+    assert payload["fallback"]["used"] is False
 
 
 def _clean_file_review(path):
@@ -109,10 +372,50 @@ def _packing_request(paths, enrichment):
         currentCommitHash="a" * 40,
         commitHash="a" * 40,
         maxAllowedTokens=200000,
+        useMcpTools=False,
     )
     request.get_rag_branch.return_value = "feature"
     request.get_rag_base_branch.return_value = "main"
     return request
+
+
+def _bind_exact_proposed_tree(request):
+    """Populate the request-scoped target snapshot and complete PR overlay."""
+    request.projectWorkspace = "workspace"
+    request.projectNamespace = "project"
+    request.targetBranchName = "main"
+    request.currentCommitHash = "source-head-sha"
+    request.commitHash = None
+    request.localRepoRevision = "target-head-sha"
+    request.localRepoPath = "/tmp/target-snapshot"
+    request.localReviewOverlayPath = "/tmp/review-overlay"
+    request.ragCollectionTarget = "sealed-target-generation"
+    request.ragBaseGenerationManifestSha256 = "b" * 64
+    request.ragReviewGenerationStatus = "ready"
+    request.ragReviewCollectionTarget = "sealed-review-generation"
+    request.ragReviewGenerationManifestSha256 = "c" * 64
+    request.ragReviewGenerationError = None
+    request.get_target_head_commit_hash.return_value = "target-head-sha"
+    return request
+
+
+def test_exact_proposed_tree_binding_accepts_dedicated_rag_snapshot_path():
+    request = _bind_exact_proposed_tree(_packing_request([], MagicMock()))
+    request.localRepoPath = ""
+    request.localRagRepoPath = "/tmp/structural-target-snapshot"
+
+    assert has_exact_proposed_tree_binding(request) is True
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("ragCollectionTarget", "ragBaseGenerationManifestSha256"),
+)
+def test_exact_proposed_tree_binding_requires_sealed_generation_receipt(field):
+    request = _bind_exact_proposed_tree(_packing_request([], MagicMock()))
+    setattr(request, field, None)
+
+    assert has_exact_proposed_tree_binding(request) is False
 
 
 class TestBatchReviewCoverage:
@@ -147,6 +450,391 @@ class TestBatchReviewCoverage:
                 output,
                 ["src/a.py", "src/b.py"],
             )
+
+    def test_multiple_stage1_schema_tool_payloads_are_salvaged(self):
+        accumulator = _Stage1BatchReviewAccumulator.for_paths((
+            "src/a.py",
+            "src/b.py",
+            "src/c.py",
+        ))
+        events = tuple(
+            SimpleNamespace(
+                action=SimpleNamespace(
+                    tool="FileReviewBatchOutput",
+                    tool_input={
+                        "reviews": [
+                            _clean_file_review(path).model_dump()
+                        ],
+                    },
+                ),
+                observation="accepted",
+            )
+            for path in ("src/a.py", "src/b.py")
+        )
+
+        salvaged = _salvage_stage1_schema_tool_outputs(
+            events,
+            accumulator,
+            ("src/a.py", "src/b.py", "src/c.py"),
+            generation_prompt="agent prompt",
+            source_phase="agent",
+        )
+
+        assert salvaged == 2
+        assert [review.file for review in accumulator.output().reviews] == [
+            "src/a.py",
+            "src/b.py",
+        ]
+        assert accumulator.missing_paths() == ["src/c.py"]
+
+    def test_malformed_mixed_schema_call_is_completed_by_corrected_singleton(
+        self,
+    ):
+        paths = tuple(f"src/file-{index}.xml" for index in range(1, 10))
+        malformed_review = _clean_file_review(paths[-1]).model_dump()
+        malformed_review.pop("analysis_summary")
+        events = (
+            SimpleNamespace(
+                action=SimpleNamespace(
+                    tool="FileReviewBatchOutput",
+                    tool_input={
+                        "reviews": [
+                            *(
+                                _clean_file_review(path).model_dump()
+                                for path in paths[:-1]
+                            ),
+                            malformed_review,
+                        ],
+                    },
+                ),
+                observation="schema validation failed",
+            ),
+            SimpleNamespace(
+                action=SimpleNamespace(
+                    tool="FileReviewBatchOutput",
+                    tool_input={
+                        "reviews": [
+                            _clean_file_review(paths[-1]).model_dump()
+                        ],
+                    },
+                ),
+                observation="accepted correction",
+            ),
+        )
+        accumulator = _Stage1BatchReviewAccumulator.for_paths(paths)
+
+        salvaged = _salvage_stage1_schema_tool_outputs(
+            events,
+            accumulator,
+            paths,
+            generation_prompt="agent prompt",
+            source_phase="agent",
+        )
+
+        assert salvaged == len(paths)
+        assert accumulator.missing_paths() == []
+        assert [
+            review.file for review in accumulator.output().reviews
+        ] == list(paths)
+
+    def test_malformed_schema_salvage_keeps_raw_duplicate_ambiguous(self):
+        paths = ("src/a.py", "src/b.py")
+        malformed_duplicate = _clean_file_review(paths[0]).model_dump()
+        malformed_duplicate.pop("analysis_summary")
+        event = SimpleNamespace(
+            action=SimpleNamespace(
+                tool="FileReviewBatchOutput",
+                tool_input={
+                    "reviews": [
+                        _clean_file_review(paths[0]).model_dump(),
+                        malformed_duplicate,
+                        _clean_file_review(paths[1]).model_dump(),
+                    ],
+                },
+            ),
+            observation="schema validation failed",
+        )
+        accumulator = _Stage1BatchReviewAccumulator.for_paths(paths)
+
+        salvaged = _salvage_stage1_schema_tool_outputs(
+            (event,),
+            accumulator,
+            paths,
+            generation_prompt="agent prompt",
+            source_phase="agent",
+        )
+
+        assert salvaged == 1
+        assert [
+            review.file for review in accumulator.output().reviews
+        ] == ["src/b.py"]
+        assert accumulator.missing_paths() == ["src/a.py"]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_fail_closed_agent_merges_rejected_batch_with_correction(
+        self,
+    ):
+        paths = tuple(f"src/file-{index}.xml" for index in range(1, 10))
+        malformed_review = _clean_file_review(paths[-1]).model_dump()
+        malformed_review.pop("analysis_summary")
+        context_event = SimpleNamespace(
+            action=SimpleNamespace(
+                tool=STAGE1_REVIEW_CONTEXT_TOOL_NAME,
+            ),
+            observation={
+                "status": "ready",
+                "snapshot": {"kind": "proposed_tree"},
+                "coverage": {"state": "complete"},
+            },
+        )
+        rejected_schema_event = SimpleNamespace(
+            action=SimpleNamespace(
+                tool="FileReviewBatchOutput",
+                tool_input={
+                    "reviews": [
+                        *(
+                            _clean_file_review(path).model_dump()
+                            for path in paths[:-1]
+                        ),
+                        malformed_review,
+                    ],
+                },
+            ),
+            observation="schema validation failed",
+        )
+
+        class AgentService:
+            def __init__(self):
+                self.requests = []
+
+            async def execute(self, request):
+                self.requests.append(request)
+                return SimpleNamespace(
+                    # The reserved correction contains only the repaired file.
+                    output=FileReviewBatchOutput(reviews=[
+                        _clean_file_review(paths[-1]),
+                    ]),
+                    tool_events=(context_event, rejected_schema_event),
+                )
+
+        class DirectLlmMustNotRun:
+            calls = 0
+
+            def with_structured_output(self, _schema, **_kwargs):
+                self.calls += 1
+                raise AssertionError("direct fallback must not run")
+
+            async def ainvoke(self, _prompt, **_kwargs):
+                self.calls += 1
+                raise AssertionError("direct fallback must not run")
+
+        accumulator = _Stage1BatchReviewAccumulator.for_paths(paths)
+        context_holder = {"response": None}
+        agent_service = AgentService()
+        direct_llm = DirectLlmMustNotRun()
+
+        result = await _invoke_stage_1_batch_llm(
+            direct_llm,
+            "agent prompt",
+            list(paths),
+            agent_service=agent_service,
+            agent_context_holder=context_holder,
+            review_accumulator=accumulator,
+            fail_closed_agent=True,
+        )
+
+        assert result == []
+        assert direct_llm.calls == 0
+        assert len(agent_service.requests) == 1
+        assert context_holder["response"] == context_event.observation
+        assert accumulator.missing_paths() == []
+        assert [
+            review.file for review in accumulator.output().reviews
+        ] == list(paths)
+
+    def test_stage1_schema_salvage_ignores_foreign_and_malformed_events(self):
+        accumulator = _Stage1BatchReviewAccumulator.for_paths(("src/a.py",))
+        valid_payload = {
+            "reviews": [_clean_file_review("src/a.py").model_dump()],
+        }
+        events = (
+            SimpleNamespace(
+                action=SimpleNamespace(
+                    tool="CrossFileAnalysisResult",
+                    tool_input=valid_payload,
+                ),
+                observation="foreign schema",
+            ),
+            SimpleNamespace(
+                action=SimpleNamespace(
+                    tool="FileReviewBatchOutput",
+                    tool_input={"reviews": [{"analysis_summary": "missing file"}]},
+                ),
+                observation="validation error",
+            ),
+            SimpleNamespace(
+                action={
+                    "tool": "FileReviewBatchOutput",
+                    "tool_input": "not a schema payload",
+                },
+                observation="invalid input type",
+            ),
+        )
+
+        salvaged = _salvage_stage1_schema_tool_outputs(
+            events,
+            accumulator,
+            ("src/a.py",),
+            generation_prompt="agent prompt",
+            source_phase="agent",
+        )
+
+        assert salvaged == 0
+        assert accumulator.output().reviews == []
+        assert accumulator.missing_paths() == ["src/a.py"]
+
+    def test_schema_salvage_never_credits_a_later_graph_observation(self):
+        accumulator = _Stage1BatchReviewAccumulator.for_paths(("src/a.py",))
+        events = (
+            SimpleNamespace(
+                action=SimpleNamespace(
+                    tool="FileReviewBatchOutput",
+                    tool_input={
+                        "reviews": [_clean_file_review("src/a.py").model_dump()],
+                    },
+                ),
+                observation="intermediate generation",
+            ),
+            SimpleNamespace(
+                action=SimpleNamespace(tool=STAGE1_REVIEW_CONTEXT_TOOL_NAME),
+                observation={
+                    "status": "ready",
+                    "snapshot": {"kind": "proposed_tree"},
+                    "relations": [],
+                },
+            ),
+        )
+
+        salvaged = _salvage_stage1_schema_tool_outputs(
+            events,
+            accumulator,
+            ("src/a.py",),
+            generation_prompt="agent prompt",
+            source_phase="agent",
+        )
+
+        assert salvaged == 0
+        assert accumulator.missing_paths() == ["src/a.py"]
+
+    def test_stage1_schema_salvage_uses_accumulator_path_and_duplicate_rules(self):
+        accumulator = _Stage1BatchReviewAccumulator.for_paths((
+            "src/a.py",
+            "src/b.py",
+            "src/c.py",
+        ))
+        events = (
+            SimpleNamespace(
+                action={
+                    "tool": "FileReviewBatchOutput",
+                    "tool_input": {
+                        "reviews": [
+                            _clean_file_review("src/a.py").model_dump(),
+                            _clean_file_review("/src/a.py").model_dump(),
+                            _clean_file_review("src/b.py").model_dump(),
+                            _clean_file_review("src/c.py").model_dump(),
+                            _clean_file_review("src/outside.py").model_dump(),
+                        ],
+                    },
+                },
+                observation="accepted",
+            ),
+            SimpleNamespace(
+                action=SimpleNamespace(
+                    tool="FileReviewBatchOutput",
+                    tool_input={
+                        "reviews": [
+                            _clean_file_review("src/a.py").model_dump(),
+                            _clean_file_review("src/b.py").model_dump(),
+                        ],
+                    },
+                ),
+                observation="accepted",
+            ),
+        )
+
+        salvaged = _salvage_stage1_schema_tool_outputs(
+            events,
+            accumulator,
+            ("src/a.py", "src/b.py"),
+            generation_prompt="agent prompt",
+            source_phase="agent",
+        )
+
+        assert salvaged == 2
+        assert [review.file for review in accumulator.output().reviews] == [
+            "src/a.py",
+            "src/b.py",
+        ]
+        assert accumulator.missing_paths() == ["src/c.py"]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_schema_tool_salvage_recovers_only_missing_paths(self):
+        paths = ("src/a.py", "src/b.py", "src/c.py")
+        accumulator = _Stage1BatchReviewAccumulator.for_paths(paths)
+
+        class AgentService:
+            async def execute(self, _request):
+                return SimpleNamespace(
+                    output=None,
+                    tool_events=tuple(
+                        SimpleNamespace(
+                            action=SimpleNamespace(
+                                tool="FileReviewBatchOutput",
+                                tool_input={
+                                    "reviews": [
+                                        _clean_file_review(path).model_dump()
+                                    ],
+                                },
+                            ),
+                            observation="accepted",
+                        )
+                        for path in paths[:2]
+                    ),
+                )
+
+        class StructuredAttempt:
+            async def ainvoke(self, prompt, **_kwargs):
+                assert prompt == "missing-only prompt"
+                return FileReviewBatchOutput(
+                    reviews=[_clean_file_review("src/c.py")]
+                )
+
+        class RecoveryLlm:
+            def with_structured_output(self, _schema, **_kwargs):
+                return StructuredAttempt()
+
+        recovery_requests = []
+
+        async def prepare_recovery(missing_paths):
+            recovery_requests.append(tuple(missing_paths))
+            return _Stage1DirectFallbackPrompt(
+                prompt="missing-only prompt",
+                structural_context_loaded=False,
+            )
+
+        result = await _invoke_stage_1_batch_llm(
+            RecoveryLlm(),
+            "agent prompt",
+            list(paths),
+            agent_service=AgentService(),
+            direct_fallback_prompt_factory=prepare_recovery,
+            review_accumulator=accumulator,
+        )
+
+        assert result == []
+        assert recovery_requests == [("src/c.py",)]
+        assert accumulator.missing_paths() == []
+        assert [review.file for review in accumulator.output().reviews] == list(paths)
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_invalid_structured_coverage_leaves_retry_to_outer_loop(self):
@@ -224,8 +912,47 @@ class TestBatchReviewCoverage:
         request = agent_service.requests[0]
         assert request.prompt == "diff plus prepared RAG evidence"
         assert request.allowed_tool_names == STAGE1_AGENT_TOOL_NAMES
-        assert request.output_schema is None
+        assert request.reasoning_effort is ReasoningEffort.MEDIUM
+        assert request.max_output_tokens == STAGE1_AGENT_MAX_OUTPUT_TOKENS
+        assert request.output_schema is FileReviewBatchOutput
         assert request.metadata["batchPaths"] == ("src/a.py",)
+        assert request.initial_required_tool_name == "getMinimalReviewContext"
+        expected_bindings = {
+            tool_name: {"focusPaths": ("src/a.py",)}
+            for tool_name in STAGE1_STRUCTURAL_TOOL_NAMES
+        }
+        expected_bindings["getReviewFileContent"] = {
+            "contextSuppliedPaths": (),
+        }
+        assert request.tool_argument_bindings == expected_bindings
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_agent_tool_observations_are_not_prompt_citation_evidence(self):
+        class AgentService:
+            async def execute(self, _request):
+                return SimpleNamespace(
+                    output=FileReviewBatchOutput(
+                        reviews=[_clean_file_review("src/a.py")]
+                    ),
+                    tool_events=[SimpleNamespace(
+                        action=SimpleNamespace(tool="searchRepositoryCode"),
+                        observation={
+                            "results": [{
+                                "navigationId": "NAV-candidate",
+                                "path": "src/dependency.py",
+                            }],
+                        },
+                    )],
+                )
+
+        result = await _invoke_stage_1_batch_llm(
+            MagicMock(),
+            "agent review prompt",
+            ["src/a.py"],
+            agent_service=AgentService(),
+        )
+
+        assert result == []
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_agent_fenced_json_is_parsed_without_post_formatting_call(self):
@@ -257,7 +984,7 @@ class TestBatchReviewCoverage:
 
         assert result == []
         assert len(agent_service.requests) == 1
-        assert agent_service.requests[0].output_schema is None
+        assert agent_service.requests[0].output_schema is FileReviewBatchOutput
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_agent_transport_failure_falls_back_to_prepared_prompt(self):
@@ -292,12 +1019,129 @@ class TestBatchReviewCoverage:
         assert events[-1]["state"] == "stage_1_agent_degraded"
         assert "did not produce a complete result" in events[-1]["message"]
         assert "tools were unavailable" not in events[-1]["message"]
+        assert (
+            "no exact proposed-tree context was available"
+            in events[-1]["message"]
+        )
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_agent_batch_deadline_is_passed_to_shared_direct_recovery(
+        self,
+        monkeypatch,
+    ):
+        class AgentService:
+            async def execute(self, request):
+                assert request.timeout_seconds == 17
+                raise TimeoutError(
+                    "Agent execution exceeded its 17s deadline"
+                )
+
+        class StructuredAttempt:
+            async def ainvoke(self, prompt):
+                assert prompt == "prepared direct recovery prompt"
+                return FileReviewBatchOutput(
+                    reviews=[_clean_file_review("src/a.py")]
+                )
+
+        class Llm:
+            def with_structured_output(self, _schema):
+                return StructuredAttempt()
+
+        monkeypatch.setattr(
+            "service.review.orchestrator.stage_1_file_review."
+            "STAGE1_AGENT_TIMEOUT_SECONDS",
+            17,
+        )
+        events = []
+
+        result = await _invoke_stage_1_batch_llm(
+            Llm(),
+            "agent prompt",
+            ["src/a.py"],
+            agent_service=AgentService(),
+            event_callback=events.append,
+            direct_fallback_prompt="prepared direct recovery prompt",
+        )
+
+        assert result == []
+        assert events[-1]["state"] == "stage_1_agent_degraded"
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_local_only_agent_failure_never_calls_direct_fallback(self):
+        class AgentService:
+            async def execute(self, _request):
+                raise RuntimeError("structural tool failed")
+
+        class DirectLlmMustNotRun:
+            def with_structured_output(self, _schema, **_kwargs):
+                raise AssertionError("direct fallback must not run")
+
+            async def ainvoke(self, _prompt, **_kwargs):
+                raise AssertionError("direct fallback must not run")
+
+        with pytest.raises(RuntimeError, match="direct review fallback is disabled"):
+            await _invoke_stage_1_batch_llm(
+                DirectLlmMustNotRun(),
+                "agent prompt",
+                ["src/a.py"],
+                agent_service=AgentService(),
+                direct_fallback_prompt="forbidden direct prompt",
+                fail_closed_agent=True,
+            )
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_agent_failure_reports_loaded_proposed_tree_context(self):
+        class AgentService:
+            async def execute(self, _request):
+                raise RuntimeError("MCP subprocess unavailable")
+
+        class StructuredAttempt:
+            async def ainvoke(self, prompt):
+                assert prompt == "direct prompt with proposed-tree context"
+                return FileReviewBatchOutput(
+                    reviews=[_clean_file_review("src/a.py")]
+                )
+
+        class Llm:
+            def with_structured_output(self, _schema):
+                return StructuredAttempt()
+
+        async def prepare_fallback(_recovery_paths):
+            return _Stage1DirectFallbackPrompt(
+                prompt="direct prompt with proposed-tree context",
+                structural_context_loaded=True,
+            )
+
+        events = []
+        result = await _invoke_stage_1_batch_llm(
+            Llm(),
+            "agent prompt",
+            ["src/a.py"],
+            agent_service=AgentService(),
+            event_callback=events.append,
+            direct_fallback_prompt_factory=prepare_fallback,
+        )
+
+        assert result == []
+        assert events[-1]["state"] == "stage_1_agent_degraded"
+        assert "already-retrieved exact proposed-tree context" in (
+            events[-1]["message"]
+        )
+        assert "no exact proposed-tree context" not in events[-1]["message"]
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_empty_agent_output_uses_mcp_free_direct_fallback(self):
         class AgentService:
             async def execute(self, _request):
-                return SimpleNamespace(output="")
+                return SimpleNamespace(
+                    output="",
+                    tool_events=[SimpleNamespace(
+                        action=SimpleNamespace(tool="searchRepositoryCode"),
+                        observation=json.dumps({
+                            "results": [{"navigationId": "NAV-not-evidence"}],
+                        }),
+                    )],
+                )
 
         class StructuredAttempt:
             async def ainvoke(self, prompt):
@@ -345,8 +1189,10 @@ class TestBatchReviewCoverage:
 
             def __init__(self):
                 self.calls = []
+                self.binding_calls = []
 
-            def with_structured_output(self, _schema, **_kwargs):
+            def with_structured_output(self, _schema, **kwargs):
+                self.binding_calls.append(kwargs)
                 return self
 
             async def ainvoke(self, prompt, **kwargs):
@@ -434,7 +1280,7 @@ class TestBatchReviewCoverage:
 
         assert result == []
         assert len(llm.calls) == 2
-        assert llm.calls[0][1]["extra_body"]["reasoning"] == {
+        assert llm.binding_calls[0]["extra_body"]["reasoning"] == {
             "effort": "low"
         }
         assert llm.calls[1][1]["extra_body"]["reasoning"] == {
@@ -442,7 +1288,7 @@ class TestBatchReviewCoverage:
         }
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_direct_recovery_does_not_rerun_degraded_agent(self):
+    async def test_direct_recovery_does_not_rerun_the_agent(self):
         recovery = json.dumps({
             "reviews": [{
                 "file": "src/a.py",
@@ -488,6 +1334,37 @@ class TestBatchReviewCoverage:
         assert llm.calls[1][1]["extra_body"]["reasoning"] == {
             "effort": "none"
         }
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_local_only_missing_agent_inventory_fails_before_model_call(self):
+        llm, request, prepared, batch = self._length_exhaustion_review_case("{}")
+        request.useMcpTools = True
+        request.mcpLocalOnly = True
+        request.projectWorkspace = "workspace"
+        request.projectNamespace = "project"
+        request.targetBranchName = "main"
+        request.currentCommitHash = "head-revision"
+        request.localRepoRevision = "base-revision"
+        request.localRepoPath = "/staged/base"
+        request.localReviewOverlayPath = "/staged/overlay"
+
+        class IncompleteAgentService:
+            available_tool_names = {STAGE1_BRANCH_FILE_TOOL_NAME}
+
+            async def execute(self, _request):
+                raise AssertionError("agent must not start")
+
+        with pytest.raises(RuntimeError, match="direct review fallback is disabled"):
+            await review_file_batch(
+                llm,
+                request,
+                batch,
+                rag_client=None,
+                prepared_context=prepared,
+                agent_service=IncompleteAgentService(),
+            )
+
+        assert llm.calls == []
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_length_recovery_does_not_accept_truncated_json(self):
@@ -1262,787 +2139,6 @@ class TestStructuredMetadataFormatting:
 
 # ── Deterministic RAG normalization ──────────────────────────────
 
-class TestDeterministicRagNormalization:
-    def test_default_flattening_uses_deterministic_chunk_cap(self):
-        response = {
-            "context": {
-                "changed_files": {
-                    "src/a.py": [
-                        {
-                            "text": f"exact chunk {index}",
-                            "metadata": {"path": f"src/related-{index}.py"},
-                        }
-                        for index in range(125)
-                    ],
-                },
-            },
-        }
-
-        chunks = _flatten_deterministic_context(response)
-
-        assert 0 < len(chunks) <= DETERMINISTIC_RAG_MAX_CHUNKS
-        assert chunks[0]["text"] == "exact chunk 0"
-        assert not any(chunk["text"] == "exact chunk 124" for chunk in chunks)
-
-    def test_flattens_all_deterministic_groups(self):
-        response = {
-            "context": {
-                "chunks": [
-                    {"text": "all chunk", "metadata": {"path": "src/all.py"}},
-                ],
-                "changed_files": {
-                    "src/a.py": [
-                        {"text": "changed", "metadata": {"path": "src/a.py"}},
-                    ],
-                },
-                "related_definitions": {
-                    "Thing": [
-                        {"text": "definition", "metadata": {"path": "src/thing.py"}},
-                    ],
-                },
-            }
-        }
-
-        chunks = _flatten_deterministic_context(response)
-        texts = {chunk["text"] for chunk in chunks}
-
-        assert {"changed", "definition"} <= texts
-        assert "all chunk" not in texts
-        assert all(chunk["_source"] == "deterministic" for chunk in chunks)
-
-    def test_pr_architecture_packet_retains_pr_indexed_freshness(self):
-        response = {
-            "context": {
-                "architecture_context": {
-                    "plugin": [{
-                        "text": "fresh effective plugin relation",
-                        "metadata": {
-                            "path": "__analysis_architecture__/magento/plugin.context",
-                            "pr": True,
-                            "pr_number": 42,
-                            "architecture_kind": "magento-interception",
-                        },
-                    }],
-                },
-            },
-        }
-
-        chunks = _flatten_deterministic_context(response)
-
-        assert len(chunks) == 1
-        assert chunks[0]["_source"] == "pr_indexed"
-        assert chunks[0]["_match_type"] == "architecture_relation"
-
-    def test_distinct_chunks_with_equal_long_prefix_are_not_collapsed(self):
-        shared_prefix = "Deterministic repository architecture context\n" + (
-            "same-prefix " * 60
-        )
-        response = {
-            "context": {
-                "architecture_context": {
-                    "first": [{
-                        "text": shared_prefix + "first-late-fact",
-                        "metadata": {
-                            "path": "__analysis_architecture__/shared.context",
-                            "architecture_kind": "magento-layout",
-                        },
-                    }],
-                    "second": [{
-                        "text": shared_prefix + "second-late-fact",
-                        "metadata": {
-                            "path": "__analysis_architecture__/shared.context",
-                            "architecture_kind": "magento-layout",
-                        },
-                    }],
-                },
-            },
-        }
-
-        chunks = _flatten_deterministic_context(response)
-
-        assert len(chunks) == 2
-        assert {
-            chunk["text"].rsplit(" ", 1)[-1]
-            for chunk in chunks
-        } == {
-            "first-late-fact",
-            "second-late-fact",
-        }
-
-    def test_exact_duplicate_chunk_across_grouped_views_is_collapsed(self):
-        duplicate = {
-            "text": "same exact deterministic fact",
-            "metadata": {
-                "path": "__analysis_architecture__/same.context",
-                "architecture_kind": "magento-layout",
-                "architecture_key": "magento-layout:same:0",
-            },
-        }
-        response = {
-            "context": {
-                "architecture_context": {"packet": [duplicate]},
-                "architecture_related": {"packet": [dict(duplicate)]},
-                "chunks": [dict(duplicate)],
-            },
-        }
-
-        chunks = _flatten_deterministic_context(response)
-
-        assert len(chunks) == 1
-        assert chunks[0]["text"] == "same exact deterministic fact"
-
-    def test_repeated_point_id_across_grouped_views_is_collapsed(self):
-        duplicate = {
-            "id": "qdrant-point-β",
-            "text": "точний повтор 🧭",
-            "metadata": {
-                "path": "src/навігація.py",
-                "start_line": 12,
-                "end_line": 12,
-            },
-        }
-        response = {
-            "context": {
-                "changed_files": {"src/навігація.py": [duplicate]},
-                "related_definitions": {"Навігація": [dict(duplicate)]},
-            },
-        }
-
-        chunks = _flatten_deterministic_context(response)
-
-        assert len(chunks) == 1
-        assert chunks[0]["id"] == "qdrant-point-β"
-
-    def test_equal_unicode_text_at_distinct_ranges_is_preserved(self):
-        text = "return 'однаковий результат ✨'"
-        response = {
-            "context": {
-                "related_definitions": {
-                    "Перший": [{
-                        "text": text,
-                        "metadata": {
-                            "path": "src/приклад.py",
-                            "start_line": 5,
-                            "end_line": 5,
-                        },
-                    }],
-                    "Другий": [{
-                        "text": text,
-                        "metadata": {
-                            "path": "src/приклад.py",
-                            "start_line": 25,
-                            "end_line": 25,
-                        },
-                    }],
-                },
-            },
-        }
-
-        chunks = _flatten_deterministic_context(response)
-
-        assert len(chunks) == 2
-        assert {
-            chunk["metadata"]["start_line"] for chunk in chunks
-        } == {5, 25}
-
-    def test_architecture_relation_limit_round_robins_neutral_kinds(self):
-        response = {
-            "context": {
-                "architecture_context": {
-                    f"packet-{index}": [{
-                        "text": f"relation {index}",
-                        "metadata": {
-                            "path": f"__analysis_architecture__/packet-{index}.context",
-                            "architecture_kind": f"kind-{index % 3}",
-                            "architecture_key": f"packet-{index}",
-                        },
-                    }]
-                    for index in range(9)
-                },
-                "related_definitions": {
-                    "RequiredType": [{
-                        "text": "class RequiredType {}",
-                        "metadata": {"path": "src/RequiredType.php"},
-                    }],
-                },
-            },
-        }
-
-        chunks = _flatten_deterministic_context(response, max_chunks=4)
-
-        relations = [
-            chunk for chunk in chunks
-            if chunk["_match_type"] == "architecture_relation"
-        ]
-        assert {
-            chunk["metadata"]["architecture_kind"] for chunk in relations
-        } == {"kind-0", "kind-1", "kind-2"}
-        assert any(
-            chunk["_match_type"] == "definition" for chunk in chunks
-        )
-
-    def test_architecture_relation_limit_covers_distinct_review_paths_first(self):
-        architecture_context = {
-            f"dominant-{index}": [{
-                "text": f"dominant relation {index}",
-                "metadata": {
-                    "path": (
-                        "__analysis_architecture__/"
-                        f"dominant-{index}.context"
-                    ),
-                    "architecture_kind": f"kind-{index}",
-                    "architecture_key": f"dominant-{index}",
-                },
-                "_matched_on": "src/dominant.py",
-            }]
-            for index in range(8)
-        }
-        architecture_context["quiet"] = [{
-            "text": "quiet file exact relation",
-            "metadata": {
-                "path": "__analysis_architecture__/quiet.context",
-                "architecture_kind": "kind-quiet",
-                "architecture_key": "quiet",
-            },
-            "_matched_on": "src/quiet.py",
-        }]
-        response = {
-            "context": {
-                "architecture_context": architecture_context,
-                "related_definitions": {
-                    "RequiredType": [{
-                        "text": "class RequiredType {}",
-                        "metadata": {"path": "src/RequiredType.php"},
-                    }],
-                },
-            },
-        }
-
-        chunks = _flatten_deterministic_context(response, max_chunks=4)
-
-        assert "quiet file exact relation" in {
-            chunk["text"] for chunk in chunks
-        }
-        assert {
-            chunk["_matched_on"]
-            for chunk in chunks
-            if chunk["_match_type"] == "architecture_relation"
-        } == {"src/dominant.py", "src/quiet.py"}
-
-    def test_related_bodies_precede_surplus_relations_for_same_paths(self):
-        related_paths = ["src/related-a.py", "src/related-b.py"]
-
-        def relation(index):
-            return {
-                "text": f"relation {index}",
-                "metadata": {
-                    "path": (
-                        "__analysis_architecture__/"
-                        f"relation-{index}.context"
-                    ),
-                    "architecture_kind": "python-import",
-                    "architecture_key": f"relation-{index}",
-                    "architecture_paths": ["src/review.py", *related_paths],
-                },
-                "_matched_on": "src/review.py",
-            }
-
-        response = {
-            "context": {
-                "architecture_context": {
-                    "relation-0": [relation(0)],
-                    "relation-1": [relation(1)],
-                },
-                "architecture_related": {
-                    path: [{
-                        "text": f"implementation for {path}",
-                        "metadata": {
-                            "path": path,
-                            "structural_record_type": "source_chunk",
-                        },
-                    }]
-                    for path in related_paths
-                },
-            },
-        }
-
-        chunks = _flatten_deterministic_context(response, max_chunks=4)
-
-        assert [chunk["_match_type"] for chunk in chunks] == [
-            "architecture_relation",
-            "architecture_related",
-            "architecture_related",
-            "architecture_relation",
-        ]
-        assert [
-            chunk["metadata"]["path"] for chunk in chunks[1:3]
-        ] == related_paths
-
-    def test_related_body_survives_related_path_in_match_provenance(self):
-        relation = {
-            "text": "exact relation",
-            "metadata": {
-                "path": "__analysis_architecture__/relation.context",
-                "architecture_kind": "data-contract-reference",
-                "architecture_key": "relation",
-                "architecture_paths": [
-                    "src/review.py",
-                    "src/related.py",
-                ],
-            },
-            "_matched_on": "src/review.py,src/related.py",
-        }
-        response = {
-            "context": {
-                "architecture_context": {"relation": [relation]},
-                "architecture_related": {
-                    "src/related.py": [{
-                        "text": "RELATED_IMPLEMENTATION_BODY",
-                        "metadata": {"path": "src/related.py"},
-                    }],
-                },
-            },
-        }
-
-        chunks = _flatten_deterministic_context(
-            response,
-            max_chunks=2,
-            reviewed_paths=["src/review.py"],
-        )
-
-        assert [chunk["_match_type"] for chunk in chunks] == [
-            "architecture_relation",
-            "architecture_related",
-        ]
-        assert chunks[1]["text"] == "RELATED_IMPLEMENTATION_BODY"
-
-    def test_dense_relations_keep_bounded_relation_source_pairs(self):
-        relation_count = 60
-        architecture_context = {}
-        architecture_related = {}
-        for index in range(relation_count):
-            related_path = f"src/related-{index:02}.py"
-            architecture_context[f"relation-{index:02}"] = [{
-                "text": (
-                    f"RELATION_FACT_{index:02} "
-                    + "relation detail " * 38
-                ),
-                "metadata": {
-                    "path": (
-                        "__analysis_architecture__/"
-                        f"relation-{index:02}.context"
-                    ),
-                    "architecture_kind": f"kind-{index:02}",
-                    "architecture_key": f"relation-{index:02}",
-                    "architecture_paths": [
-                        "src/review.py",
-                        related_path,
-                    ],
-                },
-                "_matched_on": "src/review.py",
-            }]
-            architecture_related[related_path] = [{
-                "text": (
-                    f"IMPLEMENTATION_BODY_{index:02}\n"
-                    + "implementation statement\n" * 20
-                ),
-                "metadata": {
-                    "path": related_path,
-                    "structural_record_type": "source_chunk",
-                },
-            }]
-
-        chunks = _flatten_deterministic_context({
-            "context": {
-                "architecture_context": architecture_context,
-                "architecture_related": architecture_related,
-            },
-        })
-
-        assert len(chunks) == DETERMINISTIC_RAG_MAX_CHUNKS
-        assert [chunk["_match_type"] for chunk in chunks[::2]] == [
-            "architecture_relation"
-        ] * (DETERMINISTIC_RAG_MAX_CHUNKS // 2)
-        assert [chunk["_match_type"] for chunk in chunks[1::2]] == [
-            "architecture_related"
-        ] * (DETERMINISTIC_RAG_MAX_CHUNKS // 2)
-        relation_paths = {
-            path
-            for relation in chunks[::2]
-            for path in relation["metadata"]["architecture_paths"]
-        }
-        assert {
-            body["metadata"]["path"] for body in chunks[1::2]
-        } <= relation_paths
-
-        formatted = format_rag_context({"relevant_code": chunks})
-
-        assert "RELATION_FACT_" in formatted
-        assert "IMPLEMENTATION_BODY_" in formatted
-
-    def test_architecture_kind_prefers_diagnostic_then_resolved_fact(self):
-        def relation(name, fact):
-            return {
-                "text": name,
-                "metadata": {
-                    "path": f"__analysis_architecture__/{name}.context",
-                    "architecture_kind": "magento-di",
-                    "architecture_key": name,
-                    "plugin_graph_facts": [fact],
-                },
-            }
-
-        response = {
-            "context": {
-                "architecture_context": {
-                    "coarse": [relation("coarse", {
-                        "kind": "php-inheritance",
-                        "source": "Child",
-                        "relation": "extends",
-                        "target": "Parent",
-                        "attributes": {},
-                        "related_paths": [],
-                    })],
-                    "resolved": [relation("resolved", {
-                        "kind": "php-inheritance",
-                        "source": "Acme\\Child",
-                        "relation": "extends",
-                        "target": "Acme\\Parent",
-                        "attributes": {"targetKind": "class"},
-                        "related_paths": ["src/Parent.php"],
-                    })],
-                    "diagnostic": [relation("diagnostic", {
-                        "kind": "magento-interceptor-inapplicable",
-                        "source": "Acme\\Audit",
-                        "relation": "cannot-intercept",
-                        "target": "Acme\\FinalCart::save",
-                        "attributes": {"semanticRole": "diagnostic"},
-                        "related_paths": ["src/FinalCart.php"],
-                    })],
-                },
-                "related_definitions": {
-                    "RequiredType": [{
-                        "text": "class RequiredType {}",
-                        "metadata": {"path": "src/RequiredType.php"},
-                    }],
-                },
-            },
-        }
-
-        first = _flatten_deterministic_context(response, max_chunks=2)
-        second = _flatten_deterministic_context(response, max_chunks=3)
-
-        assert [chunk["text"] for chunk in first] == [
-            "diagnostic",
-            "class RequiredType {}",
-        ]
-        assert [chunk["text"] for chunk in second] == [
-            "diagnostic",
-            "resolved",
-            "class RequiredType {}",
-        ]
-
-    def test_source_relation_precedes_duplicate_area_projections_at_chunk_cap(self):
-        def relation(name, relation_name, attributes):
-            fact = {
-                "kind": "php-constructor-dependency",
-                "source": "Acme\\Checkout\\Model\\Service",
-                "relation": relation_name,
-                "target": "Acme\\Checkout\\Api\\CartInterface",
-                "path": "app/code/Acme/Checkout/Model/Service.php",
-                "line": 1,
-                "attributes": attributes,
-                "related_paths": [
-                    "app/code/Acme/Checkout/Api/CartInterface.php",
-                ],
-            }
-            return {
-                "text": (
-                    f"[{fact['kind']}] {fact['source']} "
-                    f"{fact['relation']} {fact['target']}"
-                ),
-                "metadata": {
-                    "path": fact["path"],
-                    "architecture_kind": fact["kind"],
-                    "architecture_key": name,
-                    "plugin_graph_facts": [fact],
-                },
-                "_matched_on": fact["path"],
-            }
-
-        area_projections = {
-            f"area-{index:02}": [relation(
-                f"area-{index:02}",
-                "requests",
-                {"area": f"area-{index:02}"},
-            )]
-            for index in range(20)
-        }
-        source_relation = relation(
-            "zz-source-relation",
-            "constructor-requires",
-            {"sourceKind": "class", "targetKind": "interface"},
-        )
-        response = {
-            "context": {
-                "architecture_context": {
-                    **area_projections,
-                    "zz-source-relation": [source_relation],
-                },
-            },
-        }
-
-        chunks = _flatten_deterministic_context(response, max_chunks=4)
-
-        assert len(chunks) == 4
-        assert source_relation["text"] in {
-            chunk["text"] for chunk in chunks
-        }
-        assert chunks[0]["text"] == source_relation["text"]
-
-    def test_empty_context_has_no_chunks(self):
-        assert _rag_context_has_chunks({"relevant_code": []}) is False
-        assert _rag_context_has_chunks({"context": {"relevant_code": []}}) is False
-        assert _rag_context_has_chunks({"relevant_code": [{"text": "x"}]}) is True
-
-
-
-class TestFetchBatchRagContext:
-    @staticmethod
-    def _request():
-        request = MagicMock()
-        request.get_rag_branch.return_value = "feature"
-        request.get_rag_base_branch.return_value = "main"
-        request.projectWorkspace = "ws"
-        request.projectNamespace = "proj"
-        request.pullRequestId = 12
-        request.changedFiles = ["src/a.py"]
-        request.currentCommitHash = "a" * 40
-        request.commitHash = "a" * 40
-        request.baseCommitHash = "b" * 40
-        request.targetHeadCommitHash = "t" * 40
-        request.get_target_head_commit_hash.return_value = "t" * 40
-        request.ragCollectionTarget = "cc_ws_proj_main_generation"
-        request.ragBaseGenerationManifestSha256 = "c" * 64
-        request.ragPrGenerationFingerprint = "d" * 64
-        request.ragPrOverlayGenerationManifestSha256 = "e" * 64
-        return request
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_exact_structural_context_uses_revision_binding(self):
-        client = MagicMock()
-        client.get_deterministic_context = AsyncMock(return_value={
-            "context": {
-                "chunks": [{
-                    "text": "class Dependency: pass",
-                    "metadata": {"path": "src/dependency.py"},
-                    "_match_type": "definition",
-                }],
-                "_metadata": {"retrieval_state": "complete"},
-            },
-        })
-        state = Stage1RagState()
-
-        result = await fetch_batch_rag_context(
-            client,
-            self._request(),
-            ["src/a.py"],
-            pr_indexed=True,
-            enrichment_identifiers=["Dependency"],
-            rag_state=state,
-        )
-
-        assert result["relevant_code"][0]["_match_type"] == "definition"
-        request_payload = client.get_deterministic_context.await_args.kwargs
-        assert request_payload["source_revision"] == "a" * 40
-        assert request_payload["base_revision"] == "t" * 40
-        assert request_payload["collection_target"] == "cc_ws_proj_main_generation"
-        assert request_payload["additional_identifiers"] == ["Dependency"]
-        assert state.deterministic_retrieval_states == ["complete"]
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_partial_structural_context_keeps_exact_chunks_and_later_batches(self):
-        client = MagicMock()
-        client.get_deterministic_context = AsyncMock(return_value={
-            "context": {
-                "chunks": [{
-                    "text": "class ExactDependency: pass",
-                    "metadata": {"path": "src/exact_dependency.py"},
-                    "_match_type": "definition",
-                }],
-                "_metadata": {
-                    "retrieval_state": "partial",
-                    "coverage_state": "partial",
-                    "context_usable": True,
-                    "partial_reasons": ["global_matching_point_limit"],
-                },
-            },
-        })
-        state = Stage1RagState()
-
-        first = await fetch_batch_rag_context(
-            client,
-            self._request(),
-            ["src/a.py"],
-            pr_indexed=True,
-            rag_state=state,
-        )
-        second = await fetch_batch_rag_context(
-            client,
-            self._request(),
-            ["src/b.py"],
-            pr_indexed=True,
-            rag_state=state,
-        )
-
-        assert first["relevant_code"][0]["text"] == "class ExactDependency: pass"
-        assert first["_metadata"]["retrieval_state"] == "partial"
-        assert first["_metadata"]["partial_reasons"] == [
-            "global_matching_point_limit"
-        ]
-        formatted = format_rag_context(
-            first,
-            {"src/a.py"},
-            pr_changed_files=["src/a.py"],
-        )
-        assert formatted
-        assert "class ExactDependency: pass" in formatted
-        assert second is not None
-        assert client.get_deterministic_context.await_count == 2
-        assert state.context_disabled is False
-        assert state.deterministic_retrieval_states == ["partial", "partial"]
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_unavailable_structural_context_opens_optional_context_circuit(self):
-        client = MagicMock()
-        client.get_deterministic_context = AsyncMock(return_value={
-            "context": {
-                "chunks": [],
-                "_metadata": {
-                    "retrieval_state": "unavailable",
-                    "coverage_state": "unavailable",
-                    "context_usable": False,
-                    "partial_reasons": ["collection_not_found"],
-                },
-            },
-        })
-        state = Stage1RagState()
-
-        first = await fetch_batch_rag_context(
-            client,
-            self._request(),
-            ["src/a.py"],
-            pr_indexed=True,
-            rag_state=state,
-        )
-        second = await fetch_batch_rag_context(
-            client,
-            self._request(),
-            ["src/b.py"],
-            pr_indexed=True,
-            rag_state=state,
-        )
-
-        assert first is None
-        assert second is None
-        assert client.get_deterministic_context.await_count == 1
-        assert state.context_disabled is True
-        assert state.deterministic_retrieval_states == ["unavailable"]
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_missing_branch_disables_optional_context_without_query(self):
-        request = self._request()
-        request.get_rag_branch.return_value = None
-        client = MagicMock()
-        client.get_deterministic_context = AsyncMock()
-        state = Stage1RagState()
-
-        result = await fetch_batch_rag_context(
-            client,
-            request,
-            ["src/a.py"],
-            pr_indexed=True,
-            rag_state=state,
-        )
-
-        assert result is None
-        assert state.context_disabled is True
-        assert state.deterministic_retrieval_states == ["failed"]
-        client.get_deterministic_context.assert_not_awaited()
-
-
-class TestDeduplicatePrStaleChunks:
-    def test_empty_chunks(self):
-        assert _deduplicate_pr_stale_chunks([], ["a.py"], ["a.py"]) == []
-
-    def test_empty_pr_files(self):
-        chunks = [{"text": "code", "metadata": {"path": "a.py"}}]
-        result = _deduplicate_pr_stale_chunks(chunks, [], ["a.py"])
-        assert result == chunks
-
-    def test_non_pr_file_kept(self):
-        chunks = [{"text": "code", "metadata": {"path": "lib.py"}}]
-        result = _deduplicate_pr_stale_chunks(chunks, ["a.py"], ["a.py"])
-        assert len(result) == 1
-
-    def test_pr_file_in_batch_kept(self):
-        chunks = [
-            {"text": "stale", "metadata": {"path": "a.py"}, "_source": "branch"},
-            {"text": "fresh", "metadata": {"path": "a.py"}, "_source": "pr_indexed"},
-        ]
-        result = _deduplicate_pr_stale_chunks(chunks, ["a.py"], ["a.py"])
-        assert len(result) == 2  # Both kept because file is in batch
-
-    def test_pr_file_not_in_batch_prefers_pr_indexed(self):
-        chunks = [
-            {"text": "stale", "metadata": {"path": "a.py"}, "_source": "branch"},
-            {"text": "fresh", "metadata": {"path": "a.py"}, "_source": "pr_indexed"},
-        ]
-        result = _deduplicate_pr_stale_chunks(chunks, ["a.py"], ["other.py"])
-        assert len(result) == 1
-        assert result[0]["_source"] == "pr_indexed"
-
-    def test_no_pr_indexed_marks_stale(self):
-        chunks = [
-            {"text": "stale", "metadata": {"path": "a.py"}, "_source": "branch"},
-        ]
-        result = _deduplicate_pr_stale_chunks(chunks, ["a.py"], ["other.py"])
-        assert len(result) == 1
-        assert result[0].get("_potentially_stale") is True
-
-    def test_no_metadata_path_uses_unknown(self):
-        chunks = [{"text": "code"}]
-        result = _deduplicate_pr_stale_chunks(chunks, ["a.py"], ["a.py"])
-        assert len(result) == 1
-
-    def test_basename_matching(self):
-        chunks = [
-            {"text": "code", "metadata": {"path": "src/a.py"}, "_source": "pr_indexed"},
-            {"text": "stale", "metadata": {"path": "src/a.py"}, "_source": "branch"},
-        ]
-        result = _deduplicate_pr_stale_chunks(chunks, ["src/a.py"], ["other.py"])
-        assert len(result) == 1
-        assert result[0]["_source"] == "pr_indexed"
-
-    def test_same_basename_in_different_module_is_not_a_pr_file(self):
-        chunks = [{
-            "text": "Cart module branch configuration",
-            "metadata": {"path": "app/code/Acme/Cart/etc/di.xml"},
-            "_source": "branch",
-        }]
-
-        result = _deduplicate_pr_stale_chunks(
-            chunks,
-            ["app/code/Acme/Checkout/etc/di.xml"],
-            ["app/code/Acme/Checkout/etc/di.xml"],
-        )
-
-        assert result == chunks
-        assert "_potentially_stale" not in result[0]
-
-
-# ── _extract_calibrated_issues ───────────────────────────────────
-
 class TestExtractCalibratedIssues:
     def _make_issue(self, severity="MEDIUM"):
         return CodeReviewIssue(
@@ -2641,299 +2737,1625 @@ class TestRenderedInputPacking:
             for batch in expanded
         )
 
-    def test_realistic_architecture_source_bundles_by_exact_path(self):
-        owner_path = "src/owner.py"
-        related_path = "config/routes.xml"
-        relation_text = "ROUTE_RELATION_AUTHORITY checkout configured-by RouteTarget"
-        source_lines = [
-            f"ROUTE_SOURCE_{index:04d} " + "x" * 180
-            for index in range(500)
-        ]
-        source_text = "\n".join(source_lines) + "\n"
-        relation = {
-            "text": relation_text,
-            "metadata": {
-                "path": "__analysis_architecture__/routes.context",
-                "architecture_key": "route-relation:routes.xml:0",
-                "architecture_paths": [owner_path, related_path],
-                "plugin_graph_facts": [{
-                    "kind": "route-relation",
-                    "source": "Owner",
-                    "relation": "configured-by",
-                    "target": "RouteTarget",
-                    "path": related_path,
-                    "related_paths": [owner_path],
-                }],
-                "pr": True,
-            },
-            "_match_type": "architecture_relation",
-            "_matched_on": owner_path,
-            "_source": "pr_indexed",
-        }
-        # This is the production deterministic-RAG source shape: exact path and
-        # provenance, deliberately no architecture_key.
-        source = {
-            "text": source_text,
-            "metadata": {
-                "path": related_path,
-                "structural_record_type": "source_chunk",
-                "start_line": 1,
-                "end_line": len(source_lines),
-            },
-            "_match_type": "architecture_related",
-            "_matched_on": related_path,
-            "_source": "deterministic",
-        }
-        rag_context = {
-            "relevant_code": [relation, source],
-            "_metadata": {
-                "retrieval_state": "partial",
-                "coverage_state": "partial",
-                "context_usable": True,
-                "partial_reasons": ["global_matching_point_limit"],
-            },
-        }
-
-        bundles = _stage1_rag_evidence_bundles(rag_context)
-
-        assert bundles == [[relation, source]]
-
-        enrichment = MagicMock(
-            fileContents=[
-                MagicMock(path=owner_path, content="owner = True\n", skipped=False)
-            ],
-            fileMetadata=[],
-            relationships=[],
-        )
-        request = _packing_request([owner_path], enrichment)
-        prepared = _build_stage_1_prepared_context(request, None, False)
-        material = _prepare_stage1_prompt_material(
-            request,
-            self._batch([owner_path]),
-            prepared,
-            False,
-        )
-
-        invocations = _build_stage1_rag_invocations(
-            material,
-            rag_context,
-            token_budget=12_000,
-        )
-
-        assert len(invocations) == 1
-        rag_texts = [invocation[1] for invocation in invocations]
-        assert all(relation_text in text for text in rag_texts)
-        assert all("Structural retrieval coverage: PARTIAL" in text for text in rag_texts)
-        assert all("absence from it is not negative evidence" in text for text in rag_texts)
-        combined = "\n".join(rag_texts)
-        observed_source_lines = [
-            line for line in combined.splitlines()
-            if line.startswith("ROUTE_SOURCE_")
-        ]
-        assert observed_source_lines
-        assert len(observed_source_lines) < len(source_lines)
-        assert "Context chunk truncated by deterministic prompt budget" in combined
-        assert _estimated_prompt_tokens(invocations[0][0]) <= 12_000
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_huge_local_and_rag_evidence_form_one_linear_sequence(self):
-        path = "src/linear.py"
-        related_path = "src/dependency.py"
-        local_source = "".join(
-            f"LOCAL_SLICE_{index:05d} = '{'l' * 72}'\n"
-            for index in range(8_000)
-        )
-        diff = (
-            f"diff --git a/{path} b/{path}\n"
-            f"--- a/{path}\n"
-            f"+++ b/{path}\n"
-            "@@ -1,1 +1,1 @@\n"
-            "-old_value = 0\n"
-            "+new_value = 1\n"
-        )
-        processed = DiffProcessor().process(diff)
-        enrichment = MagicMock(
-            fileContents=[MagicMock(path=path, content=local_source, skipped=False)],
-            fileMetadata=[],
-            relationships=[],
-        )
-        request = _packing_request([path], enrichment)
-        prepared = _build_stage_1_prepared_context(request, processed, False)
-        item = {
-            "file": ReviewFile(
-                path=path,
-                focus_areas=["general"],
-                risk_level="MEDIUM",
-            ),
-            "priority": "MEDIUM",
-        }
-        token_budget = 60_000
-        local_batches = _expand_oversized_stage1_evidence_batches(
-            [[item]],
-            request,
-            prepared,
-            False,
-            token_budget,
-        )
-        assert len(local_batches) == 1
-
-        relation_text = "LINEAR_RELATION_AUTHORITY owner imports dependency"
-        rag_lines = [
-            f"RAG_SLICE_{index:05d} = '{'r' * 72}'"
-            for index in range(8_000)
-        ]
-        rag_source = "\n".join(rag_lines) + "\n"
-        rag_context = {"relevant_code": [{
-            "text": relation_text,
-            "metadata": {
-                "path": "__analysis_architecture__/linear.context",
-                "architecture_key": "linear-relation:0",
-                "architecture_paths": [path, related_path],
-                "pr": True,
-            },
-            "_match_type": "architecture_relation",
-            "_matched_on": path,
-            "_source": "pr_indexed",
-        }, {
-            "text": rag_source,
-            "metadata": {
-                "path": related_path,
-                "structural_record_type": "source_chunk",
-            },
-            "_match_type": "architecture_related",
-            "_matched_on": related_path,
-            "_source": "deterministic",
-        }]}
-        owner_material = _prepare_stage1_prompt_material(
-            request,
-            local_batches[0],
-            prepared,
-            False,
-        )
-        rag_invocations = _build_stage1_rag_invocations(
-            owner_material,
-            rag_context,
-            token_budget,
-        )
-        assert len(rag_invocations) == 1
-
-        class CapturingLlm:
-            def __init__(self):
-                self.prompts = []
-
-            def with_structured_output(self, _schema):
-                return self
-
-            async def ainvoke(self, prompt, **_kwargs):
-                self.prompts.append(prompt)
-                issue = CodeReviewIssue(
-                    id=f"issue-{len(self.prompts)}",
-                    severity="MEDIUM",
-                    category="BUG",
-                    file=path,
-                    line=1,
-                    title="Synthetic provenance candidate",
-                    reason="Synthetic issue used only to verify prompt provenance.",
-                    suggestedFixDescription="Synthetic fix.",
-                )
-                return FileReviewBatchOutput(reviews=[FileReviewOutput(
-                    file=path,
-                    analysis_summary="synthetic",
-                    issues=[issue],
-                    confidence="HIGH",
-                )])
-
-        llm = CapturingLlm()
-        ledger = CandidateEvidenceLedger()
-        state = Stage1ReviewUnitState()
-        state.register_batches(local_batches)
-        fetch_mock = AsyncMock(return_value=rag_context)
-        all_issues = []
-        with patch(
-            "service.review.orchestrator.stage_1_file_review.fetch_batch_rag_context",
-            fetch_mock,
-        ):
-            for batch_number, batch in enumerate(local_batches, start=1):
-                all_issues.extend(await review_file_batch(
-                    llm,
-                    request,
-                    batch,
-                    rag_client=object(),
-                    prepared_context=prepared,
-                    candidate_ledger=ledger,
-                ))
-                state.mark_completed(
-                    state.unit_ids_for_batch(batch_number, batch)
-                )
-
-        state.assert_complete()
-        expected_calls = 1
-        assert len(llm.prompts) == expected_calls
-        assert fetch_mock.await_count == 1
-        assert len(llm.prompts) <= 1
-
-        prompt_corpus = "\n".join(llm.prompts)
-        observed_rag_lines = [
-            line for line in prompt_corpus.splitlines()
-            if line.startswith("RAG_SLICE_")
-        ]
-        assert observed_rag_lines
-        assert len(observed_rag_lines) < len(rag_lines)
-        assert prompt_corpus.count(relation_text) == 1
-        assert "Context chunk truncated by deterministic prompt budget" in prompt_corpus
-
-        records = list(ledger._records.values())
-        assert len(records) == len(all_issues) == expected_calls
-        rag_records = [record for record in records if record.visible_evidence_by_id]
-        assert len(rag_records) == 1
-        owner_unit_id = local_batches[0][0]["_review_unit_id"]
-        assert all(record.review_unit_ids == (owner_unit_id,) for record in rag_records)
-
-    def test_rag_evidence_chunks_are_bounded_without_extra_invocations(self):
+    def test_agentic_invocation_drops_preassembled_structural_context(self):
         path = "src/owner.py"
+        structural_map = '{"relations":[{"target":"DependencyService"}]}'
+        visible_structural_evidence = {
+            "REL-owner-dependency": ({
+                "kind": "CALLS",
+                "source": "owner",
+                "relation": "calls",
+                "target": "DependencyService",
+                "path": path,
+                "line": 1,
+                "attributes": {},
+                "related_paths": (),
+            },),
+        }
         enrichment = MagicMock(
             fileContents=[MagicMock(path=path, content="owner = True\n", skipped=False)],
             fileMetadata=[],
             relationships=[],
         )
         request = _packing_request([path], enrichment)
+        request.useMcpTools = True
+        request.localRepoRevision = "target-head-sha"
+        request.projectVcsWorkspace = "tenant"
+        request.projectVcsRepoSlug = "repository"
         prepared = _build_stage_1_prepared_context(request, None, False)
         material = _prepare_stage1_prompt_material(
             request, self._batch([path]), prepared, False
         )
-        evidence_texts = [
-            "def dependency_a():\n" + ("    return 1\n" * 5_000),
-            "def dependency_b():\n" + ("    return 2\n" * 5_000),
-        ]
-        rag_context = {"relevant_code": [
-            {
-                "text": text,
-                "metadata": {"path": f"src/dependency_{index}.py"},
-                "_match_type": "definition",
-            }
-            for index, text in enumerate(evidence_texts, start=1)
-        ]}
 
-        invocations = _build_stage1_rag_invocations(
+        invocations = _build_stage1_invocations(
             material,
-            rag_context,
-            token_budget=24_000,
+            use_mcp_tools=True,
+            structural_tools_available=True,
+            review_file_tool_available=True,
+            preloaded_structural_context=structural_map,
+            preloaded_structural_evidence=visible_structural_evidence,
         )
 
         assert len(invocations) == 1
-        prompts = [invocation[0] for invocation in invocations]
-        assert all(_estimated_prompt_tokens(prompt) <= 24_000 for prompt in prompts)
-        assert all(
-            text not in prompts[0]
-            for text in evidence_texts
-        )
-        assert "def dependency_a():" in prompts[0]
-        assert "def dependency_b():" in prompts[0]
-        assert prompts[0].count(
-            "Context chunk truncated by deterministic prompt budget"
-        ) == 2
-        assert all("owner = True" in prompt for prompt in prompts)
+        prompt, structural_text, _, visible_evidence = invocations[0]
+        assert structural_map not in prompt
+        assert structural_text == ""
+        assert visible_evidence == {}
+        assert "PRELOADED STRUCTURAL RELATION MAP" not in prompt
+        assert "No structural context is preloaded in agentic mode" in prompt
+        assert "Graph use is optional" not in prompt
+        assert "owner = True" in prompt
+        assert "searchRepositoryCode" not in prompt
+        assert "getReviewFileContent" in prompt
+        assert "getBranchFileContent" not in prompt
+        assert "exploreReviewContext" in prompt
+        assert "getStructuralRelations" not in prompt
+        assert "getMinimalReviewContext" in prompt
+        assert "getImpactRadius" in prompt
+        assert "traverseCodeGraph" in prompt
+        assert "queryCodeGraph" in prompt
+        assert "getStructuralUnit" in prompt
 
+    def test_structural_relation_ids_become_prompt_visible_fact_evidence(self):
+        evidence_id = "relation:" + "a" * 64
+        evidence = structural_relation_evidence({
+            "snapshot": {"revision": "base-sha"},
+            "relations": [{
+                "evidenceId": evidence_id,
+                "kind": "OBSERVES",
+                "source": "Observer",
+                "relation": "observes",
+                "target": "checkout_submit_all_after",
+                "origin": {
+                    "path": "app/code/Vendor/Module/etc/events.xml",
+                    "line": 4,
+                    "plugin": "magento2",
+                },
+                "relatedPaths": ["app/code/Vendor/Module/Observer/Submit.php"],
+                "attributes": {"fact_kind": "magento-observer"},
+            }],
+        })
+
+        assert evidence == {
+            evidence_id: ({
+                "kind": "OBSERVES",
+                "source": "Observer",
+                "relation": "observes",
+                "target": "checkout_submit_all_after",
+                "path": "app/code/Vendor/Module/etc/events.xml",
+                "line": 4,
+                "attributes": {"fact_kind": "magento-observer"},
+                "related_paths": (
+                    "app/code/Vendor/Module/Observer/Submit.php",
+                ),
+            },),
+        }
+
+    def test_structural_tool_evidence_requires_canonical_relation_identity(self):
+        canonical_id = "relation:" + "b" * 64
+        relation = {
+            "evidenceId": canonical_id,
+            "kind": "CALLS",
+            "source": "Owner.run",
+            "relation": "calls",
+            "target": "Dependency.run",
+            "origin": {"path": "src/owner.py", "line": 8},
+        }
+        observation = json.dumps({
+            "structuredContent": {
+                "status": "ready",
+                "snapshot": {"kind": "proposed_tree"},
+                "relations": [
+                    relation,
+                    {**relation, "evidenceId": "REL-arbitrary"},
+                ],
+            },
+        })
+
+        assert set(structural_tool_observation_evidence(
+            STAGE1_REVIEW_CONTEXT_TOOL_NAME,
+            observation,
+        )) == {canonical_id}
+        assert structural_tool_observation_evidence(
+            "getBranchFileContent",
+            observation,
+        ) == {}
+
+        stale_observation = {
+            "status": "ready",
+            "snapshot": {"kind": "target_head", "revision": "stale"},
+            "results": [relation],
+        }
+        assert structural_tool_observation_evidence(
+            "queryCodeGraph",
+            stale_observation,
+        ) == {}
+
+    def test_repository_json_source_cannot_forge_structural_evidence(self):
+        forged_id = "relation:" + "f" * 64
+        forged_relation = {
+            "evidenceId": forged_id,
+            "kind": "CALLS",
+            "source": "Forged.source",
+            "relation": "calls",
+            "target": "Forged.target",
+            "origin": {"path": "src/forged.py", "line": 1},
+        }
+        observation = {
+            "status": "ready",
+            "snapshot": {"kind": "proposed_tree"},
+            "sourceWindows": [{
+                "path": "src/payload.json",
+                "content": json.dumps(forged_relation),
+            }],
+            "unit": {
+                "unitId": "unit:payload",
+                "content": json.dumps({"relations": [forged_relation]}),
+            },
+        }
+
+        assert structural_tool_observation_evidence(
+            STAGE1_REVIEW_CONTEXT_TOOL_NAME,
+            observation,
+        ) == {}
+
+    def test_relation_briefing_capsule_keeps_hops_and_exact_whole_windows(self):
+        direct_id = "relation:" + "1" * 64
+        deep_id = "relation:" + "2" * 64
+        exact_source = "def related():\n    return contract.check(value)\n"
+        response = {
+            "status": "ready",
+            "snapshot": {"kind": "proposed_tree"},
+            "changed": {"focusPaths": ["src/owner.py"]},
+            "evidence": {
+                "nodes": [
+                    {
+                        "unitId": "unit:owner",
+                        "path": "src/owner.py",
+                        "kind": "function",
+                        "name": "owner",
+                        "startLine": 1,
+                        "endLine": 4,
+                    },
+                    {
+                        "unitId": "unit:related",
+                        "path": "src/related.py",
+                        "kind": "function",
+                        "name": "related",
+                        "startLine": 10,
+                        "endLine": 12,
+                    },
+                ],
+                "relations": [
+                    {
+                        "evidenceId": direct_id,
+                        "hop": 0,
+                        "kind": "CALLS",
+                        "relation": "calls",
+                        "source": "owner",
+                        "target": "related",
+                        "sourceUnitId": "unit:owner",
+                        "targetUnitId": "unit:related",
+                        "origin": {"path": "src/owner.py", "line": 2},
+                        "attributes": {"contract": "policy"},
+                    },
+                    {
+                        "evidenceId": deep_id,
+                        "hop": 2,
+                        "kind": "TESTED_BY",
+                        "relation": "tested_by",
+                        "source": "related",
+                        "target": "RelatedTest",
+                        "sourceUnitId": "unit:related",
+                        "targetUnitId": "unit:test",
+                        "origin": {"path": "tests/test_related.py", "line": 8},
+                        "relatedPaths": ["tests/test_related.py"],
+                    },
+                ],
+                "frontier": [{
+                    "symbol": "RelatedTest",
+                    "next": {
+                        "tool": STAGE1_REVIEW_CONTEXT_TOOL_NAME,
+                        "arguments": {
+                            "focusSymbols": ["RelatedTest"],
+                        },
+                    },
+                }],
+            },
+            "sourceWindows": [{
+                "evidenceId": "source:unit:related",
+                "unitId": "unit:related",
+                "path": "src/related.py",
+                "startLine": 10,
+                "endLine": 11,
+                "content": exact_source,
+                "contentSha256": "source-sha",
+                "changedFile": False,
+                "truncated": False,
+                "relationEvidenceIds": [direct_id],
+            }],
+            "coverage": {
+                "graphState": "bounded",
+                "partialReasons": ["graph_relation_limit"],
+            },
+        }
+
+        text, visible = _stage1_relation_briefing_capsule(
+            response,
+            max_characters=6_000,
+        )
+
+        assert len(text) <= 6_000
+        assert {edge["evidenceId"] for edge in visible["edges"]} == {
+            direct_id,
+            deep_id,
+        }
+        assert {edge["hop"] for edge in visible["edges"]} == {0, 2}
+        assert visible["edges"][0]["attributes"] == {"contract": "policy"}
+        assert visible["sourceWindows"][0]["content"] == exact_source
+        assert visible["sourceWindows"][0]["endLine"] == 11
+        assert visible["sourceWindows"][0]["contentSha256"] == "source-sha"
+        assert visible["sourceWindows"][0]["truncated"] is False
+        assert visible["continuations"] == [{
+            "tool": "queryCodeGraph",
+            "reason": "Continue from the bounded relation frontier.",
+            "arguments": {
+                "pattern": "relations_of",
+                "target": "RelatedTest",
+                "detailLevel": "standard",
+            },
+        }]
+        assert STAGE1_REVIEW_CONTEXT_TOOL_NAME not in text
+
+    def test_relation_briefing_skips_oversized_fact_without_mutating_its_id(self):
+        oversized_id = "relation:" + "7" * 64
+        retained_id = "relation:" + "8" * 64
+        response = {
+            "status": "ready",
+            "snapshot": {"kind": "proposed_tree"},
+            "edges": [
+                {
+                    "evidenceId": oversized_id,
+                    "kind": "CALLS",
+                    "source": "Owner.run",
+                    "relation": "calls",
+                    "target": "Dependency.run",
+                    "origin": {"path": "src/owner.py", "line": 2},
+                    "attributes": {"payload": "x" * 10_000},
+                    "hop": 0,
+                },
+                {
+                    "evidenceId": retained_id,
+                    "kind": "TESTED_BY",
+                    "source": "Owner.run",
+                    "relation": "tested_by",
+                    "target": "OwnerTest",
+                    "origin": {"path": "tests/test_owner.py", "line": 4},
+                    "attributes": {"framework": "pytest"},
+                    "hop": 2,
+                },
+            ],
+            "coverage": {"state": "bounded"},
+        }
+
+        text, visible = _stage1_relation_briefing_capsule(
+            response,
+            max_characters=2_500,
+        )
+
+        assert oversized_id not in text
+        assert [edge["evidenceId"] for edge in visible["edges"]] == [
+            retained_id
+        ]
+        assert visible["edges"][0]["attributes"] == {"framework": "pytest"}
+
+    def test_relation_briefing_never_relabels_long_source_window_paths(self):
+        evidence_id = "relation:" + "6" * 64
+        long_path = "/".join(["nested" * 20] * 10) + "/related.py"
+        content_sha = "d" * 64
+        text, visible = _stage1_relation_briefing_capsule({
+            "status": "ready",
+            "snapshot": {"kind": "proposed_tree"},
+            "nodes": [{
+                "unitId": "unit:related",
+                "path": long_path,
+                "kind": "function",
+                "name": "related",
+                "startLine": 3,
+                "endLine": 4,
+            }],
+            "edges": [{
+                "evidenceId": evidence_id,
+                "kind": "CALLS",
+                "source": "Owner.run",
+                "relation": "calls",
+                "target": "related",
+                "sourceUnitId": "unit:owner",
+                "targetUnitId": "unit:related",
+                "origin": {"path": "src/owner.py", "line": 2},
+                "relatedPaths": [long_path],
+            }],
+            "sourceWindows": [{
+                "evidenceId": "source:unit:related",
+                "unitId": "unit:related",
+                "path": long_path,
+                "startLine": 3,
+                "endLine": 4,
+                "content": "def related():\n    return True\n",
+                "contentSha256": content_sha,
+                "relationEvidenceIds": [evidence_id],
+            }],
+        }, max_characters=10_000)
+
+        assert long_path in text
+        assert visible["nodes"][0]["path"] == long_path
+        assert visible["sourceWindows"][0]["path"] == long_path
+        assert visible["sourceWindows"][0]["contentSha256"] == content_sha
+
+    def test_relation_briefing_tolerates_malformed_optional_counters(self):
+        evidence_id = "relation:" + "9" * 64
+        text, visible = _stage1_relation_briefing_capsule({
+            "status": "ready",
+            "snapshot": {"kind": "proposed_tree"},
+            "edges": [{
+                "evidenceId": evidence_id,
+                "kind": "CALLS",
+                "source": "Owner.run",
+                "relation": "calls",
+                "target": "Dependency.run",
+                "origin": {"path": "src/owner.py", "line": 2},
+                "hop": "not-a-number",
+            }],
+        })
+
+        assert evidence_id in text
+        assert visible["edges"][0]["hop"] == 0
+
+    def test_malformed_relation_briefing_fails_open(self):
+        evidence_id = "relation:" + "a" * 64
+        text, visible = _safe_stage1_relation_briefing_capsule({
+            "status": "ready",
+            "snapshot": {"kind": "proposed_tree"},
+            "edges": [{
+                "evidenceId": evidence_id,
+                "kind": "CALLS",
+                "source": "Owner.run",
+                "relation": "calls",
+                "target": "Dependency.run",
+                "origin": {"path": "src/owner.py", "line": 2},
+            }],
+            "coverage": {"partialReasons": 17},
+        })
+
+        assert text == ""
+        assert visible == {}
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_agentic_batch_requires_model_graph_without_host_prefetch(self):
+        path = "src/owner.py"
+        direct_id = "relation:" + "3" * 64
+        deep_id = "relation:" + "4" * 64
+        enrichment = MagicMock(
+            fileContents=[MagicMock(
+                path=path,
+                content="def owner():\n    return related()\n",
+                skipped=False,
+            )],
+            fileMetadata=[],
+            relationships=[],
+        )
+        request = _bind_exact_proposed_tree(
+            _packing_request([path], enrichment)
+        )
+        request.useMcpTools = True
+        prepared = _build_stage_1_prepared_context(request, None, False)
+        briefing_response = {
+            "status": "ready",
+            "snapshot": {
+                "kind": "proposed_tree",
+                "baseRevision": "target-head-sha",
+                "sourceRevision": "source-head-sha",
+            },
+            "changed": {"focusPaths": [path]},
+            "evidence": {
+                "nodes": [
+                    {
+                        "unitId": "unit:owner",
+                        "path": path,
+                        "name": "owner",
+                        "kind": "function",
+                        "startLine": 1,
+                        "endLine": 2,
+                    },
+                    {
+                        "unitId": "unit:related",
+                        "path": "src/related.py",
+                        "name": "related",
+                        "kind": "function",
+                        "startLine": 5,
+                        "endLine": 7,
+                    },
+                ],
+                "relations": [
+                    {
+                        "evidenceId": direct_id,
+                        "hop": 0,
+                        "kind": "CALLS",
+                        "relation": "calls",
+                        "source": "owner",
+                        "target": "related",
+                        "sourceUnitId": "unit:owner",
+                        "targetUnitId": "unit:related",
+                        "origin": {"path": path, "line": 2},
+                    },
+                    {
+                        "evidenceId": deep_id,
+                        "hop": 2,
+                        "kind": "TESTED_BY",
+                        "relation": "tested_by",
+                        "source": "related",
+                        "target": "RelatedTest",
+                        "sourceUnitId": "unit:related",
+                        "targetUnitId": "unit:test",
+                        "origin": {
+                            "path": "tests/test_related.py",
+                            "line": 10,
+                        },
+                    },
+                ],
+                "frontier": [{
+                    "symbol": "RelatedTest",
+                    "next": {
+                        "tool": "queryCodeGraph",
+                        "arguments": {
+                            "pattern": "relations_of",
+                            "target": "RelatedTest",
+                        },
+                    },
+                }],
+            },
+            "sourceWindows": [{
+                "evidenceId": "source:unit:related",
+                "unitId": "unit:related",
+                "path": "src/related.py",
+                "startLine": 5,
+                "endLine": 6,
+                "content": "def related():\n    return contract.check()\n",
+                "contentSha256": "exact-related-sha",
+                "changedFile": False,
+                "truncated": False,
+                "relationEvidenceIds": [direct_id],
+            }],
+            "coverage": {
+                "graphState": "bounded",
+                "partialReasons": ["graph_relation_limit"],
+            },
+        }
+        rag_client = SimpleNamespace(
+            explore_review_context=AsyncMock(
+                return_value=briefing_response
+            )
+        )
+        invoke_review = AsyncMock(return_value=[])
+        rag_state = Stage1RagState()
+        telemetry = Stage1AgentTelemetryRecorder(
+            batch_number=1,
+            batch_paths=(path,),
+            agent_requested=True,
+            source_revision="source-head-sha",
+        )
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review."
+            "_invoke_stage_1_batch_llm",
+            invoke_review,
+        ):
+            issues = await review_file_batch(
+                object(),
+                request,
+                self._batch([path]),
+                rag_client=rag_client,
+                prepared_context=prepared,
+                agent_service=SimpleNamespace(
+                    available_tool_names=STAGE1_AGENT_TOOL_NAMES,
+                ),
+                rag_state=rag_state,
+                agent_telemetry=telemetry,
+            )
+
+        assert issues == []
+        rag_client.explore_review_context.assert_not_awaited()
+        agent_call = invoke_review.await_args
+        prompt = agent_call.args[1]
+        assert "RELATION-FIRST PROPOSED-TREE BRIEFING" not in prompt
+        assert '"hop":2' not in prompt
+        assert "tests/test_related.py" not in prompt
+        assert "return contract.check()" not in prompt
+        assert "exploreReviewContext" in prompt
+        assert STAGE1_REVIEW_CONTEXT_TOOL_NAME in (
+            agent_call.kwargs["agent_allowed_tool_names"]
+        )
+        assert agent_call.kwargs["agent_visible_evidence_by_id"] == {}
+        assert _estimated_prompt_tokens(prompt) <= _stage1_batch_token_limit(
+            request
+        )
+        assert rag_state.exact_evidence_by_id == {}
+        assert rag_state.deterministic_retrieval_states == []
+        preparation = telemetry.payload()["generationPreparation"]
+        assert preparation == {
+            "eligible": True,
+            "status": "ready",
+            "receiptPresent": True,
+            "error": None,
+        }
+        briefing_telemetry = telemetry.payload()["relationBriefing"]
+        assert briefing_telemetry["eligible"] is False
+        assert briefing_telemetry["attempted"] is False
+        assert briefing_telemetry["status"] == "not_eligible"
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_generation_preparation_failure_falls_open_to_source_review(self):
+        path = "src/owner.py"
+        enrichment = MagicMock(
+            fileContents=[MagicMock(
+                path=path,
+                content="owner = True\n",
+                skipped=False,
+            )],
+            fileMetadata=[],
+            relationships=[],
+        )
+        request = _bind_exact_proposed_tree(
+            _packing_request([path], enrichment)
+        )
+        request.useMcpTools = True
+        request.ragReviewGenerationStatus = "unavailable"
+        request.ragReviewCollectionTarget = None
+        request.ragReviewGenerationManifestSha256 = None
+        request.ragReviewGenerationError = "graph unavailable"
+        prepared = _build_stage_1_prepared_context(request, None, False)
+        rag_client = SimpleNamespace(
+            explore_review_context=AsyncMock(return_value={
+                "status": "error",
+                "error": "graph unavailable",
+                "coverage": {"graphState": "unavailable"},
+            })
+        )
+        invoke_review = AsyncMock(return_value=[])
+        rag_state = Stage1RagState()
+        telemetry = Stage1AgentTelemetryRecorder(
+            batch_number=1,
+            batch_paths=(path,),
+            agent_requested=True,
+        )
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review."
+            "_invoke_stage_1_batch_llm",
+            invoke_review,
+        ):
+            issues = await review_file_batch(
+                object(),
+                request,
+                self._batch([path]),
+                rag_client=rag_client,
+                prepared_context=prepared,
+                agent_service=SimpleNamespace(
+                    available_tool_names=STAGE1_AGENT_TOOL_NAMES,
+                ),
+                rag_state=rag_state,
+                agent_telemetry=telemetry,
+            )
+
+        assert issues == []
+        assert "RELATION-FIRST PROPOSED-TREE BRIEFING" not in (
+            invoke_review.await_args.args[1]
+        )
+        rag_client.explore_review_context.assert_not_awaited()
+        assert rag_state.deterministic_retrieval_states == []
+        assert rag_state.exact_evidence_by_id == {}
+        payload = telemetry.payload()
+        assert payload["generationPreparation"]["status"] == "unavailable"
+        assert payload["degraded"] is True
+        assert payload["relationBriefing"]["status"] == "not_eligible"
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_agentic_batch_uses_composite_proposed_tree_without_prefetch(self):
+        path = "src/owner.py"
+        enrichment = MagicMock(
+            fileContents=[MagicMock(path=path, content="owner = True\n", skipped=False)],
+            fileMetadata=[],
+            relationships=[],
+        )
+        request = _bind_exact_proposed_tree(
+            _packing_request([path], enrichment)
+        )
+        request.useMcpTools = True
+        prepared = _build_stage_1_prepared_context(request, None, False)
+        invoke_review = AsyncMock(return_value=[])
+        rag_state = Stage1RagState()
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review._invoke_stage_1_batch_llm",
+            invoke_review,
+        ):
+            issues = await review_file_batch(
+                object(),
+                request,
+                self._batch([path]),
+                rag_client=object(),
+                prepared_context=prepared,
+                agent_service=SimpleNamespace(
+                    available_tool_names=STAGE1_AGENT_TOOL_NAMES,
+                ),
+                rag_state=rag_state,
+            )
+
+        assert issues == []
+        invoke_review.assert_awaited_once()
+        agent_call = invoke_review.await_args
+        assert "DependencyService" not in agent_call.args[1]
+        assert "PRELOADED STRUCTURAL RELATION MAP" not in agent_call.args[1]
+        assert "No structural context is preloaded" in agent_call.args[1]
+        assert "Graph use is optional" not in agent_call.args[1]
+        assert "## Exact Proposed-Tree Repository Exploration" in (
+            agent_call.args[1]
+        )
+        assert "getReviewFileContent" in agent_call.args[1]
+        assert "getBranchFileContent(" not in agent_call.args[1]
+        assert "getStructuralRelations" not in agent_call.args[1]
+        assert "getMinimalReviewContext" in agent_call.args[1]
+        assert "getImpactRadius" in agent_call.args[1]
+        assert "traverseCodeGraph" in agent_call.args[1]
+        assert "queryCodeGraph" in agent_call.args[1]
+        assert "getStructuralUnit" in agent_call.args[1]
+        assert "searchRepositoryCode" not in agent_call.args[1]
+        assert "getRootDirectory" not in agent_call.args[1]
+        assert "getDirectoryByPath" not in agent_call.args[1]
+        assert "Protected Local Roots" not in agent_call.args[1]
+        assert agent_call.kwargs["agent_service"] is not None
+        assert agent_call.kwargs["agent_allowed_tool_names"] == (
+            STAGE1_AGENT_TOOL_NAMES.difference({
+                STAGE1_BRANCH_FILE_TOOL_NAME,
+            })
+        )
+        assert agent_call.kwargs["agent_max_steps"] == (
+            STAGE1_AGENT_MAX_STEPS
+        ) == 6
+        assert agent_call.kwargs["agent_phase"] == "primary"
+        assert agent_call.kwargs["required_agent_tool_names"] == (
+            STAGE1_REQUIRED_STRUCTURAL_TOOL_SEQUENCE
+        )
+        assert agent_call.kwargs["fail_closed_agent"] is False
+        assert agent_call.kwargs["agent_context_holder"] == {
+            "response": None,
+            "responses": [],
+        }
+        assert rag_state.exact_evidence_by_id == {}
+        assert rag_state.deterministic_retrieval_states == []
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_required_structural_mcp_forces_graph_workflow_and_fail_closed(self):
+        path = "src/owner.py"
+        enrichment = MagicMock(
+            fileContents=[MagicMock(
+                path=path,
+                content="owner = True\n",
+                skipped=False,
+            )],
+            fileMetadata=[],
+            relationships=[],
+        )
+        request = _bind_exact_proposed_tree(
+            _packing_request([path], enrichment)
+        )
+        request.useMcpTools = True
+        request.requireStructuralMcp = True
+        invoke_review = AsyncMock(return_value=[])
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review._invoke_stage_1_batch_llm",
+            invoke_review,
+        ):
+            issues = await review_file_batch(
+                object(),
+                request,
+                self._batch([path]),
+                rag_client=object(),
+                prepared_context=_build_stage_1_prepared_context(
+                    request,
+                    None,
+                    False,
+                ),
+                agent_service=SimpleNamespace(
+                    available_tool_names=STAGE1_AGENT_TOOL_NAMES,
+                ),
+            )
+
+        assert issues == []
+        agent_call = invoke_review.await_args
+        assert agent_call.kwargs["required_agent_tool_names"] == (
+            STAGE1_REQUIRED_STRUCTURAL_TOOL_SEQUENCE
+        )
+        assert agent_call.kwargs["fail_closed_agent"] is True
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_required_structural_mcp_rejects_incomplete_tool_inventory(self):
+        path = "src/owner.py"
+        enrichment = MagicMock(
+            fileContents=[MagicMock(
+                path=path,
+                content="owner = True\n",
+                skipped=False,
+            )],
+            fileMetadata=[],
+            relationships=[],
+        )
+        request = _bind_exact_proposed_tree(
+            _packing_request([path], enrichment)
+        )
+        request.useMcpTools = True
+        request.requireStructuralMcp = True
+
+        with pytest.raises(
+            RuntimeError,
+            match="structural MCP inventory is incomplete",
+        ):
+            await review_file_batch(
+                object(),
+                request,
+                self._batch([path]),
+                rag_client=object(),
+                prepared_context=_build_stage_1_prepared_context(
+                    request,
+                    None,
+                    False,
+                ),
+                agent_service=SimpleNamespace(
+                    available_tool_names=(
+                        STAGE1_AGENT_TOOL_NAMES.difference({
+                            "traverseCodeGraph",
+                        })
+                    ),
+                ),
+            )
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_partial_agent_reviews_are_merged_with_missing_only_recovery(self):
+        paths = ["src/a.py", "src/b.py", "src/c.py"]
+        enrichment = MagicMock(
+            fileContents=[
+                MagicMock(
+                    path=path,
+                    content=f"value = '{path}'\n",
+                    skipped=False,
+                )
+                for path in paths
+            ],
+            fileMetadata=[],
+            relationships=[],
+        )
+        request = _bind_exact_proposed_tree(
+            _packing_request(paths, enrichment)
+        )
+        request.useMcpTools = True
+        prepared = _build_stage_1_prepared_context(request, None, False)
+
+        def issue(path, identifier):
+            return CodeReviewIssue(
+                id=identifier,
+                severity="MEDIUM",
+                category="BUG_RISK",
+                file=path,
+                line=1,
+                title=f"Defect in {path}",
+                reason=f"The changed behavior in {path} is incorrect.",
+                suggestedFixDescription="Correct the changed behavior.",
+                codeSnippet=f"value = '{path}'",
+            )
+
+        issues_by_path = {
+            path: issue(path, f"issue-{index}")
+            for index, path in enumerate(paths, start=1)
+        }
+
+        class AgentService:
+            available_tool_names = STAGE1_AGENT_TOOL_NAMES
+
+            def __init__(self):
+                self.requests = []
+
+            async def execute(self, agent_request):
+                self.requests.append(agent_request)
+                return SimpleNamespace(
+                    output=FileReviewBatchOutput(reviews=[FileReviewOutput(
+                        file=paths[0],
+                        analysis_summary="Found a concrete defect.",
+                        issues=[issues_by_path[paths[0]]],
+                        confidence="HIGH",
+                    )]),
+                    tool_events=_required_structural_tool_events(),
+                )
+
+        class StructuredAttempt:
+            def __init__(self, owner):
+                self.owner = owner
+
+            async def ainvoke(self, prompt, **_kwargs):
+                self.owner.structured_prompts.append(prompt)
+                return FileReviewBatchOutput(reviews=[FileReviewOutput(
+                    file=paths[1],
+                    analysis_summary="Found a concrete defect.",
+                    issues=[issues_by_path[paths[1]]],
+                    confidence="HIGH",
+                )])
+
+        class RecoveryLlm:
+            def __init__(self):
+                self.structured_prompts = []
+                self.raw_prompts = []
+
+            def with_structured_output(self, _schema, **_kwargs):
+                return StructuredAttempt(self)
+
+            async def ainvoke(self, prompt, **_kwargs):
+                self.raw_prompts.append(prompt)
+                return SimpleNamespace(content=FileReviewBatchOutput(
+                    reviews=[FileReviewOutput(
+                        file=paths[2],
+                        analysis_summary="Found a concrete defect.",
+                        issues=[issues_by_path[paths[2]]],
+                        confidence="HIGH",
+                    )]
+                ).model_dump_json())
+
+        agent_service = AgentService()
+        recovery_llm = RecoveryLlm()
+        ledger = CandidateEvidenceLedger()
+        events = []
+        result = await review_file_batch(
+            recovery_llm,
+            request,
+            self._batch(paths),
+            rag_client=object(),
+            prepared_context=prepared,
+            agent_service=agent_service,
+            candidate_ledger=ledger,
+            event_callback=events.append,
+        )
+
+        assert result == [issues_by_path[path] for path in paths]
+        assert len(agent_service.requests) == 1
+        assert len(recovery_llm.structured_prompts) == 1
+        structured_prompt = recovery_llm.structured_prompts[0]
+        assert "FILE #1: src/b.py" in structured_prompt
+        assert "FILE #2: src/c.py" in structured_prompt
+        assert "FILE #1: src/a.py" not in structured_prompt
+        assert len(recovery_llm.raw_prompts) == 1
+        raw_prompt = recovery_llm.raw_prompts[0]
+        assert "FILE #1: src/c.py" in raw_prompt
+        assert "FILE #1: src/a.py" not in raw_prompt
+        assert "FILE #1: src/b.py" not in raw_prompt
+        assert events[-1]["state"] == "stage_1_agent_degraded"
+        assert "only the missing files" in events[-1]["message"]
+        records = [ledger.record_for(result_issue) for result_issue in result]
+        assert all(record is not None for record in records)
+        assert ":agent:" in records[0].source_key
+        assert all(
+            ":direct_recovery:" in record.source_key
+            for record in records[1:]
+        )
+
+    @pytest.mark.parametrize(
+        "primary_result",
+        ["exception", "empty", "wrong_path", "partial"],
+    )
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_local_only_retries_agent_once_for_missing_paths(
+        self,
+        primary_result,
+    ):
+        paths = ["src/a.py", "src/b.py", "src/c.py"]
+        enrichment = MagicMock(
+            fileContents=[
+                MagicMock(
+                    path=path,
+                    content=f"value = '{path}'\n",
+                    skipped=False,
+                )
+                for path in paths
+            ],
+            fileMetadata=[],
+            relationships=[],
+        )
+        request = _bind_exact_proposed_tree(
+            _packing_request(paths, enrichment)
+        )
+        request.useMcpTools = True
+        request.mcpLocalOnly = True
+        prepared = _build_stage_1_prepared_context(request, None, False)
+
+        def issue(path, identifier):
+            return CodeReviewIssue(
+                id=identifier,
+                severity="MEDIUM",
+                category="BUG_RISK",
+                file=path,
+                line=1,
+                title=f"Defect in {path}",
+                reason=f"The changed behavior in {path} is incorrect.",
+                suggestedFixDescription="Correct the changed behavior.",
+                codeSnippet=f"value = '{path}'",
+            )
+
+        issues_by_path = {
+            path: issue(path, f"issue-{index}")
+            for index, path in enumerate(paths, start=1)
+        }
+
+        def review(path):
+            return FileReviewOutput(
+                file=path,
+                analysis_summary="Found a concrete defect.",
+                issues=[issues_by_path[path]],
+                confidence="HIGH",
+            )
+
+        context_events = _required_structural_tool_events()
+
+        class AgentService:
+            available_tool_names = STAGE1_AGENT_TOOL_NAMES
+
+            def __init__(self):
+                self.requests = []
+
+            async def execute(self, agent_request):
+                self.requests.append(agent_request)
+                if len(self.requests) == 1:
+                    if primary_result == "exception":
+                        raise RuntimeError("primary agent transport failed")
+                    if primary_result == "empty":
+                        return SimpleNamespace(
+                            output="",
+                            tool_events=context_events,
+                        )
+                    if primary_result == "wrong_path":
+                        return SimpleNamespace(
+                            output=FileReviewBatchOutput(reviews=[
+                                _clean_file_review("src/Asset.php"),
+                            ]),
+                            tool_events=context_events,
+                        )
+                    return SimpleNamespace(
+                        output=FileReviewBatchOutput(
+                            reviews=[review(paths[0])],
+                        ),
+                        tool_events=context_events,
+                    )
+
+                missing = (
+                    paths[1:] if primary_result == "partial" else paths
+                )
+                return SimpleNamespace(
+                    output=FileReviewBatchOutput(
+                        reviews=[review(path) for path in missing],
+                    ),
+                    tool_events=context_events,
+                )
+
+        class DirectLlmMustNotRun:
+            def with_structured_output(self, _schema, **_kwargs):
+                raise AssertionError("direct fallback must not run")
+
+            async def ainvoke(self, _prompt, **_kwargs):
+                raise AssertionError("direct fallback must not run")
+
+        agent_service = AgentService()
+        telemetry = Stage1AgentTelemetryRecorder(
+            batch_number=1,
+            batch_paths=tuple(paths),
+            agent_requested=True,
+        )
+        result = await review_file_batch(
+            DirectLlmMustNotRun(),
+            request,
+            self._batch(paths),
+            rag_client=object(),
+            prepared_context=prepared,
+            agent_service=agent_service,
+            agent_telemetry=telemetry,
+        )
+
+        assert result == [issues_by_path[path] for path in paths]
+        assert len(agent_service.requests) == 2
+        primary_request, recovery_request = agent_service.requests
+        assert primary_request.metadata["phase"] == "primary"
+        expected_missing = (
+            tuple(paths[1:])
+            if primary_result == "partial"
+            else tuple(paths)
+        )
+        assert recovery_request.metadata == {
+            "stage": "stage_1",
+            "label": "agentic missing-path recovery",
+            "phase": "missing_path_recovery",
+            "batchPaths": expected_missing,
+        }
+        assert recovery_request.max_steps == STAGE1_AGENT_MAX_STEPS == 6
+        assert recovery_request.initial_required_tool_name == (
+            STAGE1_MINIMAL_REVIEW_CONTEXT_TOOL_NAME
+        )
+        assert recovery_request.required_tool_names == (
+            STAGE1_REQUIRED_STRUCTURAL_TOOL_SEQUENCE
+        )
+        expected_bindings = {
+            tool_name: {"focusPaths": expected_missing}
+            for tool_name in STAGE1_STRUCTURAL_TOOL_NAMES
+        }
+        expected_bindings["getReviewFileContent"] = {
+            "contextSuppliedPaths": expected_missing,
+        }
+        assert recovery_request.tool_argument_bindings == expected_bindings
+        for index, path in enumerate(expected_missing, start=1):
+            assert f"FILE #{index}: {path}" in recovery_request.prompt
+        for path in set(paths).difference(expected_missing):
+            assert not re.search(
+                rf"FILE #\d+: {re.escape(path)}",
+                recovery_request.prompt,
+            )
+        payload = telemetry.payload()
+        assert payload["degraded"] is False
+        assert payload["partialFailure"] is None
+        assert payload["fallback"]["used"] is False
+        assert {step["invocation"] for step in payload["toolSequence"]} <= {
+            1,
+            2,
+        }
+        assert payload["toolSequence"][-1]["invocation"] == 2
+
+    @pytest.mark.parametrize(
+        "recovery_failure",
+        ["partial", "repeated_empty", "stale_context"],
+    )
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_local_only_missing_path_recovery_fails_after_two_agent_invocations(
+        self,
+        recovery_failure,
+    ):
+        paths = ["src/a.py", "src/b.py", "src/c.py"]
+        enrichment = MagicMock(
+            fileContents=[
+                MagicMock(path=path, content="value = 1\n", skipped=False)
+                for path in paths
+            ],
+            fileMetadata=[],
+            relationships=[],
+        )
+        request = _bind_exact_proposed_tree(
+            _packing_request(paths, enrichment)
+        )
+        request.useMcpTools = True
+        request.mcpLocalOnly = True
+        prepared = _build_stage_1_prepared_context(request, None, False)
+        context_events = _required_structural_tool_events()
+        stale_context_events = _required_structural_tool_events(
+            first_observation={
+                "status": "ready",
+                "snapshot": {"kind": "target_head"},
+                "coverage": {"state": "complete"},
+            },
+        )
+
+        class AgentService:
+            available_tool_names = STAGE1_AGENT_TOOL_NAMES
+
+            def __init__(self):
+                self.requests = []
+
+            async def execute(self, agent_request):
+                self.requests.append(agent_request)
+                if len(self.requests) > 2:
+                    raise AssertionError("repository agent retried more than once")
+                if recovery_failure == "repeated_empty":
+                    return SimpleNamespace(
+                        output="",
+                        tool_events=context_events,
+                    )
+                if (
+                    recovery_failure == "stale_context"
+                    and len(self.requests) == 2
+                ):
+                    return SimpleNamespace(
+                        output=FileReviewBatchOutput(reviews=[
+                            _clean_file_review(path) for path in paths[1:]
+                        ]),
+                        tool_events=stale_context_events,
+                    )
+                returned_path = paths[len(self.requests) - 1]
+                return SimpleNamespace(
+                    output=FileReviewBatchOutput(
+                        reviews=[_clean_file_review(returned_path)],
+                    ),
+                    tool_events=context_events,
+                )
+
+        class DirectLlmMustNotRun:
+            def with_structured_output(self, _schema, **_kwargs):
+                raise AssertionError("direct fallback must not run")
+
+            async def ainvoke(self, _prompt, **_kwargs):
+                raise AssertionError("direct fallback must not run")
+
+        agent_service = AgentService()
+        review_call = review_file_batch(
+            DirectLlmMustNotRun(),
+            request,
+            self._batch(paths),
+            rag_client=object(),
+            prepared_context=prepared,
+            agent_service=agent_service,
+        )
+        if recovery_failure == "stale_context":
+            # Structural enrichment is optional. A complete source review is
+            # accepted even when a graph observation reports a non-proposed
+            # snapshot.
+            assert await review_call == []
+        else:
+            with pytest.raises(
+                RuntimeError,
+                match="one bounded repository-agent recovery",
+            ):
+                await review_call
+
+        assert len(agent_service.requests) == 2
+        expected_missing = (
+            tuple(paths)
+            if recovery_failure == "repeated_empty"
+            else tuple(paths[1:])
+        )
+        expected_bindings = {
+            tool_name: {"focusPaths": expected_missing}
+            for tool_name in STAGE1_STRUCTURAL_TOOL_NAMES
+        }
+        expected_bindings["getReviewFileContent"] = {
+            "contextSuppliedPaths": expected_missing,
+        }
+        assert agent_service.requests[1].tool_argument_bindings == (
+            expected_bindings
+        )
+        for index, path in enumerate(expected_missing, start=1):
+            assert (
+                f"FILE #{index}: {path}"
+                in agent_service.requests[1].prompt
+            )
+        if recovery_failure != "repeated_empty":
+            assert not re.search(
+                r"FILE #\d+: src/a\.py",
+                agent_service.requests[1].prompt,
+            )
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_partial_model_graph_result_is_reused_by_direct_fallback(self):
+        path = "src/owner.py"
+        evidence_id = "relation:" + "c" * 64
+        oversized_source_marker = "OVERSIZED-RELATED-SOURCE-"
+        enrichment = MagicMock(
+            fileContents=[MagicMock(path=path, content="owner = True\n", skipped=False)],
+            fileMetadata=[],
+            relationships=[],
+        )
+        request = _bind_exact_proposed_tree(
+            _packing_request([path], enrichment)
+        )
+        request.useMcpTools = True
+        prepared = _build_stage_1_prepared_context(request, None, False)
+        proposed_context = {
+            "status": "ready",
+            "snapshot": {
+                "kind": "proposed_tree",
+                "baseRevision": "target-head-sha",
+                "sourceRevision": "source-head-sha",
+            },
+            "changed": {"paths": [path]},
+            "evidence": {"relations": [{
+                "evidenceId": evidence_id,
+                "kind": "CALLS",
+                "source": "owner",
+                "relation": "calls",
+                "target": "DependencyService",
+                "origin": {"path": path, "line": 1},
+            }]},
+            "sourceWindows": [{
+                "path": "src/dependency.py",
+                "startLine": 1,
+                "endLine": 4,
+                "content": oversized_source_marker + "x" * 60_000,
+            }],
+            "coverage": {"state": "complete"},
+            "omittedFollowups": [],
+        }
+        class PartialAgentFailure(RuntimeError):
+            def __init__(self):
+                super().__init__("final model call failed")
+                self.tool_events = (
+                    SimpleNamespace(
+                        action=SimpleNamespace(
+                            tool=STAGE1_REVIEW_CONTEXT_TOOL_NAME,
+                        ),
+                        observation=proposed_context,
+                    ),
+                )
+
+        class AgentService:
+            available_tool_names = STAGE1_AGENT_TOOL_NAMES
+
+            def __init__(self):
+                self.requests = []
+
+            async def execute(self, agent_request):
+                self.requests.append(agent_request)
+                raise PartialAgentFailure()
+
+        direct_prompts = []
+
+        class StructuredAttempt:
+            async def ainvoke(self, prompt):
+                direct_prompts.append(prompt)
+                return FileReviewBatchOutput(
+                    reviews=[_clean_file_review(path)]
+                )
+
+        class Llm:
+            def with_structured_output(self, _schema):
+                return StructuredAttempt()
+
+        agent_service = AgentService()
+        events = []
+        rag_state = Stage1RagState()
+        rag_client = SimpleNamespace(
+            explore_review_context=AsyncMock(),
+        )
+        issues = await review_file_batch(
+            Llm(),
+            request,
+            self._batch([path]),
+            rag_client=rag_client,
+            prepared_context=prepared,
+            agent_service=agent_service,
+            rag_state=rag_state,
+            event_callback=events.append,
+        )
+
+        assert issues == []
+        assert len(direct_prompts) == 1
+        direct_prompt = direct_prompts[0]
+        assert "PRELOADED STRUCTURAL RELATION MAP" not in direct_prompt
+        assert "RELATION-FIRST STRUCTURAL REVIEW CONTEXT" in direct_prompt
+        assert "RELATION-FIRST PROPOSED-TREE BRIEFING" in direct_prompt
+        assert "DependencyService" in direct_prompt
+        assert oversized_source_marker not in direct_prompt
+        assert _estimated_prompt_tokens(direct_prompt) <= (
+            _stage1_batch_token_limit(request)
+        )
+        assert len(agent_service.requests) == 1
+        agent_request = agent_service.requests[0]
+        assert agent_request.initial_required_tool_name == (
+            STAGE1_MINIMAL_REVIEW_CONTEXT_TOOL_NAME
+        )
+        expected_bindings = {
+            tool_name: {"focusPaths": (path,)}
+            for tool_name in STAGE1_STRUCTURAL_TOOL_NAMES
+        }
+        expected_bindings["getReviewFileContent"] = {
+            "contextSuppliedPaths": (path,),
+        }
+        assert agent_request.tool_argument_bindings == expected_bindings
+        rag_client.explore_review_context.assert_not_awaited()
+        assert events[-1]["state"] == "stage_1_agent_degraded"
+        assert "already-retrieved exact proposed-tree context" in (
+            events[-1]["message"]
+        )
+        assert set(rag_state.exact_evidence_by_id) == {evidence_id}
+        assert rag_state.deterministic_retrieval_states == ["complete"]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_non_agentic_stage1_does_not_fetch_target_head_relation_map(self):
+        path = "src/owner.py"
+        evidence_id = "relation:" + "e" * 64
+        enrichment = MagicMock(
+            fileContents=[MagicMock(
+                path=path,
+                content="owner = True\n",
+                skipped=False,
+            )],
+            fileMetadata=[],
+            relationships=[],
+        )
+        request = _packing_request([path], enrichment)
+        request.useMcpTools = True
+        request.ragCollectionTarget = "collection"
+        request.ragBaseGenerationManifestSha256 = "a" * 64
+        request.get_target_head_commit_hash.return_value = "f" * 40
+        rag_client = SimpleNamespace(get_structural_relations=AsyncMock(
+            return_value={
+                "coverage": {"state": "complete"},
+                "relations": [{
+                    "evidenceId": evidence_id,
+                    "kind": "CALLS",
+                    "source": "owner",
+                    "relation": "calls",
+                    "target": "DependencyService",
+                    "origin": {"path": path, "line": 1},
+                }],
+            }
+        ))
+        prepared = _build_stage_1_prepared_context(request, None, False)
+        invoke_review = AsyncMock(return_value=[])
+        rag_state = Stage1RagState()
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review."
+            "_invoke_stage_1_batch_llm",
+            new=invoke_review,
+        ):
+            issues = await review_file_batch(
+                object(),
+                request,
+                self._batch([path]),
+                rag_client=rag_client,
+                prepared_context=prepared,
+                agent_service=None,
+                rag_state=rag_state,
+            )
+
+        assert issues == []
+        rag_client.get_structural_relations.assert_not_awaited()
+        prompt = invoke_review.await_args.args[1]
+        assert "PRELOADED STRUCTURAL RELATION MAP" not in prompt
+        assert "DependencyService" not in prompt
+        assert "exploreReviewContext" not in prompt
+        assert invoke_review.await_args.kwargs["agent_service"] is None
+        assert rag_state.exact_evidence_by_id == {}
+        assert rag_state.deterministic_retrieval_states == []
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_structural_agent_observation_is_candidate_and_rag_evidence(self):
+        path = "src/owner.py"
+        evidence_id = "relation:" + "d" * 64
+        enrichment = MagicMock(
+            fileContents=[MagicMock(
+                path=path,
+                content="dangerous_call()\n",
+                skipped=False,
+            )],
+            fileMetadata=[],
+            relationships=[],
+        )
+        request = _bind_exact_proposed_tree(
+            _packing_request([path], enrichment)
+        )
+        request.useMcpTools = True
+        prepared = _build_stage_1_prepared_context(request, None, False)
+        issue = CodeReviewIssue(
+            id="agent-issue",
+            severity="HIGH",
+            category="BUG",
+            file=path,
+            line=1,
+            title="Graph-confirmed defect",
+            reason="The exact related contract rejects this call.",
+            suggestedFixDescription="Satisfy the related contract.",
+            codeSnippet="dangerous_call()",
+            evidenceRefs=[evidence_id],
+        )
+        relation = {
+            "evidenceId": evidence_id,
+            "kind": "CALLS",
+            "source": "owner",
+            "relation": "calls",
+            "target": "DependencyService",
+            "origin": {"path": path, "line": 1},
+        }
+
+        class AgentService:
+            available_tool_names = STAGE1_AGENT_TOOL_NAMES
+
+            def __init__(self):
+                self.requests = []
+
+            async def execute(self, agent_request):
+                self.requests.append(agent_request)
+                return SimpleNamespace(
+                    output=FileReviewBatchOutput(reviews=[FileReviewOutput(
+                        file=path,
+                        analysis_summary="Exact relation confirms a defect.",
+                        issues=[issue],
+                        confidence="HIGH",
+                    )]),
+                    tool_events=_required_structural_tool_events(
+                        first_observation=json.dumps({
+                                "status": "ready",
+                                "snapshot": {
+                                    "kind": "proposed_tree",
+                                    "baseRevision": "target-head-sha",
+                                    "sourceRevision": "source-head-sha",
+                                },
+                                "coverage": {"state": "complete"},
+                                "evidence": {
+                                    "relations": [
+                                        relation,
+                                        {**relation, "evidenceId": "REL-not-canonical"},
+                                    ],
+                                },
+                            }),
+                    ) + (
+                        SimpleNamespace(
+                            action=SimpleNamespace(tool="getReviewFileContent"),
+                            observation={"relations": [{
+                                **relation,
+                                "evidenceId": "relation:" + "e" * 64,
+                            }]},
+                        ),
+                    ),
+                )
+
+        class DirectLlmMustNotRun:
+            def with_structured_output(self, _schema):
+                raise AssertionError("direct fallback must not run")
+
+        agent_service = AgentService()
+        ledger = CandidateEvidenceLedger()
+        rag_state = Stage1RagState()
+        issues = await review_file_batch(
+            DirectLlmMustNotRun(),
+            request,
+            self._batch([path]),
+            rag_client=object(),
+            prepared_context=prepared,
+            agent_service=agent_service,
+            candidate_ledger=ledger,
+            rag_state=rag_state,
+        )
+
+        assert issues == [issue]
+        record = ledger.record_for(issue)
+        assert record is not None
+        assert set(record.visible_evidence_by_id) == {evidence_id}
+        assert set(rag_state.exact_evidence_by_id) == {evidence_id}
+        assert rag_state.deterministic_retrieval_states == ["complete"]
+        assert len(agent_service.requests) == 1
+        agent_request = agent_service.requests[0]
+        assert agent_request.allowed_tool_names == (
+            STAGE1_AGENT_TOOL_NAMES.difference({
+                STAGE1_BRANCH_FILE_TOOL_NAME,
+            })
+        )
+        assert agent_request.initial_required_tool_name == (
+            STAGE1_MINIMAL_REVIEW_CONTEXT_TOOL_NAME
+        )
+        expected_bindings = {
+            tool_name: {"focusPaths": (path,)}
+            for tool_name in STAGE1_STRUCTURAL_TOOL_NAMES
+        }
+        expected_bindings["getReviewFileContent"] = {
+            "contextSuppliedPaths": (path,),
+        }
+        assert agent_request.tool_argument_bindings == expected_bindings
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_agentic_batch_without_structural_tools_is_vcs_only(self):
+        path = "src/owner.py"
+        enrichment = MagicMock(
+            fileContents=[MagicMock(
+                path=path,
+                content="owner = True\n",
+                skipped=False,
+            )],
+            fileMetadata=[],
+            relationships=[],
+        )
+        request = _packing_request([path], enrichment)
+        request.useMcpTools = True
+        request.ragEnabled = False
+        request.localRepoRevision = "target-head-sha"
+        request.projectVcsWorkspace = "tenant"
+        request.projectVcsRepoSlug = "repository"
+        prepared = _build_stage_1_prepared_context(request, None, False)
+        invoke_review = AsyncMock(return_value=[])
+        rag_state = Stage1RagState()
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review."
+            "_invoke_stage_1_batch_llm",
+            invoke_review,
+        ):
+            issues = await review_file_batch(
+                object(),
+                request,
+                self._batch([path]),
+                rag_client=None,
+                prepared_context=prepared,
+                agent_service=SimpleNamespace(
+                    available_tool_names=STAGE1_VCS_TOOL_NAMES,
+                ),
+                rag_state=rag_state,
+            )
+
+        assert issues == []
+        invoke_review.assert_awaited_once()
+        agent_call = invoke_review.await_args
+        prompt = agent_call.args[1]
+        assert "## Repository File Tool" in prompt
+        assert "PRELOADED STRUCTURAL RELATION MAP" not in prompt
+        assert "getBranchFileContent" in prompt
+        assert "getReviewFileContent" not in prompt
+        assert "getStructuralRelations" not in prompt
+        assert "queryCodeGraph" not in prompt
+        assert "getStructuralUnit" not in prompt
+        assert agent_call.kwargs["agent_allowed_tool_names"] == (
+            STAGE1_LEGACY_VCS_TOOL_NAMES
+        )
+        assert rag_state.exact_evidence_by_id == {}
+        assert rag_state.deterministic_retrieval_states == []
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_agentic_batch_registers_one_agent_phase(self):
+        path = "src/owner.py"
+        enrichment = MagicMock(
+            fileContents=[MagicMock(
+                path=path,
+                content="dangerous_call()\n",
+                skipped=False,
+            )],
+            fileMetadata=[],
+            relationships=[],
+        )
+        request = _bind_exact_proposed_tree(
+            _packing_request([path], enrichment)
+        )
+        request.useMcpTools = True
+        prepared = _build_stage_1_prepared_context(request, None, False)
+        issue = CodeReviewIssue(
+            id="agent-issue",
+            severity="MEDIUM",
+            category="BUG",
+            file=path,
+            line=1,
+            title="Agent-confirmed defect",
+            reason="The changed call is unconditionally unsafe.",
+            suggestedFixDescription="Guard the changed call.",
+            codeSnippet="dangerous_call()",
+        )
+        invoke_review = AsyncMock(return_value=[issue])
+
+        ledger = CandidateEvidenceLedger()
+        with patch(
+            "service.review.orchestrator.stage_1_file_review."
+            "_invoke_stage_1_batch_llm",
+            new=invoke_review,
+        ):
+            issues = await review_file_batch(
+                object(),
+                request,
+                self._batch([path]),
+                rag_client=object(),
+                prepared_context=prepared,
+                agent_service=object(),
+                candidate_ledger=ledger,
+            )
+
+        assert issues == [issue]
+        records = ledger.summary()["records"]
+        assert len(records) == 1
+        assert records[0]["visibleEvidenceIds"] == []
+        invoke_review.assert_awaited_once()
+        agent_call = invoke_review.await_args
+        assert agent_call.kwargs["agent_phase"] == "primary"
+        assert agent_call.kwargs["agent_allowed_tool_names"] == (
+            STAGE1_AGENT_TOOL_NAMES.difference({
+                STAGE1_BRANCH_FILE_TOOL_NAME,
+            })
+        )
 
 # ── create_smart_batches_wrapper ─────────────────────────────────
 
@@ -2980,8 +4402,10 @@ class TestCreateSmartBatchesWrapper:
             request=MagicMock(enrichmentData=None),
             rag_client=None,
         )
-        # Should still return valid batches from fallback
-        assert len(result) >= 1
+        assert [
+            [item["file"].path for item in batch]
+            for batch in result
+        ] == [["a.py"], ["b.py"]]
 
     @patch("service.review.orchestrator.stage_1_file_review.create_smart_batches_async")
     @pytest.mark.asyncio(loop_scope="function")
@@ -3046,8 +4470,6 @@ class TestCreateSmartBatchesWrapper:
             projectWorkspace="ws",
             projectNamespace="proj",
             ragBaseGenerationManifestSha256="a" * 64,
-            ragPrGenerationFingerprint="sha256:" + "b" * 64,
-            ragPrOverlayGenerationManifestSha256="c" * 64,
         )
         request.get_rag_branch.return_value = "main"
         request.get_rag_base_branch.return_value = "main"
@@ -3062,24 +4484,80 @@ class TestCreateSmartBatchesWrapper:
         assert result == mock_smart.return_value
         assert mock_smart.call_args.kwargs["rag_client"] is None
 
+    @patch("service.review.orchestrator.stage_1_file_review.create_smart_batches_async")
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_pr_merge_base_fallback_cannot_enable_graph_batching(
+        self,
+        mock_smart,
+    ):
+        groups = self._make_plan(["a.py"])
+        mock_smart.return_value = [[{
+            "file": groups[0].files[0],
+            "priority": "MEDIUM",
+        }]]
+        request = _bind_exact_proposed_tree(
+            _packing_request(["a.py"], MagicMock())
+        )
+        request.pullRequestId = 7
+        request.targetHeadCommitHash = None
+        request.baseCommitHash = "merge-base"
+        request.localRepoRevision = "merge-base"
+        request.localRepoTargetBranch = "main"
+        request.useMcpTools = True
+
+        result = await create_smart_batches_wrapper(
+            file_groups=groups,
+            processed_diff=MagicMock(),
+            request=request,
+            rag_client=MagicMock(),
+        )
+
+        assert result == mock_smart.return_value
+        assert mock_smart.call_args.kwargs["rag_client"] is None
+        assert mock_smart.call_args.kwargs["structural_binding"] is None
+
 
 class TestStage1Scheduling:
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_batches_run_with_bounded_concurrency(self):
-        files = [ReviewFile(path=f"src/f{i}.py", focus_areas=[], risk_level="MEDIUM") for i in range(3)]
-        batches = [[{"file": f, "priority": "MEDIUM"}] for f in files]
-        request = MagicMock()
-        request.deltaDiff = None
-        request.rawDiff = ""
-        request.taskContext = None
-        request.enrichmentData = None
-        request.changedFiles = [f.path for f in files]
+    async def test_all_isolated_files_run_when_profile_cap_is_lower_than_core_batches(self):
+        files = [
+            ReviewFile(
+                path=f"src/f{index}.py",
+                focus_areas=[],
+                risk_level="MEDIUM",
+            )
+            for index in range(15)
+        ]
+        batches = [
+            [{"file": file, "priority": "MEDIUM"}]
+            for file in files
+        ]
+        request = MagicMock(
+            deltaDiff=None,
+            rawDiff="",
+            taskContext=None,
+            enrichmentData=None,
+            changedFiles=[file.path for file in files],
+            useMcpTools=True,
+            currentCommitHash="source-revision",
+            commitHash="source-revision",
+        )
+        profile = SimpleNamespace(
+            invocation_cap=lambda stage: {
+                "stage_1_total": 12,
+                "stage_1_per_unit": 2,
+            }[stage]
+        )
+        agent_service = object()
+        reviewed_paths = []
 
         async def fake_batches(**kwargs):
             return batches
 
-        async def fake_review(*args, **kwargs):
-            await asyncio.sleep(0.05)
+        async def fake_review(_llm, _request, batch, *_args, **kwargs):
+            assert kwargs["agent_service"] is agent_service
+            assert len(batch) == 1
+            reviewed_paths.append(batch[0]["file"].path)
             return []
 
         with patch(
@@ -3089,18 +4567,82 @@ class TestStage1Scheduling:
             "service.review.orchestrator.stage_1_file_review.review_file_batch",
             side_effect=fake_review,
         ):
-            started = time.perf_counter()
             issues = await execute_stage_1_file_reviews(
+                llm=MagicMock(),
+                request=request,
+                plan=ReviewPlan(
+                    analysis_summary="x",
+                    file_groups=[],
+                    cross_file_concerns=[],
+                ),
+                rag_client=None,
+                max_parallel=15,
+                inference_profile=profile,
+                agent_service=agent_service,
+            )
+
+        assert issues == []
+        assert set(reviewed_paths) == {file.path for file in files}
+        assert len(reviewed_paths) == 15
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_batches_run_with_bounded_concurrency(self):
+        files = [ReviewFile(path=f"src/f{i}.py", focus_areas=[], risk_level="MEDIUM") for i in range(5)]
+        batches = [[{"file": f, "priority": "MEDIUM"}] for f in files]
+        request = MagicMock()
+        request.deltaDiff = None
+        request.rawDiff = ""
+        request.taskContext = None
+        request.enrichmentData = None
+        request.changedFiles = [f.path for f in files]
+        release = asyncio.Event()
+        two_running = asyncio.Event()
+        state = {"active": 0, "maximum": 0, "started": 0}
+
+        async def fake_batches(**kwargs):
+            return batches
+
+        async def fake_review(*args, **kwargs):
+            state["active"] += 1
+            state["started"] += 1
+            state["maximum"] = max(state["maximum"], state["active"])
+            if state["active"] == 2:
+                two_running.set()
+            try:
+                await release.wait()
+                return []
+            finally:
+                state["active"] -= 1
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review.create_smart_batches_wrapper",
+            side_effect=fake_batches,
+        ), patch(
+            "service.review.orchestrator.stage_1_file_review.review_file_batch",
+            side_effect=fake_review,
+        ):
+            review_task = asyncio.create_task(execute_stage_1_file_reviews(
                 llm=MagicMock(),
                 request=request,
                 plan=ReviewPlan(analysis_summary="x", file_groups=[], cross_file_concerns=[]),
                 rag_client=None,
-                max_parallel=3,
-            )
-            elapsed = time.perf_counter() - started
+                max_parallel=2,
+            ))
+            await asyncio.wait_for(two_running.wait(), timeout=1)
+            await asyncio.sleep(0)
+
+            assert state["active"] == 2
+            assert state["started"] == 2
+
+            release.set()
+            issues = await asyncio.wait_for(review_task, timeout=1)
 
         assert issues == []
-        assert elapsed < 0.12
+        assert state == {
+            "active": 0,
+            "maximum": 2,
+            "started": len(files),
+        }
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_reverse_completion_keeps_batch_order_and_completes_units(self):
@@ -3190,3 +4732,68 @@ class TestStage1Scheduling:
                     rag_client=None,
                     max_parallel=2,
                 )
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_cancellation_joins_batch_agents_before_propagating(self):
+        files = [
+            ReviewFile(
+                path=f"src/f{index}.py",
+                focus_areas=[],
+                risk_level="MEDIUM",
+            )
+            for index in range(2)
+        ]
+        batches = [
+            [{"file": file, "priority": "MEDIUM"}]
+            for file in files
+        ]
+        request = MagicMock(
+            deltaDiff=None,
+            rawDiff="",
+            taskContext=None,
+            enrichmentData=None,
+            changedFiles=[file.path for file in files],
+        )
+        all_started = asyncio.Event()
+        blocked = asyncio.Event()
+        started: set[str] = set()
+        cleaned_up: set[str] = set()
+
+        async def fake_batches(**kwargs):
+            return batches
+
+        async def fake_review(_llm, _request, batch, *_args, **_kwargs):
+            path = batch[0]["file"].path
+            started.add(path)
+            if len(started) == len(files):
+                all_started.set()
+            try:
+                await blocked.wait()
+            finally:
+                cleaned_up.add(path)
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review.create_smart_batches_wrapper",
+            side_effect=fake_batches,
+        ), patch(
+            "service.review.orchestrator.stage_1_file_review.review_file_batch",
+            side_effect=fake_review,
+        ):
+            review_task = asyncio.create_task(execute_stage_1_file_reviews(
+                llm=MagicMock(),
+                request=request,
+                plan=ReviewPlan(
+                    analysis_summary="x",
+                    file_groups=[],
+                    cross_file_concerns=[],
+                ),
+                rag_client=None,
+                max_parallel=2,
+            ))
+            await asyncio.wait_for(all_started.wait(), timeout=1)
+            review_task.cancel()
+
+            with pytest.raises(asyncio.CancelledError):
+                await review_task
+
+        assert cleaned_up == {file.path for file in files}

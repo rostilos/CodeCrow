@@ -30,24 +30,29 @@ CURRENT-DEFECT CONTRACT FOR NEW FINDINGS:
 
 NON-NEGOTIABLE REVIEW RULES:
 - Review only visible evidence: diff content, structured parser metadata, task
-  context, previous issues, and retrieved codebase context.
-- When a finding relies on retrieved context, copy every supporting `Evidence ID`
-  into `evidenceRefs`. Do not invent IDs. Leave `evidenceRefs` empty when the
-  current file/diff alone proves the finding.
+  context, previous issues, any retrieved structural review context, and exact
+  repository source returned by an available tool.
+- Treat any structural relationship or graph result as navigation,
+  not proof of a defect. Confirm the relevant source and line range with an exact
+  proposed-tree source window or file read when available. A metadata-only unit
+  is not source proof. A returned relation's `evidenceId` is a prompt-visible host
+  Evidence ID and may be copied when that exact relation supports the claim.
+  Source-bearing windows/file reads do not create a host Evidence ID: cite their
+  returned path and lines. Structural relation tools may return a canonical
+  `relation:<sha256>` evidenceId; copy only that exact returned ID and never
+  invent or transform one.
 - When a finding asserts a plugin-governed relationship using an exact evidence
   class in ANALYSIS PLUGIN EVIDENCE CONSTRAINTS, copy that class
   verbatim into `claimKind` and cite matching retrieved evidence in
-  `evidenceRefs`. If no E# class is supplied and deterministic repository
-  architecture context proves the relationship, use the exact bracketed fact kind
-  from its supporting fact line as `claimKind`. Leave `claimKind` empty for
-  generic defects proved directly by changed source. Never invent a claim kind.
+  `evidenceRefs`. If no E# class is supplied, leave `claimKind` empty even when
+  structural navigation helped locate the exact source. Never invent a claim kind.
 - Treat Current File Content as the post-change source of truth. When an added
   file explicitly says its duplicate current-source copy was omitted, its complete
   added-side diff is the post-change source of truth. Before reporting an
   unused/missing/unreferenced symbol, search all visible current-file and diff
   evidence for that symbol and suppress the issue if the evidence contradicts it.
 - Anchor every new finding to exact current source inside a visible reviewable
-  diff hunk. Full-file and retrieved context may prove impact, but code outside
+  diff hunk. Full-file and structural context may prove impact, but code outside
   the changed hunk is supporting context, not a separate PR finding.
 - Do not report missing imports, undefined variables, missing methods/properties,
   or unseen definitions unless the visible evidence proves they are absent.
@@ -67,11 +72,31 @@ a concrete post-change defect. Regardless of severity, do not turn a correct fix
 optional hardening idea, or speculative future concern into an issue.
 
 CROSS-MODULE / DUPLICATION CHECK:
-Use CODEBASE CONTEXT to detect existing implementations, hook/middleware/listener
+Use the STRUCTURAL RELATION MAP to locate existing implementations,
+hook/middleware/listener
 overlap, repeated scheduled/background work, duplicate config/feature flags, or
 patches that already solve the same problem. Report only when you can cite the
-existing implementation path and explain the concrete overlap/conflict. Use
+exact implementation source and explain the concrete overlap/conflict. Use
 category ARCHITECTURE for duplication findings.
+
+STATEFUL / CONCURRENT CHANGE CHECK:
+When a changed hunk reads or writes shared mutable state, a cache, a counter,
+lock-protected data, retries, or the result of an operation that can fail, trace
+concrete state transitions instead of checking lock coverage alone:
+- Test a normal execution and overlapping executions that begin from the same
+  earlier read or check.
+- When a fallible result is assigned to shared state, test both orders where one
+  caller succeeds and a caller that was already waiting later fails, and vice
+  versa. Do not assume repeated file, network, database, or external calls return
+  identical results.
+- Track the final shared value after every write. Synchronizing each memory access
+  can remove a data race while leaving a lost update, invalid ordering, or valid
+  state overwritten by a later error result.
+Report only a harmful transition reachable from visible source. Do not report the
+checklist itself, a missing textbook pattern, or theoretical contention without
+concrete impact.
+
+{issue_deduplication_instructions}
 
 {incremental_instructions}
 {pr_files_context}
@@ -108,13 +133,7 @@ PROJECT RULES:
 STRUCTURED FILE METADATA (from parser):
 {file_outlines}
 
-CODEBASE CONTEXT (from RAG):
-{rag_context}
-
-CONTEXT CITATION RULES:
-- Cite actual file paths from RAG/context when using them.
-- Do not cite context by chunk number.
-- If context is stale, deleted, unrelated, or inconclusive, do not use it as proof.
+{structural_context_section}
 
 {previous_issues}
 
@@ -139,7 +158,7 @@ Priority: {priority}
 
 PRE-OUTPUT SELF-CHECK FOR EACH NEW FINDING:
 1. The defect still exists in the post-change source and is proven by visible
-   current-file/new-side diff/RAG evidence; removed code alone does not qualify.
+   current-file, new-side diff, or exact retrieved evidence; removed code alone does not qualify.
 2. It has a concrete impact matching the selected severity.
 3. It does not rely on unseen imports, declarations, properties, or methods.
 4. It is not a framework/API guess.
@@ -149,6 +168,8 @@ PRE-OUTPUT SELF-CHECK FOR EACH NEW FINDING:
 8. It is not a correct fix, defensive improvement, change summary, praise, or
    request to verify something that the visible diff already implements.
 9. Its suggested fix describes a change that is still needed in the current code.
+10. For shared-state changes, the conclusion follows concrete overlapping and
+    success/failure executions rather than lock coverage alone.
 
 {line_number_instructions}
 
@@ -168,7 +189,8 @@ Return ONLY valid JSON with this structure:
           "line": "42",
           "scope": "LINE|BLOCK|FUNCTION|FILE",
           "codeSnippet": "exact source line copied verbatim from visible diff/file context",
-          "evidenceRefs": ["RAG-stable-id copied from supporting retrieved context"],
+          "relatedLocations": ["path/to/other-manifestation:84"],
+          "evidenceRefs": ["host Evidence ID copied from supplied evidence, when present"],
           "claimKind": "exact plugin evidence class, or empty string",
           "title": "Short issue title, max 10 words",
           "reason": "Detailed Markdown explanation with evidence and impact",
@@ -200,5 +222,7 @@ OUTPUT CONSTRAINTS:
   never return null for either field.
 - When an issue has no retrieved evidence or plugin claim, return
   `"evidenceRefs": []` and `"claimKind": ""`; never return null for these fields.
+- When an issue has no repeated manifestations, return `"relatedLocations": []`;
+  never return null for this field.
 - Do not include markdown fences or commentary outside the JSON object.
 """

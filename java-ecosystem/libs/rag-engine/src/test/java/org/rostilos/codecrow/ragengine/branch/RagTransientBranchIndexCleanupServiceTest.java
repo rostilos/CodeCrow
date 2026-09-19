@@ -296,11 +296,10 @@ class RagTransientBranchIndexCleanupServiceTest {
         when(candidate.getWorkspaceName()).thenReturn("workspace");
         when(candidate.getProjectNamespace()).thenReturn("namespace");
         when(candidate.getBranchName()).thenReturn("release/candidate");
-        when(candidate.getLastAccessedAt()).thenReturn(OffsetDateTime.now().minusDays(31));
+        when(candidate.getLastAccessedAt()).thenReturn(OffsetDateTime.now().minusDays(91));
         when(candidate.getProjectConfiguration()).thenReturn(new ProjectConfig(
                 false, "master", null,
-                new RagConfig(true, "master", null, null,
-                        true, 30, List.of("develop"), true)));
+                new RagConfig(true, "master")));
         return candidate;
     }
 

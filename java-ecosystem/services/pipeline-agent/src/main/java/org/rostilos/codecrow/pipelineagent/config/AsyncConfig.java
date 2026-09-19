@@ -25,7 +25,7 @@ public class AsyncConfig {
 
     /**
      * Keep liveness/recovery schedules independent from optional maintenance.
-     * A slow provider or Qdrant enrichment task must not prevent durable job
+     * A slow provider or repository-index task must not prevent durable job
      * recovery, heartbeat checks, or queue reconciliation from running.
      */
     @Bean(name = "taskScheduler")

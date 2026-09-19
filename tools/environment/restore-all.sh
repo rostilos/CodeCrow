@@ -3,18 +3,20 @@
 # =============================================================================
 # CodeCrow Full Restore Script
 # =============================================================================
-# Restores a CodeCrow backup created by backup-all.sh:
+# Restores CodeCrow's durable application state from a backup created by
+# backup-all.sh:
 #   - PostgreSQL database (drops + recreates)
-#   - Qdrant vector snapshots (via HTTP API)
 #   - Redis data (RDB file copy)
 #   - Config files (extracts tar archive)
+# Structural repository indexes are derived from repository source and are
+# not part of this durable application backup. Run normal branch indexing to
+# rebuild them after a restore.
 #
 # Usage:
 #   ./restore-all.sh <backup-dir>
 #   ./restore-all.sh <backup-dir> --pg-only
-#   ./restore-all.sh <backup-dir> --skip-qdrant
 #
-# Requirements: docker, curl, tar, gunzip
+# Requirements: docker, tar, gunzip
 # =============================================================================
 
 set -euo pipefail
@@ -28,7 +30,6 @@ source "$SCRIPT_DIR/backup-lib.sh"
 
 # Defaults
 DO_PG=true
-DO_QDRANT=true
 DO_REDIS=true
 DO_CONFIG=true
 BACKUP_PATH=""
@@ -38,9 +39,7 @@ BACKUP_PATH=""
 for arg in "$@"; do
   case "$arg" in
     --pg-only)
-      DO_QDRANT=false; DO_REDIS=false; DO_CONFIG=false ;;
-    --skip-qdrant)
-      DO_QDRANT=false ;;
+      DO_REDIS=false; DO_CONFIG=false ;;
     --skip-redis)
       DO_REDIS=false ;;
     --skip-config)
@@ -49,7 +48,6 @@ for arg in "$@"; do
       echo "Usage: ./restore-all.sh <backup-dir> [flags]"
       echo "  backup-dir        Path to backup directory (created by backup-all.sh)"
       echo "  --pg-only         Restore PostgreSQL only"
-      echo "  --skip-qdrant     Skip Qdrant restore"
       echo "  --skip-redis      Skip Redis restore"
       echo "  --skip-config     Skip config files restore"
       echo "  --help            Show this help"
@@ -95,7 +93,6 @@ echo
 
 echo -e "${RED}${BOLD}⚠  WARNING: This will OVERWRITE existing data!${NC}"
 echo -e "${RED}   PostgreSQL database will be dropped and recreated.${NC}"
-echo -e "${RED}   Qdrant collections will be overwritten.${NC}"
 echo -e "${RED}   Config files will be replaced.${NC}"
 echo
 read -rp "$(echo -e "${BOLD}Type 'yes' to confirm: ${NC}")" CONFIRM
@@ -139,44 +136,10 @@ if $DO_PG; then
   fi
 fi
 
-# ── 2. Qdrant Restore ───────────────────────────────────────────────────
-
-if $DO_QDRANT; then
-  header "2. Qdrant Vectors"
-  QDRANT_DIR="$BACKUP_PATH/qdrant"
-
-  if [[ ! -d "$QDRANT_DIR" ]] || [[ -z "$(ls -A "$QDRANT_DIR" 2>/dev/null)" ]]; then
-    warn "No Qdrant snapshots found in backup."
-  elif check_container "$QDRANT_CONTAINER"; then
-    read_qdrant_api_key "$DEPLOYMENT_DIR"
-    for snapshot_file in "$QDRANT_DIR"/*; do
-      FILENAME=$(basename "$snapshot_file")
-      # Extract collection name (format: collectionname_snapshotname)
-      COLLECTION=$(echo "$FILENAME" | sed 's/_[^_]*$//')
-
-      info "Restoring Qdrant collection: $COLLECTION"
-
-      # Copy snapshot into container
-      docker cp "$snapshot_file" "$QDRANT_CONTAINER:/qdrant/snapshots/${FILENAME}"
-
-      # Recover from snapshot
-      RECOVER_RESPONSE=$(curl -s $(qdrant_auth_header) -X PUT "http://localhost:6333/collections/$COLLECTION/snapshots/recover" \
-        -H "Content-Type: application/json" \
-        -d "{\"location\": \"/qdrant/snapshots/$FILENAME\"}" 2>/dev/null)
-
-      if echo "$RECOVER_RESPONSE" | grep -q '"status":"ok"'; then
-        success "Qdrant '$COLLECTION' restored"
-      else
-        warn "Qdrant restore for '$COLLECTION' may have issues: $RECOVER_RESPONSE"
-      fi
-    done
-  fi
-fi
-
-# ── 3. Redis Restore ────────────────────────────────────────────────────
+# ── 2. Redis Restore ────────────────────────────────────────────────────
 
 if $DO_REDIS; then
-  header "3. Redis Cache"
+  header "2. Redis Cache"
   REDIS_FILE="$BACKUP_PATH/redis_dump.rdb"
 
   if [[ ! -f "$REDIS_FILE" ]]; then
@@ -205,10 +168,10 @@ if $DO_REDIS; then
   fi
 fi
 
-# ── 4. Config Files ─────────────────────────────────────────────────────
+# ── 3. Config Files ─────────────────────────────────────────────────────
 
 if $DO_CONFIG; then
-  header "4. Configuration Files"
+  header "3. Configuration Files"
   CONFIG_FILE="$BACKUP_PATH/config_files.tar.gz"
 
   if [[ ! -f "$CONFIG_FILE" ]]; then

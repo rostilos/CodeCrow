@@ -6,6 +6,7 @@ import logging
 import re
 from bisect import bisect_right
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 from model.multi_stage import ReviewPlan
@@ -55,6 +56,7 @@ class _Stage3PromptContext:
     use_mcp_tools: bool
     review_revision: str
     issue_inventory: str
+    mcp_local_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,10 +72,12 @@ class _Stage3PromptShard:
 
 
 
-def _stage_3_tool_definitions() -> List[Dict[str, Any]]:
+def _stage_3_tool_definitions(
+    mcp_local_only: bool = False,
+) -> List[Dict[str, Any]]:
     definitions = McpToolExecutor(
         None,
-        None,
+        SimpleNamespace(mcpLocalOnly=mcp_local_only),
         stage="stage_3",
     ).get_tool_definitions()
     return sorted(
@@ -82,11 +86,14 @@ def _stage_3_tool_definitions() -> List[Dict[str, Any]]:
     )
 
 
-def _stage_3_declaration_bytes(use_mcp_tools: bool) -> bytes:
+def _stage_3_declaration_bytes(
+    use_mcp_tools: bool,
+    mcp_local_only: bool = False,
+) -> bytes:
     if not use_mcp_tools:
         return b""
     return json.dumps(
-        {"tools": _stage_3_tool_definitions()},
+        {"tools": _stage_3_tool_definitions(mcp_local_only)},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -97,12 +104,14 @@ def _estimated_prompt_tokens(
     prompt: str,
     *,
     use_mcp_tools: bool = False,
+    mcp_local_only: bool = False,
 ) -> int:
     """Estimate the exact UTF-8 prompt plus bound tool-schema declaration."""
     if use_mcp_tools:
         return _estimated_stage_3_messages_tokens(
             [{"role": "user", "content": prompt}],
             use_mcp_tools=True,
+            mcp_local_only=mcp_local_only,
         )
     byte_count = len(prompt.encode("utf-8")) + len(
         _stage_3_declaration_bytes(False)
@@ -132,6 +141,7 @@ def _estimated_stage_3_messages_tokens(
     messages: List[Any],
     *,
     use_mcp_tools: bool,
+    mcp_local_only: bool = False,
 ) -> int:
     """Account for every rendered message and the bound tool declarations."""
     message_bytes = json.dumps(
@@ -142,7 +152,7 @@ def _estimated_stage_3_messages_tokens(
         default=str,
     ).encode("utf-8")
     byte_count = len(message_bytes) + len(
-        _stage_3_declaration_bytes(use_mcp_tools)
+        _stage_3_declaration_bytes(use_mcp_tools, mcp_local_only)
     )
     return max(
         1,
@@ -224,6 +234,7 @@ def _render_complete_stage_3_prompt(
         task_context=task_context,
         use_mcp_tools=context.use_mcp_tools,
         review_revision=context.review_revision,
+        mcp_local_only=context.mcp_local_only,
     )
 
 
@@ -362,6 +373,7 @@ def _render_stage_3_semantic_shard(
         task_context=task_context,
         use_mcp_tools=use_mcp_tools,
         review_revision=context.review_revision,
+        mcp_local_only=context.mcp_local_only,
     )
     return _Stage3PromptShard(
         prompt=prompt,
@@ -665,7 +677,11 @@ def _split_stage_3_free_text_record(
 
     probe_anchor = _stage_3_free_text_probe_anchor(record)
     complete = _render_stage_3_semantic_shard(context, [record, probe_anchor])
-    if _estimated_prompt_tokens(complete.prompt) <= token_budget:
+    if _estimated_prompt_tokens(
+        complete.prompt,
+        use_mcp_tools=complete.use_mcp_tools,
+        mcp_local_only=context.mcp_local_only,
+    ) <= token_budget:
         return [record]
 
     preferred_boundaries = sorted({
@@ -691,7 +707,11 @@ def _split_stage_3_free_text_record(
                 context,
                 [candidate, probe_anchor],
             )
-            if _estimated_prompt_tokens(rendered.prompt) <= token_budget:
+            if _estimated_prompt_tokens(
+                rendered.prompt,
+                use_mcp_tools=rendered.use_mcp_tools,
+                mcp_local_only=context.mcp_local_only,
+            ) <= token_budget:
                 maximum_end = middle
                 low = middle + 1
             else:
@@ -977,6 +997,7 @@ def _expand_oversized_stage_3_unit(
     if _estimated_prompt_tokens(
         rendered.prompt,
         use_mcp_tools=rendered.use_mcp_tools,
+        mcp_local_only=context.mcp_local_only,
     ) <= token_budget:
         return [unit]
 
@@ -997,6 +1018,7 @@ def _expand_oversized_stage_3_unit(
             and _estimated_prompt_tokens(
                 candidate_shard.prompt,
                 use_mcp_tools=candidate_shard.use_mcp_tools,
+                mcp_local_only=context.mcp_local_only,
             ) > token_budget
         ):
             groups.append([
@@ -1042,6 +1064,7 @@ def _build_stage_3_prompt_shards(
     if _estimated_prompt_tokens(
         complete_prompt,
         use_mcp_tools=complete_uses_mcp,
+        mcp_local_only=context.mcp_local_only,
     ) <= token_budget:
         return [_Stage3PromptShard(
             prompt=complete_prompt,
@@ -1093,6 +1116,7 @@ def _build_stage_3_prompt_shards(
                 use_mcp_tools=bool(
                     candidate_shard.use_mcp_tools and context.review_revision
                 ),
+                mcp_local_only=context.mcp_local_only,
             ) > packing_token_budget
         ):
             packets.append(current)
@@ -1128,6 +1152,7 @@ def _build_stage_3_prompt_shards(
             use_mcp_tools=bool(
                 shard.use_mcp_tools and context.review_revision
             ),
+            mcp_local_only=context.mcp_local_only,
         )
         if estimated_tokens > packing_token_budget:
             splittable_keys = [
@@ -1185,6 +1210,7 @@ def _build_stage_3_prompt_shards(
             use_mcp_tools=bool(
                 bounded_last.use_mcp_tools and context.review_revision
             ),
+            mcp_local_only=context.mcp_local_only,
         )
         if bounded_tokens > token_budget:
             raise RuntimeError(
@@ -1207,6 +1233,7 @@ def _build_stage_3_prompt_shards(
         _estimated_prompt_tokens(
             complete_prompt,
             use_mcp_tools=complete_uses_mcp,
+            mcp_local_only=context.mcp_local_only,
         ),
         len(shards),
         len(records),

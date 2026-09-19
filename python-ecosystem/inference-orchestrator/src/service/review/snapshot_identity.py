@@ -98,3 +98,60 @@ def validate_review_snapshot_identity(
         target_head_revision=target_head_revision,
         merge_base_revision=merge_base_revision,
     )
+
+
+def resolve_exact_structural_base_revision(
+    request: ReviewRequestDto,
+) -> Optional[str]:
+    """Resolve a base revision only when the local PR target is cross-bound.
+
+    Structural context is optional, so an incomplete or conflicting binding is
+    represented by ``None`` rather than a core-review precondition error.  PRs
+    must bind the staged target snapshot to both the provider-captured target
+    head and target branch. Non-PR/manual reviews retain the legacy best
+    available immutable-revision behavior.
+    """
+
+    local_revision = getattr(request, "localRepoRevision", None)
+    if not isinstance(local_revision, str) or not local_revision.strip():
+        local_revision = None
+    elif local_revision != local_revision.strip():
+        return None
+
+    pull_request_id = getattr(request, "pullRequestId", None)
+    is_pull_request = (
+        isinstance(pull_request_id, int)
+        and pull_request_id != 0
+    )
+    target_head_revision = getattr(request, "targetHeadCommitHash", None)
+    if (
+        not isinstance(target_head_revision, str)
+        or not target_head_revision.strip()
+        or target_head_revision != target_head_revision.strip()
+    ):
+        target_head_revision = None
+
+    if not is_pull_request:
+        return local_revision or request.get_target_head_commit_hash()
+
+    if (
+        local_revision is None
+        or target_head_revision is None
+        or local_revision != target_head_revision
+    ):
+        return None
+
+    target_branch = getattr(request, "targetBranchName", None)
+    local_target_branch = getattr(request, "localRepoTargetBranch", None)
+    if (
+        not isinstance(target_branch, str)
+        or not target_branch.strip()
+        or target_branch != target_branch.strip()
+        or not isinstance(local_target_branch, str)
+        or not local_target_branch.strip()
+        or local_target_branch != local_target_branch.strip()
+        or local_target_branch != target_branch
+    ):
+        return None
+
+    return target_head_revision

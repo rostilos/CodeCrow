@@ -56,5 +56,9 @@ java-ecosystem/services/pipeline-agent/runtime-plugins/
 **/newrelic.yml
 
 tools/environment/dumps/
-tools/environment/qdrant-dumps/*
-!tools/environment/qdrant-dumps/.gitkeep
+tools/magento_benchmark/.cache/
+tools/magento_benchmark/config.toml
+tools/magento_benchmark/reports/
+tools/magento_benchmark/runs/
+tools/magento_benchmark/site/
+tools/magento_benchmark/work/

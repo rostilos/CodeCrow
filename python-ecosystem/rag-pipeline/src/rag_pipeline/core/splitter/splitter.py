@@ -7,7 +7,7 @@ This module provides true AST-aware code chunking that:
 3. Uses RecursiveCharacterTextSplitter for oversized chunks
 4. Enriches metadata for deterministic structural retrieval
 5. Maintains parent context ("breadcrumbs") for nested structures
-6. Uses deterministic IDs for Qdrant deduplication
+6. Uses deterministic IDs for structural-generation deduplication
 """
 
 import hashlib
@@ -47,7 +47,7 @@ def generate_deterministic_id(path: str, content: str, chunk_index: int = 0) -> 
     Generate a deterministic ID for a chunk based on file path and content.
 
     This ensures the same code chunk always gets the same ID, preventing
-    duplicates in Qdrant during re-indexing.
+    duplicate structural units during re-indexing.
     """
     hash_input = f"{path}:{chunk_index}:{content[:500]}"
     return hashlib.sha256(hash_input.encode('utf-8')).hexdigest()[:32]
@@ -136,7 +136,7 @@ class ASTCodeSplitter:
     - Uses .scm query files for declarative pattern matching
     - Splits code into semantic units (classes, functions, methods)
     - Falls back to RecursiveCharacterTextSplitter when needed
-    - Uses deterministic IDs for Qdrant deduplication
+    - Uses deterministic IDs for structural-generation deduplication
     - Enriches metadata for deterministic structural retrieval
 
     Chunk Size Strategy keeps most semantic units intact and splits only
@@ -1190,18 +1190,52 @@ class ASTCodeSplitter:
         Fragment ownership remains in metadata; stored text stays raw source.
         """
         splitter = self._get_text_splitter(language) if language else self._default_splitter
-        sub_chunks = splitter.split_text(chunk.content)
+        raw_sub_chunks = [
+            fragment
+            for fragment in splitter.split_text(chunk.content)
+            if fragment
+            and fragment.strip()
+        ]
+        sub_chunks = (
+            [
+                fragment
+                for fragment in raw_sub_chunks
+                if len(fragment.strip()) >= self.min_chunk_size
+            ]
+            if len(raw_sub_chunks) > 1
+            else raw_sub_chunks
+        )
 
         nodes = []
         parent_id = generate_deterministic_id(path, chunk.content, 0)
-        total_sub = len([s for s in sub_chunks if s and s.strip()])
+        located_sub_chunks = []
+        previous_fragment_offset = -1
+        for sub_chunk in sub_chunks:
+            # RecursiveCharacterTextSplitter may trim leading/trailing whitespace,
+            # but every emitted fragment remains an ordered substring of the AST
+            # unit. Locate that exact substring so source coordinates describe the
+            # evidence returned by getStructuralUnit, not the whole owning unit.
+            fragment_offset = chunk.content.find(
+                sub_chunk,
+                previous_fragment_offset + 1,
+            )
+            if fragment_offset < 0:
+                logger.warning(
+                    "Skipped oversized fragment that could not be located in "
+                    "its source unit: %s",
+                    path,
+                )
+                continue
+            previous_fragment_offset = fragment_offset
+            located_sub_chunks.append((sub_chunk, fragment_offset))
 
-        sub_idx = 0
-        for i, sub_chunk in enumerate(sub_chunks):
-            if not sub_chunk or not sub_chunk.strip():
-                continue
-            if len(sub_chunk.strip()) < self.min_chunk_size and total_sub > 1:
-                continue
+        total_sub = len(located_sub_chunks)
+        for sub_idx, (sub_chunk, fragment_offset) in enumerate(located_sub_chunks):
+            fragment_start_line = (
+                chunk.start_line
+                + chunk.content[:fragment_offset].count('\n')
+            )
+            fragment_end_line = fragment_start_line + sub_chunk.count('\n')
 
             # Build metadata for this fragment
             # DO NOT copy detailed lists - they don't apply to fragments
@@ -1211,8 +1245,8 @@ class ASTCodeSplitter:
             metadata['parent_chunk_id'] = parent_id
             metadata['sub_chunk_index'] = sub_idx
             metadata['total_sub_chunks'] = total_sub
-            metadata['start_line'] = chunk.start_line
-            metadata['end_line'] = chunk.end_line
+            metadata['start_line'] = fragment_start_line
+            metadata['end_line'] = fragment_end_line
 
             # Keep parent context - still relevant
             if chunk.parent_context:
@@ -1235,7 +1269,6 @@ class ASTCodeSplitter:
 
             chunk_id = generate_deterministic_id(path, sub_chunk, sub_idx)
             nodes.append(TextNode(id_=chunk_id, text=sub_chunk, metadata=metadata))
-            sub_idx += 1
 
         # Log when splitting happens - it's a signal the chunk_size might need adjustment
         if nodes:

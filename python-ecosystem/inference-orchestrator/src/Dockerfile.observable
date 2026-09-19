@@ -1,5 +1,7 @@
 FROM python:3.11-slim-bullseye AS builder
 
+ENV MCP_USE_ANONYMIZED_TELEMETRY=false
+
 # Set work directory
 WORKDIR /app
 
@@ -38,6 +40,8 @@ COPY python-ecosystem/inference-orchestrator/src/codecrow-platform-mcp-1.0.jar* 
 
 # --- Production Stage ---
 FROM python:3.11-slim-bullseye
+
+ENV MCP_USE_ANONYMIZED_TELEMETRY=false
 
 # CRITICAL FIX: Pull a slim JRE from eclipse-temurin instead of using apt-get
 # This saves ~150-200MB compared to installing openjdk-17-jre-headless via apt

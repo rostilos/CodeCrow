@@ -201,6 +201,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withTaskHistoryContext(taskHistory)
                 .withChangedFiles(preparedDiff.changedFiles())
                 .withDeletedFiles(preparedDiff.deletedFiles())
+                .withProposedTreeChangedFiles(preparedDiff.proposedTreeChangedFiles())
+                .withProposedTreeDeletedFiles(preparedDiff.proposedTreeDeletedFiles())
                 .withDiffSnippets(List.of())
                 .withRawDiff(preparedDiff.fullDiff())
                 .withTargetBranchName(request.targetBranchName)
@@ -256,7 +258,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         AiAnalysisRequestImpl.Builder<?> builder = baseBuilder(project, request, repository, aiConnection)
                 .withPullRequestId(null)
                 .withTargetBranchName(request.getTargetBranchName())
-                .withCurrentCommitHash(resolvedCommit);
+                .withCurrentCommitHash(resolvedCommit)
+                .withTargetHeadCommitHash(resolvedCommit);
 
         if (previousIssues != null && !previousIssues.isEmpty()) {
             builder.withPreviousIssues(previousIssues);
@@ -297,6 +300,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withPullRequestId(null)
                 .withTargetBranchName(branchRequest.getTargetBranchName())
                 .withCurrentCommitHash(resolvedCommit)
+                .withTargetHeadCommitHash(resolvedCommit)
                 .withChangedFiles(safeChangedFiles)
                 .withDeletedFiles(DiffParser.extractDeletedFiles(rawDiff != null ? rawDiff : ""))
                 .withDiffSnippets(DiffParser.extractDiffSnippets(rawDiff != null ? rawDiff : "", 20))

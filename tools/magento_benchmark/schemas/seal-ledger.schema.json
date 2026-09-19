@@ -1,0 +1,300 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seal-ledger.schema.json",
+  "title": "CodeCrow Magento 2 sealed-label custody ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "studyId",
+    "registrationDigest",
+    "corpusDigest",
+    "executionCorpusDigest",
+    "sealedCommitment",
+    "generatedAt",
+    "custodians",
+    "accessEvents",
+    "unseal",
+    "boundRuns",
+    "boundPostFixRuns",
+    "sealLedgerDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-seal-ledger"
+    },
+    "studyId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "registrationDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "corpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "executionCorpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "sealedCommitment": {
+      "$ref": "#/$defs/commitment"
+    },
+    "generatedAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "custodians": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "custodianId",
+          "role"
+        ],
+        "properties": {
+          "custodianId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "accessEvents": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "$ref": "#/$defs/accessEvent"
+      }
+    },
+    "unseal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "authorizedBy",
+        "reason",
+        "commitmentDigest"
+      ],
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "authorizedBy": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commitmentDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "boundRuns": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/boundRun"
+      }
+    },
+    "boundPostFixRuns": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/boundPostFixRun"
+      }
+    },
+    "sealLedgerDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "commitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "digest"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "sha256"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "accessEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eventId",
+        "at",
+        "actor",
+        "action",
+        "partition",
+        "purpose"
+      ],
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "enum": [
+            "commitment_created",
+            "custody_transfer",
+            "development_access",
+            "sealed_unseal",
+            "sealed_access"
+          ]
+        },
+        "partition": {
+          "enum": [
+            "development",
+            "sealed"
+          ]
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "boundPostFixRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runId",
+        "runDigest",
+        "pairedPrimaryRunId",
+        "pairedPrimaryRunDigest",
+        "startedAt",
+        "completedAt",
+        "analysisModel",
+        "analysisProvider",
+        "analysisConfigDigest",
+        "executionCorpusDigest",
+        "postFixReplayPlanDigest",
+        "replayLockDigest",
+        "replayAttestationDigest"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "pairedPrimaryRunId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pairedPrimaryRunDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "startedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "completedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "analysisModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "analysisProvider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "analysisConfigDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "executionCorpusDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "postFixReplayPlanDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "replayLockDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "replayAttestationDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "boundRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runId",
+        "runDigest",
+        "startedAt",
+        "completedAt",
+        "analysisModel",
+        "analysisProvider",
+        "analysisConfigDigest",
+        "executionCorpusDigest"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "startedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "completedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "analysisModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "analysisProvider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "analysisConfigDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "executionCorpusDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

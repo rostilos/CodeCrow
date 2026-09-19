@@ -19,7 +19,6 @@ from .api import (
     GraphFact,
     PluginOutcome,
     RepositoryAnalysis,
-    RepositoryAnalysisMode,
     RepositorySnapshot,
 )
 
@@ -144,9 +143,6 @@ class ImportGraphSession:
     parser: RecordParser = field(compare=False, repr=False)
     resolver: ModuleResolver = field(compare=False, repr=False)
     _records: dict[str, ImportFileRecord] = field(default_factory=dict)
-    _baseline_records: dict[str, ImportFileRecord] = field(default_factory=dict)
-    _changed_paths: set[str] = field(default_factory=set)
-    _analysis_mode: RepositoryAnalysisMode = RepositoryAnalysisMode.FULL_INDEX
 
     @classmethod
     def restore(
@@ -192,17 +188,10 @@ class ImportGraphSession:
             parser=parser,
             resolver=resolver,
             _records=dict(records),
-            _baseline_records=dict(records),
         )
-
-    def set_analysis_mode(self, mode: RepositoryAnalysisMode) -> None:
-        if not isinstance(mode, RepositoryAnalysisMode):
-            raise ValueError("repository analysis mode is invalid")
-        self._analysis_mode = mode
 
     def ingest(self, artifacts: tuple[FileArtifact, ...]) -> None:
         for artifact in artifacts:
-            self._changed_paths.add(artifact.path)
             self._records.pop(artifact.path, None)
             if artifact.deleted:
                 continue
@@ -315,91 +304,8 @@ class ImportGraphSession:
                 ))
         return tuple(sorted(packets))
 
-    @staticmethod
-    def _relation_identity(fact: GraphFact) -> tuple[object, ...]:
-        """Identify one relationship independently from source line movement."""
-        return (
-            fact.kind,
-            fact.source,
-            fact.relation,
-            fact.target,
-            fact.path,
-            fact.attributes,
-            fact.related_paths,
-        )
-
-    def _removed_relation_packets(
-        self,
-        current_packets: tuple[ArchitecturePacket, ...],
-    ) -> tuple[ArchitecturePacket, ...]:
-        """Preserve exact navigation when a PR removes a base relationship.
-
-        Prompt assembly correctly rejects a base architecture packet touching
-        a changed file as stale.  A PR-owned transition fact keeps the exact
-        path to unchanged related source without claiming the removal is a
-        defect.
-        """
-        if (
-            self._analysis_mode is not RepositoryAnalysisMode.PR_OVERLAY
-            or not self._baseline_records
-            or not self._changed_paths
-        ):
-            return ()
-
-        baseline_packets = self._packets_for(self._baseline_records)
-        current_identities = {
-            self._relation_identity(fact)
-            for packet in current_packets
-            for fact in packet.facts
-        }
-        removed_by_path: dict[str, set[GraphFact]] = {}
-        for packet in baseline_packets:
-            for fact in packet.facts:
-                if fact.path not in self._changed_paths:
-                    continue
-                if self._relation_identity(fact) in current_identities:
-                    continue
-                removed_by_path.setdefault(fact.path, set()).add(GraphFact(
-                    f"{self.plugin_id}-pr-removed-relation",
-                    fact.source,
-                    "removed-from-pr-overlay",
-                    fact.target,
-                    fact.path,
-                    fact.line,
-                    attributes=tuple(sorted((
-                        ("originalKind", fact.kind),
-                        ("originalRelation", fact.relation),
-                        ("state", "absent-in-pr-overlay"),
-                    ))),
-                    related_paths=fact.related_paths,
-                ))
-
-        return tuple(sorted(
-            ArchitecturePacket(
-                plugin_id=self.plugin_id,
-                kind=f"{self.plugin_id}-import-graph-delta",
-                key=f"removed:{source_path}",
-                paths=tuple(sorted({
-                    source_path,
-                    *(
-                        related_path
-                        for fact in facts
-                        for related_path in fact.related_paths
-                    ),
-                })),
-                facts=tuple(sorted(facts)),
-                attributes=(
-                    ("evidenceRole", "navigation"),
-                    ("state", "base-to-pr-transition"),
-                ),
-            )
-            for source_path, facts in sorted(removed_by_path.items())
-            if facts
-        ))
-
     def _packets(self) -> tuple[ArchitecturePacket, ...]:
-        current = self._packets_for(self._records)
-        return tuple(sorted((*current, *self._removed_relation_packets(current))))
+        return self._packets_for(self._records)
 
     def finish(self, dependencies: RepositoryAnalysis):
         return PluginOutcome.handled(RepositoryAnalysis(

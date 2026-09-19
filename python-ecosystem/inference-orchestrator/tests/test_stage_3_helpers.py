@@ -10,9 +10,26 @@ from service.review.orchestrator.stage_3_aggregation import (
     _summarize_issues_for_stage_3,
     _summarize_plan_for_stage_3,
     _extract_dismissed_issues,
+    _request_mcp_local_only,
     _stage_3_verification_issue_map,
     _validated_mcp_dismissals,
 )
+
+
+@pytest.mark.parametrize(
+    ("request_like", "expected"),
+    [
+        (SimpleNamespace(), False),
+        (SimpleNamespace(mcpLocalOnly=None), False),
+        (SimpleNamespace(mcpLocalOnly=False), False),
+        (SimpleNamespace(mcpLocalOnly=True), True),
+    ],
+)
+def test_mcp_local_only_matches_dto_default_for_legacy_requests(
+    request_like,
+    expected,
+):
+    assert _request_mcp_local_only(request_like) is expected
 
 
 # ── _summarize_issues_for_stage_3 ───────────────────────────

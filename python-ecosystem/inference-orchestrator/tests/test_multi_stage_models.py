@@ -60,6 +60,19 @@ def test_stage_1_explicit_null_defaults_match_omitted_defaults():
     assert explicit_null.note == ""
 
 
+def test_stage_1_missing_and_null_confidence_use_neutral_default():
+    base = {
+        "file": "src/example.py",
+        "analysis_summary": "No defect found",
+    }
+
+    omitted = FileReviewOutput.model_validate(base)
+    explicit_null = FileReviewOutput.model_validate({**base, "confidence": None})
+
+    assert omitted.confidence == "MEDIUM"
+    assert explicit_null.confidence == "MEDIUM"
+
+
 def test_stage_1_nested_issue_explicit_null_defaults_match_omission():
     omitted = _code_review_issue()
     explicit_null = _code_review_issue(
@@ -110,12 +123,15 @@ def test_null_normalization_does_not_make_required_result_lists_optional():
 
 
 def test_null_normalization_keeps_non_nullable_wire_schema_types():
-    file_review_schema = FileReviewOutput.model_json_schema()["properties"]
+    complete_file_review_schema = FileReviewOutput.model_json_schema()
+    file_review_schema = complete_file_review_schema["properties"]
     code_issue_schema = CodeReviewIssue.model_json_schema()["properties"]
     cross_issue_schema = CrossFileIssue.model_json_schema()["properties"]
 
     assert file_review_schema["note"]["type"] == "string"
     assert file_review_schema["issues"]["type"] == "array"
+    assert file_review_schema["confidence"]["type"] == "string"
+    assert "confidence" not in complete_file_review_schema["required"]
     assert code_issue_schema["isResolved"]["type"] == "boolean"
     assert code_issue_schema["evidenceRefs"]["type"] == "array"
     assert code_issue_schema["claimKind"]["type"] == "string"

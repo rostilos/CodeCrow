@@ -23,6 +23,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    restart: unless-stopped
 
   pgadmin:
     image: dpage/pgadmin4:9
@@ -58,25 +59,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: codecrow-qdrant
-    environment:
-      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
-    ports:
-      - "127.0.0.1:6333:6333"
-      - "127.0.0.1:6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    networks:
-      - codecrow-network
-    healthcheck:
-      test: ["CMD-SHELL", "bash -c '>/dev/tcp/localhost/6333'"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
     restart: unless-stopped
 
   web-server:
@@ -113,6 +95,10 @@ services:
 
       CODECROW_INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       CODECROW_RAG_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
+      # Use the deployment-owned container identity, not the generic Compose
+      # service alias. Other isolated workloads can legitimately have their own
+      # `rag-pipeline` service on this external network.
+      CODECROW_RAG_API_URL: http://codecrow-rag-pipeline:8001
       ANALYSIS_MAX_FILES: ${ANALYSIS_MAX_FILES:-150}
       ANALYSIS_MAX_FILE_SIZE_BYTES: ${ANALYSIS_MAX_FILE_SIZE_BYTES:-5242880}
       ANALYSIS_MAX_TOTAL_DIFF_SIZE_BYTES: ${ANALYSIS_MAX_TOTAL_DIFF_SIZE_BYTES:-20971520}
@@ -165,8 +151,9 @@ services:
       SPRING_SESSION_STORE_TYPE: redis
       SPRING_REDIS_HOST: redis
       SPRING_REDIS_PORT: 6379
-      RAG_API_URL: http://rag-pipeline:8001
+      CODECROW_RAG_API_URL: http://codecrow-rag-pipeline:8001
       RAG_ENABLED: "true"
+      CODECROW_RAG_LIFECYCLE_FAILED_RETRY_MINUTES: ${RAG_LIFECYCLE_FAILED_RETRY_MINUTES:-60}
       CODECROW_INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       CODECROW_RAG_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       ANALYSIS_MAX_FILES: ${ANALYSIS_MAX_FILES:-150}
@@ -232,8 +219,10 @@ services:
     environment:
       CODECROW_API_URL: http://codecrow-web-application:8081
       PLATFORM_MCP_JAR: /app/codecrow-platform-mcp-1.0.jar
+      MCP_USE_ANONYMIZED_TELEMETRY: ${MCP_USE_ANONYMIZED_TELEMETRY:-false}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
+      RAG_API_URL: http://codecrow-rag-pipeline:8001
       ANALYSIS_QUEUE_HEARTBEAT_SECONDS: ${ANALYSIS_QUEUE_HEARTBEAT_SECONDS:-30}
       ANALYSIS_CONSUMER_HEARTBEAT_SECONDS: ${ANALYSIS_CONSUMER_HEARTBEAT_SECONDS:-5}
       ANALYSIS_PROMPT_DRY_RUN_ENABLED: ${ANALYSIS_PROMPT_DRY_RUN_ENABLED:-false}
@@ -249,6 +238,7 @@ services:
     networks:
       - codecrow-network
     volumes:
+      - source_code_tmp:/tmp
       - ./config/inference-orchestrator/.env:/app/.env
       - inference_orchestrator_logs:/app/logs
     healthcheck:
@@ -277,8 +267,8 @@ services:
     container_name: codecrow-rag-pipeline
     environment:
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
-      QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
       REDIS_URL: redis://redis:6379/1
+      STRUCTURAL_INDEX_ROOT: /var/lib/codecrow/structural-index
       UVICORN_WORKERS: ${RAG_UVICORN_WORKERS:-1}
     ports:
       - "127.0.0.1:${RAG_PIPELINE_HOST_PORT:-8004}:8001"
@@ -288,13 +278,12 @@ services:
         condition: service_healthy
       fix-permissions:
         condition: service_completed_successfully
-      qdrant:
-        condition: service_healthy
     networks:
       - codecrow-network
     #command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5678", "main.py"]
     volumes:
       - source_code_tmp:/tmp
+      - structural_index_data:/var/lib/codecrow/structural-index
       - rag_logs:/app/logs
       - ./config/rag-pipeline/.env:/app/.env
     healthcheck:
@@ -328,9 +317,10 @@ services:
 
   fix-permissions:
     image: busybox
-    command: sh -c "chmod -R 1777 /tmp"
+    command: sh -c "chmod 1777 /tmp && chown 1001:1001 /var/lib/codecrow/structural-index"
     volumes:
       - source_code_tmp:/tmp
+      - structural_index_data:/var/lib/codecrow/structural-index
 
 volumes:
   source_code_tmp:
@@ -345,8 +335,8 @@ volumes:
   redis_data:
     name: redis_data
     driver: local
-  qdrant_data:
-    name: qdrant_data
+  structural_index_data:
+    name: structural_index_data
     driver: local
   pgadmin_data:
     name: pgadmin_data

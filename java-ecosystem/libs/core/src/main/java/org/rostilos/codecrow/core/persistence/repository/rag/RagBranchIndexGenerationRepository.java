@@ -47,15 +47,4 @@ public interface RagBranchIndexGenerationRepository extends JpaRepository<RagBra
             @Param("revision") String revision,
             @Param("statuses") List<RagBranchIndexGenerationStatus> statuses);
 
-    /**
-     * Physical targets that may still contain a project's PR overlays. Both
-     * active and superseded published generations are relevant: a generation
-     * can be superseded between review indexing and the close webhook.
-     */
-    @Query("SELECT DISTINCT g.collectionName FROM RagBranchIndexGeneration g "
-            + "JOIN g.branchIndex b WHERE b.project.id = :projectId "
-            + "AND g.status IN :statuses")
-    List<String> findCollectionNamesByProjectIdAndStatusIn(
-            @Param("projectId") Long projectId,
-            @Param("statuses") List<RagBranchIndexGenerationStatus> statuses);
 }

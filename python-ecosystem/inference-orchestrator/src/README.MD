@@ -84,7 +84,7 @@ inference-orchestrator/
 | Component        | Responsibility                                   |
 | ---------------- | ------------------------------------------------ |
 | `ReviewService`  | Orchestrates the entire review pipeline          |
-| `RagClient`      | Structural indexing, deterministic context, and code search |
+| `RagClient`      | Revision-bound structural relations, graph/unit reads, and code search |
 | `FileClassifier` | Neutral file-classification compatibility wrapper |
 | `SmartChunker`   | Legacy neutral line/hunk chunking compatibility  |
 | `PromptBuilder`  | Generates prompts with Lost-in-Middle protection |
@@ -94,39 +94,107 @@ inference-orchestrator/
 
 The project `useMcpTools` analysis setting defaults to enabled. The Pipeline Agent
 downloads the target-branch-head archive before inference and supplies a temporary
-local repository binding. Every Stage 1 file-review prompt then runs through the
-shared agent execution service with local file and VCS-compatible tools and
-revision-bound RAG search. The prompt still contains its diff, current-source
-projection, and preassembled structural RAG context; agent tools are additional
-ways to investigate that evidence.
+local repository binding. Every Stage 1 semantic invocation runs once through the
+shared agent execution service with the complete batch schema. Its prompt contains
+the diff, bounded post-change source, and parser/plugin metadata, but no preloaded
+structural relation map. When the target snapshot and body-complete diff-declared overlay can form
+an exact proposed tree, inference prepares one sealed generation before MCP
+startup. Every eligible primary batch must first use
+`getMinimalReviewContext`. `getImpactRadius`, `queryCodeGraph`,
+`traverseCodeGraph`, `getStructuralUnit`, and the compatible
+`exploreReviewContext` operation are focused continuations after that minimal
+call. The host injects the exact batch paths, tenant/repository
+identity, base/source revisions, snapshot, overlay, and selection inputs into
+every structural call.
+The structural service recovers the repository profile, source root, and file
+selection from the sealed base generation rather than mutable live project
+configuration. It clones the exactly bound sealed graph, applies the selected
+changed/deleted and affected-relation delta, recomputes repository-plugin output,
+and seals a complete immutable proposed generation. If plugin selection changes
+or sealed repository state cannot be restored, it rebuilds the already
+materialized proposed source under the inherited policy. Compatible cached
+generations are reopened without rescanning the complete target snapshot. Each
+graph-tool call requires the sealed review target/manifest receipt and is
+read-only.
+`getReviewFileContent` returns proposed source for any PR-modified path, including
+a path owned by another Stage 1 batch, reports deleted or unavailable modified
+paths without falling back to stale source, and reads unchanged paths from the
+pinned target snapshot.
+An unbounded reread of a path whose complete current source is already in the
+prompt is rejected; a concrete line range remains available for omitted or
+truncated context.
+
+This request-scoped proposed-tree path depends on `useMcpTools` and global
+structural-service availability. The separate project `ragEnabled` setting
+controls persistent branch indexing/retrieval and does not gate the Stage 1
+request-scoped proposed-tree tools.
+
+The focused operations provide compact orientation, weighted impact radius,
+paged named relation queries, bounded traversal, exact structural-unit windows,
+and optional source windows with explicit source coverage. `queryCodeGraph`
+accepts a non-negative result-offset `cursor` and returns `nextCursor`.
+`traverseCodeGraph` defaults
+to a 2,000-token response estimate (approximately serialized characters divided
+by four) and returns coverage plus a frontier. `getStructuralUnit` accepts
+`offset` and `maxCharacters` and returns an exact stored-content window with its
+digest and continuation metadata. Graph evidence narrows the search; exact
+proposed/current source remains proof. Exact source returned in any focused
+tool's `sourceWindows` or by `getStructuralUnit` is used directly.
+`getReviewFileContent` is the fallback for code not represented by the graph,
+required whole-file bytes, or an omitted/truncated range. When
+exact inputs, indexing, or graph tools are unavailable, Stage 1 remains
+source-only.
+
+Controlled Graph-RAG evaluations set `requireStructuralMcp: true`. In that mode
+each Stage 1 batch must complete `getMinimalReviewContext`, `getImpactRadius`,
+`queryCodeGraph`, and `getStructuralUnit` in order. The broader
+`exploreReviewContext` and `traverseCodeGraph` operations remain available after
+that bounded workflow, and `getReviewFileContent` remains available for concrete
+source gaps. A missing sealed review generation, incomplete six-tool inventory,
+MCP startup failure, failed/out-of-order required operation, or agent failure
+stops the review instead of entering source-only/direct fallback. Normal requests
+leave this flag false and retain the fail-open behavior.
+
+The shared service inventories and converts MCP tools once per review, host-binds
+tool arguments, and creates a fresh prompt-scoped agent from the selected cached
+tools for each invocation. Stage 1 sets the initial required tool to
+`getMinimalReviewContext` whenever the sealed review graph is available.
+Repository evidence participates in the same review decision as the changed-file
+evidence, so it can confirm or contradict a tentative local interpretation rather
+than being restricted to additive findings.
 
 An explicit `false` uses the direct structured-model path. Disabling may reduce
-cost and latency, but may reduce output quality. Archive staging and file, VCS,
-and on-demand RAG tools are auxiliary. If snapshot staging fails, repository
-navigation continues with revision-pinned provider reads. If on-demand RAG fails,
-the agent retains repository tools and preassembled RAG. An MCP or agent execution
-failure records reduced context and reruns that batch with an MCP-free direct
-prompt containing the same assembled evidence.
+cost and latency, but may reduce output quality. Archive staging and repository
+tools are auxiliary. If snapshot staging fails, an exact repository read can
+continue through the revision-pinned provider fallback. If MCP initialization does
+not produce a usable repository agent, or an agent does not return a complete
+batch, Stage 1 continues through the direct structured recovery path. It may reuse
+a valid exact proposed-tree response already returned to that batch, but never fetches
+or preloads a target-head relation map. Explicitly disabling MCP does not silently
+inject graph context.
+
+`mcpLocalOnly` preflights only the request-bound `getReviewFileContent` proposed-
+source path before model use. Structural MCP startup and graph calls remain
+optional and fail open during the agent run; local-only mode still disallows the
+provider-backed repository fallback and direct Stage 1 model fallback.
 
 ---
 
 ## Structural Repository Context Flow
 
-Reviews use revision-bound structural repository context. Stage 1 asks the
-repository index for exact changed-file chunks, symbol definitions, imports,
-inheritance, namespace relationships, and framework/plugin graph facts. The
-request is bound to the target collection, base revision and generation
-receipt; a successfully built PR overlay additionally binds the source revision,
-PR generation fingerprint, and overlay receipt.
+Reviews use revision-bound structural repository context. The exact review tree
+is the pinned target snapshot plus every complete non-deleted overlay body minus
+deleted paths. The initial Stage 1 prompt contains no relation records. Before
+MCP startup, the host prepares or reuses one content-addressed generation bound
+to workspace, project, branch, base/source revisions, target/overlay hashes,
+selection inputs, and structural/plugin representation. Graph queries then use
+only the sealed review receipt and never mutate the generation.
 
-The returned chunks are filtered only for stale/deleted paths, exact duplicate
-evidence, and current-source redundancy. Match
-types and concrete `matched_on` values are included in the prompt. Only exact
-structural matches are used.
-
-This deterministic context remains in each Stage 1 prompt when agent mode is
-enabled. The RAG MCP tool can add focused revision-bound results on demand; it
-does not replace preassembly or make RAG a prerequisite for reviewing the diff.
+The response's graph categories, source coverage, and exact bounded source
+windows describe that same proposed tree. The supplied diff, Current File Content, and exact
+`getReviewFileContent` results remain authoritative. Missing changed bodies,
+bounded coverage, or unavailable indexing are observable optional enrichment and
+do not prevent source-only review from continuing.
 
 Stage 2 does not issue another repository search. It combines changed source,
 Stage 1 findings, exact architecture/enrichment data, plugin groups, migrations,
@@ -140,14 +208,14 @@ failures skip this optional context while exact VCS MCP source tools remain
 available.
 
 ```python
-await rag_client.get_deterministic_context(
+await rag_client.get_structural_relations(
+    paths=["src/auth/token.py"],
     workspace="my-org",
     project="my-repo",
-    branches=["main"],
-    file_paths=["src/auth/token.py"],
-    base_revision="<commit>",
-    base_generation_manifest_sha256="<receipt>",
-    collection_target="<sealed-collection>",
+    branch="main",
+    repository_revision="<commit>",
+    repository_generation_manifest_sha256="<receipt>",
+    collection_target="<sealed-generation>",
 )
 ```
 
@@ -202,8 +270,7 @@ criterion is missing. The orchestrator handles this in three places:
 
 Incremental analysis does not send the whole PR through every review stage:
 
-- Stage 0, Stage 1, PR-overlay/index work, hunk coverage, and new inline anchors
-  use only `deltaDiff`.
+- Stage 0, Stage 1, hunk coverage, and new inline anchors use only `deltaDiff`.
 - Stage 2 gets a locally assembled base-to-head ledger in addition to the delta.
 - The ledger starts with a path manifest and then ranks task-relevant
   changed hunks without omitting lower-ranked evidence. It does not cause another source-retrieval or model
@@ -312,8 +379,8 @@ Large Language Models often lose focus on content in the middle of long prompts.
 │                          │                                 │
 │                          ▼                                 │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  ████ STRUCTURAL CONTEXT ████                        │  │
-│  │  Repository context with stale PR data protection     │  │
+│  │  ████ OPTIONAL PROPOSED-TREE TOOL SET ████           │  │
+│  │  Host-bound focused queries; no prompt preload       │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                                                            │
 └────────────────────────────────────────────────────────────┘
@@ -339,7 +406,12 @@ directory label determines risk.
    - Task intent, changed-file list, previous issues.
 
 4. **STRUCTURAL REPOSITORY CONTEXT**
-   - Repository context. Prefer PR-indexed chunks for changed files.
+   - In an eligible graph-backed agent, no relation map is preloaded;
+     `getMinimalReviewContext` is the required initial graph call and focused
+     continuations remain model-selected.
+   - Batch paths and repository/revision/source-tree identity are host-bound.
+     Use graph categories to narrow scope and exact related/file source to verify
+     a claim. Direct recovery never fetches a target-head relation map.
    - File identity is exact or a multi-segment repository-relative suffix.
      Basenames are never identities, so repeated framework paths such as
      module-local `etc/di.xml` files remain independent.
@@ -396,7 +468,9 @@ stage_1_prompt = {
     "diff_evidence": "changed hunks or hunk-preserving large-diff segment",
     "structured_parser_metadata": "raw parser metadata JSON",
     "task_context": "untrusted task/acceptance criteria text",
-    "rag_context": "repository context with stale changed-file protection",
+    "structural_tools": "host-bound minimal context, impact, query, traversal, unit, and compatible exploration; optional per batch",
+    "review_file_tool": "getReviewFileContent selects proposed source for modified paths and pinned target source for unchanged paths",
+    "degraded_structural_context": "reuse only an exact proposed-tree response already returned to this batch; never fetch a target-head map",
 }
 
 # Python does not infer file priority or risk from path/extension/category.
@@ -435,7 +509,8 @@ when the evidence itself exceeds that budget.
 │  └────────────────────────────────────────────────────┘    │
 │                                                            │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │  STRUCTURAL REPOSITORY CONTEXT                    │    │
+│  │  BOUNDED PROPOSED-TREE RELATION BRIEFING         │    │
+│  │  + OPTIONAL FOCUSED GRAPH / SOURCE TOOLS          │    │
 │  └────────────────────────────────────────────────────┘    │
 │                                                            │
 └────────────────────────────────────────────────────────────┘
@@ -445,7 +520,24 @@ when the evidence itself exceeds that budget.
 
 Stage 1 batch size is controlled by environment settings such as
 `REVIEW_STAGE1_BATCH_TOKEN_BUDGET`, `REVIEW_STAGE1_DIFF_CHUNK_TOKEN_BUDGET`,
-`REVIEW_STAGE1_MAX_PARALLEL`, and the source/metadata/RAG character limits.
+`REVIEW_STAGE1_MAX_PARALLEL`, the source/metadata character limits, and bounded
+MCP tool-result limits.
+Before MCP startup, the host prepares one sealed proposed-tree generation when
+the exact binding is available. The first eligible Stage 1 turn is the required
+bounded `getMinimalReviewContext` call; impact, broader-context, query,
+traversal, and unit tools continue only from its named IDs and frontier. Graph
+failure is observable and fail-open, so
+the supplied diff/current source still receives a normal review.
+`REVIEW_STAGE1_MAX_PARALLEL` limits batches inside one review, while
+`MAX_CONCURRENT_REVIEWS` limits reviews admitted by one orchestrator process.
+The direct streaming `/review` compatibility route emits review events but no
+separate transport heartbeat in this release. Configure proxy idle timeouts
+above the longest expected queue/provider wait. Disconnecting the client
+cancels its request runner.
+`REVIEW_STAGE1_AGENT_TIMEOUT_SECONDS=600` is a separate wall-clock
+deadline around one repository-agent batch, including all of its model turns and
+tool calls. Expiration cancels that agent and enters the existing direct
+structured recovery path when local-only execution is not required.
 Complete changed hunks remain primary evidence. When the selected review-size
 profile reaches its Stage 1 invocation ceiling, lower-priority units are recorded
 as `budget_omitted`; omitted hunk/unit/context counts are carried into terminal
@@ -464,19 +556,44 @@ reconciliation 1/2/4 packets. Structured primary calls retain the stage's
 configured reasoning effort. When a response is exhausted or invalid, a stage
 that supports retry may make one direct-output retry with reasoning disabled.
 Packet/shard omission counts are prompt-visible and preserved in provenance.
-When MCP tools are enabled, a Stage 1 agent can add tool and model turns inside a
-primary invocation; disabling the setting avoids that conditional work.
+When MCP tools are enabled, each Stage 1 semantic invocation uses one agent run
+capped at six medium-reasoning repository-capable model calls. A graph-eligible
+invocation must spend the first four on minimal context, impact radius, a named
+graph query, and exact structural-unit inspection; the remaining calls are
+available for focused graph continuations or file reads. A graph-ineligible
+source-only invocation may return a complete response without a tool call. The
+shared agent runtime then provides up to two separate
+calls for schema synthesis and one possible correction, with repository tools
+disabled while the final batch object is emitted or corrected. OpenRouter agent
+turns merge `provider.require_parameters=true` with the model and request's
+existing provider route preferences so terminal schema tool choices use a
+compatible endpoint. Routed OpenRouter calls do not add the optional
+`parallel_tool_calls` control: otherwise an ordered endpoint that does not
+advertise that parameter would be excluded before routing. Competing schema and
+out-of-inventory calls remain rejected locally. If a provider returns an out-of-inventory
+call, the graph removes that response before its static tool node and reissues
+the narrowed request. The rejected tool is not executed and the retry consumes
+the existing repository-call allowance. Exact JSON from the provider is
+validated locally; when the
+schema has one explicitly list-typed field, a valid root JSON array is wrapped
+into that field without another model call. A correction that repeats a
+repository tool name ends before the graph's static tool node can execute it or
+request another model call, and mcp-use's `No output generated`
+sentinel is not accepted as structured output. If the run still does not produce
+a complete batch, direct recovery may reuse a valid exact proposed-tree response
+already returned to it; it never fetches or preloads a target-head map.
+Disabling MCP tools uses the direct structured invocation immediately.
 
-PR overlay indexing is awaited before Stage 1 so changed-file structural
-context cannot silently come from the base branch. Exact source, base,
-generation, collection, plugin, and representation receipts determine whether
-the overlay can be reused. Optional structural retrieval failures disable
-repository context for the remaining batches and the review continues with
-changed source, diff evidence, enrichment, and plugin context.
-
-| Variable | Default | Purpose |
-| -------- | ------: | ------- |
-| `REVIEW_PR_INDEX_TIMEOUT_SECONDS` | 1200 | Maximum PR overlay indexing wait |
+The proposed-tree structural generation is content-addressed and bound by tenant,
+repository, base/source revisions, target/overlay hashes, selection inputs, and
+structural/plugin representation. It is materialized as target snapshot plus all
+changed bodies declared by the acquired raw unfiltered base-to-head diff, minus
+declared deletions, while only changed files accepted by the sealed base
+selection become structural overlay facts. Missing declared bodies disable proposed-tree graph
+operations; a path silently omitted by the upstream diff cannot be proven
+complete here. Optional structural retrieval failures
+leave the review running source-only with changed source, diff evidence,
+enrichment, and plugin context.
 
 Final issue deduplication begins with exact local root identities and uses grouped
 model-assisted dedup by default (`REVIEW_LLM_DEDUP_ENABLED=true`). The host sends only
@@ -532,6 +649,13 @@ producer accepts only an exact full object ID or a matching prefix of at least
 PR endpoint, and replaces the hint before persistence, RAG, or this service.
 Malformed provider IDs and stale/mismatched hints fail before model work.
 
+Stage 1 persists per-batch agent telemetry independently of the finding result:
+shared generation preparation, required-first-call compliance, tool sequence,
+bound graph revision, result/source counts, bounded/whole/rejected source reads,
+evidence use, latency, degradation, and partial failures. Tool
+events emitted before an agent failure remain observable, so a recovered direct
+batch does not erase what the agent already attempted.
+
 Actual candidate-generation evidence is available through an operator-only,
 project-scoped capture wrapper. `REVIEW_QUALITY_CAPTURE_ENABLED=true` also
 requires a non-empty numeric `REVIEW_QUALITY_CAPTURE_PROJECT_IDS` allowlist.
@@ -543,7 +667,9 @@ does not add or retry them. Artifacts contain proprietary source/context and use
 mode `0600`; credential values are redacted. `REVIEW_QUALITY_CAPTURE_MAX_FILES`
 defaults to 20. Initialization or atomic persistence failure fails the selected
 review closed so an incomplete artifact cannot be mistaken for complete quality
-evidence.
+evidence. Capture and runtime telemetry show which calls and tools were observed;
+they do not prove a precision, recall, cost, or latency improvement, and an
+artifact missing provider callbacks cannot prove a tool was unavailable.
 
 ---
 
@@ -582,14 +708,36 @@ AI_CLIENT_PORT="8000"
 
 # MCP Server
 MCP_SERVER_JAR="/path/to/mcp-server.jar"
+# Total deadline for one MCP tool call, including per-connection queue wait.
+# A timed-out optional Stage 1 tool returns an error and review continues from
+# the diff/current-source evidence.
+MCP_TOOL_CALL_TIMEOUT_SECONDS="120"
 
 # LLM tuning (provider credentials are supplied with each Java request)
 LLM_TEMPERATURE="0.0"
+# OpenRouter, OpenAI, and custom OpenAI-compatible clients. The timeout applies
+# to each SDK request attempt; max retries counts attempts after the first.
+LLM_PROVIDER_TIMEOUT_SECONDS="120"
+LLM_PROVIDER_MAX_RETRIES="1"
+
+# Whole repository-agent batch deadline, independent of the full review timeout.
+REVIEW_STAGE1_AGENT_TIMEOUT_SECONDS="600"
 
 # Structural repository index
 RAG_ENABLED="true"
-RAG_API_URL="http://rag-pipeline:8001"
+RAG_API_URL="http://codecrow-rag-pipeline:8001"
+# Independent timeout for each optional proposed-tree operation. It does not
+# inherit the full review timeout; timeout returns a tool error and Stage 1
+# continues from the diff/current source.
+RAG_REVIEW_CONTEXT_TIMEOUT_SECONDS="120"
+# One review-scoped generation preparation before MCP startup.
+RAG_REVIEW_PREPARATION_TIMEOUT_SECONDS="600"
 ```
+
+The local deployment sample uses a 7,200-second preparation timeout and a
+10,800-second full-review timeout for long benchmark graph builds. The
+application defaults above remain unchanged; the full-review ceiling must exceed
+preparation plus model execution.
 
 ---
 

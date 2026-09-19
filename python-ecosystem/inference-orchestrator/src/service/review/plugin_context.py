@@ -383,13 +383,15 @@ def review_plugin_context(
             lines.append(f"- E{index}: {kind} — {reason}")
         lines.append(
             "For a relationship claim governed by E#, set claimKind to its "
-            "exact evidence class and cite matching RAG Evidence IDs; leave "
+            "exact evidence class and cite matching preloaded structural "
+            "relation evidence IDs; leave "
             "claimKind empty for generic defects proved by changed source."
         )
         lines.append(
-            "For a structural fact, existence proves the relationship but not "
-            "a defect; report it only when current source or an exact diagnostic "
-            "fact proves concrete harmful behavior."
+            "For a structural fact, treat it as navigation evidence only: "
+            "existence proves the relationship but not a defect; report it "
+            "only when current source or an exact diagnostic fact proves "
+            "concrete harmful behavior."
         )
 
         if include_evidence_targets:

@@ -8,16 +8,12 @@ from unittest.mock import patch
 from rag_pipeline.api.models import (
     IndexRequest,
     CodeSearchRequest,
-    DeterministicContextRequest,
     ParseFileRequest,
     ParseBatchRequest,
     ParsedFileMetadata,
-    PRFileInfo,
-    PRIndexRequest,
-    EstimateRequest,
-    EstimateResponse,
     RepositoryIndexGraphRequest,
     RepositoryIndexNodeRequest,
+    ReviewContextRequest,
 )
 
 
@@ -90,6 +86,19 @@ class TestIndexRequest:
             )
 
     @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_allowed_root_name_prefix_is_not_treated_as_a_child_path(self):
+        with pytest.raises(ValueError, match="Path must be under"):
+            IndexRequest(
+                repo_path="/tmp-outside/repo",
+                workspace="ws",
+                project="proj",
+                branch="main",
+                commit="abc123",
+                source_tree_sha256="a" * 64,
+                collection_target="generation-target",
+            )
+
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
     def test_manual_project_profile_accepts_arbitrary_nested_source_root(self):
         req = IndexRequest(
             repo_path="/tmp/repo",
@@ -137,6 +146,53 @@ class TestIndexRequest:
                 source_root=source_root,
             )
 
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_repository_delta_requires_complete_exact_base_binding(self):
+        with pytest.raises(ValueError, match="repository delta requires"):
+            IndexRequest(
+                repo_path="/tmp/repo",
+                workspace="ws",
+                project="proj",
+                branch="main",
+                commit="next",
+                base_revision="base",
+                changed_paths=["src/changed.py"],
+            )
+
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_repository_delta_normalizes_and_deduplicates_paths(self):
+        request = IndexRequest(
+            repo_path="/tmp/repo",
+            workspace="ws",
+            project="proj",
+            branch="main",
+            commit="next",
+            base_revision="base",
+            base_collection_target="base-target",
+            base_generation_manifest_sha256="a" * 64,
+            changed_paths=[r"src\changed.py", "src/changed.py"],
+            deleted_paths=["src/deleted.py"],
+        )
+
+        assert request.changed_paths == ["src/changed.py"]
+        assert request.deleted_paths == ["src/deleted.py"]
+
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_repository_delta_rejects_overlapping_changed_and_deleted_paths(self):
+        with pytest.raises(ValueError, match="must be disjoint"):
+            IndexRequest(
+                repo_path="/tmp/repo",
+                workspace="ws",
+                project="proj",
+                branch="main",
+                commit="next",
+                base_revision="base",
+                base_collection_target="base-target",
+                base_generation_manifest_sha256="a" * 64,
+                changed_paths=["src/file.py"],
+                deleted_paths=["src/file.py"],
+            )
+
 
 class TestCodeSearchRequest:
 
@@ -167,33 +223,68 @@ class TestCodeSearchRequest:
             )
 
 
-class TestDeterministicContextRequest:
+class TestReviewContextRequest:
 
-    def test_basic_construction(self):
-        req = DeterministicContextRequest(
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_host_paths_and_bounded_focus_are_normalized(self):
+        request = ReviewContextRequest(
             workspace="ws",
-            project="proj",
-            branches=["main"],
-            file_paths=["src/main.py"],
-            base_revision="abc123",
+            project="project",
+            target_branch="main",
+            base_revision="base",
+            source_revision="source",
+            target_repo_path="/tmp/target",
+            review_overlay_path="/tmp/overlay",
+            base_collection_target="sealed-base-target",
             base_generation_manifest_sha256="a" * 64,
-            collection_target="generation-target",
+            review_collection_target="sealed-review-target",
+            review_generation_manifest_sha256="b" * 64,
+            focus_paths=[r"src\service.py", "src/service.py"],
+            question="Who calls Service.run?",
+            focus_symbols=[" Service.run ", "Service.run"],
         )
-        assert req.limit_per_file is None
-        assert req.additional_identifiers is None
 
-    def test_with_additional_identifiers(self):
-        req = DeterministicContextRequest(
+        assert request.focus_paths == ["src/service.py"]
+        assert request.focus_symbols == ["Service.run"]
+        assert request.base_collection_target == "sealed-base-target"
+        assert request.base_generation_manifest_sha256 == "a" * 64
+        assert request.max_relations == 32
+        assert request.max_source_windows == 6
+        assert request.max_source_characters == 12000
+
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_base_generation_binding_remains_optional_for_compatibility(self):
+        request = ReviewContextRequest(
             workspace="ws",
-            project="proj",
-            branches=["main"],
-            file_paths=["a.py"],
-            base_revision="abc123",
-            base_generation_manifest_sha256="a" * 64,
-            collection_target="generation-target",
-            additional_identifiers=["UserService", "OrderRepository"],
+            project="project",
+            target_branch="main",
+            base_revision="base",
+            source_revision="source",
+            target_repo_path="/tmp/target",
+            review_overlay_path="/tmp/overlay",
+            review_collection_target="sealed-review-target",
+            review_generation_manifest_sha256="b" * 64,
+            focus_paths=["src/service.py"],
+            question="Review the change",
         )
-        assert len(req.additional_identifiers) == 2
+
+        assert request.base_collection_target is None
+        assert request.base_generation_manifest_sha256 is None
+
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_focus_path_traversal_is_rejected(self):
+        with pytest.raises(ValueError, match="repository-relative"):
+            ReviewContextRequest(
+                workspace="ws",
+                project="project",
+                target_branch="main",
+                base_revision="base",
+                source_revision="source",
+                target_repo_path="/tmp/target",
+                review_overlay_path="/tmp/overlay",
+                focus_paths=["../outside.py"],
+                question="Review the change",
+            )
 
 
 class TestParseModels:
@@ -217,81 +308,13 @@ class TestParseModels:
         assert len(req.files) == 2
 
 
-class TestPRIndexRequest:
-
-    def test_construction(self):
-        req = PRIndexRequest(
-            workspace="ws",
-            project="proj",
-            pr_number=42,
-            branch="feature",
-            source_revision="head-commit",
-            base_revision="base-commit",
-            base_generation_manifest_sha256="a" * 64,
-            collection_target="generation-target",
-            files=[
-                PRFileInfo(path="src/main.py", content="x = 1", change_type="MODIFIED"),
-            ],
-        )
-        assert req.pr_number == 42
-        assert req.source_revision == "head-commit"
-        assert req.base_revision == "base-commit"
-        assert len(req.files) == 1
-        assert req.files[0].change_type == "MODIFIED"
-        assert req.files[0].content_state == "complete"
-
-    def test_partial_diff_state_is_explicit_and_validated(self):
-        partial = PRFileInfo(
-            path="src/main.py",
-            content="@@ -1 +1 @@\n-old\n+new",
-            change_type="MODIFIED",
-            content_state="partial_diff",
-        )
-
-        assert partial.content_state == "partial_diff"
-        assert PRFileInfo(
-            path="src/main.py",
-            content="x = 1",
-            change_type="modified",
-        ).change_type == "MODIFIED"
-        with pytest.raises(ValueError):
-            PRFileInfo(
-                path="src/main.py",
-                content="x = 1",
-                change_type="MODIFIED",
-                content_state="unknown",
-            )
-        with pytest.raises(ValueError):
-            PRFileInfo(
-                path="src/main.py",
-                content="x = 1",
-                change_type="UNKNOWN",
-            )
-
-
-class TestEstimateResponse:
-
-    def test_round_trip(self):
-        resp = EstimateResponse(
-            file_count=100,
-            estimated_chunks=500,
-            max_files_allowed=50000,
-            max_chunks_allowed=1000000,
-            within_limits=True,
-            message="OK",
-        )
-        data = resp.model_dump()
-        restored = EstimateResponse(**data)
-        assert restored.within_limits is True
-
-
 class TestRepositoryIndexInspectionModels:
 
     def test_graph_request_defaults(self):
         req = RepositoryIndexGraphRequest(collection_target="generation-target")
         assert req.limit == 160
         assert req.scan_limit == 2500
-        assert req.filters.include_pr is True
+        assert req.filters.branches == []
 
     def test_graph_limits_are_bounded(self):
         with pytest.raises(ValueError):

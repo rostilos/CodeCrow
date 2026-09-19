@@ -190,6 +190,91 @@ public interface JobRepository extends JpaRepository<Job, Long> {
             @Param("currentJobId") Long currentJobId
     );
 
+    @Query("SELECT j FROM Job j WHERE j.project.id = :projectId " +
+            "AND j.branchName = :branchName " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND j.status IN (org.rostilos.codecrow.core.model.job.JobStatus.PENDING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.RUNNING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.WAITING) " +
+            "ORDER BY j.id DESC")
+    List<Job> findActiveRepositoryIndexJobs(
+            @Param("projectId") Long projectId,
+            @Param("branchName") String branchName);
+
+    /**
+     * Fair, branch-serialized dispatch order. A retry diagnostic touches
+     * updatedAt, naturally rotating that candidate behind untouched work.
+     * A durable successor is not dispatchable while an older job still owns
+     * the same project/branch lane.
+     */
+    @Query("SELECT j FROM Job j WHERE " +
+            "j.jobType = org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND (j.status = org.rostilos.codecrow.core.model.job.JobStatus.PENDING " +
+            "OR (j.status = org.rostilos.codecrow.core.model.job.JobStatus.QUEUED " +
+            "AND j.updatedAt < :queuedBefore)) " +
+            "AND NOT EXISTS (SELECT older.id FROM Job older " +
+            "WHERE older.project.id = j.project.id " +
+            "AND older.branchName = j.branchName " +
+            "AND older.jobType = " +
+            "org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND older.id < j.id " +
+            "AND older.status IN (" +
+            "org.rostilos.codecrow.core.model.job.JobStatus.PENDING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.RUNNING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.WAITING)) " +
+            "ORDER BY j.updatedAt ASC, j.id ASC")
+    List<Job> findRepositoryIndexDispatchCandidates(
+            @Param("queuedBefore") OffsetDateTime queuedBefore,
+            Pageable pageable);
+
+    /**
+     * Coalesce an unclaimed successor without ever saving a stale Job entity.
+     * The status predicate makes this update mutually exclusive with dispatch
+     * claim: either the new revision becomes the claimed payload, or intake
+     * observes the failed update and creates a separate durable successor.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Job j SET j.commitHash = :revision, j.updatedAt = :updatedAt " +
+            "WHERE j.id = :jobId " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND j.status = org.rostilos.codecrow.core.model.job.JobStatus.PENDING")
+    int updatePendingRepositoryIndexRevision(
+            @Param("jobId") Long jobId,
+            @Param("revision") String revision,
+            @Param("updatedAt") OffsetDateTime updatedAt);
+
+    /** Promote an unclaimed automatic request to an operator-owned rebuild. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Job j SET j.triggerSource = " +
+            "org.rostilos.codecrow.core.model.job.JobTriggerSource.UI, " +
+            "j.updatedAt = :updatedAt WHERE j.id = :jobId " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND j.status = org.rostilos.codecrow.core.model.job.JobStatus.PENDING")
+    int promotePendingRepositoryIndexJobToOperator(
+            @Param("jobId") Long jobId,
+            @Param("updatedAt") OffsetDateTime updatedAt);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Job j SET j.status = org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
+            "j.commitHash = :resolvedRevision, " +
+            "j.currentStep = 'Repository-index capacity acquired', " +
+            "j.updatedAt = :claimedAt " +
+            "WHERE j.id = :jobId " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND ((j.commitHash = :expectedRevision) " +
+            "OR (j.commitHash IS NULL AND :expectedRevision IS NULL)) " +
+            "AND (j.status = org.rostilos.codecrow.core.model.job.JobStatus.PENDING " +
+            "OR (j.status = org.rostilos.codecrow.core.model.job.JobStatus.QUEUED " +
+            "AND j.updatedAt < :queuedBefore))")
+    int claimRepositoryIndexJob(
+            @Param("jobId") Long jobId,
+            @Param("expectedRevision") String expectedRevision,
+            @Param("resolvedRevision") String resolvedRevision,
+            @Param("queuedBefore") OffsetDateTime queuedBefore,
+            @Param("claimedAt") OffsetDateTime claimedAt);
+
     @Query("SELECT j FROM Job j WHERE j.status = org.rostilos.codecrow.core.model.job.JobStatus.RUNNING " +
             "AND j.startedAt < :threshold")
     List<Job> findStuckJobs(@Param("threshold") OffsetDateTime threshold);

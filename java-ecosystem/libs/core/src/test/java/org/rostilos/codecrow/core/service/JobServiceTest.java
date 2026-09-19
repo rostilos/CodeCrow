@@ -172,12 +172,19 @@ class JobServiceTest {
                     JobTriggerSource.UI,
                     null,
                     "develop",
-                    "abc123");
+                    "abc123",
+                    "operator requested a clean rebuild");
 
             assertThat(job.getJobType()).isEqualTo(JobType.REPOSITORY_INDEX_BUILD);
             assertThat(job.getBranchName()).isEqualTo("develop");
             assertThat(job.getCommitHash()).isEqualTo("abc123");
             assertThat(job.getTitle()).isEqualTo("Repository Index Build: develop");
+            assertThat(job.getCurrentStep())
+                    .isEqualTo("Waiting for repository-index capacity");
+            verify(jobLogRepository).save(argThat(log ->
+                    "queued".equals(log.getStep())
+                            && log.getMessage().contains(
+                                    "operator requested a clean rebuild")));
         }
     }
 

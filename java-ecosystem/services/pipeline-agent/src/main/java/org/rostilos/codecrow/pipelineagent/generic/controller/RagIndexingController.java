@@ -74,7 +74,6 @@ public class RagIndexingController {
                     return branchIndexMaintenanceService.rebuild(
                             project,
                             request.branch(),
-                            request.allConfiguredBranches(),
                             messageConsumer);
                 } catch (Exception e) {
                     log.error("RAG indexing failed", e);
@@ -142,7 +141,6 @@ public class RagIndexingController {
     }
 
     public record RagIndexRequest(
-            String branch,
-            boolean allConfiguredBranches
+            String branch
     ) {}
 }

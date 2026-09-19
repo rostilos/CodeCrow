@@ -67,7 +67,8 @@ class BranchIndexBuildAdmissionServiceTest {
     void registersThenAtomicallyLinksAndStartsJobAndOperation() {
         when(registryService.registerBuild(
                 eq(project), eq("main"), eq(RagBranchIndexKind.PRIMARY),
-                isNull(), eq("revision-b"), startsWith("exact-full-snapshot:automatic:")))
+                isNull(), eq("revision-b"), isNull(),
+                startsWith("exact-full-snapshot:automatic:")))
                 .thenReturn(registration);
         Job job = mock(Job.class);
         when(job.getId()).thenReturn(77L);
@@ -91,7 +92,8 @@ class BranchIndexBuildAdmissionServiceTest {
         InOrder order = inOrder(registryService, jobService, trackingService);
         order.verify(registryService).registerBuild(
                 eq(project), eq("main"), eq(RagBranchIndexKind.PRIMARY),
-                isNull(), eq("revision-b"), startsWith("exact-full-snapshot:automatic:"));
+                isNull(), eq("revision-b"), isNull(),
+                startsWith("exact-full-snapshot:automatic:"));
         order.verify(trackingService).preparePublishedGenerationForUpdate(
                 project, "main", "revision-a", 120, 240, sourceActivatedAt);
         order.verify(jobService).createRepositoryIndexBuildJob(
@@ -105,7 +107,7 @@ class BranchIndexBuildAdmissionServiceTest {
     @Test
     void rejectsPreviouslyCommittedAdmissionWithoutCreatingAnotherJob() {
         when(registryService.registerBuild(any(), anyString(), any(), isNull(),
-                anyString(), anyString()))
+                anyString(), isNull(), anyString()))
                 .thenReturn(new RagBranchIndexRegistryService.BuildRegistration(
                         registration.branchIndex(), registration.generation(),
                         registration.operation(), true));
@@ -132,7 +134,7 @@ class BranchIndexBuildAdmissionServiceTest {
         initialOperation.setId(31L);
         initialOperation.setGeneration(initial);
         when(registryService.registerBuild(any(), anyString(), any(), isNull(),
-                eq("revision-first"), anyString()))
+                eq("revision-first"), isNull(), anyString()))
                 .thenReturn(new RagBranchIndexRegistryService.BuildRegistration(
                         registration.branchIndex(), initial, initialOperation, false));
         Job job = mock(Job.class);

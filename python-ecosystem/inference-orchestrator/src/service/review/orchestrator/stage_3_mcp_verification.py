@@ -15,11 +15,24 @@ from typing import Any, Awaitable, Callable, Dict, List, Protocol
 from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
+from service.agent import AgentExecutionService
 from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
 from utils.llm_response import extract_llm_response_text
 
 
 logger = logging.getLogger(__name__)
+
+
+STAGE3_AGENT_MAX_OUTPUT_TOKENS = 16_384
+
+
+_TERMINAL_FINALIZATION_INSTRUCTION = (
+    "Repository verification is complete and tools are now disabled. Produce "
+    "the final executive-summary report from the original review material and "
+    "the complete tool results above. Do not request another tool call. Apply "
+    "the prompt's DISMISSED_ISSUES format only for false positives established "
+    "by those successful repository reads."
+)
 
 
 class Stage3MessageTokenEstimator(Protocol):
@@ -215,13 +228,23 @@ def mcp_read_covers_location(
     review_revision: str,
 ) -> bool:
     args = entry.get("args", {})
+    tool_name = entry.get("tool")
+    revision_is_bound = (
+        str(args.get("branch") or "") == review_revision
+        if tool_name == "getBranchFileContent"
+        else (
+            tool_name == "getReviewFileContent"
+            and entry.get("evidence_source_authority") == "proposed_tree"
+            and str(entry.get("evidence_revision") or "") == review_revision
+        )
+    )
     if not (
-        entry.get("tool") == "getBranchFileContent"
+        tool_name in {"getBranchFileContent", "getReviewFileContent"}
         and entry.get("success") is True
         and entry.get("evidence_valid") is True
         and str(args.get("verificationId") or "") == verification_id
         and location_file_path(str(args.get("filePath") or "")) == file_path
-        and str(args.get("branch") or "") == review_revision
+        and revision_is_bound
     ):
         return False
     if entry.get("evidence_complete_file") is True:
@@ -301,30 +324,50 @@ async def execute_stage_3_mcp_verification(
         verification_issues=issue_by_verification_id,
     )
     tool_defs = executor.get_tool_definitions()
-    # One tool-selection turn plus one evidence-aware completion turn. The old
-    # 15-turn loop (and identical recursive replay) multiplied every semantic
-    # child into a provider-call tree.
+    agent_service = AgentExecutionService(llm=llm, client=mcp_client)
+    model_session = None
+    # Exactly one tool-selection turn plus one tools-disabled, evidence-aware
+    # completion turn. The old 15-turn loop (and identical recursive replay)
+    # multiplied every semantic child into a provider-call tree. Keeping the
+    # second call unbound also prevents a final tool-call response from being
+    # mistaken for a completed report.
     max_iterations = 2
     token_target = runtime.input_token_target(request)
 
     messages = [{"role": "user", "content": prompt}]
     verification_records: List[Dict[str, Any]] = []
-    last_response = None
 
     for iteration in range(max_iterations):
         try:
+            use_mcp_tools = iteration == 0
+            if not use_mcp_tools:
+                messages = [
+                    *messages,
+                    {
+                        "role": "user",
+                        "content": _TERMINAL_FINALIZATION_INSTRUCTION,
+                    },
+                ]
             estimated_tokens = runtime.estimate_messages_tokens(
                 messages,
-                use_mcp_tools=True,
+                use_mcp_tools=use_mcp_tools,
             )
             if estimated_tokens > token_target:
                 continuation_messages = runtime.continuation_messages(
                     prompt,
                     verification_records,
                 )
+                if not use_mcp_tools:
+                    continuation_messages = [
+                        *continuation_messages,
+                        {
+                            "role": "user",
+                            "content": _TERMINAL_FINALIZATION_INSTRUCTION,
+                        },
+                    ]
                 continuation_tokens = runtime.estimate_messages_tokens(
                     continuation_messages,
-                    use_mcp_tools=True,
+                    use_mcp_tools=use_mcp_tools,
                 )
                 if continuation_tokens > token_target:
                     logger.warning(
@@ -354,15 +397,31 @@ async def execute_stage_3_mcp_verification(
                 )
                 messages = continuation_messages
 
-            llm_with_tools = llm.bind_tools(tool_defs)
-            response = await llm_with_tools.ainvoke(
-                messages,
-                **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
-            )
-            last_response = response
+            if use_mcp_tools:
+                if model_session is None:
+                    model_session = agent_service.create_model_session(
+                        tool_definitions=tool_defs,
+                        reasoning_effort=ReasoningEffort.LOW,
+                        max_output_tokens=STAGE3_AGENT_MAX_OUTPUT_TOKENS,
+                    )
+                response = await model_session.ainvoke(messages)
+            else:
+                # Binding an empty tool list still serializes a provider tool
+                # parameter in some adapters. A direct call guarantees that
+                # this terminal response has no callable repository tools.
+                response = await llm.ainvoke(
+                    messages,
+                    **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
+                )
             messages.append(response)
 
             tool_calls = getattr(response, "tool_calls", None)
+            if tool_calls and not use_mcp_tools:
+                logger.warning(
+                    "[MCP Stage 3] Terminal tools-disabled response contained "
+                    "tool calls; retaining every issue"
+                )
+                break
             if not tool_calls:
                 if (
                     runtime.response_finished_by_length(response)
@@ -453,10 +512,12 @@ async def execute_stage_3_mcp_verification(
         max_iterations,
     )
     return {
+        # A tool-call turn is not a report and may itself contain an
+        # untrusted dismissal marker. Never surface it as final output when
+        # the dedicated terminal call failed or violated the no-tools turn.
         "report": (
-            extract_llm_response_text(last_response)
-            if last_response is not None
-            else "Optional MCP verification was unavailable; no issue was dismissed."
+            "Optional MCP verification finalization was unavailable; "
+            "no issue was dismissed."
         ),
         "dismissed_issue_ids": [],
         "dismissed_issue_keys": [],

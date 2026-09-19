@@ -33,6 +33,9 @@ class AiAnalysisRequestImplTest {
         @DisplayName("should build with all fields")
         void shouldBuildWithAllFields() {
             List<String> changedFiles = Arrays.asList("file1.java", "file2.java");
+            List<String> proposedTreeChangedFiles = Arrays.asList(
+                    "file1.java", "file2.java", "excluded.md");
+            List<String> proposedTreeDeletedFiles = List.of("removed.bin");
             List<String> diffSnippets = Arrays.asList("snippet1", "snippet2");
 
             AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
@@ -50,6 +53,8 @@ class AiAnalysisRequestImplTest {
                     .withPrDescription("PR Description")
                     .withTaskContext(Map.of("task_key", "PROJ-123", "task_summary", "Build export"))
                     .withChangedFiles(changedFiles)
+                    .withProposedTreeChangedFiles(proposedTreeChangedFiles)
+                    .withProposedTreeDeletedFiles(proposedTreeDeletedFiles)
                     .withDiffSnippets(diffSnippets)
                     .withProjectMetadata("proj-workspace", "proj-namespace")
                     .withTargetBranchName("main")
@@ -80,6 +85,10 @@ class AiAnalysisRequestImplTest {
             assertThat(request.getTaskContext()).containsEntry("task_key", "PROJ-123");
             assertThat(request.getTaskContext()).containsEntry("task_summary", "Build export");
             assertThat(request.getChangedFiles()).containsExactly("file1.java", "file2.java");
+            assertThat(request.getProposedTreeChangedFiles())
+                    .containsExactlyElementsOf(proposedTreeChangedFiles);
+            assertThat(request.getProposedTreeDeletedFiles())
+                    .containsExactlyElementsOf(proposedTreeDeletedFiles);
             assertThat(request.getDiffSnippets()).containsExactly("snippet1", "snippet2");
             assertThat(request.getProjectWorkspace()).isEqualTo("proj-workspace");
             assertThat(request.getProjectNamespace()).isEqualTo("proj-namespace");
@@ -99,10 +108,14 @@ class AiAnalysisRequestImplTest {
         void shouldDefaultAnalysisModeToFullWhenNotSet() {
             AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
                     .withProjectId(1L)
+                    .withChangedFiles(List.of("selected.java"))
+                    .withDeletedFiles(List.of("selected-deleted.java"))
                     .build();
 
             assertThat(request.getAnalysisMode()).isEqualTo(AnalysisMode.FULL);
             assertThat(request.getRagEnabled()).isTrue();
+            assertThat(request.getProposedTreeChangedFiles()).containsExactly("selected.java");
+            assertThat(request.getProposedTreeDeletedFiles()).containsExactly("selected-deleted.java");
         }
 
         @Test

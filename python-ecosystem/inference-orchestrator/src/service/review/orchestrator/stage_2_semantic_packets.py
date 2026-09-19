@@ -80,6 +80,7 @@ class Stage2Prompt(str):
     """Rendered prompt plus exact invocation provenance."""
 
     visible_hunk_ids: frozenset[str]
+    visible_evidence_ids: frozenset[str]
     optional_enrichment_only: bool
     complete_pr_evidence_visible: bool
     omitted_packet_count: int
@@ -91,6 +92,7 @@ class Stage2Prompt(str):
         value: str,
         *,
         visible_hunk_ids: Iterable[str] = (),
+        visible_evidence_ids: Iterable[str] = (),
         optional_enrichment_only: bool = False,
         complete_pr_evidence_visible: bool = False,
         omitted_packet_count: int = 0,
@@ -99,6 +101,7 @@ class Stage2Prompt(str):
     ):
         instance = str.__new__(cls, value)
         instance.visible_hunk_ids = frozenset(visible_hunk_ids)
+        instance.visible_evidence_ids = frozenset(visible_evidence_ids)
         instance.optional_enrichment_only = optional_enrichment_only
         instance.complete_pr_evidence_visible = complete_pr_evidence_visible
         instance.omitted_packet_count = omitted_packet_count
@@ -332,6 +335,7 @@ def _build_stage_2_prompts_impl(
     evidence, then exact architecture, then optional context up to its packet
     ceiling.
     """
+    findings = _parse_stage_1_findings(stage_1_findings_json)
     complete_prompt = PromptBuilder.build_stage_2_cross_file_prompt(
         repo_slug=repo_slug,
         pr_title=pr_title,
@@ -350,6 +354,7 @@ def _build_stage_2_prompts_impl(
         return [_Stage2Prompt(
             complete_prompt,
             visible_hunk_ids=evidence_ledger.delta_hunk_ids,
+            visible_evidence_ids=_finding_evidence_ids(findings),
             complete_pr_evidence_visible=True,
         )]
 
@@ -360,7 +365,6 @@ def _build_stage_2_prompts_impl(
         token_budget - _STAGE2_OMISSION_NOTICE_RESERVE_TOKENS,
     )
 
-    findings = _parse_stage_1_findings(stage_1_findings_json)
     architecture_payload = _parse_architecture_payload(architecture_context)
     path_table = architecture_payload.get("path_table", {})
     if not isinstance(path_table, dict):
@@ -558,6 +562,7 @@ def _build_stage_2_prompts_impl(
         _Stage2Prompt(
             _render_stage_2_packet(common_static, packet),
             visible_hunk_ids=packet.review_hunk_ids,
+            visible_evidence_ids=_finding_evidence_ids(packet.findings),
             optional_enrichment_only=packet.optional_enrichment_only,
             complete_pr_evidence_visible=False,
             omitted_packet_count=len(omitted_packets),
@@ -601,6 +606,19 @@ def _parse_stage_1_findings(value: str) -> List[Dict[str, Any]]:
         else {"unparsed_stage_1_finding": item}
         for item in parsed
     ]
+
+
+def _finding_evidence_ids(
+    findings: Iterable[Mapping[str, Any]],
+) -> frozenset[str]:
+    return frozenset(
+        evidence_id.strip()
+        for finding in findings
+        for evidence_refs in (finding.get("evidenceRefs"),)
+        if isinstance(evidence_refs, (list, tuple, set))
+        for evidence_id in evidence_refs
+        if isinstance(evidence_id, str) and evidence_id.strip()
+    )
 
 
 def _format_complete_project_rules(rules_json: Optional[str]) -> str:

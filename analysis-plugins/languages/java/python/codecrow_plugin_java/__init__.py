@@ -120,7 +120,6 @@ class JavaPlugin:
             return PluginOutcome.abstained()
         return PluginOutcome.handled(ReviewContribution(
             rules=(
-                "A java-pr-removed-relation is base-to-PR navigation evidence only; require changed-hunk proof of harm.",
                 "For Java call and construction claims, require the exact declaration or resolved dependency context; do not infer behavior from a short type name.",
                 "Resolve Java types through package/import and inheritance facts before asserting that a symbol or override is missing.",
                 "Treat exact java-module-resolution, java-import-binding, and java-call-resolution facts as navigation evidence; relationship presence alone is not proof of a defect.",

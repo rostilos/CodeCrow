@@ -1,9 +1,9 @@
 """Inference policy for the multi-stage review pipeline.
 
-Input packers bound the evidence sent to a model.  This module limits semantic
-invocation fan-out, but deliberately does not impose a generated-output cap on
-normal reviews: provider completion ceilings include hidden reasoning tokens
-and can otherwise terminate a response before any review payload is emitted.
+Input packers bound the evidence sent to a model. This module limits semantic
+invocation fan-out. Stages own any narrower response policy required by their
+output contract; in particular, Stage 2 bounds its compact structured result so
+hidden reasoning cannot consume the provider's entire completion window.
 """
 
 import logging

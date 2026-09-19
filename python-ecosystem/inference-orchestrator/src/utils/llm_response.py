@@ -9,23 +9,25 @@ def extract_llm_response_text(response: Any) -> str:
     """Extract text across plain, LangChain-style, and multipart responses."""
     if response is None:
         return ""
-    if not hasattr(response, "content"):
-        return str(response)
-    content = response.content
+    content = getattr(response, "content", response)
     if content is None:
         return ""
-    if not isinstance(content, list):
+    if isinstance(content, str):
         return str(content)
 
-    text_parts = []
-    for item in content:
-        if isinstance(item, str):
-            text_parts.append(item)
-        elif isinstance(item, dict):
-            if "text" in item:
-                text_parts.append(item["text"])
-            elif "content" in item:
-                text_parts.append(item["content"])
-        elif hasattr(item, "text"):
-            text_parts.append(item.text)
-    return "".join(text_parts)
+    if isinstance(content, (list, tuple)):
+        text_parts = []
+        for item in content:
+            text_parts.append(extract_llm_response_text(item))
+        return "".join(text_parts)
+
+    if isinstance(content, dict):
+        for key in ("text", "content"):
+            if key in content:
+                return extract_llm_response_text(content[key])
+        return str(content)
+
+    if hasattr(content, "text"):
+        return extract_llm_response_text(getattr(content, "text"))
+
+    return str(content)

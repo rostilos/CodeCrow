@@ -10,6 +10,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.commitgraph.dag.CommitRangeContext;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.LocalRepositorySnapshot;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
@@ -26,16 +28,19 @@ import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
+import org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestStatusSyncService;
 import org.rostilos.codecrow.commitgraph.service.CommitCoverageService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
+import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.util.AnalysisLimitEnforcer;
 import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.core.model.branch.Branch;
+import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -128,6 +133,9 @@ class BranchAnalysisProcessorTest {
     private AstScopeEnricher astScopeEnricher;
 
     @Mock
+    private LocalRepositorySnapshotService localRepositorySnapshotService;
+
+    @Mock
     private RagOperationsService ragOperationsService;
 
     @Mock
@@ -174,6 +182,7 @@ class BranchAnalysisProcessorTest {
                 pullRequestService,
                 pullRequestStatusSyncService,
                 astScopeEnricher,
+                localRepositorySnapshotService,
                 ragOperationsService
         );
     }
@@ -1099,6 +1108,140 @@ class BranchAnalysisProcessorTest {
     }
 
     @Nested
+    @DisplayName("direct-push repository tools")
+    class DirectPushRepositoryToolsTests {
+
+        @Test
+        @DisplayName("should queue the exact generation before inference and close the local snapshot")
+        void shouldUseAndCloseExactLocalSnapshot() throws Exception {
+            BranchProcessRequest request = createRequest();
+            String exactRevision = "eb59a730e56532cc96d0e9fbb6b7616d6ca9897e";
+            request.commitHash = exactRevision;
+            VcsAiClientService aiClientService = mock(VcsAiClientService.class);
+            AiAnalysisRequest aiRequest = mock(AiAnalysisRequest.class);
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            LocalRepositorySnapshotService.PreparedSnapshot prepared =
+                    mock(LocalRepositorySnapshotService.PreparedSnapshot.class);
+            LocalRepositorySnapshot transport = new LocalRepositorySnapshot(
+                    "/tmp/codecrow-branch-review-test", "main", exactRevision);
+
+            when(project.getId()).thenReturn(1L);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+            when(repoInfo.getRepoWorkspace()).thenReturn("team");
+            when(repoInfo.getRepoSlug()).thenReturn("repo");
+            when(commitCoverageService.checkCoverage(
+                    eq(1L), eq("main"), eq(List.of(exactRevision)), eq(true)))
+                    .thenReturn(new CommitCoverageService.CoverageResult(
+                            CommitCoverageService.CoverageStatus.NOT_COVERED,
+                            List.of(exactRevision)));
+            when(vcsServiceFactory.getAiClientService(EVcsProvider.GITHUB))
+                    .thenReturn(aiClientService);
+            when(aiClientService.buildDirectPushAnalysisRequests(
+                    eq(project), eq(request), anyString(), anyMap(), anyList()))
+                    .thenReturn(List.of(aiRequest));
+            when(aiRequest.getUseMcpTools()).thenReturn(true);
+            when(aiRequest.getTargetHeadCommitHash()).thenReturn(exactRevision);
+            when(ragOperationsService.isRagEnabled(project)).thenReturn(true);
+            when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
+            when(ragOperationsService.refreshBranchGeneration(
+                    eq(project), eq("main"), eq(exactRevision), any()))
+                    .thenReturn(true);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(
+                    any(), eq(exactRevision), eq(Set.of("src/App.java"))))
+                    .thenReturn(archiveSnapshot(Map.of("src/App.java", "class App {}")));
+            when(localRepositorySnapshotService.prepare(
+                    eq(vcsConnection), eq("team"), eq("repo"), eq("main"), eq(exactRevision)))
+                    .thenReturn(Optional.of(prepared));
+            when(prepared.transport()).thenReturn(transport);
+            when(aiAnalysisClient.performAnalysis(eq(aiRequest), eq(transport), any()))
+                    .thenThrow(new IOException("inference unavailable"));
+
+            Boolean refreshAttempted = ReflectionTestUtils.invokeMethod(
+                    processor,
+                    "performDirectPushAnalysisIfNeeded",
+                    project,
+                    request,
+                    List.of(exactRevision),
+                    "diff --git a/src/App.java b/src/App.java\n+class App {}\n",
+                    Set.of("src/App.java"),
+                    EVcsProvider.GITHUB,
+                    (Consumer<Map<String, Object>>) ignored -> { },
+                    null,
+                    false,
+                    lockLease);
+
+            assertThat(refreshAttempted).isTrue();
+            var ordered = inOrder(ragOperationsService, localRepositorySnapshotService, aiAnalysisClient);
+            ordered.verify(ragOperationsService).refreshBranchGeneration(
+                    eq(project), eq("main"), eq(exactRevision), any());
+            ordered.verify(localRepositorySnapshotService).prepare(
+                    vcsConnection, "team", "repo", "main", exactRevision);
+            ordered.verify(aiAnalysisClient).performAnalysis(
+                    eq(aiRequest), eq(transport), any());
+            verify(prepared).close();
+        }
+
+        @Test
+        @DisplayName("should keep direct-push review working when the local snapshot is unavailable")
+        void shouldFallBackWhenLocalSnapshotIsUnavailable() throws Exception {
+            BranchProcessRequest request = createRequest();
+            VcsAiClientService aiClientService = mock(VcsAiClientService.class);
+            AiAnalysisRequest aiRequest = mock(AiAnalysisRequest.class);
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            CodeAnalysis analysis = mock(CodeAnalysis.class);
+
+            when(project.getId()).thenReturn(1L);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+            when(repoInfo.getRepoWorkspace()).thenReturn("team");
+            when(repoInfo.getRepoSlug()).thenReturn("repo");
+            when(commitCoverageService.checkCoverage(
+                    eq(1L), eq("main"), eq(List.of("abc123")), eq(true)))
+                    .thenReturn(new CommitCoverageService.CoverageResult(
+                            CommitCoverageService.CoverageStatus.NOT_COVERED,
+                            List.of("abc123")));
+            when(vcsServiceFactory.getAiClientService(EVcsProvider.GITHUB))
+                    .thenReturn(aiClientService);
+            when(aiClientService.buildDirectPushAnalysisRequests(
+                    eq(project), eq(request), anyString(), anyMap(), anyList()))
+                    .thenReturn(List.of(aiRequest));
+            when(aiRequest.getUseMcpTools()).thenReturn(true);
+            when(aiRequest.getTargetHeadCommitHash()).thenReturn("abc123");
+            when(ragOperationsService.isRagEnabled(project)).thenReturn(false);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(
+                    any(), eq("abc123"), anySet()))
+                    .thenReturn(archiveSnapshot(Map.of("src/App.java", "class App {}")));
+            when(localRepositorySnapshotService.prepare(
+                    eq(vcsConnection), eq("team"), eq("repo"), eq("main"), eq("abc123")))
+                    .thenReturn(Optional.empty());
+            when(aiAnalysisClient.performAnalysis(eq(aiRequest), any(Consumer.class)))
+                    .thenReturn(Map.of("issues", List.of()));
+            when(codeAnalysisService.createDirectPushAnalysisFromAiResponse(
+                    eq(project), anyMap(), eq("main"), eq("abc123"), anyMap()))
+                    .thenReturn(analysis);
+
+            ReflectionTestUtils.invokeMethod(
+                    processor,
+                    "performDirectPushAnalysisIfNeeded",
+                    project,
+                    request,
+                    List.of("abc123"),
+                    "diff --git a/src/App.java b/src/App.java\n+class App {}\n",
+                    Set.of("src/App.java"),
+                    EVcsProvider.GITHUB,
+                    (Consumer<Map<String, Object>>) ignored -> { },
+                    null,
+                    false,
+                    lockLease);
+
+            verify(aiAnalysisClient).performAnalysis(eq(aiRequest), any(Consumer.class));
+            verify(aiAnalysisClient, never()).performAnalysis(
+                    eq(aiRequest), any(LocalRepositorySnapshot.class), any());
+        }
+    }
+
+    @Nested
     @DisplayName("fullReconcile()")
     class FullReconcileTests {
 
@@ -1160,6 +1303,7 @@ class BranchAnalysisProcessorTest {
                     pullRequestService,
                     pullRequestStatusSyncService,
                     null, // astScopeEnricher
+                    localRepositorySnapshotService,
                     null // ragOperationsService
             );
 

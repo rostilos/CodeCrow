@@ -14,16 +14,14 @@ echo "  CodeCrow local production build"
 echo "  Mirrors the CI/CD verification pipeline"
 echo "=========================================="
 
-echo "--- 1. Synchronizing the frontend submodule with origin/main ---"
-git submodule update --init --recursive --remote -- "$FRONTEND_DIR"
-
-ACTUAL_FRONTEND_COMMIT="$(git -C "$FRONTEND_DIR" rev-parse HEAD)"
-FRONTEND_WORKTREE_STATUS="$(git -C "$FRONTEND_DIR" status --porcelain --untracked-files=normal)"
-if [ -n "$FRONTEND_WORKTREE_STATUS" ]; then
-    echo "Frontend submodule has non-ignored local changes; refusing a non-reproducible production build." >&2
+echo "--- 1. Using the current frontend workspace ---"
+if [ ! -f "$FRONTEND_DIR/package.json" ]; then
+    echo "Frontend submodule is not initialized: $FRONTEND_DIR/package.json is missing." >&2
+    echo "Run: git submodule update --init --recursive -- $FRONTEND_DIR" >&2
     exit 1
 fi
-echo "Frontend at latest origin/main commit: $ACTUAL_FRONTEND_COMMIT"
+ACTUAL_FRONTEND_COMMIT="$(git -C "$FRONTEND_DIR" rev-parse HEAD)"
+echo "Frontend workspace commit: $ACTUAL_FRONTEND_COMMIT"
 
 echo "--- 2. Injecting Environment Configurations ---"
 

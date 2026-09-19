@@ -13,9 +13,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Read-only projection of the primary and explicitly retained RAG branches.
- * It intentionally excludes transient PR-only snapshots from the configuration
- * view. State and counts come only from the exact branch-generation registry.
+ * Read-only projection of lazily observed RAG branches. State and counts come
+ * only from the exact branch-generation registry.
  */
 @Service
 public class RagBranchIndexStatusService {
@@ -42,9 +41,9 @@ public class RagBranchIndexStatusService {
         }
         List<RagBranchIndexStatusDTO> result = new ArrayList<>();
         result.add(toDto(primary, "PRIMARY", persisted.get(primary)));
-        for (String branch : config.getEffectiveIndexedBranches()) {
-            if (!primary.equals(branch)) {
-                result.add(toDto(branch, "RETAINED", persisted.get(branch)));
+        for (RagBranchIndex index : persisted.values()) {
+            if (!primary.equals(index.getBranchName())) {
+                result.add(toDto(index.getBranchName(), "TARGET", index));
             }
         }
         return result;

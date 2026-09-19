@@ -23,7 +23,19 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 from urllib.parse import urlsplit, urlunsplit
 
+from langchain_core.language_models.chat_models import BaseChatModel
+from pydantic import PrivateAttr
+
 from model.dtos import ReviewRequestDto
+from service.review.orchestrator.stage_1_tool_inventory import (
+    STAGE1_IMPACT_RADIUS_TOOL_NAME,
+    STAGE1_MINIMAL_REVIEW_CONTEXT_TOOL_NAME,
+    STAGE1_QUERY_GRAPH_TOOL_NAME,
+    STAGE1_REVIEW_CONTEXT_TOOL_NAME,
+    STAGE1_STRUCTURAL_TOOL_NAMES,
+    STAGE1_STRUCTURAL_UNIT_TOOL_NAME,
+    STAGE1_TRAVERSE_GRAPH_TOOL_NAME,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +43,11 @@ _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9_.-]+")
 _IMMUTABLE_GIT_REVISION = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 _SHA256_FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}")
+_STRUCTURAL_RETRIEVAL_STATES = frozenset({
+    "complete",
+    "bounded",
+    "unavailable",
+})
 _SECRET_KEYS = {
     "access_token",
     "accesstoken",
@@ -833,20 +850,15 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
         raise ValueError(
             "terminal pipeline evidence has invalid deterministic retrieval states"
         )
-    if (
-        normalized_units["registered"] > 0
-        and not deterministic_states
-    ):
-        raise ValueError(
-            "terminal pipeline evidence has no deterministic retrieval state"
-        )
-    incomplete_retrieval = sorted({
-        state for state in deterministic_states if state != "complete"
+    unknown_retrieval_states = sorted({
+        state
+        for state in deterministic_states
+        if state not in _STRUCTURAL_RETRIEVAL_STATES
     })
-    if incomplete_retrieval:
+    if unknown_retrieval_states:
         raise ValueError(
-            "terminal pipeline evidence contains incomplete deterministic "
-            "retrieval states: " + ", ".join(incomplete_retrieval)
+            "terminal pipeline evidence contains unknown structural retrieval "
+            "states: " + ", ".join(unknown_retrieval_states)
         )
     exact_evidence_ids = retrieval.get("exactEvidenceIds")
     if (
@@ -861,16 +873,11 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
     revision_binding = event.get("revisionBinding")
     if not isinstance(revision_binding, dict):
         raise ValueError("terminal pipeline evidence has no revision binding")
-    pr_indexed = revision_binding.get("prIndexed")
     pull_request_id = revision_binding.get("pullRequestId")
     target_branch = revision_binding.get("targetBranch")
     source_revision = revision_binding.get("sourceRevision")
     base_revision = revision_binding.get("baseRevision")
     base_manifest = revision_binding.get("baseGenerationManifestSha256")
-    pr_fingerprint = revision_binding.get("prGenerationFingerprint")
-    overlay_manifest = revision_binding.get(
-        "prOverlayGenerationManifestSha256"
-    )
     base_plugin_fingerprint = revision_binding.get(
         "basePluginFingerprint"
     )
@@ -883,10 +890,6 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
     base_index_representation_fingerprint = revision_binding.get(
         "baseIndexRepresentationFingerprint"
     )
-    if not isinstance(pr_indexed, bool):
-        raise ValueError(
-            "terminal pipeline evidence has invalid revisionBinding.prIndexed"
-        )
     if (
         pull_request_id is not None
         and (
@@ -930,28 +933,6 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
             "terminal pipeline evidence has invalid "
             "revisionBinding.baseGenerationManifestSha256"
         )
-    if (
-        pr_fingerprint is not None
-        and (
-            not isinstance(pr_fingerprint, str)
-            or _SHA256_FINGERPRINT.fullmatch(pr_fingerprint) is None
-        )
-    ):
-        raise ValueError(
-            "terminal pipeline evidence has invalid "
-            "revisionBinding.prGenerationFingerprint"
-        )
-    if (
-        overlay_manifest is not None
-        and (
-            not isinstance(overlay_manifest, str)
-            or _SHA256_HEX.fullmatch(overlay_manifest) is None
-        )
-    ):
-        raise ValueError(
-            "terminal pipeline evidence has invalid "
-            "revisionBinding.prOverlayGenerationManifestSha256"
-        )
     for field, value in (
         ("basePluginFingerprint", base_plugin_fingerprint),
         (
@@ -975,33 +956,6 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
                 "terminal pipeline evidence has invalid "
                 f"revisionBinding.{field}"
             )
-    if pr_indexed and (
-        pull_request_id is None
-        or base_revision is None
-        or base_manifest is None
-        or pr_fingerprint is None
-        or overlay_manifest is None
-        or base_plugin_fingerprint is None
-        or base_plugin_descriptor_fingerprint is None
-        or base_plugin_implementation_fingerprint is None
-        or base_index_representation_fingerprint is None
-    ):
-        raise ValueError(
-            "terminal pipeline evidence has incomplete indexed revision binding"
-        )
-    if not pr_indexed and (
-        base_manifest is not None
-        or pr_fingerprint is not None
-        or overlay_manifest is not None
-        or base_plugin_fingerprint is not None
-        or base_plugin_descriptor_fingerprint is not None
-        or base_plugin_implementation_fingerprint is not None
-        or base_index_representation_fingerprint is not None
-    ):
-        raise ValueError(
-            "terminal pipeline evidence has receipts for an unindexed PR overlay"
-        )
-
     return {
         "state": "review_evidence_completed",
         "hunkCoverage": normalized_hunks,
@@ -1017,14 +971,11 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
             "exactEvidenceIds": exact_evidence_ids,
         },
         "revisionBinding": {
-            "prIndexed": pr_indexed,
             "pullRequestId": pull_request_id,
             "targetBranch": target_branch,
             "sourceRevision": source_revision,
             "baseRevision": base_revision,
             "baseGenerationManifestSha256": base_manifest,
-            "prGenerationFingerprint": pr_fingerprint,
-            "prOverlayGenerationManifestSha256": overlay_manifest,
             "basePluginFingerprint": base_plugin_fingerprint,
             "basePluginDescriptorFingerprint": (
                 base_plugin_descriptor_fingerprint
@@ -1035,6 +986,302 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
             "baseIndexRepresentationFingerprint": (
                 base_index_representation_fingerprint
             ),
+        },
+    }
+
+
+def _nonnegative_stage1_count(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, value)
+
+
+def _stage1_agent_receipt_summary(records: Any) -> dict[str, Any]:
+    """Aggregate source-free Stage 1 graph delivery and source-read evidence."""
+
+    batches = records if isinstance(records, list) else []
+    eligible_briefings = 0
+    attempted_briefings = 0
+    delivered_briefings = 0
+    unavailable_briefings = 0
+    empty_briefings = 0
+    prompt_relations = 0
+    visible_evidence_ids: set[str] = set()
+    briefing_source_windows = 0
+    briefing_source_characters = 0
+    briefing_prompt_characters = 0
+    source_read_total = 0
+    bounded_source_reads = 0
+    whole_file_source_reads = 0
+    redundant_whole_file_rejections = 0
+    generation_eligible_batches = 0
+    generation_ready_batches = 0
+    generation_unavailable_batches = 0
+    generation_receipt_batches = 0
+    graph_eligible_batches = 0
+    graph_required_first_call_batches = 0
+    graph_required_first_call_satisfied_batches = 0
+    graph_required_workflow_batches = 0
+    graph_required_workflow_satisfied_batches = 0
+    graph_attempted_batches = 0
+    graph_attempted_calls = 0
+    graph_completed_calls = 0
+    graph_failed_calls = 0
+    graph_source_bearing_calls = 0
+    graph_source_windows = 0
+    graph_evidence_ids: set[str] = set()
+    graph_call_counts = {
+        STAGE1_MINIMAL_REVIEW_CONTEXT_TOOL_NAME: 0,
+        STAGE1_REVIEW_CONTEXT_TOOL_NAME: 0,
+        STAGE1_IMPACT_RADIUS_TOOL_NAME: 0,
+        STAGE1_TRAVERSE_GRAPH_TOOL_NAME: 0,
+        STAGE1_QUERY_GRAPH_TOOL_NAME: 0,
+        STAGE1_STRUCTURAL_UNIT_TOOL_NAME: 0,
+    }
+
+    for batch in batches:
+        if not isinstance(batch, dict):
+            continue
+        preparation = batch.get("generationPreparation")
+        preparation_status = ""
+        if isinstance(preparation, dict):
+            preparation_eligible = preparation.get("eligible") is True
+            preparation_status = str(
+                preparation.get("status") or ""
+            ).strip().casefold()
+            generation_eligible_batches += int(preparation_eligible)
+            generation_ready_batches += int(
+                preparation_eligible and preparation_status == "ready"
+            )
+            generation_unavailable_batches += int(
+                preparation_eligible and preparation_status != "ready"
+            )
+            generation_receipt_batches += int(
+                preparation.get("receiptPresent") is True
+            )
+        briefing = batch.get("relationBriefing")
+        if isinstance(briefing, dict):
+            eligible_briefings += int(briefing.get("eligible") is True)
+            attempted_briefings += int(briefing.get("attempted") is True)
+            status = str(briefing.get("status") or "").strip().casefold()
+            unavailable_briefings += int(status == "unavailable")
+            empty_briefings += int(status == "empty")
+            briefing_prompt_characters += _nonnegative_stage1_count(
+                briefing.get("promptChars")
+            )
+            briefing_source_windows += _nonnegative_stage1_count(
+                briefing.get("sourceWindows")
+            )
+            briefing_source_characters += _nonnegative_stage1_count(
+                briefing.get("sourceCharacters")
+            )
+            prompt_counts = briefing.get("promptResultCounts")
+            prompt_count = 0
+            if isinstance(prompt_counts, dict):
+                prompt_count = _nonnegative_stage1_count(
+                    prompt_counts.get("edges")
+                )
+                if prompt_count == 0:
+                    prompt_count = _nonnegative_stage1_count(
+                        prompt_counts.get("relations")
+                    )
+            prompt_relations += prompt_count
+            batch_evidence_ids = {
+                evidence_id
+                for evidence_id in briefing.get("visibleEvidenceIds") or ()
+                if isinstance(evidence_id, str) and evidence_id
+            }
+            visible_evidence_ids.update(batch_evidence_ids)
+            if (
+                _nonnegative_stage1_count(briefing.get("promptChars")) > 0
+                and batch_evidence_ids
+            ):
+                delivered_briefings += 1
+
+        source_summary = batch.get("sourceReadSummary")
+        summary_is_usable = (
+            isinstance(source_summary, dict)
+            and all(
+                isinstance(source_summary.get(key), int)
+                and not isinstance(source_summary.get(key), bool)
+                for key in (
+                    "totalRequests",
+                    "boundedRangeRequests",
+                    "wholeFileRequests",
+                )
+            )
+        )
+        if summary_is_usable:
+            batch_bounded = _nonnegative_stage1_count(
+                source_summary.get("boundedRangeRequests")
+            )
+            batch_whole = _nonnegative_stage1_count(
+                source_summary.get("wholeFileRequests")
+            )
+            batch_total = max(
+                _nonnegative_stage1_count(source_summary.get("totalRequests")),
+                batch_bounded + batch_whole,
+            )
+        else:
+            source_reads = [
+                tool.get("sourceRead")
+                for tool in batch.get("toolSequence") or ()
+                if isinstance(tool, dict)
+                and isinstance(tool.get("sourceRead"), dict)
+            ]
+            batch_total = len(source_reads)
+            batch_bounded = sum(
+                read.get("mode") == "bounded_range"
+                for read in source_reads
+            )
+            batch_whole = sum(
+                read.get("mode") == "whole_file"
+                for read in source_reads
+            )
+        source_read_total += batch_total
+        bounded_source_reads += batch_bounded
+        whole_file_source_reads += batch_whole
+
+        tool_sequence = [
+            tool
+            for tool in batch.get("toolSequence") or ()
+            if isinstance(tool, dict)
+        ]
+        graph_tools = [
+            tool
+            for tool in tool_sequence
+            if tool.get("name") in STAGE1_STRUCTURAL_TOOL_NAMES
+        ]
+        initial_required_tool = batch.get("initialRequiredTool")
+        first_action = batch.get("firstAction")
+        first_action_name = (
+            first_action.get("name")
+            if isinstance(first_action, dict)
+            else None
+        )
+        graph_required = initial_required_tool in STAGE1_STRUCTURAL_TOOL_NAMES
+        required_tool_sequence = batch.get("requiredToolSequence")
+        graph_workflow_required = bool(
+            isinstance(required_tool_sequence, list)
+            and required_tool_sequence
+        )
+        graph_eligible = bool(
+            preparation_status == "ready"
+            or graph_required
+            or graph_tools
+        )
+        graph_eligible_batches += int(graph_eligible)
+        graph_required_first_call_batches += int(graph_required)
+        graph_required_first_call_satisfied_batches += int(
+            graph_required and first_action_name == initial_required_tool
+        )
+        graph_required_workflow_batches += int(graph_workflow_required)
+        graph_required_workflow_satisfied_batches += int(
+            graph_workflow_required
+            and batch.get("requiredToolSequenceSatisfied") is True
+        )
+        graph_attempted_batches += int(bool(graph_tools))
+        for tool in graph_tools:
+            graph_attempted_calls += 1
+            status = str(tool.get("status") or "").strip().casefold()
+            if status == "completed":
+                graph_completed_calls += 1
+            else:
+                graph_failed_calls += 1
+            name = str(tool.get("name") or "")
+            if name in graph_call_counts:
+                graph_call_counts[name] += 1
+            result_counts = tool.get("resultCounts")
+            if isinstance(result_counts, dict):
+                graph_source_windows += _nonnegative_stage1_count(
+                    result_counts.get("sourceWindows")
+                )
+            source_paths = tool.get("sourcePaths")
+            graph_source_bearing_calls += int(
+                isinstance(source_paths, list) and bool(source_paths)
+            )
+            graph_evidence_ids.update(
+                evidence_id
+                for evidence_id in tool.get("evidenceIds") or ()
+                if isinstance(evidence_id, str) and evidence_id
+            )
+        redundant_whole_file_rejections += sum(
+            tool.get("errorCode") == "current_source_already_supplied"
+            for tool in tool_sequence
+            if tool.get("name") in {
+                "getReviewFileContent",
+                "getBranchFileContent",
+            }
+        )
+
+    return {
+        "relationBriefing": {
+            "eligibleBatches": eligible_briefings,
+            "attemptedBatches": attempted_briefings,
+            "deliveredBatches": delivered_briefings,
+            "unavailableBatches": unavailable_briefings,
+            "emptyBatches": empty_briefings,
+            "promptVisibleRelations": prompt_relations,
+            "promptVisibleEvidenceIds": len(visible_evidence_ids),
+            "sourceWindows": briefing_source_windows,
+            "sourceCharacters": briefing_source_characters,
+            "promptCharacters": briefing_prompt_characters,
+        },
+        "sourceReads": {
+            "totalRequests": source_read_total,
+            "boundedRangeRequests": bounded_source_reads,
+            "wholeFileRequests": whole_file_source_reads,
+            "unclassifiedRequests": max(
+                0,
+                source_read_total
+                - bounded_source_reads
+                - whole_file_source_reads,
+            ),
+            "redundantWholeFileRejectedRequests": (
+                redundant_whole_file_rejections
+            ),
+        },
+        "generationPreparation": {
+            "eligibleBatches": generation_eligible_batches,
+            "readyBatches": generation_ready_batches,
+            "unavailableBatches": generation_unavailable_batches,
+            "receiptPresentBatches": generation_receipt_batches,
+        },
+        "graphTools": {
+            "eligibleBatches": graph_eligible_batches,
+            "requiredFirstCallBatches": graph_required_first_call_batches,
+            "requiredFirstCallSatisfiedBatches": (
+                graph_required_first_call_satisfied_batches
+            ),
+            "requiredWorkflowBatches": graph_required_workflow_batches,
+            "requiredWorkflowSatisfiedBatches": (
+                graph_required_workflow_satisfied_batches
+            ),
+            "attemptedBatches": graph_attempted_batches,
+            "attemptedCalls": graph_attempted_calls,
+            "completedCalls": graph_completed_calls,
+            "failedCalls": graph_failed_calls,
+            "sourceBearingCalls": graph_source_bearing_calls,
+            "sourceWindows": graph_source_windows,
+            "returnedEvidenceIds": len(graph_evidence_ids),
+            "minimalContextCalls": graph_call_counts[
+                STAGE1_MINIMAL_REVIEW_CONTEXT_TOOL_NAME
+            ],
+            "reviewContextCalls": graph_call_counts[
+                STAGE1_REVIEW_CONTEXT_TOOL_NAME
+            ],
+            "impactRadiusCalls": graph_call_counts[
+                STAGE1_IMPACT_RADIUS_TOOL_NAME
+            ],
+            "traversalCalls": graph_call_counts[
+                STAGE1_TRAVERSE_GRAPH_TOOL_NAME
+            ],
+            "graphQueryCalls": graph_call_counts[
+                STAGE1_QUERY_GRAPH_TOOL_NAME
+            ],
+            "structuralUnitCalls": graph_call_counts[
+                STAGE1_STRUCTURAL_UNIT_TOOL_NAME
+            ],
         },
     }
 
@@ -1093,6 +1340,7 @@ class ReviewQualityCaptureSession:
             "modelBoundaryInvocations": 0,
             "providerCalls": 0,
             "calls": [],
+            "stage1AgentBatches": [],
             "pipelineEvidenceStatus": "pending",
             "pipelineEvidence": None,
             "pipelineEvidenceDigest": None,
@@ -1102,7 +1350,7 @@ class ReviewQualityCaptureSession:
             "warnings": [
                 (
                     "This opt-in artifact contains proprietary source, prompts, "
-                    "retrieved context, and model outputs. Credentials are redacted."
+                    "structural context, and model outputs. Credentials are redacted."
                 ),
                 (
                     "The capture observes the existing BYOK model boundary and does "
@@ -1147,6 +1395,32 @@ class ReviewQualityCaptureSession:
 
     def observe_pipeline_event(self, event: Any) -> None:
         """Observe terminal host evidence without changing review callbacks."""
+        if (
+            isinstance(event, dict)
+            and event.get("state") == "stage_1_agent_telemetry"
+            and isinstance(event.get("agentTelemetry"), dict)
+        ):
+            telemetry = self._scrub_known_credentials(
+                _redact_secrets(_json_safe(event["agentTelemetry"]))
+            )
+            batch_number = telemetry.get("batchNumber")
+            records = self._artifact["stage1AgentBatches"]
+            records[:] = [
+                record
+                for record in records
+                if record.get("batchNumber") != batch_number
+            ]
+            records.append(telemetry)
+            records.sort(key=lambda record: (
+                int(record.get("batchNumber"))
+                if isinstance(record.get("batchNumber"), int)
+                else 2 ** 31,
+                str(record.get("batchPaths") or ""),
+            ))
+            # Batch events may arrive long before terminal completion. Persist
+            # each compact record in the existing crash-safe artifact.
+            self._write()
+            return
         try:
             evidence = _terminal_pipeline_evidence(event)
         except ValueError as exception:
@@ -1246,6 +1520,7 @@ class ReviewQualityCaptureSession:
                 "promptDigest": call.get("promptDigest"),
                 "responseDigest": call.get("responseDigest"),
             })
+        stage1_agent_batches = self._artifact.get("stage1AgentBatches") or []
         receipt = {
             "kind": "review-quality-capture-receipt",
             "status": self._artifact["status"],
@@ -1259,6 +1534,10 @@ class ReviewQualityCaptureSession:
                 "modelBoundaryInvocations"
             ],
             "providerCalls": self._artifact["providerCalls"],
+            "stage1AgentBatchCount": len(stage1_agent_batches),
+            "stage1AgentSummary": _stage1_agent_receipt_summary(
+                stage1_agent_batches
+            ),
             "calls": call_receipts,
         }
         receipt["receiptDigest"] = _digest(receipt)
@@ -1435,8 +1714,21 @@ class ReviewQualityCaptureSession:
         )
 
 
-class ReviewQualityCaptureLLM:
-    """Transparent model view that records each actual invocation."""
+class ReviewQualityCaptureLLM(BaseChatModel):
+    """Runnable chat-model proxy that records each actual invocation.
+
+    LangChain's agent factory requires a concrete ``BaseChatModel``. Keeping the
+    capture wrapper on that boundary lets tool-enabled agent turns flow through
+    the same crash-safe artifact as direct structured calls instead of forcing
+    capture-enabled reviews onto a degraded non-agent path.
+    """
+
+    _delegate: Any = PrivateAttr()
+    _session: ReviewQualityCaptureSession = PrivateAttr()
+    _schema: Any = PrivateAttr(default=None)
+    _include_raw: bool = PrivateAttr(default=False)
+    _bindings: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _tools: tuple[dict[str, Any], ...] = PrivateAttr(default_factory=tuple)
 
     def __init__(
         self,
@@ -1448,6 +1740,7 @@ class ReviewQualityCaptureLLM:
         bindings: Optional[dict[str, Any]] = None,
         tools: Iterable[dict[str, Any]] = (),
     ):
+        super().__init__()
         self._delegate = delegate
         self._session = session
         self._schema = schema
@@ -1468,7 +1761,19 @@ class ReviewQualityCaptureLLM:
         return getattr(self._delegate, "max_tokens", None)
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._delegate, name)
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self._delegate, name)
+
+    @property
+    def _llm_type(self) -> str:
+        return "codecrow-review-quality-capture"
+
+    def _generate(self, *args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError(
+            "Review quality capture supports asynchronous review invocations only"
+        )
 
     def _clone(self, delegate: Any, **updates: Any) -> "ReviewQualityCaptureLLM":
         return ReviewQualityCaptureLLM(
@@ -1551,7 +1856,19 @@ class ReviewQualityCaptureLLM:
             tools=tuple(_tool_descriptor(tool) for tool in materialized),
         )
 
-    async def ainvoke(self, input_data: Any, **kwargs: Any) -> Any:
+    async def ainvoke(
+        self,
+        input_data: Any,
+        config: Optional[dict[str, Any]] = None,
+        *,
+        stop: Optional[list[str]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        invoke_kwargs = dict(kwargs)
+        if config is not None:
+            invoke_kwargs["config"] = config
+        if stop is not None:
+            invoke_kwargs["stop"] = stop
         return await self._session.invoke(
             self._delegate,
             input_data,
@@ -1559,7 +1876,7 @@ class ReviewQualityCaptureLLM:
             include_raw=self._include_raw,
             bindings=self._bindings,
             tools=self._tools,
-            invoke_kwargs=kwargs,
+            invoke_kwargs=invoke_kwargs,
         )
 
 

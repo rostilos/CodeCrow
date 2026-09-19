@@ -195,7 +195,7 @@ class TestGetConnectedComponents:
 # ── get_smart_batches ────────────────────────────────────────
 
 class TestGetSmartBatches:
-    def test_twelve_file_mixed_priority_pr_stays_in_one_batch(self):
+    def test_twelve_isolated_files_remain_independent_batches(self):
         priorities = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
         groups = [
             _make_group(
@@ -214,8 +214,8 @@ class TestGetSmartBatches:
             max_allowed_tokens=60_000,
         )
 
-        assert len(batches) == 1
-        assert len(batches[0]) == 12
+        assert len(batches) == 12
+        assert all(len(batch) == 1 for batch in batches)
 
     def test_with_enrichment(self):
         groups = [
@@ -230,11 +230,10 @@ class TestGetSmartBatches:
             groups, "ws", "proj", ["main"],
             enrichment_data=enrichment,
         )
-        assert len(batches) >= 1
-        all_paths = [item["file"].path for batch in batches for item in batch]
-        assert "a.py" in all_paths
-        assert "b.py" in all_paths
-        assert "c.py" in all_paths
+        assert {
+            frozenset(item["file"].path for item in batch)
+            for batch in batches
+        } == {frozenset({"a.py", "b.py"}), frozenset({"c.py"})}
 
     def test_max_batch_size(self):
         files = [_make_file(f"f{i}.py") for i in range(20)]
@@ -250,43 +249,6 @@ class TestGetSmartBatches:
             assert len(batch) <= 5
 
 
-# ── _merge_small_batches ────────────────────────────────────
-
-class TestMergeSmallBatches:
-    def test_merges_across_priority_when_capacity_allows(self):
-        b = DependencyGraphBuilder()
-        batch1 = [{"file": _make_file("a.py"), "priority": "HIGH"}]
-        batch2 = [{"file": _make_file("b.py"), "priority": "LOW"}]
-        result = b._merge_small_batches(
-            [batch1, batch2],
-            min_size=3,
-            max_size=10,
-            max_allowed_tokens=60_000,
-            file_token_cost={"a.py": 30_000, "b.py": 29_000},
-        )
-        assert len(result) == 1
-        assert len(result[0]) == 2
-
-    def test_token_ceiling_still_splits(self):
-        b = DependencyGraphBuilder()
-        batches = [
-            [{"file": _make_file("a.py"), "priority": "HIGH"}],
-            [{"file": _make_file("b.py"), "priority": "LOW"}],
-        ]
-        result = b._merge_small_batches(
-            batches,
-            min_size=3,
-            max_size=15,
-            max_allowed_tokens=60_000,
-            file_token_cost={"a.py": 31_000, "b.py": 30_000},
-        )
-        assert len(result) == 2
-
-    def test_empty(self):
-        b = DependencyGraphBuilder()
-        assert b._merge_small_batches([], 3, 10) == []
-
-
 # ── create_smart_batches convenience function ────────────────
 
 class TestCreateSmartBatches:
@@ -300,39 +262,49 @@ class TestCreateSmartBatches:
         assert len(batches) >= 1
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_async_rag_client_is_awaited(self):
-        class AsyncRag:
+    async def test_async_structural_client_is_awaited(self):
+        class StructuralClient:
             def __init__(self):
                 self.called = False
 
-            async def get_deterministic_context(self, **kwargs):
+            async def get_structural_relations(self, **kwargs):
                 self.called = True
                 return {
-                    "context": {
-                        "changed_files": {
-                            "a.py": [{"metadata": {"path": "a.py", "primary_name": "A"}}],
-                            "b.py": [{"metadata": {"path": "b.py", "primary_name": "B"}}],
-                        },
-                        "related_definitions": {
-                            "A": [{"metadata": {"path": "b.py"}}],
-                        },
-                    }
+                    "anchors": [],
+                    "relations": [{
+                        "kind": "IMPORTS",
+                        "source": "a.py",
+                        "relation": "imports",
+                        "target": "b.py",
+                        "origin": {"path": "a.py", "line": 1},
+                        "relatedPaths": ["a.py", "b.py"],
+                    }],
                 }
 
         groups = [_make_group("HIGH", [_make_file("a.py"), _make_file("b.py")])]
-        rag = AsyncRag()
+        client = StructuralClient()
 
         batches = await create_smart_batches_async(
-            groups, "ws", "proj", ["main"], rag_client=rag, max_batch_size=5
+            groups,
+            "ws",
+            "proj",
+            ["main"],
+            rag_client=client,
+            max_batch_size=5,
+            structural_binding={
+                "repository_revision": "abc123",
+                "repository_generation_manifest_sha256": "a" * 64,
+                "collection_target": "generation-target",
+            },
         )
 
-        assert rag.called is True
+        assert client.called is True
         assert len(batches) >= 1
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_async_structured_rag_error_uses_basic_fallback(self):
-        class AsyncRag:
-            async def get_deterministic_context(self, **kwargs):
+    async def test_async_structural_error_uses_basic_fallback(self):
+        class StructuralClient:
+            async def get_structural_relations(self, **kwargs):
                 return {
                     "status": "error",
                     "status_code": 503,
@@ -353,15 +325,19 @@ class TestCreateSmartBatches:
             "ws",
             "proj",
             ["main"],
-            rag_client=AsyncRag(),
+            rag_client=StructuralClient(),
             max_batch_size=5,
+            structural_binding={
+                "repository_revision": "abc123",
+                "repository_generation_manifest_sha256": "a" * 64,
+                "collection_target": "generation-target",
+            },
         )
 
-        batch_paths = [
-            {entry["file"].path for entry in batch}
+        assert {
+            tuple(entry["file"].path for entry in batch)
             for batch in batches
-        ]
-        assert any({"src/a.py", "src/b.py"}.issubset(paths) for paths in batch_paths)
+        } == {("src/a.py",), ("src/b.py",), ("lib/c.py",)}
 
 
 # ── build_dependency_aware_batches ───────────────────────────

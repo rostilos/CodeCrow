@@ -21,7 +21,10 @@ class FileReviewOutput(BaseModel):
         default_factory=list,
         description="Current actionable defects plus matched previous-issue resolutions; omit successful fixes, praise, INFO notes, and speculative advice",
     )
-    confidence: str = Field(description="Confidence level (HIGH/MEDIUM/LOW)")
+    confidence: str = Field(
+        default="MEDIUM",
+        description="Confidence level (HIGH/MEDIUM/LOW)",
+    )
     note: str = Field(default="", description="Optional analysis note")
 
     @field_validator("issues", mode="before")
@@ -35,6 +38,12 @@ class FileReviewOutput(BaseModel):
     def normalize_null_note(cls, value):
         """Keep the internal note contract string-only for tolerant LLM input."""
         return "" if value is None else value
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_null_confidence(cls, value):
+        """Use the neutral confidence when an LLM emits an explicit null."""
+        return "MEDIUM" if value is None else value
 
 
 class FileReviewBatchOutput(BaseModel):
@@ -85,7 +94,7 @@ class CrossFileIssue(BaseModel):
     evidence: str = Field(description="Visible post-change evidence proving the current harmful interaction")
     evidenceRefs: List[str] = Field(
         default_factory=list,
-        description="Stable Evidence ID values copied from retrieved context used by this issue",
+        description="Stable structural Evidence IDs visible to the invocation and used by this issue",
     )
     claimKind: str = Field(
         default="",

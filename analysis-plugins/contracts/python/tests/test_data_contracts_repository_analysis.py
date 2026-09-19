@@ -85,15 +85,11 @@ def test_graphql_reference_removal_keeps_only_the_exact_schema_path():
     overlay_analysis, diagnostics = overlay.finish()
     assert diagnostics == ()
 
-    removed = next(
-        fact
-        for fact in _facts(overlay_analysis)
-        if fact.kind == "data-contract-pr-removed-reference"
+    assert not any(
+        fact.kind == "data-contract-reference"
         and fact.path == "app/design/frontend/Acme/theme/templates/product.phtml"
-        and dict(fact.attributes)["field"] == "product_type"
-    )
-    assert removed.related_paths == (
-        "schema/catalog.graphqls",
+        and dict(fact.attributes).get("field") == "product_type"
+        for fact in _facts(overlay_analysis)
     )
 
 
@@ -426,8 +422,10 @@ def test_line_only_graphql_move_does_not_emit_a_removal():
     overlay_analysis, diagnostics = overlay.finish()
 
     assert diagnostics == ()
-    assert not any(
-        fact.kind == "data-contract-pr-removed-reference"
+    assert any(
+        fact.kind == "data-contract-reference"
+        and fact.path == "src/query.txt"
+        and dict(fact.attributes).get("field") == "id"
         for fact in _facts(overlay_analysis)
     )
 

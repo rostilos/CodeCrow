@@ -173,7 +173,9 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 # ============================================================================
 # RAG
 # ============================================================================
-#codecrow.rag.api.url=http://rag-pipeline:8001
+# Docker Compose sets this to the deployment-owned `codecrow-rag-pipeline`
+# container name so unrelated workloads cannot collide on a generic service alias.
+#codecrow.rag.api.url=http://codecrow-rag-pipeline:8001
 #codecrow.rag.api.enabled=true
 
 # RAG API timeouts (in seconds)
@@ -185,10 +187,13 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 # transport after one minute while allowing an active stream to run indefinitely.
 #codecrow.rag.api.timeout.stream-idle=60
 # Exact configured-branch builds are serialized by default because architecture
-# finalization shares CPU, memory, and Qdrant access in one indexing process.
+# finalization shares CPU, memory, and structural-store access in one process.
 # Raise these only after provisioning independent capacity for concurrent builds.
 #codecrow.rag.branch-build.parallelism=1
 #codecrow.rag.branch-build.global-parallelism=1
+# Failed refreshes retry only while the active generation remains incompatible.
+# This cooldown prevents a transient dependency failure from creating a build loop.
+#codecrow.rag.lifecycle.failed-retry-minutes=60
 # Exact-generation operation recovery. A live build heartbeats its persisted
 # operation; a published operation also repairs an interrupted job/status handoff.
 #codecrow.rag.generation.stale-after-minutes=30

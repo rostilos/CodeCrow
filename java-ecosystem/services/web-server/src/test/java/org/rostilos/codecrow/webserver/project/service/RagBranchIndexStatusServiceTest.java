@@ -20,15 +20,14 @@ import static org.mockito.Mockito.when;
 class RagBranchIndexStatusServiceTest {
 
     @Test
-    void reportsPrimaryAndEachExplicitRetainedBranchWithoutTransientIndexes() {
+    void reportsPrimaryAndEveryLazilyObservedBranch() {
         RagBranchIndexRepository branches = mock(RagBranchIndexRepository.class);
         RagBranchIndexStatusService service = new RagBranchIndexStatusService(branches);
 
         Project project = new Project();
         ReflectionTestUtils.setField(project, "id", 42L);
         ProjectConfig config = new ProjectConfig();
-        config.setRagConfig(new RagConfig(
-                true, "master", null, null, true, 30, List.of("develop"), true));
+        config.setRagConfig(new RagConfig(true, "master"));
         project.setConfiguration(config);
 
         RagBranchIndex develop = new RagBranchIndex(project, "develop", RagBranchIndexKind.DURABLE);
@@ -43,10 +42,10 @@ class RagBranchIndexStatusServiceTest {
         var statuses = service.getConfiguredBranches(project);
 
         assertThat(statuses).extracting(value -> value.branchName())
-                .containsExactly("master", "develop");
+                .containsExactly("master", "develop", "release/candidate");
         assertThat(statuses.get(0).status()).isEqualTo("NOT_INDEXED");
         assertThat(statuses.get(1))
                 .extracting(value -> value.role(), value -> value.status(), value -> value.errorMessage())
-                .containsExactly("RETAINED", "FAILED", "archive unavailable");
+                .containsExactly("TARGET", "FAILED", "archive unavailable");
     }
 }

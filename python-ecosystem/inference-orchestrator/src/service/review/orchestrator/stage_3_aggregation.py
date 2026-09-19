@@ -160,6 +160,11 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _request_mcp_local_only(request: Any) -> bool:
+    """Match the request DTO's false default for compatible legacy callers."""
+    return getattr(request, "mcpLocalOnly", False) is True
+
+
 # This is an input packing target, not a provider or output-token cap. Stage 3
 # shares the rendered-prompt target used by the earlier review stages.
 STAGE3_INPUT_TOKEN_TARGET = max(
@@ -234,6 +239,7 @@ async def execute_stage_3_aggregation(
         use_mcp_tools=use_mcp_tools,
         review_revision=review_revision,
         issue_inventory=_stage_3_issue_inventory(verification_issues),
+        mcp_local_only=_request_mcp_local_only(request),
     )
     token_target = _stage_3_input_token_target(request)
 
@@ -262,6 +268,7 @@ async def execute_stage_3_aggregation(
             use_mcp_tools=bool(
                 shard.use_mcp_tools and review_revision
             ),
+            mcp_local_only=context.mcp_local_only,
         )
         logger.info(
             "Stage 3 prompt assembled: shard=%d/%d chars=%d "
@@ -529,7 +536,13 @@ async def _stage_3_with_mcp(
 ) -> Dict[str, Any]:
     runtime = Stage3McpRuntime(
         input_token_target=_stage_3_input_token_target,
-        estimate_messages_tokens=_estimated_stage_3_messages_tokens,
+        estimate_messages_tokens=lambda messages, *, use_mcp_tools: (
+            _estimated_stage_3_messages_tokens(
+                messages,
+                use_mcp_tools=use_mcp_tools,
+                mcp_local_only=_request_mcp_local_only(request),
+            )
+        ),
         continuation_messages=_stage_3_mcp_continuation_messages,
         invoke_report=_invoke_stage_3_report,
         response_finished_by_length=_response_finished_by_length,

@@ -10,6 +10,13 @@ from typing import Any, Mapping, Sequence
 from .evaluation import evaluate_dataset
 
 
+_STRUCTURAL_RETRIEVAL_STATES = frozenset({
+    "complete",
+    "bounded",
+    "unavailable",
+})
+
+
 def _canonical_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
@@ -512,10 +519,16 @@ def _capture_hunk_counts(
         for state in deterministic_states
     ):
         raise ValueError(f"{path}: deterministic retrieval evidence is invalid")
-    if registered > 0 and not deterministic_states:
-        raise ValueError(f"{path}: deterministic retrieval evidence is missing")
-    if any(state != "complete" for state in deterministic_states):
-        raise ValueError(f"{path}: deterministic retrieval evidence is incomplete")
+    unknown_retrieval_states = sorted({
+        state
+        for state in deterministic_states
+        if state not in _STRUCTURAL_RETRIEVAL_STATES
+    })
+    if unknown_retrieval_states:
+        raise ValueError(
+            f"{path}: structural retrieval evidence has unknown states: "
+            + ", ".join(unknown_retrieval_states)
+        )
     exact_evidence_ids = retrieval.get("exactEvidenceIds")
     if (
         not isinstance(exact_evidence_ids, int)

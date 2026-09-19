@@ -163,19 +163,30 @@ structural context while the normal review pipeline continues.
 
 | Capability          | Implemented Behavior                                                                                                                                       |
 | :------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Retrieval           | Exact source, symbol, path, revision, architecture, and typed graph lookup in Qdrant                                                                         |
-| Stored Context      | Source records, architecture facts, graph relations, plugin snapshots, and repository-detection state                                                       |
-| Generation Build   | Builds and seals an immutable generation for one exact branch revision, then atomically activates its opaque target                                      |
-| Resilient Writes    | Quarantines malformed files and exact rejected points while retaining valid content; systemic Qdrant failures still prevent activation                    |
-| Generation Refresh | Builds a complete snapshot for the new branch revision while readers retain the last complete active generation                                             |
-| PR Context          | Uses an immutable, commit-pinned PR overlay so changed files do not retrieve stale base-branch copies                                                      |
-| Compatibility Guard | Host, selection, descriptor, and implementation fingerprints are provenance only and never force a reindex or filter context; snapshot integrity and the Qdrant collection schema remain enforced |
-| Prompt Budget       | Plugin and repository evidence share bounded context budgets; plugins cannot create an additional model stage                                              |
+| Retrieval           | Exact source-unit, symbol, path, revision, architecture, and typed graph lookup in a local SQLite structural store                                           |
+| Stored Context      | Tree-sitter units, architecture facts, graph relations, plugin snapshots, and repository-detection state; no embeddings or vector chunks                         |
+| Generation Build    | Builds and seals an immutable generation for one exact branch revision, then atomically publishes its opaque target                                          |
+| Resilient Writes    | File and optional plugin extraction fail open where useful structure remains; a failed store build never publishes a partial generation                          |
+| Generation Refresh | Builds a complete snapshot for the new branch revision while readers retain the last complete active generation                                               |
+| PR Context          | Builds eligible review context from the proposed tree relative to paths parsed from the acquired raw unfiltered base-to-head diff (pinned target snapshot + all declared changed bodies - declared deletions); `getReviewFileContent` reads proposed source for declared modified paths and pinned target source for unchanged paths. A missing declared body skips graph enrichment, and silent upstream diff omissions cannot be proven complete |
+| Compatibility Guard | The external generation receipt must match the immutable database seal and the exact workspace, project, branch, revision, and opaque target binding             |
+| Agentic Stage 1     | The existing MCP setting is enabled by default. One proposed-tree generation is prepared before MCP startup; every graph-ready batch must complete compact context, impact radius, a named graph query, and exact-unit inspection in order, then may use broader exploration, traversal, or exact file reads for unresolved gaps. Batch paths and both generation receipts are host-bound. No relation map is preloaded; normal reviews fail open, while controlled structural benchmarks verify the same workflow fail closed |
 
 The Repository Index Explorer exposes the different record types and their
-relationships. Deterministic architecture and state points intentionally use
-stable content identities; they participate in exact generation replacement
-rather than behaving as unrelated source files.
+relationships. Deterministic architecture and state records use stable content
+identities and participate in exact generation replacement rather than behaving
+as unrelated source files.
+
+The project's persistent RAG setting controls branch indexing/retrieval only.
+Request-scoped proposed-tree context for Stage 1 is controlled by the existing
+MCP-tools setting (enabled by default) and structural-service availability.
+Its normal one-per-review preparation restores the exactly bound base generation's repository-plugin
+snapshots and applies the proposed delta before tools read the complete proposed
+generation directly. If repository-aware plugin selection changes or a custom
+repository analyzer cannot restore sealed state, CodeCrow fully indexes the
+already materialized proposed source under the inherited sealed policy. A
+failed optional plugin finalizer drops cloned repository-wide output rather than
+publishing stale target-head facts.
 
 ## Review Pipeline and Quality Controls
 
@@ -188,6 +199,7 @@ rather than behaving as unrelated source files.
 | Idempotent Evidence          | Persists deterministic execution, coverage, candidate, and finding identities for safe retry and lifecycle reconciliation            |
 | Failure Semantics            | A failed or incomplete batch is not interpreted as a clean review; incomplete coverage blocks publication                            |
 | Queue Liveness               | Capacity-first consumers renew locks and report heartbeats; timeout is based on inactivity rather than total healthy-review duration |
+| Stage 1 Tool Telemetry       | Persists generation preparation, required-first-call compliance, graph/file sequence, revision, source/evidence use, rejected redundant reads, latency, degradation, and partial failures per batch      |
 | Full-Pipeline Prompt Dry Run | Runs normal acquisition, enrichment, plugins, repository context, batching, and prompt assembly with a capture model instead of the review LLM |
 | Capture and Replay Tooling   | Provides opt-in prompt capture, disconnected fixtures, replay, paired evaluation, and publication-gate tooling for operators         |
 
@@ -201,11 +213,13 @@ Real review-quality capture is a separate opt-in mode: it observes normal BYOK
 calls and stores source-bearing prompts, responses, and evidence for allowlisted
 projects. Treat those artifacts as sensitive and restrict access as described in
 the [configuration guide](https://codecrow.app/docs/developer/configuration).
+Capture is optional observability: an incomplete capture is labeled incomplete
+and does not block review or prove a quality result.
 
 ## Key Features
 
 - **Evidence-Bound Reviews**: Multi-stage analysis with immutable inputs, changed-hunk coverage, candidate provenance, deterministic validation, and publication gates.
-- **Context-Aware Reviews**: Optional structural repository context using exact source and typed graph relations stored in Qdrant.
+- **Context-Aware Reviews**: Optional structural repository navigation using exact source units and typed AST/plugin graph relations stored in immutable SQLite generations.
 - **Plugin-Based Enrichment**: Local language, framework, and domain plugins add exact context while generic hosts remain available for every project.
 - **Task-Aware PR Review**: When a project has a connected Jira task-management integration, PR analysis can include the linked task summary, description, status, priority, assignee, reporter, and URL. The setting `taskContextAnalysisEnabled` defaults to `true` and can be disabled per project through analysis settings.
 - **Delta Reviews, Immutable Indexes**: Repeat reviews can focus on new hunks, while every branch refresh publishes a complete revision-pinned repository-index generation.
@@ -232,8 +246,8 @@ High level components:
 - **Pipeline agent** (`java-ecosystem/services/pipeline-agent/`) – receives VCS webhooks, fetches repo/PR data, and coordinates analysis.
 - **Analysis plugins** (`analysis-plugins/`) – neutral contracts and independently owned language, framework, and domain implementations.
 - **Inference orchestrator** (`python-ecosystem/inference-orchestrator/`) – assembles bounded review stages, enforces evidence gates, and calls the configured review model. MCP tools are loaded only for flows that require them.
-- **Repository index pipeline** (`python-ecosystem/rag-pipeline/`) – builds exact source, architecture, plugin-state, and graph context in **Qdrant**.
-- **PostgreSQL, Redis, and Qdrant** – durable application state, queues/liveness coordination, and repository context respectively.
+- **Repository index pipeline** (`python-ecosystem/rag-pipeline/`) – builds immutable SQLite generations containing exact source units, architecture, plugin state, and graph relations.
+- **PostgreSQL, Redis, and the structural-index volume** – durable application state, queues/liveness coordination, and revision-bound repository context respectively.
 
 See the [system design](https://codecrow.app/docs/developer/architecture),
 [plugin architecture](https://codecrow.app/docs/developer/plugin-architecture),
@@ -271,5 +285,8 @@ Contributions are welcome. Please see our [Development Guide](https://codecrow.a
 ## License
 
 This project is licensed under the [FSL-1.1-MIT (Functional Source License)](LICENSE). You can use, modify, and self-host it freely — the only restriction is that you may not use it to build a competing commercial code-review product. Every version automatically converts to a full MIT license two years after its release.
+
+See [Third-Party Notices](THIRD_PARTY_NOTICES.md) for source-adapted components
+distributed under their original licenses.
 
 > **Note:** The hosted service (codecrow-cloud) is proprietary and not covered by this license.

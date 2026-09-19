@@ -30,7 +30,7 @@ def _provider_config(path, **updates):
         "baseUrl": "https://openrouter.ai/api/v1",
         "customParameters": {"temperature": 0},
         "maxAllowedTokens": 20000,
-        "useMcpTools": False,
+        "useMcpTools": True,
     }
     payload.update(updates)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -38,7 +38,7 @@ def _provider_config(path, **updates):
     return path
 
 
-def test_review_provider_config_requires_owner_only_file_and_forbids_tools(
+def test_review_provider_config_requires_owner_only_file_and_structural_tools(
     tmp_path,
 ):
     path = _provider_config(tmp_path / "review.json")
@@ -54,8 +54,8 @@ def test_review_provider_config_requires_owner_only_file_and_forbids_tools(
     with pytest.raises(ValueError, match="owner-only"):
         load_review_provider_config(path)
 
-    _provider_config(path, useMcpTools=True)
-    with pytest.raises(ValueError, match="forbids MCP"):
+    _provider_config(path, useMcpTools=False)
+    with pytest.raises(ValueError, match="requires MCP"):
         load_review_provider_config(path)
 
     _provider_config(path, unexpected="typo")
@@ -209,7 +209,7 @@ def test_applies_same_explicit_byok_settings_without_vcs_or_agent_credentials(
     assert paid.aiModel == "review-model"
     assert paid.aiApiKey == "review-secret"
     assert paid.maxAllowedTokens == 20000
-    assert paid.useMcpTools is False
+    assert paid.useMcpTools is True
     assert paid.accessToken is None
     assert paid.oAuthClient is None
     assert paid.oAuthSecret is None

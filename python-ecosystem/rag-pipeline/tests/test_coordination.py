@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,8 +8,6 @@ from rag_pipeline.core.coordination import (
     MutationLeaseUnavailable,
     ProjectMutationCoordinator,
 )
-from rag_pipeline.core.index_manager.collection_manager import CollectionManager
-from rag_pipeline.core.index_manager.manager import RAGIndexManager
 
 
 def _coordinator(timeout=0):
@@ -79,42 +76,6 @@ def test_branch_publication_scope_serializes_only_the_same_branch_head():
     assert main != develop
 
 
-def test_pr_overlay_scope_serializes_only_the_same_pr():
-    coordinator = _coordinator()
-
-    pr_41_index = coordinator._resource_key(
-        "workspace", "project", publication_scope="pr-overlay:41"
-    )
-    pr_41_delete = coordinator._resource_key(
-        "workspace", "project", publication_scope="pr-overlay:41"
-    )
-    pr_42_index = coordinator._resource_key(
-        "workspace", "project", publication_scope="pr-overlay:42"
-    )
-
-    assert pr_41_index == pr_41_delete
-    assert pr_41_index != pr_42_index
-
-
-def test_index_manager_binds_overlay_mutations_to_pr_scope():
-    coordinator = MagicMock()
-    manager = SimpleNamespace(_mutation_coordinator=coordinator)
-    lease = object()
-    coordinator.acquire.return_value = lease
-
-    result = RAGIndexManager.pr_overlay_mutation(
-        manager, "workspace", "project", 42, "index-pr-overlay"
-    )
-
-    assert result is lease
-    coordinator.acquire.assert_called_once_with(
-        "workspace",
-        "project",
-        "index-pr-overlay",
-        publication_scope="pr-overlay:42",
-    )
-
-
 def test_project_mutation_coordination_fails_closed_when_redis_is_unavailable():
     coordinator = _coordinator()
     coordinator._client.set.side_effect = RuntimeError("redis unavailable")
@@ -125,52 +86,6 @@ def test_project_mutation_coordination_fails_closed_when_redis_is_unavailable():
             collection_target="generation",
         ):
             pass
-
-
-def test_pending_janitor_keeps_live_and_aliased_collections_and_deletes_expired():
-    client = MagicMock()
-    client.get_aliases.return_value.aliases = [
-        SimpleNamespace(
-            alias_name="active",
-            collection_name="base_pending_1000000000_aaaaaaaa_bbbbbbbb",
-        )
-    ]
-    client.get_collections.return_value.collections = [
-        SimpleNamespace(name="base_pending_1000000000_aaaaaaaa_bbbbbbbb"),
-        SimpleNamespace(name="base_pending_1000000000_cccccccc_dddddddd"),
-        SimpleNamespace(name="base_pending_1000000000_eeeeeeee_ffffffff"),
-        SimpleNamespace(name="unrecognized_pending_name"),
-    ]
-    manager = CollectionManager(client)
-
-    with patch(
-        "rag_pipeline.core.index_manager.collection_manager.time.time",
-        return_value=1000100000,
-    ):
-        cleaned = manager.cleanup_expired_pending_collections(
-            is_operation_active=lambda token: token == "cccccccc",
-            min_age_seconds=300,
-        )
-
-    assert cleaned == 1
-    client.delete_collection.assert_called_once_with(
-        "base_pending_1000000000_eeeeeeee_ffffffff"
-    )
-
-
-def test_pending_janitor_propagates_alias_read_failure_to_lifecycle_owner():
-    client = MagicMock()
-    client.get_aliases.side_effect = RuntimeError("qdrant unavailable")
-    manager = CollectionManager(client)
-
-    with pytest.raises(RuntimeError, match="qdrant unavailable"):
-        manager.cleanup_expired_pending_collections(
-            is_operation_active=lambda _token: False,
-            min_age_seconds=300,
-        )
-
-    client.get_collections.assert_not_called()
-    client.delete_collection.assert_not_called()
 
 
 def test_pending_janitor_operation_check_propagates_redis_failure():

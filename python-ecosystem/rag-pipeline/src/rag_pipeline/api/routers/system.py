@@ -2,6 +2,7 @@
 import gc
 import logging
 from fastapi import APIRouter, HTTPException
+from ..models import RepresentationIdentityResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["system"])
@@ -15,10 +16,23 @@ def root():
 @router.get("/health")
 async def health():
     # Keep liveness on the event loop. Synchronous FastAPI handlers share a
-    # finite AnyIO worker pool, so a burst of slow indexing/Qdrant calls must
+    # finite AnyIO worker pool, so a burst of slow indexing/storage calls must
     # not make Docker declare an otherwise running process unhealthy merely
     # because every worker token is occupied.
     return {"status": "healthy"}
+
+
+@router.get(
+    "/system/representation",
+    response_model=RepresentationIdentityResponse,
+)
+def current_representation_identity():
+    """Return the content identity used to decide generation compatibility."""
+    from .. import api as api_module
+
+    if api_module.index_manager is None:
+        raise HTTPException(status_code=503, detail="Repository index is starting")
+    return api_module.index_manager.current_representation_identity()
 
 
 @router.post("/system/gc")

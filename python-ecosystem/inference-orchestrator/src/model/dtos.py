@@ -128,16 +128,6 @@ class ReviewRequestDto(BaseModel):
         exclude=True,
         description="Internal sealed target-generation receipt returned by RAG indexing",
     )
-    ragPrGenerationFingerprint: Optional[str] = Field(
-        default=None,
-        exclude=True,
-        description="Internal exact PR-overlay generation receipt returned by RAG indexing",
-    )
-    ragPrOverlayGenerationManifestSha256: Optional[str] = Field(
-        default=None,
-        exclude=True,
-        description="Internal content-addressed PR-overlay membership seal returned by RAG indexing",
-    )
     ragBasePluginFingerprint: Optional[str] = Field(
         default=None,
         exclude=True,
@@ -158,6 +148,26 @@ class ReviewRequestDto(BaseModel):
         exclude=True,
         description="Internal index representation identity of the sealed target generation",
     )
+    ragReviewGenerationStatus: Optional[str] = Field(
+        default=None,
+        exclude=True,
+        description="Internal request-scoped proposed-tree preparation state",
+    )
+    ragReviewCollectionTarget: Optional[str] = Field(
+        default=None,
+        exclude=True,
+        description="Internal opaque collection target for the sealed review generation",
+    )
+    ragReviewGenerationManifestSha256: Optional[str] = Field(
+        default=None,
+        exclude=True,
+        description="Internal sealed proposed-tree generation receipt",
+    )
+    ragReviewGenerationError: Optional[str] = Field(
+        default=None,
+        exclude=True,
+        description="Internal observable reason proposed-tree preparation was unavailable",
+    )
     # File enrichment data (full file contents + pre-computed dependency graph)
     enrichmentData: Optional[PrEnrichmentDataDto] = Field(default=None, description="Pre-computed file contents and dependency relationships from Java")
     projectCapabilities: Optional[ProjectCapabilitiesDto] = Field(
@@ -175,12 +185,28 @@ class ReviewRequestDto(BaseModel):
         default=None,
         description="Opaque job identifier used only to name a prompt dry-run artifact.",
     )
-    # MCP tools for enhanced context in Stage 1 and issue verification in Stage 3
+    # Repository/structural MCP tools in Stage 1 and source tools in Stage 3.
     useMcpTools: Optional[bool] = Field(
         default=True,
         description=(
-            "Enable agentic repository and RAG tools for Stage 1 context gaps "
+            "Enable agentic repository and structural tools for Stage 1 context gaps "
             "and exact-source tools for issue verification"
+        ),
+    )
+    mcpLocalOnly: bool = Field(
+        default=False,
+        description=(
+            "Restrict MCP to request-staged repository and structural sources. "
+            "Provider tools, credentials, and provider fallbacks are disabled."
+        ),
+    )
+    requireStructuralMcp: bool = Field(
+        default=False,
+        description=(
+            "Require the exact proposed-tree graph and the complete Stage 1 "
+            "structural MCP workflow. When enabled, the review fails before "
+            "source-only model fallback if graph preparation or graph tools are "
+            "unavailable. Intended for controlled Graph-RAG evaluations."
         ),
     )
     localRepoPath: Optional[str] = Field(
@@ -197,11 +223,25 @@ class ReviewRequestDto(BaseModel):
         default=None,
         description="Immutable target-head revision represented by localRepoPath",
     )
+    localRagRepoPath: Optional[str] = Field(
+        default=None,
+        description=(
+            "Ephemeral target-head snapshot selected identically to the sealed "
+            "structural base generation"
+        ),
+    )
+    localReviewOverlayPath: Optional[str] = Field(
+        default=None,
+        description=(
+            "Ephemeral request-scoped proposed-tree overlay for PR-modified files"
+        ),
+    )
     ragEnabled: bool = Field(
         default=True,
         description=(
-            "Whether this project review may index or retrieve RAG context. "
-            "False disables RAG for this request even when the service is globally enabled."
+            "Whether this project review may use the structural repository index. "
+            "False disables structural context for this request even when the "
+            "service is globally enabled."
         ),
     )
     # Custom project review rules (JSON array of enabled rules from ProjectRulesConfig)
@@ -210,10 +250,8 @@ class ReviewRequestDto(BaseModel):
     reconciliationFileContents: Optional[Dict[str, str]] = Field(default=None, description="Pre-fetched file contents for MCP-free reconciliation. Map of filePath to full file content.")
 
     def get_rag_branch(self) -> Optional[str]:
-        # The indexed PR source branch is never repository truth. A review is
-        # assembled from the immutable target branch plus the exact PR overlay;
-        # accepting source-branch index data here can mix stale or rejected branch
-        # state into otherwise current changed-file evidence.
+        # Structural context is always bound to the immutable target head. The
+        # PR diff and changed-file source remain direct review evidence.
         return self.targetBranchName
 
     def get_rag_base_branch(self) -> Optional[str]:

@@ -12,7 +12,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 JAVA_CONTROLLER = "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/controller/ProviderWebhookController.java"
 PLATFORM_MCP_SERVER = "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/PlatformMcpServer.java"
 FASTAPI_APP = "python-ecosystem/rag-pipeline/src/rag_pipeline/api/api.py"
-FASTAPI_ROUTER = "python-ecosystem/rag-pipeline/src/rag_pipeline/api/routers/pr.py"
+FASTAPI_ROUTER = "python-ecosystem/rag-pipeline/src/rag_pipeline/api/routers/query.py"
 JAVASCRIPT_CONFIG = "frontend/eslint.config.js"
 
 
@@ -56,10 +56,7 @@ def test_current_java_source_produces_java_and_spring_architecture_context():
     )
     triples = {(fact.kind, fact.relation, fact.target) for fact in facts}
 
-    assert len(diagnostics) == 1
-    assert diagnostics[0].code == "plugin-index-output-limit"
-    assert diagnostics[0].path == JAVA_CONTROLLER
-    assert diagnostics[0].recoverable is True
+    assert diagnostics == ()
     assert ("java-type", "declares", "org.rostilos.codecrow.pipelineagent.generic.controller.ProviderWebhookController") in triples
     assert ("spring-route", "handles", "POST /api/webhooks/{provider}/{authToken}") in triples
     assert ("spring-injection", "depends-on", "WebhookProjectResolver") in triples
@@ -108,16 +105,12 @@ def test_current_python_sources_produce_python_and_fastapi_architecture_context(
     )
 
     assert app_diagnostics == ()
-    assert len(route_diagnostics) == 1
-    assert route_diagnostics[0].code == "plugin-index-output-limit"
-    assert route_diagnostics[0].plugin_id == "python"
-    assert route_diagnostics[0].path == FASTAPI_ROUTER
-    assert route_diagnostics[0].recoverable is True
+    assert route_diagnostics == ()
     assert any(fact.kind == "python-import" and fact.target == "fastapi.FastAPI" for fact in app_facts)
     assert any(fact.kind == "fastapi-application" and fact.target == "app" for fact in app_facts)
     assert any(fact.kind == "fastapi-middleware" and fact.target == "ServiceSecretMiddleware" for fact in app_facts)
-    assert any(fact.kind == "fastapi-router" and fact.relation == "includes" and fact.target == "pr_router" for fact in app_facts)
-    assert any(fact.kind == "fastapi-route" and fact.target == "POST /index/pr-files" for fact in route_facts)
+    assert any(fact.kind == "fastapi-router" and fact.relation == "includes" and fact.target == "query_router" for fact in app_facts)
+    assert any(fact.kind == "fastapi-route" and fact.target == "POST /query/relations" for fact in route_facts)
 
 
 def test_current_javascript_source_produces_module_and_call_context():

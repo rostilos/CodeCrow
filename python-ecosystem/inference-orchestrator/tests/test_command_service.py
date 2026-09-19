@@ -19,6 +19,7 @@ from service.command.command_service import (
     _command_input_token_budget,
     _estimated_command_input_tokens,
 )
+from utils.mcp_config import MCPConfigBuilder
 
 
 @pytest.fixture
@@ -117,6 +118,46 @@ class TestBuildPlatformJvmProps:
         )
         result = service._build_platform_jvm_props(request)
         assert result.get("oAuthClient") == "client"
+
+    @patch("os.path.exists", return_value=True)
+    def test_command_credentials_and_internal_secret_do_not_enter_process_args(
+            self,
+            mock_exists,
+            service,
+    ):
+        request = MagicMock(
+            projectId=5,
+            pullRequestId=10,
+            projectVcsWorkspace="ws",
+            projectVcsRepoSlug="repo",
+            accessToken="command-flow-token-sentinel",
+            oAuthClient=None,
+            oAuthSecret=None,
+            vcsProvider="github",
+            vcsBaseUrl=None,
+        )
+        with patch.dict(
+                "os.environ",
+                {"INTERNAL_API_SECRET": "command-internal-secret-sentinel"},
+        ):
+            platform_props = service._build_platform_jvm_props(request)
+
+        config = MCPConfigBuilder.build_config(
+            "/vcs.jar",
+            include_platform_mcp=True,
+            platform_mcp_jar_path="/platform.jar",
+            platform_jvm_props=platform_props,
+        )["mcpServers"]["codecrow-platform-mcp"]
+        loggable_args = " ".join(config["args"])
+
+        assert "command-flow-token-sentinel" not in loggable_args
+        assert "command-internal-secret-sentinel" not in loggable_args
+        assert config["env"]["CODECROW_MCP_ACCESS_TOKEN"] == (
+            "command-flow-token-sentinel"
+        )
+        assert config["env"]["CODECROW_MCP_INTERNAL_API_SECRET"] == (
+            "command-internal-secret-sentinel"
+        )
 
 
 # ── _build_summarize_prompt ──────────────────────────────────────
@@ -814,6 +855,7 @@ class TestCreateMcpClient:
             mock_cls.from_dict.return_value = MagicMock()
             client = service._create_mcp_client({"servers": {}})
             mock_cls.from_dict.assert_called_once()
+            client.add_middleware.assert_called_once()
 
     def test_raises_on_failure(self, service):
         with patch("service.command.command_service.MCPClient") as mock_cls:

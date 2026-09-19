@@ -9,6 +9,10 @@ import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -21,6 +25,36 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class LocalRepositorySnapshotServiceTest {
+
+    @Test
+    void cleanupRemovesOnlyAbandonedReviewTrees() throws Exception {
+        BranchArchiveService archiveService = mock(BranchArchiveService.class);
+        VcsClientProvider vcsClientProvider = mock(VcsClientProvider.class);
+        Path staleSnapshot = Files.createDirectory(
+                temporaryRoot.resolve("codecrow-pr-review-stale"));
+        Path staleOverlay = Files.createDirectory(
+                temporaryRoot.resolve("codecrow-pr-overlay-stale"));
+        Path activeSnapshot = Files.createDirectory(
+                temporaryRoot.resolve("codecrow-pr-review-active"));
+        Path unrelated = Files.createDirectory(
+                temporaryRoot.resolve("another-service-stale"));
+        FileTime stale = FileTime.from(Instant.now().minusSeconds(25 * 60 * 60));
+        Files.setLastModifiedTime(staleSnapshot, stale);
+        Files.setLastModifiedTime(staleOverlay, stale);
+        Files.setLastModifiedTime(unrelated, stale);
+
+        LocalRepositorySnapshotService service = new LocalRepositorySnapshotService(
+                archiveService,
+                vcsClientProvider,
+                temporaryRoot);
+
+        service.cleanupAbandonedSnapshots();
+
+        assertThat(staleSnapshot).doesNotExist();
+        assertThat(staleOverlay).doesNotExist();
+        assertThat(activeSnapshot).exists();
+        assertThat(unrelated).exists();
+    }
 
     @TempDir
     Path temporaryRoot;
@@ -85,6 +119,89 @@ class LocalRepositorySnapshotServiceTest {
         Path snapshotPath = prepared.path();
         prepared.close();
         assertThat(snapshotPath).doesNotExist();
+    }
+
+    @Test
+    void preparesAndCleansRequestScopedProposedTreeOverlay() throws Exception {
+        BranchArchiveService archiveService = mock(BranchArchiveService.class);
+        VcsClientProvider provider = mock(VcsClientProvider.class);
+        VcsConnection connection = mock(VcsConnection.class);
+        LocalRepositorySnapshotService service = new LocalRepositorySnapshotService(
+                archiveService,
+                provider,
+                temporaryRoot);
+
+        var prepared = service.prepareForReview(
+                connection,
+                "team",
+                "repo",
+                "main",
+                "target-head-sha",
+                Map.of(
+                        "src/Changed.java", "class Changed { int proposed; }\n",
+                        "../outside.java", "must not be written"),
+                List.of("src/Changed.java", "src/Unavailable.java", "../outside.java"),
+                List.of("src/Deleted.java"))
+                .orElseThrow();
+
+        Path overlay = prepared.reviewOverlayPath();
+        assertThat(overlay).exists().isDirectory();
+        assertThat(overlay.resolve("files/src/Changed.java"))
+                .hasContent("class Changed { int proposed; }\n");
+        assertThat(overlay.resolve("files/outside.java")).doesNotExist();
+        assertThat(Files.readString(overlay.resolve("manifest.json")))
+                .contains("src/Changed.java", "src/Unavailable.java", "src/Deleted.java")
+                .doesNotContain("outside.java");
+        assertThat(prepared.transport().reviewOverlayPath()).isEqualTo(overlay.toString());
+
+        Path snapshot = prepared.path();
+        prepared.close();
+        assertThat(snapshot).doesNotExist();
+        assertThat(overlay).doesNotExist();
+    }
+
+    @Test
+    void retainsExactProposedBodiesForReadsAcrossReviewBatches() throws Exception {
+        BranchArchiveService archiveService = mock(BranchArchiveService.class);
+        VcsClientProvider provider = mock(VcsClientProvider.class);
+        VcsConnection connection = mock(VcsConnection.class);
+        LocalRepositorySnapshotService service = new LocalRepositorySnapshotService(
+                archiveService,
+                provider,
+                temporaryRoot);
+
+        var prepared = service.prepareForReview(
+                connection,
+                "team",
+                "repo",
+                "main",
+                "target-head-sha",
+                Map.of(
+                        "src/BatchOne.java", "class BatchOne { int proposed; }\n",
+                        "src/BatchThreeDependency.java",
+                        "class BatchThreeDependency { int proposed; }\n"),
+                List.of(
+                        "src/BatchOne.java",
+                        "src/BatchThreeDependency.java",
+                        "src/Unavailable.java"),
+                List.of("src/Deleted.java"))
+                .orElseThrow();
+
+        Path overlay = prepared.reviewOverlayPath();
+        assertThat(overlay.resolve("files/src/BatchOne.java"))
+                .hasContent("class BatchOne { int proposed; }\n");
+        assertThat(overlay.resolve("files/src/BatchThreeDependency.java"))
+                .hasContent("class BatchThreeDependency { int proposed; }\n");
+        assertThat(overlay.resolve("files/src/Unavailable.java")).doesNotExist();
+        assertThat(overlay.resolve("files/src/Deleted.java")).doesNotExist();
+        assertThat(Files.readString(overlay.resolve("manifest.json")))
+                .contains(
+                        "src/BatchOne.java",
+                        "src/BatchThreeDependency.java",
+                        "src/Unavailable.java",
+                        "src/Deleted.java");
+
+        prepared.close();
     }
 
     @Test

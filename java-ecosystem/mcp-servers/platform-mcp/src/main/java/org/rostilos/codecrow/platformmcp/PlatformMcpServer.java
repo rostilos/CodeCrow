@@ -39,7 +39,7 @@ public class PlatformMcpServer {
     private static final ObjectMapper objectMapper;
     private static final PlatformMcpTools mcpTools;
 
-    /** Serialize tool execution — see McpStdioServer javadoc for rationale. */
+    /** Serialize access to the shared platform tool implementation. */
     private static final Semaphore TOOL_SEMAPHORE = new Semaphore(1, true);
     
     static {

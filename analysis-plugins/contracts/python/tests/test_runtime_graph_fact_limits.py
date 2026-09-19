@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from types import SimpleNamespace
+
+import pytest
 
 from codecrow_plugins import (
     Capability,
@@ -112,8 +115,9 @@ def test_graph_facts_bound_serialized_payload_bytes():
     first = _fact("first", "first", target="α" * 32)
     second = _fact("second", "second", target="β" * 32)
     runtime, capabilities = _runtime({"first": (first,), "second": (second,)})
+    attributed_first = replace(first, contributing_plugin_ids=("first",))
     runtime.MAX_GRAPH_FACT_BYTES_PER_ARTIFACT = len(json.dumps(
-        [dict(first.as_metadata())],
+        [dict(attributed_first.as_metadata())],
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -139,6 +143,7 @@ def test_graph_facts_bound_records_with_diagnostics():
     first = tuple(_fact("first", f"first-{index:03d}") for index in range(125))
     second = tuple(_fact("second", f"second-{index:03d}") for index in range(125))
     runtime, capabilities = _runtime({"first": first, "second": second})
+    runtime.MAX_FACTS_PER_FILE = 200
 
     facts, diagnostics = runtime.graph_facts(
         FileArtifact("src/example.py", "pass"),
@@ -175,4 +180,61 @@ def test_graph_fact_merge_is_deterministic_across_kinds_and_duplicates():
 
     assert selected == expected
     assert {fact.kind for fact in selected} == {"kind-a", "kind-b"}
+    assert all(fact.contributing_plugin_ids == ("complete",) for fact in selected)
     assert diagnostics == ()
+
+
+def test_graph_fact_provenance_is_metadata_not_semantic_identity():
+    base = _fact("route", "controller", target="GET /orders")
+    first = replace(base, contributing_plugin_ids=("first",))
+    second = replace(base, contributing_plugin_ids=("second",))
+
+    assert first == second
+    assert hash(first) == hash(second)
+    assert dict(first.as_metadata())["contributing_plugin_ids"] == ["first"]
+
+    with pytest.raises(
+        ValueError,
+        match="graph fact contributing plugin ids must be unique and sorted",
+    ):
+        replace(base, contributing_plugin_ids=("second", "first"))
+
+
+def test_graph_facts_merge_all_semantic_duplicate_contributors():
+    shared = _fact("route", "controller", target="GET /orders")
+    runtime, capabilities = _runtime({
+        "second": (shared, shared),
+        "first": (shared,),
+    })
+
+    facts, diagnostics = runtime.graph_facts(
+        FileArtifact("src/example.py", "pass"),
+        capabilities,
+    )
+
+    assert len(facts) == 1
+    assert facts[0] == shared
+    assert facts[0].contributing_plugin_ids == ("first", "second")
+    assert dict(facts[0].as_metadata())["contributing_plugin_ids"] == [
+        "first",
+        "second",
+    ]
+    assert diagnostics == ()
+
+
+def test_graph_fact_rebase_preserves_contributing_plugins():
+    fact = replace(
+        _fact(
+            "route",
+            "controller",
+            path="routes.py",
+            related_paths=("handlers.py",),
+        ),
+        contributing_plugin_ids=("django",),
+    )
+
+    rebased = PluginRuntime._rebase_fact(fact, "services/orders")
+
+    assert rebased.path == "services/orders/routes.py"
+    assert rebased.related_paths == ("services/orders/handlers.py",)
+    assert rebased.contributing_plugin_ids == ("django",)

@@ -11,7 +11,7 @@ import httpx
 from unittest.mock import patch
 
 os.environ.setdefault("RAG_ENABLED", "true")
-os.environ.setdefault("RAG_API_URL", "http://rag-pipeline:8001")
+os.environ.setdefault("RAG_API_URL", "http://codecrow-rag-pipeline:8001")
 os.environ.setdefault("SERVICE_SECRET", "test-secret-token")
 
 from service.rag.rag_client import RagClient
@@ -19,7 +19,7 @@ from service.rag.rag_client import RagClient
 
 @pytest.fixture
 def rag_client():
-    client = RagClient(base_url="http://rag-pipeline:8001", enabled=True)
+    client = RagClient(base_url="http://codecrow-rag-pipeline:8001", enabled=True)
     yield client
 
 
@@ -28,7 +28,7 @@ def rag_client():
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
 async def test_search_code_sends_correct_payload(rag_client):
-    route = respx.post("http://rag-pipeline:8001/query/code-search").mock(
+    route = respx.post("http://codecrow-rag-pipeline:8001/query/code-search").mock(
         return_value=httpx.Response(200, json={
             "results": [{
                 "path": "a.py",
@@ -66,7 +66,7 @@ async def test_search_code_sends_correct_payload(rag_client):
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
 async def test_search_code_sends_service_secret_header(rag_client):
-    route = respx.post("http://rag-pipeline:8001/query/code-search").mock(
+    route = respx.post("http://codecrow-rag-pipeline:8001/query/code-search").mock(
         return_value=httpx.Response(200, json={"results": []})
     )
     await rag_client.search_code(
@@ -81,7 +81,7 @@ async def test_search_code_sends_service_secret_header(rag_client):
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
 async def test_search_code_handles_timeout(rag_client):
-    respx.post("http://rag-pipeline:8001/query/code-search").mock(
+    respx.post("http://codecrow-rag-pipeline:8001/query/code-search").mock(
         side_effect=httpx.ReadTimeout("timed out")
     )
     result = await rag_client.search_code(
@@ -107,7 +107,7 @@ async def test_rag_client_disabled_returns_empty():
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
 async def test_is_healthy(rag_client):
-    route = respx.get("http://rag-pipeline:8001/health").mock(
+    route = respx.get("http://codecrow-rag-pipeline:8001/health").mock(
         return_value=httpx.Response(200, json={"status": "healthy"})
     )
     result = await rag_client.is_healthy()
@@ -119,7 +119,7 @@ async def test_is_healthy(rag_client):
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
 async def test_is_healthy_failure(rag_client):
-    respx.get("http://rag-pipeline:8001/health").mock(
+    respx.get("http://codecrow-rag-pipeline:8001/health").mock(
         side_effect=httpx.ConnectError("connection refused")
     )
     result = await rag_client.is_healthy()

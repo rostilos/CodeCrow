@@ -120,6 +120,17 @@ class TestBuildStage1:
         assert "Current File Content (post-change" in result
         assert "print('hi')" in result
 
+    def test_stage_1_requires_atomic_root_findings(self):
+        result = PromptBuilder.build_stage_1_batch_prompt(
+            files=[{"path": "src/main.py", "diff": "+run_cleanup()"}],
+            priority="HIGH",
+        )
+
+        assert "1 root/issue" in result
+        assert '"relatedLocations": ["path/to/other-manifestation:84"]' in result
+        assert "Repeats: relatedLocations" in result
+        assert 'return `"relatedLocations": []`' in result
+
     def test_incremental_mode(self):
         files = [{"path": "a.py", "diff": "+x", "type": "MODIFIED"}]
         result = PromptBuilder.build_stage_1_batch_prompt(
@@ -129,26 +140,58 @@ class TestBuildStage1:
         assert "INCREMENTAL" in result
         assert "Delta Diff" in result
 
-    def test_with_rag_context(self):
+    def test_with_structural_context(self):
         files = [{"path": "a.py", "diff": "+x"}]
         result = PromptBuilder.build_stage_1_batch_prompt(
-            files=files, priority="LOW", rag_context="RAG data here",
+            files=files,
+            priority="LOW",
+            structural_context="compact relation data",
         )
-        assert "RAG data here" in result
+        assert "compact relation data" in result
 
-    def test_agent_prompt_keeps_rag_and_supplies_repository_tool_binding(self):
+    def test_agent_prompt_requires_minimal_proposed_tree_tool_without_preload(self):
         result = PromptBuilder.build_stage_1_batch_prompt(
             files=[{"path": "a.py", "diff": "+x"}],
             priority="HIGH",
-            rag_context="preassembled RAG evidence",
+            structural_context="compact structural relation map",
             use_mcp_tools=True,
             target_branch="main",
             vcs_workspace="tenant",
             vcs_repo_slug="repository",
         )
 
-        assert "preassembled RAG evidence" in result
-        assert "searchRepositoryCode" in result
+        assert "compact structural relation map" not in result
+        assert "PRELOADED STRUCTURAL RELATION MAP" not in result
+        assert "No structural context is preloaded in agentic mode" in result
+        assert "Graph use is optional" not in result
+        assert "structural-context section above states" in result
+        assert "begin with the required minimal-context call" in result
+        assert '["a.py"]' in result
+        assert "Findings based only on source reads leave" in result
+        assert "never invent or transform an Evidence ID" in result
+        assert "searchRepositoryCode" not in result
+        assert "getStructuralRelations" not in result
+        assert "getMinimalReviewContext(question, focusSymbols?, maxRelations?" in result
+        assert "getImpactRadius(targets?, maxDepth?, maxResults?" in result
+        assert "queryCodeGraph(pattern, target, maxResults?" in result
+        assert "traverseCodeGraph(start, direction?, strategy?" in result
+        assert "getStructuralUnit(unitId, offset?, maxCharacters?)" in result
+        assert "`tokenBudget` accepts 512–16,000" in result
+        assert "If `status=ambiguous`" in result
+        assert "When `sourceEvidence=true`" in result
+        assert (
+            "exploreReviewContext(question, focusSymbols?, maxRelations?"
+            in result
+        )
+        assert "host supplies the exact batch paths" in result
+        assert "sealed, selection-matched proposed-tree generation" in result
+        assert "modified/added units use proposed bytes" in result
+        assert "deleted units are absent" in result
+        assert "unchanged related units use pinned target bytes" in result
+        assert "Finish the complete review" in result
+        assert "exactly one review object" in result
+        assert "Required first call" in result
+        assert "Current File Content are the post-change authority" in result
         assert (
             "getBranchFileContent(workspace, repoSlug, branch, filePath, startLine?,"
             in result
@@ -156,6 +199,60 @@ class TestBuildStage1:
         assert "TARGET BRANCH/REVISION REF: main" in result
         assert "VCS WORKSPACE: tenant" in result
         assert "VCS REPOSITORY (repoSlug/projectKey): repository" in result
+
+    def test_agent_prompt_without_structural_tools_is_vcs_only(self):
+        result = PromptBuilder.build_stage_1_batch_prompt(
+            files=[{"path": "a.py", "diff": "+x"}],
+            priority="HIGH",
+            structural_context="structural context must not leak",
+            use_mcp_tools=True,
+            structural_tools_available=False,
+            target_branch="main",
+            vcs_workspace="tenant",
+            vcs_repo_slug="repository",
+        )
+
+        assert "## Repository File Tool" in result
+        assert "getBranchFileContent" in result
+        assert "PRELOADED STRUCTURAL RELATION MAP" not in result
+        assert "structural context must not leak" not in result
+        assert "getStructuralRelations" not in result
+        assert "queryCodeGraph" not in result
+        assert "getStructuralUnit" not in result
+        assert "exploreReviewContext" not in result
+        assert "No structural relation metadata or graph tools" in result
+        assert "getReviewFileContent" not in result
+        assert "target-head-only source" not in result
+
+    def test_agent_prompt_uses_review_tree_for_changed_paths(self):
+        result = PromptBuilder.build_stage_1_batch_prompt(
+            files=[{"path": "src/current.py", "diff": "+x"}],
+            priority="HIGH",
+            all_pr_files=["src/current.py", "src/other_batch.py"],
+            deleted_files=["src/deleted.py"],
+            use_mcp_tools=True,
+            review_file_tool_available=True,
+            target_branch="target-head-sha",
+            vcs_workspace="tenant",
+            vcs_repo_slug="repository",
+        )
+
+        assert (
+            "getReviewFileContent(workspace, repoSlug, filePath, startLine?, "
+            "endLine?)" in result
+        )
+        assert "including a path assigned to another Stage 1 batch" in result
+        assert "Use getReviewFileContent for code unrepresented by the graph" in result
+        assert "smallest useful\nline range by default" in result
+        assert "needed whole-file bytes" not in result
+        assert "getBranchFileContent(" not in result
+        assert "reports deleted paths as absent" in result
+        assert "modified/added units use proposed bytes" in result
+        assert "deleted units are absent" in result
+        assert "exact source and tests" in result
+        assert "win whenever they disagree" in result
+        assert "exact proposed-tree source are post-change authority" in result
+        assert "unchanged paths from the pinned target-head snapshot" in result
 
     def test_with_all_pr_files(self):
         files = [{"path": "a.py", "diff": "+x"}]
@@ -247,11 +344,26 @@ class TestBuildStage1:
         assert "informational issue" in result
         assert '"claimKind"' in result
         assert "exact plugin evidence class" in result
-        assert "exact bracketed fact kind" in result
+        assert "leave `claimKind` empty even when" in result
         assert "Anchor every new finding" in result
         assert "reviewable changed hunk" in result
         assert "not a separate PR finding" in result
 
+    def test_stage_1_requires_state_transition_reasoning(self):
+        result = PromptBuilder.build_stage_1_batch_prompt(
+            files=[{
+                "path": "cache.py",
+                "current_code": "cache = load()",
+                "diff": "+with lock:\n+    cache = load()",
+            }],
+            priority="HIGH",
+        )
+
+        assert "STATEFUL / CONCURRENT CHANGE CHECK" in result
+        assert "caller succeeds" in result
+        assert "caller that was already waiting later fails" in result
+        assert "lost update" in result
+        assert "lock coverage alone" in result
 
 class TestBuildStage2:
 
@@ -264,7 +376,7 @@ class TestBuildStage2:
         assert "repo" in result
         assert "Concern A" in result
         assert '"claimKind"' in result
-        assert "exact plugin evidence class" in result
+        assert "plugin-governed relationship claim using an exact evidence class" in result
         assert "exact bracketed fact kind" in result
         assert "reviewable PR diff hunk" in result
         assert "cannot be the annotation anchor" in result
@@ -381,3 +493,18 @@ class TestBuildStage3:
         assert "REVIEWED REVISION: commit-abc" in result
         assert "Verification ID" in result
         assert 'DISMISSED_ISSUES: ["issue_0", "issue_3"]' in result
+
+    def test_local_only_mcp_verification_never_advertises_provider_tools(self):
+        result = PromptBuilder.build_stage_3_aggregation_prompt(
+            repo_slug="r", pr_id="7", author="d", pr_title="T",
+            total_files=1, additions=1, deletions=0,
+            stage_0_plan="p", stage_1_issues_json="[]",
+            stage_2_findings_json="[]", recommendation="APPROVE",
+            use_mcp_tools=True,
+            review_revision="commit-abc",
+            mcp_local_only=True,
+        )
+
+        assert "getReviewFileContent" in result
+        assert "getPullRequestComments" not in result
+        assert "getBranchFileContent" not in result

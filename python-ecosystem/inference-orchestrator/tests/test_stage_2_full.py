@@ -11,6 +11,7 @@ from service.review.orchestrator.stage_2_cross_file import (
     _estimated_prompt_tokens,
     _format_complete_project_rules,
     _merge_stage_2_results,
+    _merge_stage_2_results_with_provenance,
     _stage_2_input_token_budget,
     _Stage2Prompt,
     _slim_issues_for_stage_2,
@@ -503,8 +504,8 @@ class TestStage2SemanticPacking:
 
         assert len(prompts) == 4
         assert all(_estimated_prompt_tokens(prompt) <= 6_000 for prompt in prompts)
-        assert all(prompt.omitted_packet_count == 30 for prompt in prompts)
-        assert all(prompt.omitted_unit_count == 31 for prompt in prompts)
+        assert all(prompt.omitted_packet_count == 15 for prompt in prompts)
+        assert all(prompt.omitted_unit_count == 29 for prompt in prompts)
         authority_prompts = [
             prompt for prompt in prompts
             if "OVERSIZED_DEPENDENCY_EDGE" in prompt
@@ -659,8 +660,8 @@ class TestStage2SemanticPacking:
 
         assert len(prompts) == 4
         assert all(_estimated_prompt_tokens(prompt) <= 6_000 for prompt in prompts)
-        assert all(prompt.omitted_packet_count == 6 for prompt in prompts)
-        assert all(prompt.omitted_unit_count == 6 for prompt in prompts)
+        assert all(prompt.omitted_packet_count == 2 for prompt in prompts)
+        assert all(prompt.omitted_unit_count == 4 for prompt in prompts)
         joined = "\n".join(prompts)
         admitted = [record for record in records if record in joined]
         assert admitted == records[:len(admitted)]
@@ -792,6 +793,51 @@ class TestMergeStage2SemanticResults:
         assert forward.pr_recommendation == "FAIL"
         assert forward.confidence == "LOW"
 
+    def test_duplicate_prefers_shard_where_evidence_refs_were_visible(self):
+        prompt_texts = ("semantic-owner-candidate", "semantic-non-owner")
+        sorted_by_digest = sorted(
+            prompt_texts,
+            key=lambda value: hashlib.sha256(value.encode()).hexdigest(),
+        )
+        non_owner = _Stage2Prompt(
+            sorted_by_digest[0],
+            visible_evidence_ids={"RAG-other"},
+        )
+        owner = _Stage2Prompt(
+            sorted_by_digest[1],
+            visible_evidence_ids={"RAG-own"},
+        )
+        issue = _cross_issue("CROSS_DUP", "same-issue").model_copy(
+            update={"evidenceRefs": ["RAG-own"]},
+        )
+
+        def result():
+            return CrossFileAnalysisResult(
+                pr_risk_level="MEDIUM",
+                cross_file_issues=[issue],
+                pr_recommendation="PASS_WITH_WARNINGS",
+                confidence="HIGH",
+            )
+
+        forward, forward_provenance = _merge_stage_2_results_with_provenance([
+            (result(), non_owner),
+            (result(), owner),
+        ])
+        reverse, reverse_provenance = _merge_stage_2_results_with_provenance([
+            (result(), owner),
+            (result(), non_owner),
+        ])
+
+        assert forward.model_dump() == reverse.model_dump()
+        assert len(forward.cross_file_issues) == 1
+        assert forward_provenance == reverse_provenance
+        assert forward_provenance["CROSS_001"].visible_evidence_ids == {
+            "RAG-own"
+        }
+        assert forward_provenance["CROSS_001"].prompt_digest == (
+            "sha256:" + hashlib.sha256(str(owner).encode()).hexdigest()
+        )
+
     @pytest.mark.asyncio(loop_scope="function")
     async def test_execute_invokes_every_shard_and_merges_all_findings(self):
         request = MagicMock()
@@ -812,10 +858,12 @@ class TestMergeStage2SemanticResults:
             _Stage2Prompt(
                 "semantic-one",
                 visible_hunk_ids={"hunk-one"},
+                visible_evidence_ids={"RAG-one"},
             ),
             _Stage2Prompt(
                 "semantic-two",
                 visible_hunk_ids={"hunk-two"},
+                visible_evidence_ids={"RAG-two"},
             ),
         ]
         outputs = [
@@ -857,6 +905,9 @@ class TestMergeStage2SemanticResults:
         assert {issue.title for issue in result.cross_file_issues} == {"alpha", "beta"}
         digests = json.loads(prompt_provenance["issuePromptDigests"])
         hunk_ids = json.loads(prompt_provenance["issuePromptHunkIds"])
+        evidence_ids = json.loads(
+            prompt_provenance["issuePromptEvidenceIds"]
+        )
         assert digests == {
             "CROSS_001": "sha256:" + hashlib.sha256(b"semantic-two").hexdigest(),
             "CROSS_002": "sha256:" + hashlib.sha256(b"semantic-one").hexdigest(),
@@ -864,6 +915,10 @@ class TestMergeStage2SemanticResults:
         assert hunk_ids == {
             "CROSS_001": ["hunk-two"],
             "CROSS_002": ["hunk-one"],
+        }
+        assert evidence_ids == {
+            "CROSS_001": ["RAG-two"],
+            "CROSS_002": ["RAG-one"],
         }
         assert "generationPromptDigest" not in prompt_provenance
 

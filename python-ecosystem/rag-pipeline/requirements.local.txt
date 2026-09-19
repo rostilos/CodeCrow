@@ -19,9 +19,6 @@ tree-sitter-c-sharp==0.23.1
 tree-sitter-ruby==0.23.1
 tree-sitter-php==0.24.1
 
-# Qdrant payload storage
-qdrant-client==1.16.2
-
 # Redis for cross-process mutation coordination
 redis>=5.0.0,<6.0.0
 

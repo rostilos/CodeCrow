@@ -85,7 +85,8 @@ class BranchHealthServiceTest {
 
         service.recordCommitsAnalyzed(project, List.of("a", "b"), "main");
 
-        verify(analyzedCommitService).recordBranchCommitsAnalyzed(project, List.of("a", "b"));
+        verify(analyzedCommitService).recordBranchCommitsAnalyzed(
+                project, List.of("a", "b"), "main");
     }
 
     @Test
@@ -103,7 +104,7 @@ class BranchHealthServiceTest {
         Project project = new Project();
         setId(project, 1L);
         doThrow(new RuntimeException("DB down")).when(analyzedCommitService)
-                .recordBranchCommitsAnalyzed(any(), anyList());
+                .recordBranchCommitsAnalyzed(any(), anyList(), eq("main"));
 
         // Should not throw
         service.recordCommitsAnalyzed(project, List.of("a"), "main");

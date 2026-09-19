@@ -129,7 +129,7 @@ class MutationLease:
 
 
 class ProjectMutationCoordinator:
-    """Serialize mutations of one exact target or isolated PR overlay."""
+    """Serialize mutations of one exact structural generation target."""
 
     def __init__(
         self,

@@ -5,7 +5,7 @@ import logging
 import re
 
 from .documents import Document
-from ..utils.utils import detect_language_from_path, should_exclude_file, should_include_file, clean_archive_path
+from ..utils.utils import detect_language_from_path, should_exclude_file, should_include_file
 from ..models.config import RAGConfig
 from .source_tree import (
     RepositoryFileSizeLimitExceeded,
@@ -304,14 +304,11 @@ class DocumentLoader:
             language = detect_language_from_path(str(full_path))
             filetype = full_path.suffix.lstrip('.')
 
-            # Clean archive root prefix from path (e.g., 'owner-repo-commit/src/file.php' -> 'src/file.php')
-            clean_path = clean_archive_path(relative_path_str)
-
             metadata = {
                 "workspace": workspace,
                 "project": project,
                 "branch": branch,
-                "path": clean_path,
+                "path": Path(relative_path).as_posix(),
                 "commit": commit,
                 "language": language,
                 "filetype": filetype,

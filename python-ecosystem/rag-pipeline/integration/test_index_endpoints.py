@@ -49,19 +49,6 @@ def _preflight_receipt() -> dict:
 
 
 @pytest.mark.asyncio
-async def test_get_limits(client, auth_headers):
-    response = await client.get("/limits", headers=auth_headers)
-    assert response.status_code == 200
-    assert response.json() == {
-        "max_chunks_per_index": 1_000_000,
-        "max_file_size_bytes": 512 * 1024,
-        "max_files_per_index": 5000,
-        "chunk_size": 8000,
-        "chunk_overlap": 200,
-    }
-
-
-@pytest.mark.asyncio
 async def test_full_index_requires_and_forwards_exact_target(
     client, auth_headers, rag_app, tmp_path
 ):
@@ -231,28 +218,3 @@ async def test_exact_generation_delete_forwards_registry_receipt(
 
     assert response.status_code == 200
     assert response.json()["status"] == "success"
-
-
-@pytest.mark.asyncio
-async def test_estimate_repository(client, auth_headers, rag_app, tmp_path):
-    import rag_pipeline.api.api as api_module
-
-    api_module.index_manager.estimate_repository_size.return_value = (10, 100)
-    repository = tmp_path / "repository"
-    repository.mkdir()
-    previous_root = os.environ.get("ALLOWED_REPO_ROOT")
-    os.environ["ALLOWED_REPO_ROOT"] = str(tmp_path)
-    try:
-        response = await client.post(
-            "/index/estimate",
-            json={"repo_path": str(repository)},
-            headers=auth_headers,
-        )
-    finally:
-        if previous_root is None:
-            os.environ.pop("ALLOWED_REPO_ROOT", None)
-        else:
-            os.environ["ALLOWED_REPO_ROOT"] = previous_root
-
-    assert response.status_code == 200
-    assert response.json()["estimated_chunks"] == 100

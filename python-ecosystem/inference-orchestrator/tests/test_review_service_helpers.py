@@ -5,12 +5,16 @@ Covers: _build_jvm_props, _build_pr_metadata, _emit_event, _create_llm,
         _create_mcp_client
 """
 import asyncio
+import json
+import logging
+from types import SimpleNamespace
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from model.dtos import ReviewRequestDto
 from service.review.review_service import ReviewService
+from utils.mcp_config import MCPConfigBuilder
 
 
 @pytest.fixture
@@ -59,6 +63,7 @@ class TestBuildJvmProps:
             localRepoPath="/tmp/review-snapshot",
             localRepoTargetBranch="main",
             localRepoRevision="abc123",
+            localReviewOverlayPath="/tmp/review-overlay",
         )
         result = service._build_jvm_props(request)
         assert isinstance(result, dict)
@@ -66,6 +71,7 @@ class TestBuildJvmProps:
         assert result["local.repo.path"] == "/tmp/review-snapshot"
         assert result["local.repo.targetBranch"] == "main"
         assert result["local.repo.revision"] == "abc123"
+        assert result["local.review.overlay.path"] == "/tmp/review-overlay"
 
     def test_with_override_tokens(self, service):
         request = MagicMock(
@@ -82,9 +88,59 @@ class TestBuildJvmProps:
             localRepoPath=None,
             localRepoTargetBranch=None,
             localRepoRevision=None,
+            localReviewOverlayPath=None,
         )
         result = service._build_jvm_props(request)
         assert isinstance(result, dict)
+
+    def test_review_credentials_do_not_enter_mcp_process_args(self, service):
+        request = MagicMock(
+            projectId=1,
+            pullRequestId=42,
+            projectVcsWorkspace="ws",
+            projectVcsRepoSlug="repo",
+            oAuthClient=None,
+            oAuthSecret=None,
+            accessToken="review-flow-token-sentinel",
+            maxAllowedTokens=None,
+            vcsProvider="github",
+            vcsBaseUrl=None,
+            localRepoPath=None,
+            localRepoTargetBranch=None,
+            localRepoRevision=None,
+            localReviewOverlayPath=None,
+        )
+
+        config = MCPConfigBuilder.build_config(
+            "/server.jar",
+            service._build_jvm_props(request),
+        )["mcpServers"]["codecrow-vcs-mcp"]
+
+        assert "review-flow-token-sentinel" not in " ".join(config["args"])
+        assert config["env"]["CODECROW_MCP_ACCESS_TOKEN"] == (
+            "review-flow-token-sentinel"
+        )
+
+    def test_local_only_request_sets_java_fail_closed_property(self, service):
+        request = MagicMock(
+            projectId=1,
+            pullRequestId=42,
+            projectVcsWorkspace="ws",
+            projectVcsRepoSlug="repo",
+            oAuthClient=None,
+            oAuthSecret=None,
+            accessToken=None,
+            maxAllowedTokens=None,
+            vcsProvider="github",
+            vcsBaseUrl=None,
+            localRepoPath="/tmp/target",
+            localRepoTargetBranch="main",
+            localRepoRevision="target-head",
+            localReviewOverlayPath="/tmp/overlay",
+            mcpLocalOnly=True,
+        )
+
+        assert service._build_jvm_props(request)["local.mcp.only"] == "true"
 
 
 # ── _build_pr_metadata ───────────────────────────────────────────
@@ -130,6 +186,7 @@ class TestReviewServiceCreateMcpClient:
             mock_cls.from_dict.return_value = MagicMock()
             client = service._create_mcp_client({"servers": {}})
             mock_cls.from_dict.assert_called_once()
+            client.add_middleware.assert_called_once()
 
     def test_failure(self, service):
         with patch("service.review.review_service.MCPClient") as mock_cls:
@@ -157,15 +214,35 @@ class TestReviewServiceRequestRag:
 
         assert service._rag_client_for_request(request) is service.rag_client
 
-    def test_exact_generation_binding_enables_rag_mcp(self, service):
+    def test_agent_tools_ignore_project_persistent_index_setting(self, service):
+        service.rag_client = MagicMock(enabled=True)
+        request = MagicMock(ragEnabled=False, projectId=1, pullRequestId=42)
+
+        assert service._rag_client_for_request(request) is None
+        assert service._rag_client_for_agent_tools() is service.rag_client
+
+    def test_globally_disabled_rag_disables_agent_structural_service(self, service):
+        service.rag_client = MagicMock(enabled=False)
+
+        assert service._rag_client_for_agent_tools() is None
+
+    def test_exact_proposed_tree_binding_enables_rag_mcp(self, service):
         request = MagicMock(
             projectWorkspace="tenant",
             projectNamespace="project",
             targetBranchName="main",
-            targetHeadCommitHash="target-head",
-            baseCommitHash="merge-base",
+            currentCommitHash="source-head",
+            commitHash=None,
+            localRepoPath="/tmp/target-snapshot",
+            localRagRepoPath="/tmp/structural-snapshot",
+            localRepoRevision="target-head",
+            localReviewOverlayPath="/tmp/review-overlay",
             ragBaseGenerationManifestSha256="manifest",
             ragCollectionTarget="collection",
+            ragReviewCollectionTarget="review-collection",
+            ragReviewGenerationManifestSha256="review-manifest",
+            changedFiles=[],
+            deletedFiles=[],
         )
         request.get_target_head_commit_hash.return_value = "target-head"
 
@@ -174,23 +251,350 @@ class TestReviewServiceRequestRag:
             "project": "project",
             "branch": "main",
             "revision": "target-head",
+            "source_revision": "source-head",
+            "target_repo_path": "/tmp/structural-snapshot",
+            "review_overlay_path": "/tmp/review-overlay",
             "manifest": "manifest",
             "collection_target": "collection",
+            "review_collection_target": "review-collection",
+            "review_generation_manifest_sha256": "review-manifest",
         }
 
-    def test_incomplete_generation_binding_skips_only_rag_mcp(self, service):
+    def test_incomplete_proposed_tree_binding_skips_only_rag_mcp(
+        self,
+        service,
+        caplog,
+    ):
         request = MagicMock(
             projectWorkspace="tenant",
             projectNamespace="project",
             targetBranchName="main",
-            targetHeadCommitHash="target-head",
-            baseCommitHash="merge-base",
+            currentCommitHash="source-head",
+            commitHash=None,
+            localRepoPath="/tmp/target-snapshot",
+            localRepoRevision="target-head",
+            localReviewOverlayPath="/tmp/review-overlay",
             ragBaseGenerationManifestSha256=None,
             ragCollectionTarget=None,
         )
         request.get_target_head_commit_hash.return_value = "target-head"
 
-        assert service._build_rag_mcp_context(request, MagicMock()) is None
+        with caplog.at_level(logging.INFO):
+            assert service._build_rag_mcp_context(request, MagicMock()) is None
+        assert (
+            "repository tools remain available without indexed relationships"
+            in caplog.text
+        )
+        assert "preassembled RAG" not in caplog.text
+
+    def test_proposed_tree_binding_falls_back_to_vcs_snapshot(self, service):
+        request = MagicMock(
+            projectWorkspace="tenant",
+            projectNamespace="project",
+            targetBranchName="main",
+            currentCommitHash="source-head",
+            commitHash=None,
+            localRepoPath="/tmp/target-snapshot",
+            localRagRepoPath=None,
+            localRepoRevision="target-head",
+            localReviewOverlayPath="/tmp/review-overlay",
+            ragBaseGenerationManifestSha256="manifest",
+            ragCollectionTarget="collection",
+            ragReviewCollectionTarget="review-collection",
+            ragReviewGenerationManifestSha256="review-manifest",
+            changedFiles=[],
+            deletedFiles=[],
+        )
+        request.get_target_head_commit_hash.return_value = "target-head"
+
+        context = service._build_rag_mcp_context(request, MagicMock())
+
+        assert context["target_repo_path"] == "/tmp/target-snapshot"
+
+    def test_pr_graph_binding_does_not_ship_changed_paths_for_source_redaction(
+        self,
+        service,
+    ):
+        request = MagicMock(
+            projectWorkspace="tenant",
+            projectNamespace="project",
+            targetBranchName="main",
+            currentCommitHash="source-head",
+            commitHash=None,
+            localRepoPath="/tmp/target-snapshot",
+            localRepoRevision="target-head",
+            ragBaseGenerationManifestSha256="manifest",
+            ragCollectionTarget="collection",
+            ragReviewCollectionTarget="review-collection",
+            ragReviewGenerationManifestSha256="review-manifest",
+            localReviewOverlayPath="/tmp/review-overlay",
+            changedFiles=[f"src/file-{index}.py" for index in range(25)],
+            deletedFiles=["src/deleted.py"],
+        )
+        request.get_target_head_commit_hash.return_value = "target-head"
+
+        context = service._build_rag_mcp_context(request, MagicMock())
+
+        assert context["source_revision"] == "source-head"
+        assert context["target_repo_path"] == "/tmp/target-snapshot"
+        assert context["review_overlay_path"] == "/tmp/review-overlay"
+        assert "proposed_tree_paths_json" not in context
+
+
+def _local_only_request(tmp_path, **overrides):
+    target = tmp_path / "target"
+    structural = tmp_path / "structural"
+    overlay = tmp_path / "overlay"
+    for path in (target, structural, overlay):
+        path.mkdir(exist_ok=True)
+    values = {
+        "projectId": 1,
+        "projectVcsWorkspace": "ws",
+        "projectVcsRepoSlug": "repo",
+        "projectWorkspace": "tenant",
+        "projectNamespace": "project",
+        "aiProvider": "OPENAI",
+        "aiModel": "gpt-4",
+        "aiApiKey": "key",
+        "targetBranchName": "main",
+        "sourceBranchName": "feature",
+        "pullRequestId": 7,
+        "commitHash": "source-head",
+        "currentCommitHash": "source-head",
+        "targetHeadCommitHash": "target-head",
+        "baseCommitHash": "target-head",
+        "changedFiles": ["src/a.py"],
+        "useMcpTools": True,
+        "mcpLocalOnly": True,
+        "ragEnabled": True,
+        "ragCollectionTarget": "sealed-collection",
+        "ragBaseGenerationManifestSha256": "a" * 64,
+        "localRepoPath": str(target),
+        "localRepoTargetBranch": "main",
+        "localRepoRevision": "target-head",
+        "localRagRepoPath": str(structural),
+        "localReviewOverlayPath": str(overlay),
+    }
+    values.update(overrides)
+    return ReviewRequestDto(**values)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_review_generation_is_prepared_before_mcp_context(service, tmp_path):
+    request = _local_only_request(tmp_path)
+    client = MagicMock()
+    client.prepare_review_generation = AsyncMock(return_value={
+        "status": "ready",
+        "collection_target": "sealed-review",
+        "generation_manifest_sha256": "b" * 64,
+        "source_revision": "source-head",
+        "cache_hit": False,
+    })
+    events = []
+
+    await service._prepare_rag_review_generation(request, client, events.append)
+
+    assert request.ragReviewGenerationStatus == "ready"
+    assert request.ragReviewCollectionTarget == "sealed-review"
+    assert request.ragReviewGenerationManifestSha256 == "b" * 64
+    assert events[-1]["state"] == "rag_review_generation_ready"
+    assert service._build_rag_mcp_context(request, client)[
+        "review_collection_target"
+    ] == "sealed-review"
+    client.prepare_review_generation.assert_awaited_once()
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_review_generation_failure_is_observable_and_fails_open(
+    service,
+    tmp_path,
+):
+    request = _local_only_request(tmp_path)
+    client = MagicMock()
+    client.prepare_review_generation = AsyncMock(return_value={
+        "status": "error",
+        "error": "capacity unavailable",
+    })
+    events = []
+
+    await service._prepare_rag_review_generation(request, client, events.append)
+
+    assert request.ragReviewGenerationStatus == "unavailable"
+    assert request.ragReviewCollectionTarget is None
+    assert request.ragReviewGenerationError == "capacity unavailable"
+    assert service._build_rag_mcp_context(request, client) is None
+    assert events[-1]["state"] == "rag_review_generation_degraded"
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_required_review_generation_failure_is_observable_and_fail_closed(
+    service,
+    tmp_path,
+):
+    request = _local_only_request(
+        tmp_path,
+        mcpLocalOnly=False,
+        requireStructuralMcp=True,
+    )
+    client = MagicMock()
+    client.prepare_review_generation = AsyncMock(return_value={
+        "status": "error",
+        "error": "capacity unavailable",
+    })
+    events = []
+
+    await service._prepare_rag_review_generation(request, client, events.append)
+
+    assert request.ragReviewGenerationStatus == "unavailable"
+    assert request.ragReviewGenerationError == "capacity unavailable"
+    assert events[-1]["state"] == "rag_review_generation_failed"
+    assert "stop before model use" in events[-1]["message"]
+
+
+def test_required_structural_mcp_contract_rejects_disabled_dependencies(service):
+    request = MagicMock(
+        requireStructuralMcp=True,
+        useMcpTools=False,
+        ragEnabled=True,
+    )
+    with pytest.raises(ValueError, match="useMcpTools must be true"):
+        service._validate_required_structural_mcp_request(request)
+
+    request.useMcpTools = True
+    request.ragEnabled = False
+    with pytest.raises(ValueError, match="ragEnabled must be true"):
+        service._validate_required_structural_mcp_request(request)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_local_only_preflight_proves_request_bound_proposed_source(
+    service,
+    tmp_path,
+):
+    request = _local_only_request(tmp_path)
+    vcs = MagicMock()
+    vcs.call_tool = AsyncMock(return_value=SimpleNamespace(content=[
+        SimpleNamespace(text=json.dumps({
+            "filePath": "src/a.py",
+            "fileContent": "proposed source",
+            "source": "review-overlay",
+            "exists": True,
+            "changed": True,
+            "unavailable": False,
+        }))
+    ]))
+    client = MagicMock()
+    client.get_all_active_sessions.return_value = {
+        "codecrow-vcs-mcp": vcs,
+    }
+
+    receipt = await service._preflight_local_only_mcp(client, request)
+
+    assert receipt == {
+        "status": "ready",
+        "focusPath": "src/a.py",
+        "baseRevision": "target-head",
+        "sourceAuthority": "review-overlay",
+    }
+    assert vcs.call_tool.await_args.args[0] == "getReviewFileContent"
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_local_only_preflight_does_not_call_optional_structural_session(
+    service,
+    tmp_path,
+):
+    request = _local_only_request(tmp_path)
+    vcs = MagicMock()
+    vcs.call_tool = AsyncMock(return_value=SimpleNamespace(content=[
+        SimpleNamespace(text=json.dumps({
+            "filePath": "src/a.py",
+            "source": "review-overlay",
+            "exists": True,
+            "changed": True,
+            "unavailable": False,
+        }))
+    ]))
+    rag = MagicMock()
+    rag.call_tool = AsyncMock(return_value=SimpleNamespace(content=[
+        SimpleNamespace(text=json.dumps({
+            "status": "error",
+            "status_code": 409,
+            "error": (
+                "proposed changes alter repository-aware structural plugin "
+                "selection: data-contracts"
+            ),
+            "snapshot": {},
+        }))
+    ]))
+    client = MagicMock()
+    client.get_all_active_sessions.return_value = {
+        "codecrow-vcs-mcp": vcs,
+        "codecrow-rag-mcp": rag,
+    }
+
+    receipt = await service._preflight_local_only_mcp(client, request)
+
+    assert receipt["sourceAuthority"] == "review-overlay"
+    rag.call_tool.assert_not_awaited()
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_local_only_preflight_failure_makes_zero_llm_calls(
+    service,
+    tmp_path,
+):
+    request = _local_only_request(tmp_path)
+    service.rag_client = MagicMock(enabled=True)
+    vcs = MagicMock()
+    vcs.call_tool = AsyncMock(return_value=SimpleNamespace(content=[
+        SimpleNamespace(text=json.dumps({
+            "filePath": "src/a.py",
+            "source": "review-overlay",
+            "exists": True,
+            "changed": True,
+            "unavailable": True,
+            "error": "review overlay unavailable",
+        }))
+    ]))
+    client = MagicMock()
+    client.get_all_active_sessions.return_value = {
+        "codecrow-vcs-mcp": vcs,
+    }
+    client.close_all_sessions = AsyncMock()
+    llm = MagicMock()
+    llm.ainvoke = AsyncMock()
+
+    class InitializedAgentService:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def initialize(self, **_kwargs):
+            return {}
+
+    with (
+        patch("service.review.review_service.os.path.exists", return_value=True),
+        patch.object(service, "_create_llm", return_value=llm),
+        patch.object(service, "_create_mcp_client", return_value=client),
+        patch("service.agent.AgentExecutionService", InitializedAgentService),
+    ):
+        result = await service._process_review(request)
+
+    llm.ainvoke.assert_not_awaited()
+    assert result["result"]["error"]
+    client.close_all_sessions.assert_awaited_once()
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_local_only_request_accepts_disabled_optional_graph_service(
+    service,
+    tmp_path,
+):
+    request = _local_only_request(tmp_path)
+    service.rag_client = MagicMock(enabled=False)
+
+    service._validate_local_only_mcp_request(request)
+    assert service._rag_client_for_agent_tools() is None
 
 # ── _create_llm ──────────────────────────────────────────────────
 
@@ -241,6 +645,56 @@ class TestReviewServiceConstants:
     def test_review_timeout_is_int(self, service):
         assert isinstance(ReviewService.REVIEW_TIMEOUT_SECONDS, int)
         assert ReviewService.REVIEW_TIMEOUT_SECONDS > 0
+
+    def test_mcp_session_close_timeout_is_positive(self, service):
+        assert isinstance(ReviewService.MCP_SESSION_CLOSE_TIMEOUT_SECONDS, float)
+        assert ReviewService.MCP_SESSION_CLOSE_TIMEOUT_SECONDS > 0
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_hanging_mcp_cleanup_does_not_strand_completed_review(
+    service,
+    caplog,
+):
+    cleanup_cancelled = asyncio.Event()
+
+    async def hanging_cleanup():
+        try:
+            await asyncio.Future()
+        finally:
+            cleanup_cancelled.set()
+
+    client = MagicMock()
+    client.close_all_sessions = AsyncMock(side_effect=hanging_cleanup)
+    service.MCP_SESSION_CLOSE_TIMEOUT_SECONDS = 0.01
+
+    with caplog.at_level(logging.WARNING):
+        await asyncio.wait_for(
+            service._close_mcp_sessions(
+                client,
+                context="review completion",
+            ),
+            timeout=0.5,
+        )
+
+    client.close_all_sessions.assert_awaited_once()
+    assert cleanup_cancelled.is_set()
+    assert "MCP session cleanup timed out" in caplog.text
+    assert "review completion" in caplog.text
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_mcp_cleanup_failure_is_fail_open(service, caplog):
+    client = MagicMock()
+    client.close_all_sessions = AsyncMock(side_effect=RuntimeError("disconnect failed"))
+
+    with caplog.at_level(logging.WARNING):
+        await service._close_mcp_sessions(
+            client,
+            context="review completion",
+        )
+
+    assert "Error closing MCP sessions during review completion" in caplog.text
 
 
 @pytest.mark.asyncio(loop_scope="function")

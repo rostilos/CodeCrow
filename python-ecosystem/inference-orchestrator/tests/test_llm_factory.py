@@ -25,6 +25,7 @@ from llm.llm_factory import (
     _anthropic_output_cap,
     _is_cloudflare_base_url,
     _normalize_cloudflare_chat_payload,
+    _normalize_openrouter_chat_payload,
     _normalize_openai_compatible_base_url,
     _parse_google_vertex_config,
     _split_openai_compatible_parameters,
@@ -130,6 +131,7 @@ class TestCreateLlm:
                 ai_api_key="test-key",
             )
         constructor.assert_called_once()
+        assert "model_kwargs" not in constructor.call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_provider_construction_guard_is_task_local(self):
@@ -181,6 +183,64 @@ class TestCreateLlm:
         assert llm is constructor.return_value
         assert "max_tokens" not in constructor.call_args.kwargs
         assert "max_completion_tokens" not in constructor.call_args.kwargs
+        assert "model_kwargs" not in constructor.call_args.kwargs
+
+    def test_openrouter_uses_finite_transport_defaults(self, monkeypatch):
+        monkeypatch.delenv("LLM_PROVIDER_TIMEOUT_SECONDS", raising=False)
+        monkeypatch.delenv("LLM_PROVIDER_MAX_RETRIES", raising=False)
+
+        with patch("llm.llm_factory.ChatOpenRouter") as constructor:
+            LLMFactory.create_llm(
+                ai_model="deepseek/deepseek-v4-flash-0731",
+                ai_provider="openrouter",
+                ai_api_key="test-key",
+            )
+
+        assert constructor.call_args.kwargs["timeout"] == 120.0
+        assert constructor.call_args.kwargs["max_retries"] == 1
+
+    def test_openrouter_applies_explicit_provider_priority(self):
+        with patch("llm.llm_factory.ChatOpenRouter") as constructor:
+            LLMFactory.create_llm(
+                ai_model="deepseek/deepseek-v4-flash-0731",
+                ai_provider="openrouter",
+                ai_api_key="test-key",
+                ai_custom_parameters={
+                    "provider": {
+                        "order": ["cloudflare"],
+                        "allow_fallbacks": True,
+                    },
+                },
+            )
+
+        assert constructor.call_args.kwargs["extra_body"] == {
+            "provider": {
+                "order": ["cloudflare"],
+                "allow_fallbacks": True,
+            },
+        }
+
+    def test_openai_protocol_transport_settings_are_configurable(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER_TIMEOUT_SECONDS", "75.5")
+        monkeypatch.setenv("LLM_PROVIDER_MAX_RETRIES", "0")
+
+        with patch("llm.llm_factory.ChatOpenAI") as constructor:
+            LLMFactory.create_llm(
+                ai_model="gpt-4o",
+                ai_provider="openai",
+                ai_api_key="test-key",
+            )
+
+        assert constructor.call_args.kwargs["timeout"] == 75.5
+        assert constructor.call_args.kwargs["max_retries"] == 0
+
+    def test_openrouter_payload_uses_canonical_max_tokens_field(self):
+        payload = _normalize_openrouter_chat_payload({
+            "model": "deepseek/deepseek-v4-flash-0731",
+            "max_completion_tokens": 16_384,
+        })
+        assert payload["max_tokens"] == 16_384
+        assert "max_completion_tokens" not in payload
 
     def test_openai(self):
         llm = LLMFactory.create_llm(
@@ -202,6 +262,7 @@ class TestCreateLlm:
         assert llm is constructor.return_value
         resolve_cap.assert_called_once_with("claude-3-sonnet", 18_000)
         assert constructor.call_args.kwargs["max_tokens"] == 18_000
+        assert "model_kwargs" not in constructor.call_args.kwargs
 
     def test_google_gemini_2x(self):
         ChatGoogleGenerativeAI.reset_mock()
@@ -277,6 +338,77 @@ class TestCreateLlm:
             ai_base_url="https://my-vllm.example.com",
         )
         assert llm is not None
+
+    def test_openai_compatible_applies_bounds_to_sdk_and_http_clients(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("LLM_PROVIDER_TIMEOUT_SECONDS", "90")
+        monkeypatch.setenv("LLM_PROVIDER_MAX_RETRIES", "1")
+        sync_client = MagicMock()
+        async_client = MagicMock()
+
+        with patch(
+            "llm.ssrf_safe_transport.create_ssrf_safe_http_client",
+            return_value=sync_client,
+        ) as create_sync, patch(
+            "llm.ssrf_safe_transport.create_ssrf_safe_async_http_client",
+            return_value=async_client,
+        ) as create_async, patch("llm.llm_factory.ChatOpenAI") as constructor:
+            LLMFactory.create_llm(
+                ai_model="local-model",
+                ai_provider="openai_compatible",
+                ai_api_key="test-key",
+                ai_base_url="https://my-vllm.example.com",
+            )
+
+        create_sync.assert_called_once_with(
+            "https://my-vllm.example.com",
+            timeout=90.0,
+        )
+        create_async.assert_called_once_with(
+            "https://my-vllm.example.com",
+            timeout=90.0,
+        )
+        assert constructor.call_args.kwargs["timeout"] == 90.0
+        assert constructor.call_args.kwargs["max_retries"] == 1
+
+    def test_openai_compatible_explicit_constructor_bounds_remain_supported(
+        self,
+    ):
+        sync_client = MagicMock()
+        async_client = MagicMock()
+
+        with patch(
+            "llm.ssrf_safe_transport.create_ssrf_safe_http_client",
+            return_value=sync_client,
+        ) as create_sync, patch(
+            "llm.ssrf_safe_transport.create_ssrf_safe_async_http_client",
+            return_value=async_client,
+        ) as create_async, patch("llm.llm_factory.ChatOpenAI") as constructor:
+            LLMFactory.create_llm(
+                ai_model="local-model",
+                ai_provider="openai_compatible",
+                ai_api_key="test-key",
+                ai_base_url="https://my-vllm.example.com",
+                ai_custom_parameters={
+                    "constructor_kwargs": {
+                        "timeout": 45,
+                        "max_retries": 0,
+                    },
+                },
+            )
+
+        create_sync.assert_called_once_with(
+            "https://my-vllm.example.com",
+            timeout=45,
+        )
+        create_async.assert_called_once_with(
+            "https://my-vllm.example.com",
+            timeout=45,
+        )
+        assert constructor.call_args.kwargs["timeout"] == 45
+        assert constructor.call_args.kwargs["max_retries"] == 0
 
     def test_unsupported_provider_raises(self):
         with pytest.raises(UnsupportedProviderError, match="Unsupported AI provider"):

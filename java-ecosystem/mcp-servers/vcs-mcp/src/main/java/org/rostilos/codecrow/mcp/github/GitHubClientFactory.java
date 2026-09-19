@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.mcp.github;
 
 import okhttp3.OkHttpClient;
+import org.rostilos.codecrow.mcp.generic.McpCredentialSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,7 +14,7 @@ public class GitHubClientFactory {
 
     public GitHubMcpClientImpl createClient() {
         // Use the same property names as BitbucketCloudClientFactory for consistency
-        String accessToken = System.getProperty("accessToken");
+        String accessToken = McpCredentialSource.accessToken();
         String owner = System.getProperty("workspace");  // GitHub uses owner, but we receive workspace
         String repo = System.getProperty("repo.slug");
         String prNumber = System.getProperty("pullRequest.id");

@@ -5,6 +5,7 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.AnalysisProfileConfig;
+import org.rostilos.codecrow.core.model.project.config.RagConfig;
 import org.rostilos.codecrow.core.model.vcs.*;
 import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
@@ -31,6 +32,7 @@ import org.rostilos.codecrow.vcsclient.model.VcsRepository;
 import org.rostilos.codecrow.vcsclient.model.VcsRepositoryPage;
 import org.rostilos.codecrow.vcsclient.model.VcsWorkspace;
 import org.rostilos.codecrow.webserver.integration.dto.request.RepoOnboardRequest;
+import org.rostilos.codecrow.webserver.project.service.RepositoryIndexBootstrapService;
 import org.rostilos.codecrow.webserver.exception.GitHubInstallationRecoveryException;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
 import org.rostilos.codecrow.webserver.integration.dto.response.*;
@@ -99,6 +101,7 @@ public class VcsIntegrationService {
     private final OAuthStateService oAuthStateService;
     private final SiteSettingsProvider siteSettingsProvider;
     private final VcsProviderCleanupService providerCleanupService;
+    private final RepositoryIndexBootstrapService repositoryIndexBootstrapService;
     
     public VcsIntegrationService(
             VcsConnectionRepository connectionRepository,
@@ -112,7 +115,8 @@ public class VcsIntegrationService {
             VcsClientProvider vcsClientProvider,
             OAuthStateService oAuthStateService,
             SiteSettingsProvider siteSettingsProvider,
-            VcsProviderCleanupService providerCleanupService
+            VcsProviderCleanupService providerCleanupService,
+            RepositoryIndexBootstrapService repositoryIndexBootstrapService
     ) {
         this.connectionRepository = connectionRepository;
         this.bindingRepository = bindingRepository;
@@ -127,6 +131,7 @@ public class VcsIntegrationService {
         this.oAuthStateService = oAuthStateService;
         this.siteSettingsProvider = siteSettingsProvider;
         this.providerCleanupService = providerCleanupService;
+        this.repositoryIndexBootstrapService = repositoryIndexBootstrapService;
     }
     
     /**
@@ -1774,6 +1779,8 @@ public class VcsIntegrationService {
         
         binding.setWebhooksConfigured(webhooksConfigured);
         VcsRepoBinding savedBinding = bindingRepository.save(binding);
+        project.setVcsRepoBinding(savedBinding);
+        repositoryIndexBootstrapService.enqueueAfterCommit(project);
         
         log.info("Onboarded repository {} to project {} in workspace {}", 
                 repo.fullName(), project.getId(), workspaceId);
@@ -1812,6 +1819,7 @@ public class VcsIntegrationService {
         }
         
         ProjectConfig config = new ProjectConfig(false, mainBranch);
+        config.setRagConfig(new RagConfig(true, mainBranch));
         config.setAnalysisProfile(new AnalysisProfileConfig(
                 request.getProjectType(), request.getSourceRoot()));
         // Ensure main branch is always in analysis patterns

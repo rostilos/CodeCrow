@@ -21,6 +21,7 @@ from service.review.orchestrator.json_utils import (
 from service.review.orchestrator.structured_output import (
     format_response_diagnostics,
     invoke_structured_output,
+    output_token_request_kwargs,
 )
 from service.review.pr_evidence import (
     PrEvidenceLedger,
@@ -43,8 +44,31 @@ from service.review.orchestrator.stage_2_semantic_packets import (
     build_stage_2_prompts,
 )
 from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
+from utils.llm_delegate import unwrap_llm_delegate
 
 logger = logging.getLogger(__name__)
+
+
+# Stage 2 returns a compact typed finding list. A finite stage-local completion
+# budget prevents reasoning models from spending the provider's entire context
+# window without emitting the schema. The reasoning-free recovery gets the same
+# bound so a malformed direct response cannot run away either.
+STAGE2_MAX_OUTPUT_TOKENS = 16_384
+
+
+def _stage_2_output_token_limit(llm: Any) -> int:
+    """Respect a provider/model cap that is lower than the Stage 2 ceiling."""
+    limits = [STAGE2_MAX_OUTPUT_TOKENS]
+    for candidate in (llm, unwrap_llm_delegate(llm)):
+        for attribute in ("max_tokens", "max_output_tokens"):
+            configured = getattr(candidate, attribute, None)
+            if (
+                isinstance(configured, int)
+                and not isinstance(configured, bool)
+                and configured > 0
+            ):
+                limits.append(configured)
+    return min(limits)
 
 
 class Stage2GenerationError(ValueError):
@@ -317,6 +341,13 @@ async def execute_stage_2_cross_file(
             },
             separators=(",", ":"),
         )
+        prompt_provenance["issuePromptEvidenceIds"] = json.dumps(
+            {
+                issue_id: sorted(provenance.visible_evidence_ids)
+                for issue_id, provenance in sorted(issue_provenance.items())
+            },
+            separators=(",", ":"),
+        )
 
     return merged
 
@@ -327,14 +358,16 @@ async def _invoke_stage_2_llm(
     label: str,
     force_unstructured: bool = False,
 ) -> Optional[CrossFileAnalysisResult]:
+    output_token_limit = _stage_2_output_token_limit(llm)
     if supports_structured_output(llm) and not force_unstructured:
         try:
             invocation = await invoke_structured_output(
                 llm,
                 prompt,
                 CrossFileAnalysisResult,
-                effort=ReasoningEffort.HIGH,
+                effort=ReasoningEffort.LOW,
                 label=f"stage-2-{label}",
+                max_tokens=output_token_limit,
             )
             result = await resolve_structured_output(
                 invocation,
@@ -358,11 +391,12 @@ async def _invoke_stage_2_llm(
     try:
         response = await llm.ainvoke(
             prompt,
+            **output_token_request_kwargs(llm, output_token_limit),
             **reasoning_request_kwargs(
                 llm,
                 ReasoningEffort.NONE
                 if force_unstructured
-                else ReasoningEffort.HIGH,
+                else ReasoningEffort.LOW,
             ),
         )
         content = extract_llm_response_text(response)
@@ -391,6 +425,7 @@ def _prompt_digest(prompt: str) -> str:
 class _IssueProvenance:
     prompt_digest: str
     visible_hunk_ids: frozenset[str]
+    visible_evidence_ids: frozenset[str]
 
 
 def _issue_identity(issue: Any) -> str:
@@ -404,6 +439,31 @@ def _issue_identity(issue: Any) -> str:
     )
 
 
+def _issue_has_visible_evidence(
+    issue: Any,
+    provenance: _IssueProvenance,
+) -> bool:
+    evidence_refs = {
+        str(evidence_id).strip()
+        for evidence_id in (getattr(issue, "evidenceRefs", ()) or ())
+        if str(evidence_id).strip()
+    }
+    return evidence_refs.issubset(provenance.visible_evidence_ids)
+
+
+def _issue_provenance_rank(
+    issue: Any,
+    provenance: _IssueProvenance,
+) -> tuple[Any, ...]:
+    """Prefer a citation-valid generating shard, then the stable tie-break."""
+    return (
+        not _issue_has_visible_evidence(issue, provenance),
+        provenance.prompt_digest,
+        tuple(sorted(provenance.visible_hunk_ids)),
+        tuple(sorted(provenance.visible_evidence_ids)),
+    )
+
+
 def _merge_stage_2_results_with_provenance(
     result_prompts: Sequence[tuple[CrossFileAnalysisResult, _Stage2Prompt]],
 ) -> tuple[CrossFileAnalysisResult, Dict[str, _IssueProvenance]]:
@@ -414,6 +474,7 @@ def _merge_stage_2_results_with_provenance(
         provenance = _IssueProvenance(
             prompt_digest=_prompt_digest(prompt),
             visible_hunk_ids=prompt.visible_hunk_ids,
+            visible_evidence_ids=prompt.visible_evidence_ids,
         )
         return result, {
             issue.id: provenance
@@ -425,17 +486,15 @@ def _merge_stage_2_results_with_provenance(
         provenance = _IssueProvenance(
             prompt_digest=_prompt_digest(prompt),
             visible_hunk_ids=prompt.visible_hunk_ids,
+            visible_evidence_ids=prompt.visible_evidence_ids,
         )
         for issue in result.cross_file_issues:
             key = _issue_identity(issue)
             existing = unique.get(key)
-            if existing is None or (
-                provenance.prompt_digest,
-                tuple(sorted(provenance.visible_hunk_ids)),
-            ) < (
-                existing[1].prompt_digest,
-                tuple(sorted(existing[1].visible_hunk_ids)),
-            ):
+            if existing is None or _issue_provenance_rank(
+                issue,
+                provenance,
+            ) < _issue_provenance_rank(existing[0], existing[1]):
                 unique[key] = (issue, provenance)
 
     severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}

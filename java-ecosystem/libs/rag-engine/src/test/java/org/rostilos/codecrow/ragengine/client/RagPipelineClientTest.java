@@ -64,21 +64,6 @@ class RagPipelineClientTest {
     }
 
     @Test
-    void prCleanupRequiresAndSendsAnExactGenerationTarget() throws Exception {
-        assertThatThrownBy(() -> client.deletePrFiles("ws", "repo", 42, " "))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("collectionTarget");
-
-        server.enqueue(json("{\"deleted_count\":1}"));
-        assertThat(client.deletePrFiles("ws", "repo", 42, "generation with/slash"))
-                .isTrue();
-
-        RecordedRequest request = server.takeRequest();
-        assertThat(request.getRequestUrl().queryParameter("collection_target"))
-                .isEqualTo("generation with/slash");
-    }
-
-    @Test
     void branchCleanupRequiresAndSendsRegistryOwnershipProof() throws Exception {
         assertThatThrownBy(() -> client.deleteBranch(
                 "ws", "repo", "feature/x", "generation", "revision", null))
@@ -98,19 +83,6 @@ class RagPipelineClientTest {
         assertThat(request.getRequestUrl().queryParameter("generation_manifest_sha256"))
                 .isEqualTo("manifest");
         assertThat(request.getPath()).contains("feature%2Fx");
-    }
-
-    @Test
-    void serviceFailureStopsMultiGenerationPrCleanup() {
-        server.enqueue(new MockResponse().setResponseCode(409).setBody("conflict"));
-
-        RagPipelineClient.PrFilesDeletionOutcome result =
-                client.deletePrFilesWithOutcome("ws", "repo", 42, "generation");
-
-        assertThat(result.successful()).isFalse();
-        assertThat(result.failure())
-                .isEqualTo(RagPipelineClient.PrFilesDeletionFailure.SERVICE);
-        assertThat(result.shouldStopRemainingTargets()).isTrue();
     }
 
     private static MockResponse json(String body) {

@@ -1,7 +1,7 @@
 # Core dependencies
 python-dotenv>=1.0.0,<2.0.0
 
-# LangChain text splitters (language-aware code splitting)
+# LangChain text splitters remain for the lightweight /parse compatibility API.
 langchain-text-splitters>=0.3.0
 
 # Tree-sitter is one native compatibility set. Keep every wheel exact so a
@@ -18,9 +18,6 @@ tree-sitter-cpp==0.23.4
 tree-sitter-c-sharp==0.23.1
 tree-sitter-ruby==0.23.1
 tree-sitter-php==0.24.1
-
-# Qdrant payload storage
-qdrant-client==1.16.2
 
 # Redis for cross-process mutation coordination
 redis>=5.0.0,<6.0.0

@@ -3,6 +3,7 @@ import json
 import os
 
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from model.dtos import ReviewRequestDto
 from service.review.orchestrator.json_utils import supports_structured_output
@@ -50,14 +51,11 @@ def _request(**updates):
 
 def _revision_binding():
     return {
-        "prIndexed": True,
         "pullRequestId": 12,
         "targetBranch": "main",
         "sourceRevision": "b" * 40,
         "baseRevision": "a" * 40,
         "baseGenerationManifestSha256": "c" * 64,
-        "prGenerationFingerprint": "sha256:" + "d" * 64,
-        "prOverlayGenerationManifestSha256": "e" * 64,
         "basePluginFingerprint": "sha256:" + "1" * 64,
         "basePluginDescriptorFingerprint": "sha256:" + "2" * 64,
         "basePluginImplementationFingerprint": "sha256:" + "3" * 64,
@@ -161,6 +159,7 @@ async def test_capture_records_exact_model_boundary_and_redacts_credentials(
     session = create_quality_capture_session(_request())
     delegate = _FakeDelegate()
     llm = ReviewQualityCaptureLLM(delegate, session)
+    assert isinstance(llm, BaseChatModel)
     forwarded_events = []
     event_callback = session.wrap_event_callback(forwarded_events.append)
 
@@ -292,7 +291,12 @@ async def test_capture_records_tool_binding_options(capture_environment):
         tool_choice="required",
         strict=True,
     )
-    await bound.ainvoke("Use the declared evidence tool")
+    assert isinstance(bound, BaseChatModel)
+    await bound.ainvoke(
+        "Use the declared evidence tool",
+        {"tags": ["agent-turn"]},
+        stop=["done"],
+    )
     await session.complete({"result": {"issues": []}})
 
     artifact = json.loads(session.path.read_text(encoding="utf-8"))
@@ -308,6 +312,9 @@ async def test_capture_records_tool_binding_options(capture_environment):
             "name": "lookup",
         },
     ]
+    delegated_kwargs = delegate.calls[0][1]
+    assert delegated_kwargs["config"]["tags"] == ["agent-turn"]
+    assert delegated_kwargs["stop"] == ["done"]
 
 
 @pytest.mark.asyncio
@@ -352,46 +359,218 @@ async def test_capture_marks_missing_or_invalid_terminal_pipeline_evidence(
     assert invalid_artifact["pipelineEvidenceStatus"] == "invalid"
     assert "non-terminal hunk states" in invalid_artifact["pipelineEvidenceError"]
 
-    degraded = create_quality_capture_session(_request())
-    degraded.observe_pipeline_event({
-        "state": "review_evidence_completed",
-        "hunkCoverage": {
-            "ingested": 0,
-            "planned": 0,
-            "reviewed": 0,
-            "validated": 0,
-            "completed": 1,
-            "excluded": 0,
-        },
-        "reviewUnits": {"registered": 1, "completed": 1},
-        "candidates": {
-            "generated": 0,
-            "published": 0,
-            "rejected": 0,
-            "rejectionCounts": {},
-            "records": [],
-        },
-        "hunkReceipts": [{
-            "hunkId": "sha256:hunk",
-            "path": "src/example.py",
-            "promptCandidateIds": [],
-            "anchoredCandidateIds": [],
-            "publishedCandidateIds": [],
-            "rejectedCandidateIds": [],
-            "outcome": "no_anchored_candidate",
-        }],
-        "retrieval": {
-            "deterministicStates": ["failed"],
+    for label, states in (
+        ("disabled", []),
+        ("bounded", ["bounded"]),
+        ("unavailable", ["unavailable"]),
+    ):
+        optional = create_quality_capture_session(_request())
+        optional.observe_pipeline_event({
+            "state": "review_evidence_completed",
+            "hunkCoverage": {
+                "ingested": 0,
+                "planned": 0,
+                "reviewed": 0,
+                "validated": 0,
+                "completed": 1,
+                "excluded": 0,
+            },
+            "reviewUnits": {"registered": 1, "completed": 1},
+            "candidates": {
+                "generated": 0,
+                "published": 0,
+                "rejected": 0,
+                "rejectionCounts": {},
+                "records": [],
+            },
+            "hunkReceipts": [{
+                "hunkId": "sha256:hunk",
+                "path": "src/example.py",
+                "promptCandidateIds": [],
+                "anchoredCandidateIds": [],
+                "publishedCandidateIds": [],
+                "rejectedCandidateIds": [],
+                "outcome": "no_anchored_candidate",
+            }],
+            "retrieval": {
+                "deterministicStates": states,
+                "exactEvidenceIds": 0,
+            },
+            "revisionBinding": _revision_binding(),
+        })
+        await optional.complete({"result": {"issues": []}})
+        optional_artifact = json.loads(
+            optional.path.read_text(encoding="utf-8")
+        )
+        assert optional_artifact["pipelineEvidenceStatus"] == "complete", label
+        assert optional_artifact["pipelineEvidence"]["retrieval"] == {
+            "deterministicStates": states,
             "exactEvidenceIds": 0,
+        }
+
+
+@pytest.mark.asyncio
+async def test_capture_persists_ordered_stage1_agent_batch_telemetry(
+    capture_environment,
+):
+    session = create_quality_capture_session(_request())
+
+    session.observe_pipeline_event({
+        "state": "stage_1_agent_telemetry",
+        "agentTelemetry": {
+            "batchNumber": 2,
+            "batchPaths": ["src/second.py"],
+            "firstAction": {"kind": "final_response_without_tool"},
+            "toolSequence": [],
+            "apiKey": "must-not-survive",
         },
     })
-    await degraded.complete({"result": {"issues": []}})
-    degraded_artifact = json.loads(degraded.path.read_text(encoding="utf-8"))
-    assert degraded_artifact["pipelineEvidenceStatus"] == "invalid"
-    assert (
-        "incomplete deterministic retrieval states"
-        in degraded_artifact["pipelineEvidenceError"]
+    session.observe_pipeline_event({
+        "state": "stage_1_agent_telemetry",
+        "agentTelemetry": {
+            "batchNumber": 1,
+            "batchPaths": ["src/first.py"],
+            "generationPreparation": {
+                "eligible": True,
+                "status": "ready",
+                "receiptPresent": True,
+            },
+            "initialRequiredTool": "getMinimalReviewContext",
+            "relationBriefing": {
+                "eligible": True,
+                "attempted": True,
+                "status": "bounded",
+                "promptChars": 1_200,
+                "promptResultCounts": {"edges": 3, "sourceWindows": 2},
+                "visibleEvidenceIds": [
+                    "relation:" + character * 64
+                    for character in ("1", "2", "3")
+                ],
+                "sourceWindows": 2,
+                "sourceCharacters": 500,
+            },
+            "sourceReadSummary": {
+                "totalRequests": 2,
+                "boundedRangeRequests": 1,
+                "wholeFileRequests": 1,
+            },
+            "firstAction": {
+                "kind": "tool",
+                "name": "getMinimalReviewContext",
+            },
+            "toolSequence": [{
+                "sequence": 1,
+                "name": "getMinimalReviewContext",
+                "status": "completed",
+                "resultCounts": {"relations": 3, "sourceWindows": 2},
+                "evidenceIds": [
+                    "relation:" + character * 64
+                    for character in ("1", "2", "3")
+                ],
+                "sourcePaths": ["src/related.py"],
+                "snapshot": {
+                    "kind": "proposed_tree",
+                    "sourceRevision": "b" * 40,
+                },
+            }],
+        },
+    })
+    # A later event for the same batch replaces the crash-safe record rather
+    # than inflating the batch count.
+    session.observe_pipeline_event({
+        "state": "stage_1_agent_telemetry",
+        "agentTelemetry": {
+            "batchNumber": 2,
+            "batchPaths": ["src/second.py"],
+            "generationPreparation": {
+                "eligible": True,
+                "status": "unavailable",
+                "receiptPresent": False,
+            },
+            "relationBriefing": {
+                "eligible": True,
+                "attempted": True,
+                "status": "unavailable",
+                "promptChars": 0,
+                "promptResultCounts": {},
+                "visibleEvidenceIds": [],
+                "sourceWindows": 0,
+                "sourceCharacters": 0,
+            },
+            "sourceReadSummary": {
+                "totalRequests": 1,
+                "boundedRangeRequests": 0,
+                "wholeFileRequests": 1,
+            },
+            "firstAction": {"kind": "failed_before_observable_tool"},
+            "toolSequence": [],
+            "partialFailure": "transport unavailable",
+        },
+    })
+
+    recording = json.loads(session.path.read_text(encoding="utf-8"))
+    assert [
+        batch["batchNumber"]
+        for batch in recording["stage1AgentBatches"]
+    ] == [1, 2]
+    assert recording["stage1AgentBatches"][0]["toolSequence"][0][
+        "snapshot"
+    ]["kind"] == "proposed_tree"
+    assert recording["stage1AgentBatches"][1]["partialFailure"] == (
+        "transport unavailable"
     )
+    assert "must-not-survive" not in session.path.read_text(encoding="utf-8")
+
+    await session.complete({"result": {"issues": []}})
+    receipt = session.receipt()
+    assert receipt["stage1AgentBatchCount"] == 2
+    assert receipt["stage1AgentSummary"] == {
+        "relationBriefing": {
+            "eligibleBatches": 2,
+            "attemptedBatches": 2,
+            "deliveredBatches": 1,
+            "unavailableBatches": 1,
+            "emptyBatches": 0,
+            "promptVisibleRelations": 3,
+            "promptVisibleEvidenceIds": 3,
+            "sourceWindows": 2,
+            "sourceCharacters": 500,
+            "promptCharacters": 1_200,
+        },
+            "sourceReads": {
+                "totalRequests": 3,
+                "boundedRangeRequests": 1,
+                "wholeFileRequests": 2,
+                "unclassifiedRequests": 0,
+                "redundantWholeFileRejectedRequests": 0,
+            },
+            "generationPreparation": {
+                "eligibleBatches": 2,
+                "readyBatches": 1,
+                "unavailableBatches": 1,
+                "receiptPresentBatches": 1,
+            },
+            "graphTools": {
+                "eligibleBatches": 1,
+                "requiredFirstCallBatches": 1,
+                "requiredFirstCallSatisfiedBatches": 1,
+                "requiredWorkflowBatches": 0,
+                "requiredWorkflowSatisfiedBatches": 0,
+                "attemptedBatches": 1,
+                "attemptedCalls": 1,
+                "completedCalls": 1,
+                "failedCalls": 0,
+                "sourceBearingCalls": 1,
+                "sourceWindows": 2,
+                "returnedEvidenceIds": 3,
+                "minimalContextCalls": 1,
+                "reviewContextCalls": 0,
+                "impactRadiusCalls": 0,
+                "traversalCalls": 0,
+                "graphQueryCalls": 0,
+                "structuralUnitCalls": 0,
+            },
+        }
 
 
 @pytest.mark.asyncio

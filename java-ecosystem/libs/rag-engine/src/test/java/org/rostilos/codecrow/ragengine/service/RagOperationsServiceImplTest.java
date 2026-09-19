@@ -14,6 +14,7 @@ import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexGenerationRepository;
 import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepository;
 import org.rostilos.codecrow.core.service.AnalysisJobService;
+import org.rostilos.codecrow.core.service.RepositoryIndexJobQueueService;
 import org.rostilos.codecrow.ragengine.branch.BranchIndexBuildAdmissionService;
 import org.rostilos.codecrow.ragengine.branch.BranchIndexGenerationBuildService;
 import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
@@ -36,6 +37,8 @@ class RagOperationsServiceImplTest {
     @Mock private RagPipelineClient pipelineClient;
     @Mock private BranchIndexGenerationBuildService generationBuildService;
     @Mock private BranchIndexBuildAdmissionService buildAdmissionService;
+    @Mock private RepositoryIndexJobQueueService queueService;
+    @Mock private RagRepresentationIdentityService representationIdentityService;
 
     private RagOperationsServiceImpl service;
     private Project project;
@@ -50,7 +53,9 @@ class RagOperationsServiceImplTest {
                 generationRepository,
                 pipelineClient,
                 generationBuildService,
-                buildAdmissionService);
+                buildAdmissionService,
+                queueService,
+                representationIdentityService);
         ReflectionTestUtils.setField(service, "ragApiEnabled", true);
 
         project = new Project();
@@ -79,26 +84,4 @@ class RagOperationsServiceImplTest {
         verifyNoInteractions(trackingService);
     }
 
-    @Test
-    void prCleanupVisitsEachRegistryOwnedGenerationOnce() {
-        when(generationRepository.findCollectionNamesByProjectIdAndStatusIn(
-                42L,
-                List.of(
-                        RagBranchIndexGenerationStatus.ACTIVE,
-                        RagBranchIndexGenerationStatus.SUPERSEDED)))
-                .thenReturn(List.of("generation-a", "generation-a", "generation-b"));
-        when(pipelineClient.deletePrFilesWithOutcome(
-                "workspace", "repository", 17, "generation-a"))
-                .thenReturn(RagPipelineClient.PrFilesDeletionOutcome.success("generation-a"));
-        when(pipelineClient.deletePrFilesWithOutcome(
-                "workspace", "repository", 17, "generation-b"))
-                .thenReturn(RagPipelineClient.PrFilesDeletionOutcome.success("generation-b"));
-
-        assertThat(service.deletePrFiles(project, 17)).isTrue();
-        verify(pipelineClient).deletePrFilesWithOutcome(
-                "workspace", "repository", 17, "generation-a");
-        verify(pipelineClient).deletePrFilesWithOutcome(
-                "workspace", "repository", 17, "generation-b");
-        verifyNoMoreInteractions(pipelineClient);
-    }
 }

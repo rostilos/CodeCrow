@@ -106,11 +106,10 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
         
         log.info("Handling Bitbucket Cloud PR event: {} for project {}", eventType, project.getId());
         
-        // Close/merge events: clean up PR RAG data and return
+        // Close/merge events update persisted PR state and do not start analysis.
         if (CLOSE_PR_EVENTS.contains(eventType)) {
             markPullRequestClosed(payload, project, "pullrequest:fulfilled".equals(eventType));
-            cleanupPrRagData(payload, project);
-            return WebhookResult.ignored("PR " + eventType + " event: cleaned up PR RAG data");
+            return WebhookResult.ignored("PR " + eventType + " event: state updated");
         }
         
         try {
@@ -290,29 +289,6 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
             log.info("Updated placeholder comment {} with error message", commentId);
         } catch (Exception e) {
             log.error("Failed to update placeholder with error: {}", e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Best-effort cleanup of PR RAG data when a pull request is merged or declined.
-     * This is a best-effort, non-blocking operation — failure does not affect the webhook result.
-     */
-    private void cleanupPrRagData(WebhookPayload payload, Project project) {
-        try {
-            String prIdStr = payload.pullRequestId();
-            if (prIdStr == null) {
-                return;
-            }
-            int prNumber = Integer.parseInt(prIdStr);
-            boolean deleted = ragOperationsService.deletePrFiles(project, prNumber);
-            if (deleted) {
-                log.info("Cleaned up PR #{} RAG data for project {} on close/merge", prNumber, project.getId());
-            } else {
-                log.info("PR #{} RAG cleanup did not complete for project {}; "
-                        + "the cleanup operation recorded the failure detail", prNumber, project.getId());
-            }
-        } catch (Exception e) {
-            log.warn("Error cleaning up PR RAG data for project {}: {}", project.getId(), e.getMessage());
         }
     }
 

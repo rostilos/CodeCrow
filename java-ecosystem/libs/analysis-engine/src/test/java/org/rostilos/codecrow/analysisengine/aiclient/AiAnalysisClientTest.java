@@ -333,7 +333,8 @@ class AiAnalysisClientTest {
                                         new LocalRepositorySnapshot(
                                                         "/tmp/codecrow-pr-review-123",
                                                         "main",
-                                                        "target-head-sha"),
+                                                        "target-head-sha",
+                                                        "/tmp/codecrow-pr-overlay-123"),
                                         null);
 
                         var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
@@ -348,7 +349,8 @@ class AiAnalysisClientTest {
                         assertThat(requestPayload)
                                         .containsEntry("localRepoPath", "/tmp/codecrow-pr-review-123")
                                         .containsEntry("localRepoTargetBranch", "main")
-                                        .containsEntry("localRepoRevision", "target-head-sha");
+                                        .containsEntry("localRepoRevision", "target-head-sha")
+                                        .containsEntry("localReviewOverlayPath", "/tmp/codecrow-pr-overlay-123");
                 }
 
                 @Test

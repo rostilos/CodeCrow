@@ -52,7 +52,10 @@ public class PlatformApiService {
         if (instance == null) {
             String url = System.getProperty("api.base.url", "http://localhost:8081");
             String projectIdStr = System.getProperty("project.id", "0");
-            String secret = System.getProperty("internal.api.secret", "");
+            String secret = McpCredentialSource.internalApiSecret();
+            if (secret == null) {
+                secret = "";
+            }
             Long projectId = Long.parseLong(projectIdStr);
             instance = new PlatformApiService(url, projectId, secret);
         }

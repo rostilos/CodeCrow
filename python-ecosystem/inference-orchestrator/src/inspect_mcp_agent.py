@@ -1,5 +1,9 @@
 
 import inspect
+from utils.mcp_runtime import configure_mcp_runtime
+
+configure_mcp_runtime()
+
 import mcp_use.agent
 from mcp_use.agent import MCPAgent
 

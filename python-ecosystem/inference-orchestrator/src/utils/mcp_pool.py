@@ -28,6 +28,8 @@ from asyncio import Queue, Lock
 from contextlib import asynccontextmanager
 import time
 
+from utils.mcp_config import MCPConfigBuilder
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,6 +88,7 @@ class McpProcessPool:
         self._lock = Lock()
         self._initialized = False
         self._shutting_down = False
+        self._jvm_props: Dict[str, str] = {}
         
         # Metrics
         self._total_requests = 0
@@ -102,11 +105,12 @@ class McpProcessPool:
             if self._initialized:
                 return
                 
+            self._jvm_props = dict(jvm_props or {})
             logger.info(f"Initializing MCP process pool with {self.pool_size} processes")
             
             for i in range(self.pool_size):
                 try:
-                    process = await self._create_process(jvm_props)
+                    process = await self._create_process(self._jvm_props)
                     self._pool.append(process)
                     await self._available.put(process)
                     logger.debug(f"Created pooled process {i+1}/{self.pool_size}")
@@ -118,12 +122,9 @@ class McpProcessPool:
     
     async def _create_process(self, jvm_props: Dict[str, str] = None) -> PooledProcess:
         """Create a new MCP server process."""
-        jvm_props = jvm_props or {}
-        jvm_args = []
-        
-        for key, value in jvm_props.items():
-            sanitized = str(value).replace("\n", " ")
-            jvm_args.append(f"-D{key}={sanitized}")
+        jvm_args, server_env = MCPConfigBuilder.build_java_launch_options(
+            jvm_props,
+        )
         
         cmd = ["java"] + jvm_args + ["-jar", self.jar_path]
         
@@ -132,7 +133,12 @@ class McpProcessPool:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=0
+            bufsize=0,
+            env=(
+                {**os.environ, **server_env}
+                if server_env
+                else None
+            ),
         )
         
         # Wait a bit for JVM to warm up
@@ -219,7 +225,7 @@ class McpProcessPool:
             self._pool.remove(old_process)
         
         # Create new process
-        new_process = await self._create_process()
+        new_process = await self._create_process(self._jvm_props)
         self._pool.append(new_process)
         
         return new_process

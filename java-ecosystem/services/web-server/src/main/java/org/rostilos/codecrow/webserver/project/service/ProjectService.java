@@ -103,6 +103,7 @@ public class ProjectService implements IProjectService {
     private final CommentCommandRateLimitRepository commentCommandRateLimitRepository;
     private final AnalyzedCommitRepository analyzedCommitRepository;
     private final ProjectWebhookCleanupService webhookCleanupService;
+    private final RepositoryIndexBootstrapService repositoryIndexBootstrapService;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -130,7 +131,8 @@ public class ProjectService implements IProjectService {
             RagBranchIndexRepository ragBranchIndexRepository,
             CommentCommandRateLimitRepository commentCommandRateLimitRepository,
             AnalyzedCommitRepository analyzedCommitRepository,
-            ProjectWebhookCleanupService webhookCleanupService) {
+            ProjectWebhookCleanupService webhookCleanupService,
+            RepositoryIndexBootstrapService repositoryIndexBootstrapService) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
         this.tokenEncryptionService = tokenEncryptionService;
@@ -157,6 +159,7 @@ public class ProjectService implements IProjectService {
         this.commentCommandRateLimitRepository = commentCommandRateLimitRepository;
         this.analyzedCommitRepository = analyzedCommitRepository;
         this.webhookCleanupService = webhookCleanupService;
+        this.repositoryIndexBootstrapService = repositoryIndexBootstrapService;
     }
 
     @Transactional
@@ -256,6 +259,7 @@ public class ProjectService implements IProjectService {
             mainBranch = request.getMainBranch();
         }
         ProjectConfig config = new ProjectConfig(false, mainBranch);
+        config.setRagConfig(new RagConfig(true, mainBranch));
         config.setAnalysisProfile(new AnalysisProfileConfig(
                 request.getProjectType(), request.getSourceRoot()));
         // Ensure main branch is always included in analysis patterns
@@ -317,7 +321,14 @@ public class ProjectService implements IProjectService {
             throw new SecurityException("Failed to generate project auth token");
         }
 
-        return projectRepository.save(newProject);
+        Project saved = projectRepository.save(newProject);
+        if (saved.hasVcsBinding()) {
+            VcsRepoBinding binding = saved.getVcsRepoBinding();
+            binding.setProject(saved);
+            saved.setVcsRepoBinding(vcsRepoBindingRepository.save(binding));
+            repositoryIndexBootstrapService.enqueueAfterCommit(saved);
+        }
+        return saved;
     }
 
     @Transactional(readOnly = true)
@@ -746,8 +757,6 @@ public class ProjectService implements IProjectService {
      * @param includePatterns     patterns to include in indexing (applied before
      *                            exclusion)
      * @param excludePatterns     patterns to exclude from indexing
-     * @param multiBranchEnabled  whether multi-branch indexing is enabled
-     * @param branchRetentionDays how long to keep branch index metadata
      * @return the updated project
      */
     @Transactional
@@ -757,16 +766,10 @@ public class ProjectService implements IProjectService {
             boolean enabled,
             String branch,
             java.util.List<String> includePatterns,
-            java.util.List<String> excludePatterns,
-            Boolean multiBranchEnabled,
-            Integer branchRetentionDays,
-            java.util.List<String> indexedBranches,
-            Boolean transientBranchIndexesEnabled) {
+            java.util.List<String> excludePatterns) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
-        return updateRagConfig(project, enabled, branch, includePatterns, excludePatterns,
-                multiBranchEnabled, branchRetentionDays, indexedBranches,
-                transientBranchIndexesEnabled);
+        return updateRagConfig(project, enabled, branch, includePatterns, excludePatterns);
     }
 
     private Project updateRagConfig(
@@ -774,11 +777,7 @@ public class ProjectService implements IProjectService {
             boolean enabled,
             String branch,
             java.util.List<String> includePatterns,
-            java.util.List<String> excludePatterns,
-            Boolean multiBranchEnabled,
-            Integer branchRetentionDays,
-            java.util.List<String> indexedBranches,
-            Boolean transientBranchIndexesEnabled) {
+            java.util.List<String> excludePatterns) {
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
         boolean useMcpTools = currentConfig != null
@@ -795,61 +794,18 @@ public class ProjectService implements IProjectService {
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
 
         RagConfig ragConfig = new RagConfig(
-                enabled, branch, includePatterns, excludePatterns, multiBranchEnabled, branchRetentionDays,
-                indexedBranches, transientBranchIndexesEnabled);
+                enabled, branch, includePatterns, excludePatterns);
 
         ProjectConfig newConfig = new ProjectConfig(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands,
                 maxAnalysisTokenLimit, taskContextAnalysisEnabled);
         preserveProjectConfigExtensions(newConfig, currentConfig);
         project.setConfiguration(newConfig);
-        return projectRepository.save(project);
-    }
-
-    @Transactional
-    public Project updateRagConfig(
-            Long workspaceId,
-            Long projectId,
-            boolean enabled,
-            String branch,
-            java.util.List<String> includePatterns,
-            java.util.List<String> excludePatterns,
-            Boolean multiBranchEnabled,
-            Integer branchRetentionDays) {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
-                .orElseThrow(() -> new NoSuchElementException("Project not found"));
-        RagConfig currentRag = currentRagConfig(project);
-        return updateRagConfig(project, enabled, branch, includePatterns, excludePatterns,
-                multiBranchEnabled, branchRetentionDays,
-                currentRag != null ? currentRag.indexedBranches() : null,
-                currentRag != null ? currentRag.transientBranchIndexesEnabled() : null);
-    }
-
-    /**
-     * Simplified RAG config update (backward compatible).
-     */
-    @Transactional
-    public Project updateRagConfig(
-            Long workspaceId,
-            Long projectId,
-            boolean enabled,
-            String branch,
-            java.util.List<String> includePatterns,
-            java.util.List<String> excludePatterns) {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
-                .orElseThrow(() -> new NoSuchElementException("Project not found"));
-        RagConfig currentRag = currentRagConfig(project);
-        return updateRagConfig(project, enabled, branch, includePatterns, excludePatterns,
-                currentRag != null ? currentRag.multiBranchEnabled() : null,
-                currentRag != null ? currentRag.branchRetentionDays() : null,
-                currentRag != null ? currentRag.indexedBranches() : null,
-                currentRag != null ? currentRag.transientBranchIndexesEnabled() : null);
-    }
-
-    private RagConfig currentRagConfig(Project project) {
-        return project.getConfiguration() != null
-                ? project.getConfiguration().ragConfig()
-                : null;
+        Project saved = projectRepository.save(project);
+        if (enabled && saved.hasVcsBinding()) {
+            repositoryIndexBootstrapService.enqueueAfterCommit(saved);
+        }
+        return saved;
     }
 
     @Transactional
@@ -1050,9 +1006,7 @@ public class ProjectService implements IProjectService {
             AnalysisScopeConfig scope = config.analysisScope();
             RagConfig rag = config.ragConfig() != null ? config.ragConfig() : new RagConfig();
             config.setRagConfig(new RagConfig(
-                    rag.enabled(), rag.branch(), scope.includePatterns(), scope.excludePatterns(),
-                    rag.multiBranchEnabled(), rag.branchRetentionDays(), rag.indexedBranches(),
-                    rag.transientBranchIndexesEnabled()));
+                    rag.enabled(), rag.branch(), scope.includePatterns(), scope.excludePatterns()));
         } else {
             throw new IllegalArgumentException("direction must be FROM_RAG or TO_RAG");
         }

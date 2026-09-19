@@ -1,0 +1,654 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "judgment.schema.json",
+  "title": "CodeCrow Magento 2 judgment run",
+  "description": "Blinded semantic pair judgments, one-to-one assignments, and optional unmatched-finding adjudication for one analysis run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "judgmentId",
+    "createdAt",
+    "promptVersion",
+    "promptDigest",
+    "corpusId",
+    "corpusDigest",
+    "analysisRunId",
+    "analysisRunDigest",
+    "analysisModel",
+    "judgeModel",
+    "judgeConfig",
+    "judgeConfigDigest",
+    "cases",
+    "judgmentDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-judgment-run"
+    },
+    "judgmentId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "promptVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "promptDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "corpusId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "corpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "analysisRunId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "analysisRunDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "analysisModel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "judgeModel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "judgeConfig": {
+      "type": "object",
+      "description": "Recursively secret-redacted public judge configuration."
+    },
+    "judgeConfigDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/scoredCase"
+          },
+          {
+            "$ref": "#/$defs/notScoredCase"
+          }
+        ]
+      }
+    },
+    "judgmentDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "x-codecrow-semantic-gates": {
+    "primary": "Only one-to-one assignments whose pair verdict is substantive_match count as primary true positives.",
+    "novel": "Novel-finding judgments are secondary and do not expand the reviewer gold set or create expanded-gold recall/F1 without pooled, model-blind adjudication."
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "goldId": {
+      "type": "string",
+      "pattern": "^G[0-9]{3}$"
+    },
+    "candidateId": {
+      "type": "string",
+      "pattern": "^C[0-9]{3}$"
+    },
+    "notScoredCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "const": "not_scored"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "scoredCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "status",
+        "sizeBand",
+        "partition",
+        "caseInputDigest",
+        "judgeConfigDigest",
+        "goldCount",
+        "candidateCount",
+        "goldIssues",
+        "candidateFindings",
+        "pairJudgments",
+        "assignments",
+        "unmatchedGold",
+        "unmatchedCandidates",
+        "novelFindingJudgments",
+        "calls",
+        "rawJudgment",
+        "caseDigest"
+      ],
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "const": "scored"
+        },
+        "sizeBand": {
+          "enum": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        "partition": {
+          "enum": [
+            "development",
+            "sealed"
+          ]
+        },
+        "caseInputDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "judgeConfigDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "goldCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "candidateCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "goldIssues": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/goldIssue"
+          }
+        },
+        "candidateFindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/candidateFinding"
+          }
+        },
+        "pairJudgments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pairJudgment"
+          }
+        },
+        "assignments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/assignment"
+          }
+        },
+        "unmatchedGold": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/goldId"
+          }
+        },
+        "unmatchedCandidates": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/candidateId"
+          }
+        },
+        "novelFindingJudgments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/novelJudgment"
+          }
+        },
+        "calls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/call"
+          }
+        },
+        "rawJudgment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "caseDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "goldIssue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "goldId",
+        "sourceId",
+        "sourceUrl",
+        "path",
+        "line",
+        "reviewComment",
+        "summary",
+        "category",
+        "severity"
+      ],
+      "properties": {
+        "goldId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "sourceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceUrl": {
+          "type": "string",
+          "pattern": "^https://github\\.com/"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reviewComment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "candidateFinding": {
+      "type": "object",
+      "required": [
+        "candidateId",
+        "findingId",
+        "path",
+        "line",
+        "title",
+        "description",
+        "category",
+        "severity",
+        "suggestedFix",
+        "confidence"
+      ],
+      "properties": {
+        "candidateId": {
+          "$ref": "#/$defs/candidateId"
+        },
+        "findingId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "suggestedFix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "pairJudgment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "goldId",
+        "candidateId",
+        "specific_issue",
+        "grounded_at_snapshot",
+        "same_root_cause",
+        "same_failure_or_consequence",
+        "compatible_required_change",
+        "location_relation",
+        "verdict",
+        "confidence",
+        "repeatAgreement",
+        "repeatVerdicts"
+      ],
+      "properties": {
+        "goldId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "candidateId": {
+          "$ref": "#/$defs/candidateId"
+        },
+        "specific_issue": {
+          "$ref": "#/$defs/yesNoUnclear"
+        },
+        "grounded_at_snapshot": {
+          "$ref": "#/$defs/yesNoUnclear"
+        },
+        "same_root_cause": {
+          "$ref": "#/$defs/yesNoUnclear"
+        },
+        "same_failure_or_consequence": {
+          "$ref": "#/$defs/yesNoUnclear"
+        },
+        "compatible_required_change": {
+          "$ref": "#/$defs/yesNoUnclear"
+        },
+        "location_relation": {
+          "enum": [
+            "exact_line",
+            "same_symbol",
+            "same_functional_area",
+            "dependency",
+            "unrelated",
+            "unclear"
+          ]
+        },
+        "verdict": {
+          "enum": [
+            "substantive_match",
+            "partial",
+            "related_distinct",
+            "no_match",
+            "unverifiable"
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/rate"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "repeatAgreement": {
+          "$ref": "#/$defs/rate"
+        },
+        "repeatVerdicts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "goldId",
+        "candidateId",
+        "weight",
+        "judgment"
+      ],
+      "properties": {
+        "goldId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "candidateId": {
+          "$ref": "#/$defs/candidateId"
+        },
+        "weight": {
+          "type": "number"
+        },
+        "judgment": {
+          "$ref": "#/$defs/pairJudgment"
+        }
+      }
+    },
+    "novelJudgment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateId",
+        "verdict",
+        "grounded_at_snapshot",
+        "actionable",
+        "confidence",
+        "repeatAgreement",
+        "repeatVerdicts"
+      ],
+      "properties": {
+        "candidateId": {
+          "$ref": "#/$defs/candidateId"
+        },
+        "verdict": {
+          "enum": [
+            "valid_in_scope_novel",
+            "invalid",
+            "out_of_scope",
+            "unverifiable"
+          ]
+        },
+        "grounded_at_snapshot": {
+          "$ref": "#/$defs/yesNoUnclear"
+        },
+        "actionable": {
+          "$ref": "#/$defs/yesNoUnclear"
+        },
+        "confidence": {
+          "$ref": "#/$defs/rate"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "repeatAgreement": {
+          "$ref": "#/$defs/rate"
+        },
+        "repeatVerdicts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "yesNoUnclear": {
+      "enum": [
+        "yes",
+        "no",
+        "unclear"
+      ]
+    },
+    "call": {
+      "description": "One complete repeat record with the exact provider request and response envelope needed for paper-gate reconstruction.",
+      "type": "object",
+      "required": [
+        "kind",
+        "repeat",
+        "system",
+        "prompt",
+        "response",
+        "checkpoint",
+        "bindingDigest",
+        "completedAt",
+        "callDigest",
+        "rejectedStructuredResponses",
+        "promptSha256",
+        "rawContentSha256",
+        "request",
+        "requestSha256",
+        "providerResponse",
+        "providerResponseSha256"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "pair",
+            "novel"
+          ]
+        },
+        "goldId": {
+          "$ref": "#/$defs/goldId"
+        },
+        "candidateId": {
+          "$ref": "#/$defs/candidateId"
+        },
+        "repeat": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "system": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "response": {
+          "type": "object"
+        },
+        "checkpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bindingDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "callDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "rejectedStructuredResponses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "attempt",
+              "response",
+              "metadata",
+              "validationError"
+            ],
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "response": {},
+              "metadata": {
+                "type": "object"
+              },
+              "validationError": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "usage": {},
+        "responseId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "promptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "rawContentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "request": {
+          "type": "object"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "providerResponse": {
+          "type": "object"
+        },
+        "providerResponseSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

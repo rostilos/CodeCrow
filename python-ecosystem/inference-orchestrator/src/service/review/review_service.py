@@ -1,14 +1,23 @@
 import os
 import asyncio
+import json
 import logging
+import re
 from typing import Dict, Any, Optional, Callable
 from dotenv import load_dotenv
+from utils.mcp_runtime import configure_mcp_runtime
+
+configure_mcp_runtime()
+
 from mcp_use import MCPClient
 
 from model.dtos import ReviewRequestDto
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
 from utils.response_parser import ResponseParser
+from utils.mcp_tool_serialization import (
+    install_per_connection_tool_serialization,
+)
 from service.rag.rag_client import RagClient
 from service.review.issue_processor import post_process_analysis_result
 from service.review.plugin_context import apply_plugin_file_policy
@@ -25,7 +34,14 @@ from service.review.evidence_scopes import (
 from utils.hunk_coverage import validate_acquired_diff_manifest
 from utils.error_sanitizer import create_user_friendly_error
 from service.review.orchestrator import MultiStageReviewOrchestrator
-from service.review.snapshot_identity import validate_review_snapshot_identity
+from service.review.orchestrator.stage_1_tool_inventory import (
+    STAGE1_REVIEW_FILE_TOOL_NAME,
+    STAGE1_STRUCTURAL_TOOL_NAMES,
+)
+from service.review.snapshot_identity import (
+    resolve_exact_structural_base_revision,
+    validate_review_snapshot_identity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +52,17 @@ class ReviewService:
     MAX_FIX_RETRIES = 2
 
     # Maximum concurrent reviews (each spawns a JVM subprocess + LLM calls)
-    MAX_CONCURRENT_REVIEWS = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "20"))
+    MAX_CONCURRENT_REVIEWS = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4"))
 
     # Hard timeout ceiling per review (seconds). Configurable via .env
     REVIEW_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "1500"))
     MCP_SESSION_INITIALIZATION_TIMEOUT_SECONDS = float(os.environ.get(
         "MCP_SESSION_INITIALIZATION_TIMEOUT_SECONDS",
         "30",
+    ))
+    MCP_SESSION_CLOSE_TIMEOUT_SECONDS = float(os.environ.get(
+        "MCP_SESSION_CLOSE_TIMEOUT_SECONDS",
+        "10",
     ))
     def __init__(self):
         load_dotenv(interpolate=False)
@@ -75,6 +95,8 @@ class ReviewService:
         # startup, or dry-run dispatch. Every review mode must describe the
         # same exact immutable repository snapshot.
         validate_review_snapshot_identity(request)
+        self._validate_local_only_mcp_request(request)
+        self._validate_required_structural_mcp_request(request)
         async with self._review_semaphore:
             if request.promptDryRun:
                 return await self._process_prompt_dry_run(request, event_callback)
@@ -207,6 +229,8 @@ class ReviewService:
         - {"type": "final", "result": {...}}
         - {"type": "error", "message": "..."}
         """
+        self._validate_local_only_mcp_request(request)
+        self._validate_required_structural_mcp_request(request)
         jar_path = self.default_jar_path
 
         # An incremental execution owns the delta manifest. The full PR diff is
@@ -227,6 +251,16 @@ class ReviewService:
         is_branch_reconciliation = request.analysisType == "BRANCH_ANALYSIS"
         has_file_contents = bool(request.reconciliationFileContents)
         has_previous_issues = bool(request.previousCodeAnalysisIssues)
+        if (
+            request.requireStructuralMcp
+            and is_branch_reconciliation
+            and has_file_contents
+            and has_previous_issues
+        ):
+            raise ValueError(
+                "Required structural MCP is incompatible with the MCP-free "
+                "branch-reconciliation path. No review-model stage was started."
+            )
         needs_multistage_review = not (
             is_branch_reconciliation and has_previous_issues
         )
@@ -255,8 +289,8 @@ class ReviewService:
             )
 
             # Incremental review and PR-wide reasoning use deliberately separate
-            # evidence scopes. Stage 0/1, hunk coverage, RAG overlay indexing,
-            # and publication anchors continue to use only ``processed_diff``
+            # evidence scopes. Stage 0/1, hunk coverage, and publication anchors
+            # continue to use only ``processed_diff``
             # (the delta). Stage 2 receives this bounded base-to-head parse so it
             # cannot mistake a one-file delta for the complete PR state.
             if (
@@ -347,6 +381,11 @@ class ReviewService:
 
         use_mcp_tools = bool(request.useMcpTools)
         mcp_available = use_mcp_tools and os.path.exists(jar_path)
+        if (request.mcpLocalOnly or request.requireStructuralMcp) and not mcp_available:
+            raise RuntimeError(
+                "Required MCP precondition failed: the request-scoped VCS MCP "
+                "server is unavailable. No review-model stage was started."
+            )
         if use_mcp_tools and not mcp_available:
             logger.warning(
                 "Agentic repository tools requested but the VCS MCP server is "
@@ -372,9 +411,38 @@ class ReviewService:
                     "message": f"Analysis starting ({context})"
                 })
 
-                # Create LLM instance
-                llm = self._create_llm(request, quality_capture)
                 request_rag_client = self._rag_client_for_request(request)
+                agent_rag_client = self._rag_client_for_agent_tools()
+                await self._prepare_rag_review_generation(
+                    request,
+                    agent_rag_client,
+                    event_callback,
+                )
+                rag_mcp_context = self._build_rag_mcp_context(
+                    request,
+                    agent_rag_client,
+                )
+                if request.requireStructuralMcp:
+                    if request.ragReviewGenerationStatus != "ready":
+                        raise RuntimeError(
+                            "Required proposed-tree graph preparation did not "
+                            "produce a sealed ready generation; no review-model "
+                            "stage was started: "
+                            + str(
+                                request.ragReviewGenerationError
+                                or request.ragReviewGenerationStatus
+                            )
+                        )
+                    if rag_mcp_context is None:
+                        raise RuntimeError(
+                            "Required proposed-tree graph binding is incomplete; "
+                            "no review-model stage was started"
+                        )
+
+                # Provider construction is intentionally after every local-only
+                # request/binding precondition. No model invocation happens
+                # until the MCP sessions and exact-source preflight pass below.
+                llm = self._create_llm(request, quality_capture)
                 agent_service = None
 
                 if mcp_available:
@@ -384,10 +452,6 @@ class ReviewService:
                             "state": "mcp_initializing",
                             "message": "Initializing repository tools"
                         })
-                        rag_mcp_context = self._build_rag_mcp_context(
-                            request,
-                            request_rag_client,
-                        )
                         config = MCPConfigBuilder.build_config(
                             jar_path,
                             self._build_jvm_props(request),
@@ -401,11 +465,22 @@ class ReviewService:
                             llm=llm,
                             client=client,
                         )
+                        structural_mcp_required = request.requireStructuralMcp
                         optional_errors = await agent_service.initialize(
-                            required_server_names=("codecrow-vcs-mcp",),
+                            required_server_names=(
+                                (
+                                    "codecrow-vcs-mcp",
+                                    "codecrow-rag-mcp",
+                                )
+                                if structural_mcp_required
+                                else ("codecrow-vcs-mcp",)
+                            ),
                             optional_server_names=(
                                 ("codecrow-rag-mcp",)
-                                if rag_mcp_context is not None
+                                if (
+                                    rag_mcp_context is not None
+                                    and not structural_mcp_required
+                                )
                                 else ()
                             ),
                             session_timeout_seconds=(
@@ -417,19 +492,48 @@ class ReviewService:
                         )
                         if rag_start_error is not None:
                             logger.warning(
-                                "Optional on-demand RAG tool failed to start; "
-                                "continuing with repository tools and prepared "
-                                "RAG context: %s",
+                                "Optional structural graph tools failed to start; "
+                                "continuing with repository tools without "
+                                "indexed relationships: %s",
                                 rag_start_error,
                             )
                             self._emit_event(event_callback, {
                                 "type": "status",
                                 "state": "rag_mcp_degraded",
                                 "message": (
-                                    "On-demand RAG search is unavailable; "
-                                    "repository tools and prepared context remain "
-                                    "available"
+                                    "Structural graph tools are unavailable; "
+                                    "local repository tools remain available"
                                 ),
+                            })
+                        if structural_mcp_required:
+                            required_tool_names = (
+                                STAGE1_STRUCTURAL_TOOL_NAMES
+                                | {STAGE1_REVIEW_FILE_TOOL_NAME}
+                            )
+                            missing_tool_names = sorted(
+                                required_tool_names.difference(
+                                    agent_service.available_tool_names
+                                )
+                            )
+                            if missing_tool_names:
+                                raise RuntimeError(
+                                    "Required structural MCP inventory is "
+                                    "incomplete; missing: "
+                                    + ", ".join(missing_tool_names)
+                                )
+                        if request.mcpLocalOnly or request.requireStructuralMcp:
+                            preflight = await self._preflight_local_only_mcp(
+                                client,
+                                request,
+                            )
+                            self._emit_event(event_callback, {
+                                "type": "status",
+                                "state": "local_mcp_preflight_completed",
+                                "message": (
+                                    "Local proposed-source MCP passed its "
+                                    "request-binding preflight"
+                                ),
+                                "localMcpPreflight": preflight,
                             })
                         self._emit_event(event_callback, {
                             "type": "status",
@@ -437,6 +541,23 @@ class ReviewService:
                             "message": "Repository tools are ready"
                         })
                     except Exception as mcp_error:
+                        if request.mcpLocalOnly or request.requireStructuralMcp:
+                            logger.error(
+                                "Required MCP tools failed to initialize: %s",
+                                mcp_error,
+                                exc_info=True,
+                            )
+                            if client is not None:
+                                await self._close_mcp_sessions(
+                                    client,
+                                    context="required MCP initialization failure",
+                                )
+                            client = None
+                            raise RuntimeError(
+                                "Required repository/structural MCP "
+                                "tools failed to initialize; no review-model "
+                                "stage was started"
+                            ) from mcp_error
                         logger.warning(
                             "Optional agentic repository tools failed to "
                             "initialize; continuing with direct Stage 1 prompts: %s",
@@ -444,14 +565,10 @@ class ReviewService:
                             exc_info=True,
                         )
                         if client is not None:
-                            try:
-                                await client.close_all_sessions()
-                            except Exception as close_error:
-                                logger.debug(
-                                    "Failed to close partially initialized MCP "
-                                    "sessions: %s",
-                                    close_error,
-                                )
+                            await self._close_mcp_sessions(
+                                client,
+                                context="optional MCP initialization failure",
+                            )
                         client = None
                         agent_service = None
                         self._emit_event(event_callback, {
@@ -561,10 +678,34 @@ class ReviewService:
             # Client ownership begins at construction, so timeout/cancellation
             # during session startup cannot leave MCP child processes behind.
             if client is not None:
-                try:
-                    await client.close_all_sessions()
-                except Exception as close_err:
-                    logger.warning(f"Error closing MCP sessions: {close_err}")
+                await self._close_mcp_sessions(
+                    client,
+                    context="review completion",
+                )
+
+    async def _close_mcp_sessions(
+            self,
+            client: MCPClient,
+            *,
+            context: str,
+    ) -> None:
+        """Bound request-owned MCP teardown so it cannot strand a result."""
+        try:
+            async with asyncio.timeout(self.MCP_SESSION_CLOSE_TIMEOUT_SECONDS):
+                await client.close_all_sessions()
+        except TimeoutError:
+            logger.warning(
+                "MCP session cleanup timed out after %.1f seconds during %s; "
+                "continuing without waiting for teardown",
+                self.MCP_SESSION_CLOSE_TIMEOUT_SECONDS,
+                context,
+            )
+        except Exception as close_error:
+            logger.warning(
+                "Error closing MCP sessions during %s: %s",
+                context,
+                close_error,
+            )
 
     def _build_jvm_props(
             self,
@@ -585,35 +726,358 @@ class ReviewService:
             local_repo_path=request.localRepoPath,
             local_repo_target_branch=request.localRepoTargetBranch,
             local_repo_revision=request.localRepoRevision,
+            local_review_overlay_path=request.localReviewOverlayPath,
+            local_mcp_only=request.mcpLocalOnly is True,
         )
+
+    def _validate_local_only_mcp_request(
+            self,
+            request: ReviewRequestDto,
+    ) -> None:
+        """Reject incomplete provider-isolated reviews before model startup."""
+        if request.mcpLocalOnly is not True:
+            return
+        if request.useMcpTools is not True:
+            raise ValueError(
+                "Local-only MCP precondition failed: useMcpTools must be true. "
+                "No review-model stage was started."
+            )
+        required_text = {
+            "localRepoPath": request.localRepoPath,
+            "localRepoTargetBranch": request.localRepoTargetBranch,
+            "localRepoRevision": request.localRepoRevision,
+            "localReviewOverlayPath": request.localReviewOverlayPath,
+            "projectVcsWorkspace": request.projectVcsWorkspace,
+            "projectVcsRepoSlug": request.projectVcsRepoSlug,
+        }
+        missing = sorted(
+            name
+            for name, value in required_text.items()
+            if not isinstance(value, str) or not value.strip()
+        )
+        if missing:
+            raise ValueError(
+                "Local-only MCP precondition failed: missing exact local/RAG "
+                "binding fields: "
+                + ", ".join(missing)
+                + ". No review-model stage was started."
+            )
+
+        missing_paths = sorted(
+            name
+            for name in (
+                "localRepoPath",
+                "localReviewOverlayPath",
+            )
+            if not os.path.isdir(str(required_text[name]))
+        )
+        if missing_paths:
+            raise ValueError(
+                "Local-only MCP precondition failed: staged directories are "
+                "unavailable: "
+                + ", ".join(missing_paths)
+                + ". No review-model stage was started."
+            )
+
+        exposed_credentials = sorted(
+            name
+            for name in ("accessToken", "oAuthClient", "oAuthSecret")
+            if isinstance(getattr(request, name, None), str)
+            and bool(getattr(request, name).strip())
+        )
+        if exposed_credentials:
+            raise ValueError(
+                "Local-only MCP precondition failed: provider credentials are "
+                "not allowed: "
+                + ", ".join(exposed_credentials)
+                + ". No review-model stage was started."
+            )
+
+    def _validate_required_structural_mcp_request(
+            self,
+            request: ReviewRequestDto,
+    ) -> None:
+        """Reject a structurally-enforced review before any provider activity."""
+        if request.requireStructuralMcp is not True:
+            return
+        if request.useMcpTools is not True:
+            raise ValueError(
+                "Required structural MCP precondition failed: useMcpTools must "
+                "be true. No review-model stage was started."
+            )
+        if request.ragEnabled is not True:
+            raise ValueError(
+                "Required structural MCP precondition failed: ragEnabled must "
+                "be true. No review-model stage was started."
+            )
+
+    @staticmethod
+    def _mcp_tool_payload(result: Any, tool_name: str) -> Dict[str, Any]:
+        if bool(
+            getattr(result, "isError", False)
+            or getattr(result, "is_error", False)
+        ):
+            raise RuntimeError(f"{tool_name} returned an MCP error")
+        for attribute in ("structuredContent", "structured_content"):
+            structured = getattr(result, attribute, None)
+            if isinstance(structured, dict):
+                return structured
+        text = "\n".join(
+            str(block.text)
+            for block in (getattr(result, "content", None) or ())
+            if isinstance(getattr(block, "text", None), str)
+        ).strip()
+        try:
+            payload = json.loads(text)
+        except (TypeError, json.JSONDecodeError) as exception:
+            raise RuntimeError(
+                f"{tool_name} returned no structured JSON payload"
+            ) from exception
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{tool_name} returned a non-object payload")
+        return payload
+
+    async def _preflight_local_only_mcp(
+            self,
+            client: MCPClient,
+            request: ReviewRequestDto,
+    ) -> Dict[str, Any]:
+        """Prove the request-bound proposed-source read before LLM use."""
+        sessions = client.get_all_active_sessions()
+        if not isinstance(sessions, dict):
+            raise RuntimeError("Local-only MCP sessions are unavailable")
+        vcs_session = sessions.get("codecrow-vcs-mcp")
+        if vcs_session is None:
+            raise RuntimeError(
+                "Local-only MCP preflight requires the repository session"
+            )
+
+        focus_paths = [
+            str(path).strip().replace("\\", "/").lstrip("/")
+            for path in (
+                *(request.changedFiles or ()),
+                *(request.deletedFiles or ()),
+            )
+            if isinstance(path, str) and path.strip()
+        ]
+        if not focus_paths:
+            raise RuntimeError(
+                "Local-only MCP preflight requires at least one changed path"
+            )
+        focus_path = focus_paths[0]
+
+        source_result = await vcs_session.call_tool(
+            "getReviewFileContent",
+            {
+                "workspace": request.projectVcsWorkspace,
+                "repoSlug": request.projectVcsRepoSlug,
+                "filePath": focus_path,
+            },
+        )
+        source = self._mcp_tool_payload(
+            source_result,
+            "getReviewFileContent",
+        )
+        if source.get("error"):
+            raise RuntimeError(
+                "Local-only proposed-tree source preflight failed: "
+                f"{source['error']}"
+            )
+        observed_path = str(source.get("filePath") or "").replace(
+            "\\", "/"
+        ).lstrip("/")
+        if (
+            observed_path != focus_path
+            or source.get("unavailable") is True
+            or source.get("source") not in {"review-overlay", "target-head"}
+        ):
+            raise RuntimeError(
+                "Local-only proposed-tree source preflight returned an "
+                "unbound or unavailable source"
+            )
+
+        return {
+            "status": "ready",
+            "focusPath": focus_path,
+            "baseRevision": request.localRepoRevision,
+            "sourceAuthority": source.get("source"),
+        }
 
     def _build_rag_mcp_context(
             self,
             request: ReviewRequestDto,
             rag_client: Optional[RagClient],
     ) -> Optional[Dict[str, str]]:
-        """Return the exact tenant/repository binding for optional RAG search."""
+        """Return the exact request binding for proposed-tree graph tools."""
         if rag_client is None:
             return None
+        source_revision = (
+            request.currentCommitHash
+            or request.commitHash
+        )
+        base_revision = resolve_exact_structural_base_revision(request)
+        structural_repo_path = getattr(request, "localRagRepoPath", None)
+        if (
+            not isinstance(structural_repo_path, str)
+            or not structural_repo_path.strip()
+        ):
+            structural_repo_path = request.localRepoPath
         context = {
             "workspace": request.projectWorkspace,
             "project": request.projectNamespace,
             "branch": request.targetBranchName,
-            "revision": request.get_target_head_commit_hash(),
+            "revision": base_revision,
+            "source_revision": source_revision,
+            "target_repo_path": structural_repo_path,
+            "review_overlay_path": request.localReviewOverlayPath,
             "manifest": request.ragBaseGenerationManifestSha256,
             "collection_target": request.ragCollectionTarget,
+            "review_collection_target": request.ragReviewCollectionTarget,
+            "review_generation_manifest_sha256": (
+                request.ragReviewGenerationManifestSha256
+            ),
         }
         if not all(
             isinstance(value, str) and bool(value.strip())
             for value in context.values()
         ):
             logger.info(
-                "Stage 1 RAG search tool is unavailable because the request has "
-                "no complete exact-generation binding; preassembled RAG context "
-                "and repository tools remain available"
+                "Stage 1 proposed-tree graph tool is unavailable because the "
+                "request has no complete target snapshot, review overlay, "
+                "revision binding, or exact sealed base generation; repository "
+                "tools remain available without indexed relationships"
             )
             return None
+
         return context
+
+    async def _prepare_rag_review_generation(
+            self,
+            request: ReviewRequestDto,
+            rag_client: Optional[RagClient],
+            event_callback: Optional[Callable[[Dict], None]],
+    ) -> None:
+        """Prepare one sealed proposed-tree graph before MCP and Stage 1 fan-out."""
+
+        request.ragReviewGenerationStatus = "not_eligible"
+        request.ragReviewCollectionTarget = None
+        request.ragReviewGenerationManifestSha256 = None
+        request.ragReviewGenerationError = None
+        if rag_client is None or not bool(request.useMcpTools):
+            return
+
+        source_revision = request.currentCommitHash or request.commitHash
+        base_revision = resolve_exact_structural_base_revision(request)
+        structural_repo_path = getattr(request, "localRagRepoPath", None)
+        if (
+            not isinstance(structural_repo_path, str)
+            or not structural_repo_path.strip()
+        ):
+            structural_repo_path = request.localRepoPath
+        binding = {
+            "workspace": request.projectWorkspace,
+            "project": request.projectNamespace,
+            "target_branch": request.targetBranchName,
+            "base_revision": base_revision,
+            "source_revision": source_revision,
+            "target_repo_path": structural_repo_path,
+            "review_overlay_path": request.localReviewOverlayPath,
+            "base_collection_target": request.ragCollectionTarget,
+            "base_generation_manifest_sha256": (
+                request.ragBaseGenerationManifestSha256
+            ),
+        }
+        if not all(
+            isinstance(value, str) and bool(value.strip())
+            for value in binding.values()
+        ):
+            return
+
+        request.ragReviewGenerationStatus = "preparing"
+        self._emit_event(event_callback, {
+            "type": "status",
+            "state": "rag_review_generation_preparing",
+            "message": (
+                "Preparing one exact proposed-tree graph before Stage 1"
+            ),
+        })
+        try:
+            response = await rag_client.prepare_review_generation(**binding)
+        except Exception as error:
+            response = {
+                "status": "error",
+                "error": f"{type(error).__name__}: {error}",
+            }
+
+        status = str(response.get("status") or "").strip().casefold()
+        collection_target = response.get("collection_target")
+        generation_manifest = response.get("generation_manifest_sha256")
+        response_revision = response.get("source_revision")
+        ready = (
+            status == "ready"
+            and isinstance(collection_target, str)
+            and bool(collection_target.strip())
+            and isinstance(generation_manifest, str)
+            and re.fullmatch(r"[0-9a-f]{64}", generation_manifest) is not None
+            and response_revision == source_revision
+        )
+        if ready:
+            request.ragReviewGenerationStatus = "ready"
+            request.ragReviewCollectionTarget = collection_target
+            request.ragReviewGenerationManifestSha256 = generation_manifest
+            self._emit_event(event_callback, {
+                "type": "status",
+                "state": "rag_review_generation_ready",
+                "message": (
+                    "Exact proposed-tree graph is sealed and ready for "
+                    "read-only Stage 1 tools"
+                ),
+                "ragReviewGeneration": {
+                    "status": "ready",
+                    "sourceRevision": source_revision,
+                    "generationManifestSha256": generation_manifest,
+                    "cacheHit": response.get("cache_hit") is True,
+                },
+            })
+            return
+
+        error = str(
+            response.get("error")
+            or "proposed-tree generation preparation returned no sealed receipt"
+        ).strip()
+        request.ragReviewGenerationStatus = "unavailable"
+        request.ragReviewGenerationError = error
+        structural_required = request.requireStructuralMcp is True
+        logger.warning(
+            "%s proposed-tree graph preparation failed%s: %s",
+            "Required" if structural_required else "Optional",
+            (
+                "; the review will stop before model use"
+                if structural_required
+                else "; continuing with request-bound source review"
+            ),
+            error,
+        )
+        self._emit_event(event_callback, {
+            "type": "status",
+            "state": (
+                "rag_review_generation_failed"
+                if structural_required
+                else "rag_review_generation_degraded"
+            ),
+            "message": (
+                "Required structural graph preparation is unavailable; the "
+                "review will stop before model use"
+                if structural_required
+                else "Structural graph preparation is unavailable; Stage 1 "
+                "will continue with exact request-bound source"
+            ),
+            "ragReviewGeneration": {
+                "status": "unavailable",
+                "sourceRevision": source_revision,
+                "error": error,
+            },
+        })
 
     def _rag_client_for_request(
             self,
@@ -631,10 +1095,24 @@ class ReviewService:
             return None
         return self.rag_client
 
+    def _rag_client_for_agent_tools(self) -> Optional[RagClient]:
+        """Expose on-demand structural tools whenever MCP analysis is active.
+
+        The caller already gates MCP session creation with ``useMcpTools``.
+        Project ``ragEnabled`` controls persistent branch indexing/retrieval;
+        it does not control the request-scoped proposed-tree generation, which
+        is built from the host's temporary snapshot and overlay.
+        """
+        if not bool(getattr(self.rag_client, "enabled", True)):
+            return None
+        return self.rag_client
+
     def _create_mcp_client(self, config: Dict[str, Any]) -> MCPClient:
         """Create MCP client from configuration."""
         try:
-            return MCPClient.from_dict(config)
+            return install_per_connection_tool_serialization(
+                MCPClient.from_dict(config)
+            )
         except Exception as e:
             raise Exception(f"Failed to construct MCPClient: {str(e)}")
 

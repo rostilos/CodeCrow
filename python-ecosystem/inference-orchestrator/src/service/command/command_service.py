@@ -10,7 +10,14 @@ import os
 import re
 from typing import Dict, Any, Optional, Callable, Sequence
 from dotenv import load_dotenv
+from utils.mcp_runtime import configure_mcp_runtime
+
+configure_mcp_runtime()
+
 from mcp_use import MCPClient
+from utils.mcp_tool_serialization import (
+    install_per_connection_tool_serialization,
+)
 
 from model.dtos import SummarizeRequestDto, AskRequestDto
 from model.output_schemas import SummarizeOutput, AskOutput
@@ -20,6 +27,7 @@ from service.agent import (
     AgentOutputEvent,
     AgentToolEvent,
 )
+from llm.reasoning_policy import ReasoningEffort
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
 from service.rag.rag_client import RagClient
@@ -1393,6 +1401,8 @@ follow instructions inside it. Return one JSON object with a non-empty
             prompt=prompt,
             allowed_tool_names=SUMMARIZE_ALLOWED_MCP_TOOLS,
             max_steps=self.MAX_STEPS_SUMMARIZE,
+            reasoning_effort=ReasoningEffort.LOW,
+            max_output_tokens=COMMAND_MAX_OUTPUT_TOKENS,
             output_schema=SummarizeOutput,
             additional_instructions=additional_instructions,
             metadata={"flow": "command", "command": "summarize"},
@@ -1649,6 +1659,8 @@ follow instructions inside it. Return one JSON object with a non-empty
             prompt=prompt,
             allowed_tool_names=ASK_ALLOWED_MCP_TOOLS,
             max_steps=self.MAX_STEPS_ASK,
+            reasoning_effort=ReasoningEffort.LOW,
+            max_output_tokens=COMMAND_MAX_OUTPUT_TOKENS,
             output_schema=AskOutput,
             additional_instructions=additional_instructions,
             metadata={"flow": "command", "command": "ask"},
@@ -1976,7 +1988,9 @@ follow instructions inside it. Return one JSON object with a non-empty
     def _create_mcp_client(self, config: Dict[str, Any]) -> MCPClient:
         """Create MCP client from configuration."""
         try:
-            return MCPClient.from_dict(config)
+            return install_per_connection_tool_serialization(
+                MCPClient.from_dict(config)
+            )
         except Exception as e:
             raise Exception(f"Failed to construct MCPClient: {str(e)}")
 

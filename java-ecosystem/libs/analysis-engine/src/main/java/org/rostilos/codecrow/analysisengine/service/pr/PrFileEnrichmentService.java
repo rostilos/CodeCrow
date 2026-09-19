@@ -43,7 +43,7 @@ public class PrFileEnrichmentService {
     @Value("${pr.enrichment.max-total-size-bytes:20971520}") // 20MB default
     private long maxTotalSizeBytes;
 
-    @Value("${pr.enrichment.rag-pipeline-url:${codecrow.rag.api.url:http://rag-pipeline:8001}}")
+    @Value("${pr.enrichment.rag-pipeline-url:${codecrow.rag.api.url:http://codecrow-rag-pipeline:8001}}")
     private String ragPipelineUrl;
 
     @Value("${pr.enrichment.rag-api-secret:${codecrow.rag.api.secret:}}")

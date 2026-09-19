@@ -122,7 +122,7 @@ class ProjectConfigTest {
         @Test
         @DisplayName("should create with ragConfig")
         void shouldCreateWithRagConfig() {
-            RagConfig ragConfig = new RagConfig(true, "main", null, List.of("*.log"), true, 30);
+            RagConfig ragConfig = new RagConfig(true, "main", null, List.of("*.log"));
             ProjectConfig config = new ProjectConfig(false, "main", null, ragConfig);
             
             assertThat(config.ragConfig()).isEqualTo(ragConfig);
@@ -133,7 +133,7 @@ class ProjectConfigTest {
         void shouldCreateWithAllParams() {
             BranchAnalysisConfig branchConfig = new BranchAnalysisConfig(
                 List.of("main"), List.of("*"));
-            RagConfig ragConfig = new RagConfig(true, "main", null, List.of(), true, 14);
+            RagConfig ragConfig = new RagConfig(true, "main", null, List.of());
             CommentCommandsConfig commentConfig = new CommentCommandsConfig();
             
             ProjectConfig config = new ProjectConfig(
@@ -195,7 +195,7 @@ class ProjectConfigTest {
         @DisplayName("should sync RAG config branch when set")
         void shouldSyncRagConfigBranch() {
             ProjectConfig config = new ProjectConfig();
-            RagConfig ragConfig = new RagConfig(true, "old-branch", null, List.of(), false, 7);
+            RagConfig ragConfig = new RagConfig(true, "old-branch", null, List.of());
             config.setRagConfig(ragConfig);
             
             config.setMainBranch("new-branch");
@@ -484,7 +484,7 @@ class ProjectConfigTest {
         @DisplayName("should set ragConfig")
         void shouldSetRagConfig() {
             ProjectConfig config = new ProjectConfig();
-            RagConfig ragConfig = new RagConfig(true, "main", null, List.of(), false, 7);
+            RagConfig ragConfig = new RagConfig(true, "main", null, List.of());
             config.setRagConfig(ragConfig);
             assertThat(config.ragConfig()).isSameAs(ragConfig);
         }

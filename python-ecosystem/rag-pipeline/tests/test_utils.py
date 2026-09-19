@@ -1,6 +1,6 @@
 """
 Comprehensive unit tests for rag_pipeline.utils.utils module.
-Covers: make_namespace, clean_archive_path, should_include_file,
+Covers: make_namespace, should_include_file,
         should_exclude_file, is_binary_file.
 """
 import os
@@ -10,7 +10,6 @@ from pathlib import Path
 
 from rag_pipeline.utils.utils import (
     make_namespace,
-    clean_archive_path,
     should_include_file,
     should_exclude_file,
     is_binary_file,
@@ -33,40 +32,6 @@ class TestNamespaces:
 
     def test_namespace_lowercased(self):
         assert make_namespace("WS", "PROJ", "MAIN") == "ws__proj__main"
-
-# ─── clean_archive_path ──────────────────────────────────────────────────────
-
-
-class TestCleanArchivePath:
-
-    def test_empty_path(self):
-        assert clean_archive_path("") == ""
-        assert clean_archive_path(None) is None
-
-    def test_single_component_unchanged(self):
-        assert clean_archive_path("file.py") == "file.py"
-
-    def test_source_marker_first_part_unchanged(self):
-        for marker in ["src", "lib", "app", "test", "tests", "pkg", "cmd"]:
-            path = f"{marker}/some/file.py"
-            assert clean_archive_path(path) == path
-
-    def test_strips_bitbucket_archive_prefix(self):
-        # owner-repo-commitHash pattern (>20 chars, hyphens)
-        assert clean_archive_path("owner-repo-abc123def456/src/main.py") == "src/main.py"
-
-    def test_strips_long_commit_hash_prefix(self):
-        # 40+ char prefix
-        long_hash = "a" * 45
-        assert clean_archive_path(f"{long_hash}/lib/util.py") == "lib/util.py"
-
-    def test_strips_multi_hyphen_with_digits(self):
-        assert clean_archive_path("my-repo-v2-abc123/src/file.py") == "src/file.py"
-
-    def test_preserves_normal_paths(self):
-        assert clean_archive_path("normal/path/file.py") == "normal/path/file.py"
-        assert clean_archive_path("mymodule/subdir/test.js") == "mymodule/subdir/test.js"
-
 
 # ─── should_include_file ─────────────────────────────────────────────────────
 

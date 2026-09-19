@@ -1,4 +1,4 @@
-"""Fail-closed repository-generation leases for review retrieval."""
+"""Exact repository-generation leases for structural retrieval."""
 
 from __future__ import annotations
 
@@ -17,16 +17,12 @@ def require_repository_generation(
 ):
     """Load one exact sealed generation and match its registry receipt."""
     requested_target = collection_target
-    active_target = index_manager._collection_manager.require_structural_collection(
-        requested_target
-    )
-    bound_target = active_target
     result = index_manager.get_revision_preflight(
         workspace,
         project,
         branch,
         revision,
-        collection_target=bound_target,
+        collection_target=requested_target,
     )
     if result is None:
         raise ExactIndexPreconditionError(
@@ -40,7 +36,7 @@ def require_repository_generation(
         )
     return {
         **result,
-        "_collection_target": bound_target,
+        "_collection_target": requested_target,
         "_lease_target": requested_target,
     }
 

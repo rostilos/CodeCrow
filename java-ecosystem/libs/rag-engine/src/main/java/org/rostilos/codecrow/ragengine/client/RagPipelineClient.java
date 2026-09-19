@@ -72,7 +72,7 @@ public class RagPipelineClient {
 
     @Autowired
     public RagPipelineClient(
-            @Value("${codecrow.rag.api.url:http://rag-pipeline:8001}") String ragApiUrl,
+            @Value("${codecrow.rag.api.url:http://codecrow-rag-pipeline:8001}") String ragApiUrl,
             @Value("${codecrow.rag.api.enabled:true}") boolean ragEnabled,
             @Value("${codecrow.rag.api.timeout.connect:30}") int connectTimeout,
             @Value("${codecrow.rag.api.timeout.read:120}") int readTimeout,
@@ -258,129 +258,6 @@ public class RagPipelineClient {
     // PR-SPECIFIC OPERATIONS
     // ==========================================================================
 
-    /**
-     * Delete all indexed points for a specific PR from the project's collection.
-     * Called after PR analysis completes or when a PR is closed/merged to clean up
-     * PR-specific data from Qdrant.
-     * 
-     * This operation is idempotent — calling it for a PR with no indexed points
-     * returns status "skipped".
-     * 
-     * Python endpoint: DELETE /index/pr-files/{workspace}/{project}/{pr_number}
-     * 
-     * @param workspace  Workspace identifier
-     * @param project    Project identifier
-     * @param prNumber   PR number whose indexed points should be deleted
-     * @return true if points were deleted or already absent, false on error
-     */
-    /** Deletes PR overlay points from one immutable physical generation. */
-    public boolean deletePrFiles(
-            String workspace,
-            String project,
-            int prNumber,
-            String collectionTarget) {
-        PrFilesDeletionOutcome outcome = deletePrFilesWithOutcome(
-                workspace, project, prNumber, collectionTarget);
-        if (!outcome.successful()) {
-            log.warn("Failed to delete PR #{} files from {}/{} target={}: status={} detail={}",
-                    prNumber, workspace, project, outcome.targetLabel(),
-                    outcome.statusCode() != null ? outcome.statusCode() : "transport",
-                    outcome.detail());
-        }
-        return outcome.successful();
-    }
-
-    /**
-     * Performs one PR-overlay deletion without logging. Multi-generation callers
-     * use the structured result to emit one contextual diagnostic and stop after
-     * a service-wide failure instead of repeating the same timeout per target.
-     */
-    public PrFilesDeletionOutcome deletePrFilesWithOutcome(
-            String workspace,
-            String project,
-            int prNumber,
-            String collectionTarget) {
-        String targetLabel = requireExactTarget("collectionTarget", collectionTarget);
-        if (!ragEnabled) {
-            log.debug("RAG disabled, skipping PR files deletion");
-            return PrFilesDeletionOutcome.success(targetLabel);
-        }
-
-        HttpUrl.Builder urlBuilder = HttpUrl.get(String.format(
-                "%s/index/pr-files/%s/%s/%d", ragApiUrl, workspace, project, prNumber)).newBuilder();
-        urlBuilder.addQueryParameter("collection_target", targetLabel);
-
-        Request.Builder builder = new Request.Builder()
-                .url(urlBuilder.build())
-                .delete();
-        addAuthHeader(builder);
-        Request request = builder.build();
-
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (response.isSuccessful()) {
-                log.info("Deleted PR #{} indexed data from {}/{} target={}",
-                        prNumber, workspace, project, targetLabel);
-                return PrFilesDeletionOutcome.success(targetLabel);
-            } else {
-                int statusCode = response.code();
-                String detail = response.body() != null ? response.body().string() : "no body";
-                boolean serviceFailure = statusCode == 401
-                        || statusCode == 403
-                        || statusCode == 408
-                        || statusCode == 409
-                        || statusCode == 429
-                        || statusCode >= 500;
-                return PrFilesDeletionOutcome.failure(
-                        targetLabel,
-                        serviceFailure
-                                ? PrFilesDeletionFailure.SERVICE
-                                : PrFilesDeletionFailure.TARGET,
-                        statusCode,
-                        truncateDetail(detail));
-            }
-        } catch (IOException e) {
-            return PrFilesDeletionOutcome.failure(
-                    targetLabel,
-                    PrFilesDeletionFailure.TRANSPORT,
-                    null,
-                    e.getMessage());
-        }
-    }
-
-    public enum PrFilesDeletionFailure {
-        NONE,
-        TARGET,
-        SERVICE,
-        TRANSPORT
-    }
-
-    public record PrFilesDeletionOutcome(
-            String targetLabel,
-            boolean successful,
-            PrFilesDeletionFailure failure,
-            Integer statusCode,
-            String detail) {
-
-        public static PrFilesDeletionOutcome success(String targetLabel) {
-            return new PrFilesDeletionOutcome(
-                    targetLabel, true, PrFilesDeletionFailure.NONE, null, null);
-        }
-
-        public static PrFilesDeletionOutcome failure(
-                String targetLabel,
-                PrFilesDeletionFailure failure,
-                Integer statusCode,
-                String detail) {
-            return new PrFilesDeletionOutcome(
-                    targetLabel, false, failure, statusCode, detail);
-        }
-
-        public boolean shouldStopRemainingTargets() {
-            return failure == PrFilesDeletionFailure.SERVICE
-                    || failure == PrFilesDeletionFailure.TRANSPORT;
-        }
-    }
-
     // ==========================================================================
     // BRANCH OPERATIONS
     // ==========================================================================
@@ -417,7 +294,7 @@ public class RagPipelineClient {
     /**
      * Deletes one exact generation using its registry-owned revision and
      * manifest digest as an O(1) ownership proof. The RAG service retrieves the
-     * deterministic manifest point; it does not scan every collection member.
+     * sealed generation receipt; it does not scan every stored unit.
      */
     public BranchDeletionOutcome deleteBranchWithOutcome(
             String workspace,
@@ -542,6 +419,46 @@ public class RagPipelineClient {
         } catch (IOException e) {
             log.warn("RAG health check failed: {}", e.getMessage());
             return false;
+        }
+    }
+
+    public record RepresentationIdentity(
+            String identity,
+            String indexRepresentationFingerprint,
+            String pluginDescriptorFingerprint,
+            String pluginImplementationFingerprint,
+            List<String> pluginIds) {
+    }
+
+    @SuppressWarnings("unchecked")
+    public RepresentationIdentity getCurrentRepresentationIdentity()
+            throws IOException {
+        if (!ragEnabled) {
+            throw new IOException("RAG disabled");
+        }
+        Request.Builder builder = new Request.Builder()
+                .url(ragApiUrl + "/system/representation")
+                .get();
+        addAuthHeader(builder);
+        try (Response response = httpClient.newCall(builder.build()).execute()) {
+            String body = response.body() != null ? response.body().string() : "{}";
+            if (!response.isSuccessful()) {
+                throw new RagApiException(response.code(), truncateDetail(body));
+            }
+            Map<String, Object> payload = objectMapper.readValue(body, Map.class);
+            String identity = requireExactTarget(
+                    "representationIdentity",
+                    String.valueOf(payload.get("representation_identity")));
+            Object rawPluginIds = payload.get("plugin_ids");
+            List<String> pluginIds = rawPluginIds instanceof List<?> values
+                    ? values.stream().map(String::valueOf).toList()
+                    : List.of();
+            return new RepresentationIdentity(
+                    identity,
+                    String.valueOf(payload.get("index_representation_fingerprint")),
+                    String.valueOf(payload.get("plugin_descriptor_fingerprint")),
+                    String.valueOf(payload.get("plugin_implementation_fingerprint")),
+                    pluginIds);
         }
     }
 
