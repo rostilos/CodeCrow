@@ -39,7 +39,6 @@ public record ProjectDTO(
         Boolean webhooksConfigured,
         Long qualityGateId,
         Integer maxAnalysisTokenLimit,
-        Boolean useMcpTools,
         Boolean taskContextAnalysisEnabled,
         String projectType,
         String sourceRoot,
@@ -105,7 +104,6 @@ public record ProjectDTO(
         Boolean prAnalysisEnabled = project.isPrAnalysisEnabled();
         Boolean branchAnalysisEnabled = project.isBranchAnalysisEnabled();
         String installationMethod = null;
-        Boolean useMcpTools = ProjectConfig.DEFAULT_USE_MCP_TOOLS;
         Boolean taskContextAnalysisEnabled = true;
 
         ProjectConfig config = project.getConfiguration();
@@ -129,7 +127,6 @@ public record ProjectDTO(
             if (config.installationMethod() != null) {
                 installationMethod = config.installationMethod().name();
             }
-            useMcpTools = config.useMcpTools();
             taskContextAnalysisEnabled = config.isTaskContextAnalysisEnabled();
         }
 
@@ -190,7 +187,6 @@ public record ProjectDTO(
                 webhooksConfigured,
                 project.getQualityGate() != null ? project.getQualityGate().getId() : null,
                 maxAnalysisTokenLimit,
-                useMcpTools,
                 taskContextAnalysisEnabled,
                 config != null ? config.analysisProfile().projectType() : null,
                 config != null ? config.analysisProfile().sourceRoot() : null,

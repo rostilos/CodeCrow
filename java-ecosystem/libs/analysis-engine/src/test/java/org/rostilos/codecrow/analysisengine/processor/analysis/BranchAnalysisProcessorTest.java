@@ -1140,7 +1140,6 @@ class BranchAnalysisProcessorTest {
             when(aiClientService.buildDirectPushAnalysisRequests(
                     eq(project), eq(request), anyString(), anyMap(), anyList()))
                     .thenReturn(List.of(aiRequest));
-            when(aiRequest.getUseMcpTools()).thenReturn(true);
             when(aiRequest.getTargetHeadCommitHash()).thenReturn(exactRevision);
             when(ragOperationsService.isRagEnabled(project)).thenReturn(true);
             when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
@@ -1150,8 +1149,9 @@ class BranchAnalysisProcessorTest {
             when(branchFileOperationsService.downloadBranchFileSnapshot(
                     any(), eq(exactRevision), eq(Set.of("src/App.java"))))
                     .thenReturn(archiveSnapshot(Map.of("src/App.java", "class App {}")));
-            when(localRepositorySnapshotService.prepare(
-                    eq(vcsConnection), eq("team"), eq("repo"), eq("main"), eq(exactRevision)))
+            when(localRepositorySnapshotService.prepareForReview(
+                    eq(vcsConnection), eq("team"), eq("repo"), eq("main"), eq(exactRevision),
+                    eq(Map.of()), eq(List.of()), eq(List.of())))
                     .thenReturn(Optional.of(prepared));
             when(prepared.transport()).thenReturn(transport);
             when(aiAnalysisClient.performAnalysis(eq(aiRequest), eq(transport), any()))
@@ -1175,8 +1175,9 @@ class BranchAnalysisProcessorTest {
             var ordered = inOrder(ragOperationsService, localRepositorySnapshotService, aiAnalysisClient);
             ordered.verify(ragOperationsService).refreshBranchGeneration(
                     eq(project), eq("main"), eq(exactRevision), any());
-            ordered.verify(localRepositorySnapshotService).prepare(
-                    vcsConnection, "team", "repo", "main", exactRevision);
+            ordered.verify(localRepositorySnapshotService).prepareForReview(
+                    vcsConnection, "team", "repo", "main", exactRevision,
+                    Map.of(), List.of(), List.of());
             ordered.verify(aiAnalysisClient).performAnalysis(
                     eq(aiRequest), eq(transport), any());
             verify(prepared).close();
@@ -1206,14 +1207,14 @@ class BranchAnalysisProcessorTest {
             when(aiClientService.buildDirectPushAnalysisRequests(
                     eq(project), eq(request), anyString(), anyMap(), anyList()))
                     .thenReturn(List.of(aiRequest));
-            when(aiRequest.getUseMcpTools()).thenReturn(true);
             when(aiRequest.getTargetHeadCommitHash()).thenReturn("abc123");
             when(ragOperationsService.isRagEnabled(project)).thenReturn(false);
             when(branchFileOperationsService.downloadBranchFileSnapshot(
                     any(), eq("abc123"), anySet()))
                     .thenReturn(archiveSnapshot(Map.of("src/App.java", "class App {}")));
-            when(localRepositorySnapshotService.prepare(
-                    eq(vcsConnection), eq("team"), eq("repo"), eq("main"), eq("abc123")))
+            when(localRepositorySnapshotService.prepareForReview(
+                    eq(vcsConnection), eq("team"), eq("repo"), eq("main"), eq("abc123"),
+                    eq(Map.of()), eq(List.of()), eq(List.of())))
                     .thenReturn(Optional.empty());
             when(aiAnalysisClient.performAnalysis(eq(aiRequest), any(Consumer.class)))
                     .thenReturn(Map.of("issues", List.of()));

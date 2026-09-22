@@ -30,9 +30,6 @@ import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
-import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
-import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
-import org.rostilos.codecrow.plugins.ProjectCapabilities;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,28 +44,20 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
     private final Logger log = LoggerFactory.getLogger(getClass());
     private final TokenEncryptionService tokenEncryptionService;
     private final VcsClientProvider vcsClientProvider;
-    private final VcsConnectionCredentialsExtractor credentialsExtractor;
     private final PrFileEnrichmentService enrichmentService;
     private final TaskContextEnrichmentService taskContextEnrichmentService;
-    private final TaskHistoryContextService taskHistoryContextService;
     private final PullRequestDiffPreparationService diffPreparationService;
-    private final ProjectCapabilitySelectionService capabilitySelectionService;
 
     protected AbstractVcsAiClientService(
             TokenEncryptionService tokenEncryptionService,
             VcsClientProvider vcsClientProvider,
             PrFileEnrichmentService enrichmentService,
             TaskContextEnrichmentService taskContextEnrichmentService,
-            TaskHistoryContextService taskHistoryContextService,
-            ProjectCapabilitySelectionService capabilitySelectionService,
             PullRequestDiffPreparationService diffPreparationService) {
         this.tokenEncryptionService = tokenEncryptionService;
         this.vcsClientProvider = vcsClientProvider;
-        this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
         this.enrichmentService = enrichmentService;
         this.taskContextEnrichmentService = taskContextEnrichmentService;
-        this.taskHistoryContextService = taskHistoryContextService;
-        this.capabilitySelectionService = capabilitySelectionService;
         this.diffPreparationService = diffPreparationService;
     }
 
@@ -183,14 +172,10 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             return List.of();
         }
 
-        CapabilityEnrichment capabilityEnrichment = prepareCapabilityEnrichment(
-                project, repository, currentCommit, preparedDiff.changedFiles(), "pull request");
-        PrEnrichmentDataDto enrichment = capabilityEnrichment.enrichment();
-        ProjectCapabilities projectCapabilities = capabilityEnrichment.capabilities();
+        PrEnrichmentDataDto enrichment = enrichFiles(
+                repository, currentCommit, preparedDiff.proposedTreeChangedFiles(), "pull request");
         Map<String, String> taskContext = resolveTaskContext(
                 project, request.sourceBranchName, pullRequest.title(), pullRequest.description());
-        String taskHistory = resolveTaskHistory(
-                project, request, taskContext, pullRequest.title(), pullRequest.description());
 
         AiAnalysisRequestImpl.Builder<?> builder = baseBuilder(project, request, repository, aiConnection)
                 .withPullRequestId(request.getPullRequestId())
@@ -198,7 +183,6 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withPrTitle(pullRequest.title())
                 .withPrDescription(pullRequest.description())
                 .withTaskContext(taskContext)
-                .withTaskHistoryContext(taskHistory)
                 .withChangedFiles(preparedDiff.changedFiles())
                 .withDeletedFiles(preparedDiff.deletedFiles())
                 .withProposedTreeChangedFiles(preparedDiff.proposedTreeChangedFiles())
@@ -214,10 +198,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withCurrentCommitHash(currentCommit)
                 .withTargetHeadCommitHash(pullRequest.targetHeadCommit())
                 .withBaseCommitHash(pullRequest.baseCommit())
-                .withEnrichmentData(enrichment)
-                .withProjectCapabilities(projectCapabilities);
+                .withEnrichmentData(enrichment);
 
-        addVcsCredentials(builder, repository.connection());
         return List.of(builder.build());
     }
 
@@ -273,7 +255,6 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             builder.withRawDiff(relevantDiff);
         }
 
-        addVcsCredentials(builder, repository.connection());
         return builder.build();
     }
 
@@ -291,9 +272,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 repository, branchRequest.getCommitHash(), branchRequest.getTargetBranchName());
         branchRequest.commitHash = resolvedCommit;
         List<String> safeChangedFiles = changedFiles != null ? changedFiles : List.of();
-        CapabilityEnrichment capabilityEnrichment = prepareCapabilityEnrichment(
-                project, repository, resolvedCommit, safeChangedFiles, "direct push");
-        PrEnrichmentDataDto enrichment = capabilityEnrichment.enrichment();
+        PrEnrichmentDataDto enrichment = enrichFiles(
+                repository, resolvedCommit, safeChangedFiles, "direct push");
 
         AiAnalysisRequestImpl.Builder<?> builder = baseBuilder(
                 project, branchRequest, repository, aiConnection)
@@ -306,10 +286,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withDiffSnippets(DiffParser.extractDiffSnippets(rawDiff != null ? rawDiff : "", 20))
                 .withRawDiff(rawDiff)
                 .withAnalysisMode(AnalysisMode.FULL)
-                .withEnrichmentData(enrichment)
-                .withProjectCapabilities(capabilityEnrichment.capabilities());
+                .withEnrichmentData(enrichment);
 
-        addVcsCredentials(builder, repository.connection());
         return List.of(builder.build());
     }
 
@@ -326,10 +304,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withProjectVcsConnectionBindingInfo(repository.workspace(), repository.repoSlug())
                 .withProjectAiConnectionTokenDecrypted(
                         tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
-                .withUseLocalMcp(true)
-                .withUseMcpTools(effectiveConfig.useMcpTools())
                 .withRagEnabled(ragConfig != null && ragConfig.enabled())
-                .withMaxAllowedTokens(effectiveConfig.maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
                 .withVcsProvider(providerKey())
@@ -354,55 +329,12 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             return PrEnrichmentDataDto.empty();
         }
 
-        PrEnrichmentDataDto enrichment = PrEnrichmentDataDto.empty();
-        if (enrichmentService.isEnrichmentEnabled()) {
-            try {
-                enrichment = enrichmentService.enrichPrFiles(
-                        vcsClient, repository.workspace(), repository.repoSlug(), commitHash, changedFiles);
-            } catch (Exception e) {
-                log.warn("Structured enrichment failed for {}; trying content-only acquisition: {}",
-                        operation, e.getMessage());
-            }
-        }
-        if (enrichment.hasData()) return enrichment;
-
         try {
             return enrichmentService.fetchFileContentsOnly(
                     vcsClient, repository.workspace(), repository.repoSlug(), commitHash, changedFiles);
         } catch (Exception e) {
             log.warn("Skipping {} file-content enrichment: {}", operation, e.getMessage());
             return PrEnrichmentDataDto.empty();
-        }
-    }
-
-    private CapabilityEnrichment prepareCapabilityEnrichment(
-            Project project,
-            RepositoryInfo repository,
-            String commit,
-            List<String> changedFiles,
-            String operation) {
-        if (capabilitySelectionService == null) {
-            return new CapabilityEnrichment(
-                    enrichFiles(repository, commit, changedFiles, operation),
-                    null);
-        }
-        try {
-            VcsClient vcsClient = vcsClientProvider.getClient(repository.connection());
-            var plan = capabilitySelectionService.plan(
-                    vcsClient, repository.workspace(), repository.repoSlug(), commit,
-                    changedFiles,
-                    project.getEffectiveConfig().analysisProfile());
-            PrEnrichmentDataDto enrichment = enrichFiles(
-                    repository, commit, plan.enrichmentPaths(), operation);
-            ProjectCapabilities capabilities = capabilitySelectionService.complete(
-                    plan, enrichment);
-            return new CapabilityEnrichment(enrichment, capabilities);
-        } catch (Exception exception) {
-            log.warn("Skipping project capability enrichment at commit {}: {}",
-                    commit, exception.getMessage());
-            return new CapabilityEnrichment(
-                    enrichFiles(repository, commit, changedFiles, operation),
-                    null);
         }
     }
 
@@ -466,19 +398,6 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         return Map.copyOf(withFallbackKey);
     }
 
-    private String resolveTaskHistory(
-            Project project,
-            PrProcessRequest request,
-            Map<String, String> taskContext,
-            String title,
-            String description) {
-        if (taskHistoryContextService == null || taskContextEnrichmentService == null) return "";
-        String taskKey = taskContextEnrichmentService.resolveTaskKey(
-                project, request.sourceBranchName, title, description).orElse(null);
-        return taskHistoryContextService.buildTaskHistoryContext(
-                project.getId(), request.getPullRequestId(), taskContext, taskKey);
-    }
-
     private RepositoryInfo repositoryInfo(Project project) {
         var vcsInfo = project.getEffectiveVcsRepoInfo();
         if (vcsInfo == null || vcsInfo.getVcsConnection() == null) {
@@ -486,21 +405,6 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         }
         return new RepositoryInfo(
                 vcsInfo.getVcsConnection(), vcsInfo.getRepoWorkspace(), vcsInfo.getRepoSlug());
-    }
-
-    private void addVcsCredentials(
-            AiAnalysisRequestImpl.Builder<?> builder,
-            VcsConnection connection) throws GeneralSecurityException {
-        VcsConnectionCredentials credentials = credentialsExtractor.extractCredentials(connection);
-        builder.withVcsBaseUrl(credentials.vcsBaseUrl());
-        if (VcsConnectionCredentialsExtractor.hasAccessToken(credentials)) {
-            builder.withAccessToken(credentials.accessToken());
-        } else if (VcsConnectionCredentialsExtractor.hasOAuthCredentials(credentials)) {
-            builder.withProjectVcsConnectionCredentials(
-                    credentials.oAuthClient(), credentials.oAuthSecret());
-        } else {
-            log.warn("No credentials available for VCS connection type: {}", connection.getConnectionType());
-        }
     }
 
     private String providerKey() {
@@ -549,7 +453,4 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             String baseCommit,
             String headCommit) {}
 
-    private record CapabilityEnrichment(
-            PrEnrichmentDataDto enrichment,
-            ProjectCapabilities capabilities) {}
 }

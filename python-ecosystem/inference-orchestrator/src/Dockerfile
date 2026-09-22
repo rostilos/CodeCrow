@@ -1,4 +1,4 @@
-FROM python:3.11-slim-bullseye AS builder
+FROM python:3.11-slim-bookworm AS builder
 
 ENV MCP_USE_ANONYMIZED_TELEMETRY=false
 
@@ -39,7 +39,7 @@ COPY python-ecosystem/inference-orchestrator/src/codecrow-vcs-mcp-1.0.jar ./code
 COPY python-ecosystem/inference-orchestrator/src/codecrow-platform-mcp-1.0.jar* ./
 
 # --- Production Stage ---
-FROM python:3.11-slim-bullseye
+FROM python:3.11-slim-bookworm
 
 ENV MCP_USE_ANONYMIZED_TELEMETRY=false
 
@@ -61,7 +61,7 @@ RUN apt-get update && \
 RUN groupadd --gid 1001 appuser && \
     useradd --uid 1001 --gid appuser --no-create-home \
         --shell /usr/sbin/nologin appuser
-RUN mkdir -p /app/logs/prompt-dry-runs && chown -R appuser:appuser /app
+RUN mkdir -p /app/logs && chown -R appuser:appuser /app
 
 WORKDIR /app
 

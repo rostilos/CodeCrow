@@ -83,7 +83,6 @@ public interface IProjectService {
         Project updateAnalysisSettings(Long workspaceId, Long projectId, Boolean prAnalysisEnabled,
                         Boolean branchAnalysisEnabled, InstallationMethod installationMethod,
                         Integer maxAnalysisTokenLimit,
-                        Boolean useMcpTools,
                         Boolean taskContextAnalysisEnabled);
 
         Project updateProjectQualityGate(Long workspaceId, Long projectId, Long qualityGateId);

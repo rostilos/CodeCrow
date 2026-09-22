@@ -4,8 +4,8 @@ import pytest
 from pydantic import BaseModel
 
 from llm.reasoning_policy import ReasoningEffort
-from service.review.orchestrator.json_utils import resolve_structured_output
-from service.review.orchestrator.structured_output import (
+from service.agent.json_utils import resolve_structured_output
+from service.agent.structured_output import (
     StructuredOutputInvocation,
     invoke_structured_output,
     output_token_request_kwargs,

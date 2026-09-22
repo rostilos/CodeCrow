@@ -19,6 +19,8 @@ from ..models import (
     ReviewContextRequest,
     ReviewContextResponse,
     ReviewGraphQueryRequest,
+    ReviewFileRequest,
+    ReviewSearchRequest,
     ReviewImpactRadiusRequest,
     ReviewMinimalContextRequest,
     ProposedTreePrepareRequest,
@@ -374,6 +376,33 @@ def review_unit(request: ReviewUnitRequest):
             detail="Review structural unit was not found",
         )
     return result
+
+
+@router.post("/query/review-file")
+def review_file(request: ReviewFileRequest):
+    """Read exact source when graph units do not cover the needed text."""
+
+    return _proposed_tree_operation(
+        request,
+        "get_review_file_content",
+        path=request.path,
+        side=request.side,
+        start_line=request.start_line,
+        end_line=request.end_line,
+    )
+
+
+@router.post("/query/review-search")
+def review_search(request: ReviewSearchRequest):
+    """Search exact proposed-tree paths and source outside indexed symbols."""
+
+    return _proposed_tree_operation(
+        request,
+        "search_review_code",
+        query=request.query,
+        cursor=request.cursor,
+        max_results=request.max_results,
+    )
 
 
 @router.post("/query/code-search")

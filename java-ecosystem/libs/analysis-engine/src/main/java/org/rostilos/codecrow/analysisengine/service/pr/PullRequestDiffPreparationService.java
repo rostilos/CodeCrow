@@ -9,7 +9,6 @@ import org.rostilos.codecrow.analysisengine.util.AnalysisLimitEnforcer;
 import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
-import org.rostilos.codecrow.analysisengine.util.TokenEstimator;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.project.Project;
@@ -75,7 +74,6 @@ public class PullRequestDiffPreparationService {
         String unfilteredSelectedDiff = mode == AnalysisMode.INCREMENTAL ? scopedDeltaDiff : scopedFullDiff;
         String selectedDiff = mode == AnalysisMode.INCREMENTAL ? deltaDiff : fullDiff;
         limitEnforcer.enforce(project, pullRequestId, unfilteredSelectedDiff);
-        logTokenEstimate(project, pullRequestId, selectedDiff);
 
         List<String> changedFiles = DiffParser.extractChangedFiles(selectedDiff);
         List<String> deletedFiles = DiffParser.extractDeletedFiles(selectedDiff);
@@ -138,16 +136,6 @@ public class PullRequestDiffPreparationService {
             return false;
         }
         return true;
-    }
-
-    private void logTokenEstimate(Project project, Long pullRequestId, String diff) {
-        int maxTokens = project.getEffectiveConfig().maxAnalysisTokenLimit();
-        TokenEstimator.TokenEstimationResult estimate = TokenEstimator.estimateAndCheck(diff, maxTokens);
-        log.info("PR diff token estimate: {}", estimate.toLogString());
-        if (estimate.exceedsLimit()) {
-            log.info("PR diff will use map-reduce chunking: project={}, PR={}, tokens={}/{}",
-                    project.getId(), pullRequestId, estimate.estimatedTokens(), estimate.maxAllowedTokens());
-        }
     }
 
     private String abbreviate(String hash) {

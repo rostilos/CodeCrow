@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 from utils.llm_delegate import llm_class_names
 from utils.llm_response import extract_llm_response_text
 from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
-from service.review.orchestrator.structured_output import (
+from service.agent.structured_output import (
     StructuredOutputInvocation,
     extract_structured_payload_text,
     invoke_structured_output,
@@ -37,13 +37,13 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-STRUCTURED_OUTPUT_ENABLED = _env_bool("REVIEW_STRUCTURED_OUTPUT_ENABLED", True)
-CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED = _env_bool("REVIEW_CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED", False)
+STRUCTURED_OUTPUT_ENABLED = _env_bool("AGENT_STRUCTURED_OUTPUT_ENABLED", True)
+CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED = _env_bool("AGENT_CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED", False)
 JSON_REPAIR_INPUT_TOKEN_TARGET = max(
     10_000,
     _env_int(
-        "REVIEW_JSON_REPAIR_INPUT_TOKEN_TARGET",
-        _env_int("REVIEW_STAGE1_BATCH_TOKEN_BUDGET", 60_000),
+        "AGENT_JSON_REPAIR_INPUT_TOKEN_TARGET",
+        60_000,
     ),
 )
 _JSON_REPAIR_ESTIMATOR_SAFETY_TOKENS = 256

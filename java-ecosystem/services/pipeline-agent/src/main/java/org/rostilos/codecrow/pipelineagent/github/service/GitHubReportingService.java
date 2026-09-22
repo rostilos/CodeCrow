@@ -2,6 +2,7 @@ package org.rostilos.codecrow.pipelineagent.github.service;
 
 import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
@@ -140,7 +141,9 @@ public class GitHubReportingService implements VcsReportingService {
                 httpClient, vcsRepoInfo, pullRequestNumber, codeAnalysis, reviewPlan);
         
         // Create Check Run for the commit
-        createCheckRun(httpClient, vcsRepoInfo, codeAnalysis, summary);
+        if (codeAnalysis.getStatus() == AnalysisStatus.ACCEPTED) {
+            createCheckRun(httpClient, vcsRepoInfo, codeAnalysis, summary);
+        }
 
         log.info("Successfully posted analysis results to GitHub");
     }

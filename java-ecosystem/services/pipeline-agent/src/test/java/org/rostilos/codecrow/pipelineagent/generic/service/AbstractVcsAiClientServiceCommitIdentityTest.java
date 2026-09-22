@@ -65,7 +65,7 @@ class AbstractVcsAiClientServiceCommitIdentityTest {
         when(project.getNamespace()).thenReturn("repository");
         when(project.getWorkspace()).thenReturn(workspace);
         when(workspace.getName()).thenReturn("tenant-workspace");
-        when(project.getEffectiveConfig()).thenReturn(new ProjectConfig(false, true, "main",
+        when(project.getEffectiveConfig()).thenReturn(new ProjectConfig(false, "main",
                 null, null, true, true, null, null));
         when(project.getEffectiveVcsRepoInfo()).thenReturn(repository);
         when(repository.getVcsConnection()).thenReturn(connection);
@@ -237,7 +237,7 @@ class AbstractVcsAiClientServiceCommitIdentityTest {
                 TokenEncryptionService encryptionService,
                 VcsClientProvider clientProvider,
                 PullRequestDiffPreparationService diffPreparationService) {
-            super(encryptionService, clientProvider, null, null, null, null, diffPreparationService);
+            super(encryptionService, clientProvider, null, null, diffPreparationService);
         }
 
         @Override

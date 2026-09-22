@@ -186,11 +186,11 @@ class RagClient:
         try:
             configured_timeout = os.environ.get(
                 "RAG_REVIEW_PREPARATION_TIMEOUT_SECONDS",
-                "600",
+                "1800",
             )
             return max(60.0, float(configured_timeout))
         except (TypeError, ValueError):
-            return 600.0
+            return 1800.0
 
     async def _post_structural_query(
         self,
@@ -917,6 +917,45 @@ class RagClient:
                 "sourceEvidence": False,
             },
             operation="review structural unit",
+        )
+
+    async def get_review_file_content(
+        self,
+        *,
+        path: str,
+        side: str = "proposed",
+        start_line: int = 1,
+        end_line: Optional[int] = None,
+        **binding: Any,
+    ) -> Dict[str, Any]:
+        """Read line-numbered source from one sealed proposed-tree generation."""
+        payload = self._review_query_payload(**binding)
+        payload.update({
+            "path": path,
+            "side": side,
+            "start_line": start_line,
+            "end_line": end_line,
+        })
+        return await self._post_review_query(
+            "/query/review-file", payload,
+            {"status": "unavailable", "path": path, "side": side},
+            operation="review file content",
+        )
+
+    async def search_review_code(
+        self,
+        *,
+        query: str,
+        cursor: int = 0,
+        **binding: Any,
+    ) -> Dict[str, Any]:
+        """Search literal source in the sealed proposed tree."""
+        payload = self._review_query_payload(**binding)
+        payload.update({"query": query, "cursor": cursor})
+        return await self._post_review_query(
+            "/query/review-search", payload,
+            {"status": "unavailable", "query": query, "results": []},
+            operation="review source search",
         )
 
     async def get_structural_relations(

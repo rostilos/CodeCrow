@@ -895,19 +895,16 @@ public class BranchAnalysisProcessor {
 				}
 			};
 
-			Optional<LocalRepositorySnapshotService.PreparedSnapshot> localSnapshot = Optional.empty();
-			if (aiRequest.getUseMcpTools()) {
-				localSnapshot = localRepositorySnapshotService.prepare(
+			Optional<LocalRepositorySnapshotService.PreparedSnapshot> localSnapshot =
+					localRepositorySnapshotService.prepareForReview(
 						repository.vcsConnection(),
 						repository.workspace(),
 						repository.repoSlug(),
 						request.getTargetBranchName(),
-						aiRequest.getTargetHeadCommitHash());
-			}
+						request.getCommitHash(),
+						Collections.emptyMap(), Collections.emptyList(), Collections.emptyList());
 
-			// Keep the exact local tree alive for the whole agent session and remove it
-			// immediately afterwards. Snapshot preparation is optional enrichment;
-			// failure falls back to the existing provider-backed MCP path.
+			// Keep the exact pushed revision alive while the graph-guided review runs.
 			requireConfirmedLease(lockLease);
 			Map<String, Object> aiResponse;
 			if (localSnapshot.isPresent()) {
@@ -919,15 +916,9 @@ public class BranchAnalysisProcessor {
 				aiResponse = aiAnalysisClient.performAnalysis(aiRequest, aiEventConsumer);
 			}
 
-			if (AiAnalysisClient.isPromptDryRunResult(aiResponse)) {
-				log.warn(
-						"Prompt dry run completed for direct push project={}, branch={}; artifact={}",
-						project.getId(), request.getTargetBranchName(), aiResponse.get("promptArtifact"));
-				EventNotificationEmitter.emitStatus(
-						consumer,
-						"prompt_dry_run_completed",
-						"Prompt dry run completed without persisting a direct-push analysis");
-				return repositoryRefreshHandled;
+			if ("partial".equals(aiResponse.get("status"))) {
+				EventNotificationEmitter.emitStatus(consumer, "direct_push_analysis_partial",
+						"Direct push review is incomplete; findings are partial");
 			}
 
 			// Save the analysis with DetectionSource.DIRECT_PUSH_ANALYSIS
@@ -952,12 +943,14 @@ public class BranchAnalysisProcessor {
 						astEx.getMessage());
 			}
 
-			log.info("Direct push analysis completed: project={}, branch={}, commit={}, {} issues found",
+			log.info("Direct push analysis finished: project={}, branch={}, commit={}, status={}, {} issues found",
 					project.getId(), request.getTargetBranchName(),
-					request.getCommitHash(), issuesFound);
+					request.getCommitHash(), aiResponse.get("status"), issuesFound);
 
-			EventNotificationEmitter.emitStatus(consumer, "direct_push_analysis_complete",
-					"Direct push analysis found " + issuesFound + " issues");
+			if (!"partial".equals(aiResponse.get("status"))) {
+				EventNotificationEmitter.emitStatus(consumer, "direct_push_analysis_complete",
+						"Direct push analysis found " + issuesFound + " issues");
+			}
 			return repositoryRefreshHandled;
 
 		} catch (BranchAnalysisLeaseLostException leaseLost) {

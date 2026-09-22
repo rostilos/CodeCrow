@@ -5,7 +5,6 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import java.util.List;
 import java.util.Map;
-import org.rostilos.codecrow.plugins.ProjectCapabilities;
 
 public interface AiAnalysisRequest {
     Long getProjectId();
@@ -47,8 +46,6 @@ public interface AiAnalysisRequest {
     int getMaxAllowedTokens();
 
     boolean getUseLocalMcp();
-
-    boolean getUseMcpTools();
 
     default boolean getRagEnabled() { return true; }
 
@@ -126,7 +123,6 @@ public interface AiAnalysisRequest {
      */
     default Map<String, String> getReconciliationFileContents() { return null; }
 
-    default ProjectCapabilities getProjectCapabilities() { return null; }
 
     default String getProjectRules() { return null; }
 

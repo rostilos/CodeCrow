@@ -8,7 +8,6 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
-import org.rostilos.codecrow.plugins.ProjectCapabilities;
 
 import java.util.List;
 import java.util.Map;
@@ -35,7 +34,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final int maxAllowedTokens;
     protected final List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
     protected final boolean useLocalMcp;
-    protected final boolean useMcpTools;
     protected final boolean ragEnabled;
     protected final AnalysisType analysisType;
     protected final String prTitle;
@@ -69,7 +67,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
     // Pre-fetched file contents for MCP-free branch reconciliation
     protected final Map<String, String> reconciliationFileContents;
-    protected final ProjectCapabilities projectCapabilities;
 
     protected AiAnalysisRequestImpl(Builder<?> builder) {
         this.projectId = builder.projectId;
@@ -87,7 +84,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.maxAllowedTokens = builder.maxAllowedTokens;
         this.previousCodeAnalysisIssues = builder.previousCodeAnalysisIssues;
         this.useLocalMcp = builder.useLocalMcp;
-        this.useMcpTools = builder.useMcpTools;
         this.ragEnabled = builder.ragEnabled;
         this.analysisType = builder.analysisType;
         this.prTitle = builder.prTitle;
@@ -119,7 +115,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.projectRules = builder.projectRules;
         // Pre-fetched file contents for MCP-free reconciliation
         this.reconciliationFileContents = builder.reconciliationFileContents;
-        this.projectCapabilities = builder.projectCapabilities;
     }
 
     public Long getProjectId() {
@@ -300,11 +295,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return reconciliationFileContents;
     }
 
-    @Override
-    public ProjectCapabilities getProjectCapabilities() {
-        return projectCapabilities;
-    }
-
     public static Builder<?> builder() {
         return new Builder<>();
     }
@@ -328,7 +318,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private int maxAllowedTokens;
         private List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
         private boolean useLocalMcp;
-        private boolean useMcpTools;
         private boolean ragEnabled = true;
         private AnalysisType analysisType;
         private String prTitle;
@@ -358,7 +347,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String projectRules;
         // Pre-fetched file contents for MCP-free reconciliation
         private Map<String, String> reconciliationFileContents;
-        private ProjectCapabilities projectCapabilities;
 
         protected Builder() {
         }
@@ -564,11 +552,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             return self();
         }
 
-        public T withUseMcpTools(boolean useMcpTools) {
-            this.useMcpTools = useMcpTools;
-            return self();
-        }
-
         public T withRagEnabled(boolean ragEnabled) {
             this.ragEnabled = ragEnabled;
             return self();
@@ -700,11 +683,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             return self();
         }
 
-        public T withProjectCapabilities(ProjectCapabilities projectCapabilities) {
-            this.projectCapabilities = projectCapabilities;
-            return self();
-        }
-
         public AiAnalysisRequestImpl build() {
             return new AiAnalysisRequestImpl(this);
         }
@@ -712,11 +690,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
     public boolean getUseLocalMcp() {
         return useLocalMcp;
-    }
-
-    @Override
-    public boolean getUseMcpTools() {
-        return useMcpTools;
     }
 
     @Override

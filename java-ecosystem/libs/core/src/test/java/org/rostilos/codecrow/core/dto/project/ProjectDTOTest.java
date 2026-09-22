@@ -49,7 +49,7 @@ class ProjectDTOTest {
                     20L, "namespace", "main", "main",
                     100L, stats, ragConfig,
                     true, false, "WEBHOOK",
-                    commandsConfig, true, 50L, 200000, false, true,
+                    commandsConfig, true, 50L, 200000, true,
                     null, null, null, null, null);
 
             assertThat(dto.id()).isEqualTo(1L);
@@ -84,7 +84,7 @@ class ProjectDTOTest {
                     1L, "Test", null, true,
                     null, null, null, null, null, null,
                     null, null, null, null, null, null,
-                    null, null, null, null, null, null, null, null, null, null,
+                    null, null, null, null, null, null, null, null, null,
                     null, null, null, null, null);
 
             assertThat(dto.description()).isNull();
@@ -115,7 +115,6 @@ class ProjectDTOTest {
             assertThat(dto.vcsConnectionId()).isNull();
             assertThat(dto.aiConnectionId()).isNull();
             assertThat(dto.defaultBranchId()).isNull();
-            assertThat(dto.useMcpTools()).isTrue();
         }
 
         @Test
@@ -282,23 +281,6 @@ class ProjectDTOTest {
             ProjectDTO dto = ProjectDTO.fromProject(project);
 
             assertThat(dto.taskContextAnalysisEnabled()).isFalse();
-        }
-
-        @Test
-        @DisplayName("should expose an explicitly disabled MCP review setting")
-        void shouldExposeExplicitlyDisabledMcpReviewSetting() {
-            Project project = new Project();
-            setField(project, "id", 1L);
-            project.setName("Test");
-            project.setIsActive(true);
-
-            ProjectConfig config = new ProjectConfig();
-            config.setUseMcpTools(false);
-            project.setConfiguration(config);
-
-            ProjectDTO dto = ProjectDTO.fromProject(project);
-
-            assertThat(dto.useMcpTools()).isFalse();
         }
 
         @Test

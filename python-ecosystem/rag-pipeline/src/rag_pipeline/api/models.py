@@ -416,6 +416,28 @@ class ReviewUnitRequest(ProposedTreeQueryBinding):
     max_characters: int = Field(default=12000, ge=1, le=60000)
 
 
+class ReviewFileRequest(ProposedTreeQueryBinding):
+    """Exact source lines from the bound proposed or target tree."""
+
+    path: str
+    side: Literal["proposed", "target"] = "proposed"
+    start_line: int = Field(default=1, ge=1)
+    end_line: Optional[int] = Field(default=None, ge=1)
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        return _validate_repository_relative_path(value)
+
+
+class ReviewSearchRequest(ProposedTreeQueryBinding):
+    """A paged literal read of the bound proposed tree."""
+
+    query: str = Field(min_length=1, max_length=1000)
+    cursor: int = Field(default=0, ge=0)
+    max_results: int = Field(default=100, ge=1, le=500)
+
+
 class ReviewContextResponse(BaseModel):
     """Bounded source-backed structural evidence for one PR review question."""
 

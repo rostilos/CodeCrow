@@ -1,12 +1,12 @@
 """
-Extended tests for service.review.orchestrator.json_utils —
+Extended tests for service.agent.json_utils —
 clean_json_text, parse_llm_response, repair_json_with_llm.
 """
 import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from pydantic import BaseModel
-from service.review.orchestrator.json_utils import clean_json_text
+from service.agent.json_utils import clean_json_text
 
 
 class SimpleModel(BaseModel):

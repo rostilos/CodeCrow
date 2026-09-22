@@ -499,6 +499,8 @@ async def test_proposed_tree_query_methods_use_review_bound_endpoints():
         "/query/review-traverse",
         "/query/review-graph",
         "/query/review-unit",
+        "/query/review-file",
+        "/query/review-search",
     )
     routes = {
         endpoint: respx.post(f"http://rag:8001{endpoint}").mock(
@@ -555,6 +557,15 @@ async def test_proposed_tree_query_methods_use_review_bound_endpoints():
         max_characters=2048,
         **binding,
     )
+    await client.get_review_file_content(
+        path="src/payment.py", side="target",
+        start_line=7, end_line=12,
+        **binding,
+    )
+    await client.search_review_code(
+        query="authorize", cursor=100,
+        **binding,
+    )
 
     for endpoint, route in routes.items():
         assert route.called, endpoint
@@ -585,6 +596,17 @@ async def test_proposed_tree_query_methods_use_review_bound_endpoints():
     assert unit_payload["unit_id"] == "unit:payment"
     assert unit_payload["offset"] == 4096
     assert unit_payload["max_characters"] == 2048
+    file_payload = json.loads(
+        routes["/query/review-file"].calls.last.request.content
+    )
+    assert file_payload["path"] == "src/payment.py"
+    assert file_payload["side"] == "target"
+    assert (file_payload["start_line"], file_payload["end_line"]) == (7, 12)
+    search_payload = json.loads(
+        routes["/query/review-search"].calls.last.request.content
+    )
+    assert search_payload["query"] == "authorize"
+    assert search_payload["cursor"] == 100
     await client.close()
 
 

@@ -16,9 +16,6 @@ import java.util.Objects;
  * (LocalRepoClient)
  * when a local repository path is available (for example when analysis is
  * executed from an uploaded archive).
- * - useMcpTools: when true, enables agentic MCP tool use during PR review.
- * Enabled by default; projects can disable it to reduce cost and latency when
- * accepting potentially lower review quality.
  * - mainBranch: the primary branch (master/main) used as base for RAG training
  * and analysis.
  * IMPORTANT: This is the single source of truth for the project's main branch.
@@ -59,13 +56,9 @@ import java.util.Objects;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class ProjectConfig {
     public static final int DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT = 200000;
-    public static final boolean DEFAULT_USE_MCP_TOOLS = true;
 
     @JsonProperty("useLocalMcp")
     private boolean useLocalMcp;
-
-    @JsonProperty("useMcpTools")
-    private boolean useMcpTools;
 
     @JsonProperty("mainBranch")
     private String mainBranch;
@@ -107,7 +100,6 @@ public class ProjectConfig {
 
     public ProjectConfig() {
         this.useLocalMcp = false;
-        this.useMcpTools = DEFAULT_USE_MCP_TOOLS;
         this.prAnalysisEnabled = true;
         this.branchAnalysisEnabled = true;
         this.taskContextAnalysisEnabled = true;
@@ -117,16 +109,8 @@ public class ProjectConfig {
     public ProjectConfig(boolean useLocalMcp, String mainBranch, BranchAnalysisConfig branchAnalysis,
             RagConfig ragConfig, Boolean prAnalysisEnabled, Boolean branchAnalysisEnabled,
             InstallationMethod installationMethod, CommentCommandsConfig commentCommands) {
-        this(useLocalMcp, DEFAULT_USE_MCP_TOOLS, mainBranch, branchAnalysis, ragConfig, prAnalysisEnabled,
+        this(useLocalMcp, mainBranch, branchAnalysis, ragConfig, prAnalysisEnabled,
                 branchAnalysisEnabled,
-                installationMethod, commentCommands, DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT);
-    }
-
-    public ProjectConfig(boolean useLocalMcp, boolean useMcpTools, String mainBranch,
-            BranchAnalysisConfig branchAnalysis,
-            RagConfig ragConfig, Boolean prAnalysisEnabled, Boolean branchAnalysisEnabled,
-            InstallationMethod installationMethod, CommentCommandsConfig commentCommands) {
-        this(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig, prAnalysisEnabled, branchAnalysisEnabled,
                 installationMethod, commentCommands, DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT);
     }
 
@@ -134,27 +118,17 @@ public class ProjectConfig {
             RagConfig ragConfig, Boolean prAnalysisEnabled, Boolean branchAnalysisEnabled,
             InstallationMethod installationMethod, CommentCommandsConfig commentCommands,
             Integer maxAnalysisTokenLimit) {
-        this(useLocalMcp, DEFAULT_USE_MCP_TOOLS, mainBranch, branchAnalysis, ragConfig, prAnalysisEnabled,
+        this(useLocalMcp, mainBranch, branchAnalysis, ragConfig, prAnalysisEnabled,
                 branchAnalysisEnabled,
-                installationMethod, commentCommands, maxAnalysisTokenLimit);
-    }
-
-    public ProjectConfig(boolean useLocalMcp, boolean useMcpTools, String mainBranch,
-            BranchAnalysisConfig branchAnalysis,
-            RagConfig ragConfig, Boolean prAnalysisEnabled, Boolean branchAnalysisEnabled,
-            InstallationMethod installationMethod, CommentCommandsConfig commentCommands,
-            Integer maxAnalysisTokenLimit) {
-        this(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig, prAnalysisEnabled, branchAnalysisEnabled,
                 installationMethod, commentCommands, maxAnalysisTokenLimit, true);
     }
 
-    public ProjectConfig(boolean useLocalMcp, boolean useMcpTools, String mainBranch,
+    public ProjectConfig(boolean useLocalMcp, String mainBranch,
             BranchAnalysisConfig branchAnalysis,
             RagConfig ragConfig, Boolean prAnalysisEnabled, Boolean branchAnalysisEnabled,
             InstallationMethod installationMethod, CommentCommandsConfig commentCommands,
             Integer maxAnalysisTokenLimit, Boolean taskContextAnalysisEnabled) {
         this.useLocalMcp = useLocalMcp;
-        this.useMcpTools = useMcpTools;
         this.mainBranch = mainBranch;
         this.defaultBranch = mainBranch; // Keep in sync for backward compatibility
         this.branchAnalysis = branchAnalysis;
@@ -183,10 +157,6 @@ public class ProjectConfig {
 
     public boolean useLocalMcp() {
         return useLocalMcp;
-    }
-
-    public boolean useMcpTools() {
-        return useMcpTools;
     }
 
     public String mainBranch() {
@@ -268,10 +238,6 @@ public class ProjectConfig {
     // Setters for Jackson
     public void setUseLocalMcp(boolean useLocalMcp) {
         this.useLocalMcp = useLocalMcp;
-    }
-
-    public void setUseMcpTools(boolean useMcpTools) {
-        this.useMcpTools = useMcpTools;
     }
 
     public void setMainBranch(String mainBranch) {
@@ -478,7 +444,6 @@ public class ProjectConfig {
             return false;
         ProjectConfig that = (ProjectConfig) o;
         return useLocalMcp == that.useLocalMcp &&
-                useMcpTools == that.useMcpTools &&
                 Objects.equals(mainBranch, that.mainBranch) &&
                 Objects.equals(branchAnalysis, that.branchAnalysis) &&
                 Objects.equals(ragConfig, that.ragConfig) &&
@@ -498,7 +463,7 @@ public class ProjectConfig {
 
     @Override
     public int hashCode() {
-        return Objects.hash(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
+        return Objects.hash(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, taskContextAnalysisEnabled, installationMethod,
                 commentCommands, maxAnalysisTokenLimit, analysisLimits, analysisScope,
                 analysisProfile(), projectRules, taskManagement, qaAutoDoc);
@@ -508,7 +473,6 @@ public class ProjectConfig {
     public String toString() {
         return "ProjectConfig{" +
                 "useLocalMcp=" + useLocalMcp +
-                ", useMcpTools=" + useMcpTools +
                 ", mainBranch='" + mainBranch + '\'' +
                 ", branchAnalysis=" + branchAnalysis +
                 ", ragConfig=" + ragConfig +

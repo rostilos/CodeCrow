@@ -1,6 +1,5 @@
 package org.rostilos.codecrow.core.model.project.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -37,33 +36,6 @@ class ProjectConfigTest {
         void shouldDefaultUseLocalMcpToFalse() {
             ProjectConfig config = new ProjectConfig();
             assertThat(config.useLocalMcp()).isFalse();
-        }
-
-        @Test
-        @DisplayName("should default MCP review tools to true")
-        void shouldDefaultMcpReviewToolsToTrue() {
-            ProjectConfig config = new ProjectConfig();
-            assertThat(config.useMcpTools()).isTrue();
-        }
-
-        @Test
-        @DisplayName("should use the enabled default when legacy JSON omits MCP review tools")
-        void shouldDefaultMcpReviewToolsForLegacyJson() throws Exception {
-            ProjectConfig config = new ObjectMapper().readValue(
-                    "{\"mainBranch\":\"main\"}",
-                    ProjectConfig.class);
-
-            assertThat(config.useMcpTools()).isTrue();
-        }
-
-        @Test
-        @DisplayName("should preserve an explicit disabled MCP review setting")
-        void shouldPreserveExplicitDisabledMcpReviewSetting() throws Exception {
-            ProjectConfig config = new ObjectMapper().readValue(
-                    "{\"mainBranch\":\"main\",\"useMcpTools\":false}",
-                    ProjectConfig.class);
-
-            assertThat(config.useMcpTools()).isFalse();
         }
 
         @Test

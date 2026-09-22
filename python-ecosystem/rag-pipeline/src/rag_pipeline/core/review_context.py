@@ -280,8 +280,8 @@ def _review_identity(
     project: str,
     target_branch: str,
     base_revision: str,
-    base_collection_target: str,
-    base_generation_manifest_sha256: str,
+    base_collection_target: str | None,
+    base_generation_manifest_sha256: str | None,
     source_revision: str,
     target_source_tree_sha256: str,
     overlay_sha256: str,
@@ -1122,72 +1122,56 @@ class ProposedTreeReviewContextService:
         project_type: str | None = None,
         source_root: str | None = None,
     ) -> ProposedTreeGeneration:
-        if not base_collection_target or not base_generation_manifest_sha256:
-            raise ExactIndexPreconditionError(
-                "proposed-tree review context requires an exact sealed "
-                "target-head generation"
-            )
         target_root = Path(target_repo_path).resolve()
         overlay = load_review_overlay(review_overlay_path)
         representation = self.index_manager.current_representation_identity()
-        base_receipt = self.index_manager.get_revision_preflight(
-            workspace,
-            project,
-            target_branch,
-            base_revision,
-            collection_target=base_collection_target,
-        )
-        if (
-            base_receipt is None
-            or base_receipt.get("generation_manifest_sha256")
-            != base_generation_manifest_sha256
-        ):
-            raise ExactIndexPreconditionError(
-                "exact sealed target-head generation is unavailable"
+        target_source = None
+        base_receipt = None
+        if base_collection_target and base_generation_manifest_sha256:
+            base_receipt = self.index_manager.get_revision_preflight(
+                workspace, project, target_branch, base_revision,
+                collection_target=base_collection_target,
             )
-        target_source_tree_sha256 = str(
-            base_receipt.get("source_tree_sha256") or ""
-        )
-        if base_receipt.get("index_representation_fingerprint") != (
-            representation["index_representation_fingerprint"]
-        ):
-            raise ExactIndexPreconditionError(
-                "sealed target-head generation uses a different structural "
-                "representation"
+            if (
+                base_receipt is None
+                or base_receipt.get("generation_manifest_sha256")
+                != base_generation_manifest_sha256
+                or base_receipt.get("index_representation_fingerprint")
+                != representation["index_representation_fingerprint"]
+            ):
+                base_receipt = None
+        if base_receipt is not None:
+            target_source_tree_sha256 = str(
+                base_receipt.get("source_tree_sha256") or ""
             )
-        with self.index_manager.open_reader(
-            workspace=workspace,
-            project=project,
-            branch=target_branch,
-            revision=base_revision,
-            generation_manifest_sha256=str(
-                base_generation_manifest_sha256
-            ),
-            collection_target=str(base_collection_target),
-        ) as sealed_base_reader:
-            base_repository_facts = sealed_base_reader.repository_facts()
-        if base_repository_facts.get("revision") != base_revision:
-            raise ExactIndexPreconditionError(
-                "sealed target-head repository facts have a different revision"
+            with self.index_manager.open_reader(
+                workspace=workspace,
+                project=project,
+                branch=target_branch,
+                revision=base_revision,
+                generation_manifest_sha256=base_generation_manifest_sha256,
+                collection_target=base_collection_target,
+            ) as sealed_base_reader:
+                base_repository_facts = sealed_base_reader.repository_facts()
+            if base_repository_facts.get("revision") != base_revision:
+                base_receipt = None
+        if base_receipt is not None:
+            project_type = base_repository_facts.get("projectType") or None
+            source_root = base_repository_facts.get("sourceRoot") or None
+            # A delta inherits the sealed base's selection and repository profile.
+            include_patterns = tuple(
+                base_receipt.get("index_include_patterns") or ()
+            ) or None
+            exclude_patterns = tuple(
+                base_receipt.get("index_exclude_patterns") or ()
+            ) or None
+        else:
+            base_collection_target = None
+            base_generation_manifest_sha256 = None
+            target_source = attest_repository_source_tree(
+                target_root, base_revision,
             )
-        project_type = (
-            str(base_repository_facts["projectType"])
-            if base_repository_facts.get("projectType")
-            else None
-        )
-        source_root = (
-            str(base_repository_facts["sourceRoot"])
-            if base_repository_facts.get("sourceRoot")
-            else None
-        )
-        # Proposed-tree indexing remains bound to the exact selection policy of
-        # its sealed base. Request-time profile fields cannot widen or narrow it.
-        include_patterns = tuple(
-            base_receipt.get("index_include_patterns") or ()
-        ) or None
-        exclude_patterns = tuple(
-            base_receipt.get("index_exclude_patterns") or ()
-        ) or None
+            target_source_tree_sha256 = target_source.tree_sha256
         selected_overlay_paths = tuple(
             path.as_posix()
             for path in self.index_manager.loader.iter_repository_files(
@@ -1223,8 +1207,9 @@ class ProposedTreeReviewContextService:
             "base_generation_manifest_sha256": (
                 base_generation_manifest_sha256
             ),
-            "base_index_selection_policy_sha256": base_receipt.get(
-                "index_selection_policy_sha256"
+            "base_index_selection_policy_sha256": (
+                base_receipt.get("index_selection_policy_sha256")
+                if base_receipt is not None else None
             ),
             "source_revision": source_revision,
             "target_source_tree_sha256": target_source_tree_sha256,
@@ -1257,7 +1242,8 @@ class ProposedTreeReviewContextService:
                 cache_hit=True,
             )
 
-        target_source = attest_repository_source_tree(target_root, base_revision)
+        if target_source is None:
+            target_source = attest_repository_source_tree(target_root, base_revision)
         if target_source_tree_sha256 != target_source.tree_sha256:
             raise ExactIndexPreconditionError(
                 "sealed target-head generation does not match the supplied "
@@ -1278,33 +1264,35 @@ class ProposedTreeReviewContextService:
                 for path in overlay.changed_paths
                 if path not in deleted_path_set
             )
-            try:
-                self.index_manager.index_proposed_tree_delta(
-                    repo_path=str(proposed_root),
-                    workspace=workspace,
-                    project=project,
-                    branch=target_branch,
-                    base_revision=base_revision,
-                    commit=source_revision,
-                    changed_paths=changed_paths,
-                    deleted_paths=overlay.deleted_paths,
-                    # The manager performs the sole authoritative attestation
-                    # of this exclusively-owned temporary composition.
-                    source_tree_sha256=None,
-                    collection_target=collection_target,
-                    base_collection_target=base_collection_target,
-                    base_generation_manifest_sha256=(
-                        base_generation_manifest_sha256
-                    ),
-                    project_type=project_type,
-                    source_root=source_root,
-                    snapshot_metadata=snapshot_metadata,
-                    source_tree_exclusively_owned=True,
-                )
-            except RepositoryDeltaRebuildRequired:
-                # Repository-aware plugin selection changed, or a custom plugin
-                # cannot restore its sealed base state. The already-materialized
-                # full proposed tree is the exact, bounded fallback.
+            full_build = base_receipt is None
+            if not full_build:
+                try:
+                    self.index_manager.index_proposed_tree_delta(
+                        repo_path=str(proposed_root),
+                        workspace=workspace,
+                        project=project,
+                        branch=target_branch,
+                        base_revision=base_revision,
+                        commit=source_revision,
+                        changed_paths=changed_paths,
+                        deleted_paths=overlay.deleted_paths,
+                        # The manager attests this exclusively-owned tree.
+                        source_tree_sha256=None,
+                        collection_target=collection_target,
+                        base_collection_target=base_collection_target,
+                        base_generation_manifest_sha256=(
+                            base_generation_manifest_sha256
+                        ),
+                        project_type=project_type,
+                        source_root=source_root,
+                        snapshot_metadata=snapshot_metadata,
+                        source_tree_exclusively_owned=True,
+                    )
+                except RepositoryDeltaRebuildRequired:
+                    full_build = True
+            if full_build:
+                # A cold review or an incompatible delta indexes the same exact
+                # proposed tree directly, without first indexing the target head.
                 self.index_manager.index_repository(
                     repo_path=str(proposed_root),
                     workspace=workspace,
@@ -1381,10 +1369,6 @@ class ProposedTreeReviewContextService:
     ) -> ProposedTreeGeneration:
         """Verify and load a sealed review generation without mutating storage."""
 
-        if not base_collection_target or not base_generation_manifest_sha256:
-            raise ExactIndexPreconditionError(
-                "prepared proposed-tree queries require an exact sealed base"
-            )
         if not review_collection_target or not review_generation_manifest_sha256:
             raise ExactIndexPreconditionError(
                 "proposed-tree query requires a sealed review-generation receipt"
@@ -1887,6 +1871,205 @@ class ProposedTreeReviewContextService:
                 offset=offset,
                 max_characters=max_characters,
             )
+
+    def get_review_file_content(
+        self,
+        *,
+        target_repo_path: str,
+        review_overlay_path: str,
+        workspace: str,
+        project: str,
+        target_branch: str,
+        base_revision: str,
+        source_revision: str,
+        focus_paths: Sequence[str],
+        path: str,
+        side: str = "proposed",
+        start_line: int = 1,
+        end_line: int | None = None,
+        base_collection_target: str | None = None,
+        base_generation_manifest_sha256: str | None = None,
+        review_collection_target: str | None = None,
+        review_generation_manifest_sha256: str | None = None,
+        include_patterns: Sequence[str] | None = None,
+        exclude_patterns: Sequence[str] | None = None,
+        project_type: str | None = None,
+        source_root: str | None = None,
+    ) -> dict[str, Any]:
+        """Read exact text from the graph-bound proposed or target tree."""
+        path = _normalize_path(path)
+        if side not in {"proposed", "target"}:
+            raise ValueError("side must be proposed or target")
+        if start_line < 1 or (end_line is not None and end_line < start_line):
+            raise ValueError("invalid source line range")
+        with self.open_read_session(
+            target_repo_path=target_repo_path,
+            review_overlay_path=review_overlay_path,
+            workspace=workspace,
+            project=project,
+            target_branch=target_branch,
+            base_revision=base_revision,
+            source_revision=source_revision,
+            base_collection_target=base_collection_target,
+            base_generation_manifest_sha256=base_generation_manifest_sha256,
+            review_collection_target=review_collection_target,
+            review_generation_manifest_sha256=review_generation_manifest_sha256,
+            include_patterns=include_patterns,
+            exclude_patterns=exclude_patterns,
+            project_type=project_type,
+            source_root=source_root,
+        ) as session:
+            overlay = load_review_overlay(review_overlay_path)
+            if overlay.fingerprint != session.generation.overlay_sha256:
+                raise ProposedTreeUnavailableError("review overlay changed after indexing")
+            if side == "proposed" and path in overlay.deleted_paths:
+                return {
+                    "status": "deleted", "path": path, "side": side,
+                    "snapshot": session.reader.snapshot(),
+                }
+            if side == "proposed" and path in overlay.file_sha256_by_path:
+                content = read_repository_file_bytes(
+                    overlay.files_root, path,
+                    expected_sha256=overlay.file_sha256_by_path[path],
+                )
+                origin = "review_overlay"
+            else:
+                target = attest_repository_source_tree(
+                    target_repo_path, base_revision,
+                )
+                if target.tree_sha256 != session.generation.target_source_tree_sha256:
+                    raise ProposedTreeUnavailableError(
+                        "target tree changed after proposed graph indexing"
+                    )
+                expected_sha = target.file_sha256_by_path.get(path)
+                if expected_sha is None:
+                    return {
+                        "status": "missing", "path": path, "side": side,
+                        "snapshot": session.reader.snapshot(),
+                    }
+                content = read_repository_file_bytes(
+                    target_repo_path, path, expected_sha256=expected_sha,
+                )
+                origin = "target_tree"
+            try:
+                lines = content.decode("utf-8").splitlines(keepends=True)
+            except UnicodeDecodeError:
+                return {
+                    "status": "binary", "path": path, "side": side,
+                    "snapshot": session.reader.snapshot(),
+                }
+            last_line = min(end_line or len(lines), len(lines))
+            return {
+                "status": "ready",
+                "path": path,
+                "side": side,
+                "origin": origin,
+                "startLine": start_line,
+                "endLine": last_line,
+                "totalLines": len(lines),
+                "content": "".join(lines[start_line - 1:last_line]),
+                "snapshot": session.reader.snapshot(),
+            }
+
+    def search_review_code(
+        self,
+        *,
+        target_repo_path: str,
+        review_overlay_path: str,
+        workspace: str,
+        project: str,
+        target_branch: str,
+        base_revision: str,
+        source_revision: str,
+        focus_paths: Sequence[str],
+        query: str,
+        cursor: int = 0,
+        max_results: int = 100,
+        base_collection_target: str | None = None,
+        base_generation_manifest_sha256: str | None = None,
+        review_collection_target: str | None = None,
+        review_generation_manifest_sha256: str | None = None,
+        include_patterns: Sequence[str] | None = None,
+        exclude_patterns: Sequence[str] | None = None,
+        project_type: str | None = None,
+        source_root: str | None = None,
+    ) -> dict[str, Any]:
+        """Search literal paths and UTF-8 lines in the exact proposed tree."""
+        needle = query.strip().casefold()
+        if not needle or cursor < 0 or max_results < 1:
+            raise ValueError("search requires a query and non-negative page")
+        with self.open_read_session(
+            target_repo_path=target_repo_path,
+            review_overlay_path=review_overlay_path,
+            workspace=workspace,
+            project=project,
+            target_branch=target_branch,
+            base_revision=base_revision,
+            source_revision=source_revision,
+            base_collection_target=base_collection_target,
+            base_generation_manifest_sha256=base_generation_manifest_sha256,
+            review_collection_target=review_collection_target,
+            review_generation_manifest_sha256=review_generation_manifest_sha256,
+            include_patterns=include_patterns,
+            exclude_patterns=exclude_patterns,
+            project_type=project_type,
+            source_root=source_root,
+        ) as session:
+            overlay = load_review_overlay(review_overlay_path)
+            if overlay.fingerprint != session.generation.overlay_sha256:
+                raise ProposedTreeUnavailableError("review overlay changed after indexing")
+            target = attest_repository_source_tree(target_repo_path, base_revision)
+            if target.tree_sha256 != session.generation.target_source_tree_sha256:
+                raise ProposedTreeUnavailableError(
+                    "target tree changed after proposed graph indexing"
+                )
+            paths = sorted(
+                (set(target.file_sha256_by_path) | set(overlay.file_sha256_by_path))
+                - set(overlay.deleted_paths)
+            )
+            results: list[dict[str, Any]] = []
+            matching = 0
+            for path in paths:
+                if path in overlay.file_sha256_by_path:
+                    root = overlay.files_root
+                    expected = overlay.file_sha256_by_path[path]
+                else:
+                    root = target_repo_path
+                    expected = target.file_sha256_by_path[path]
+                if needle in path.casefold():
+                    if matching >= cursor:
+                        results.append({"path": path, "line": None, "text": None})
+                    matching += 1
+                    if len(results) > max_results:
+                        break
+                content = read_repository_file_bytes(
+                    root, path, expected_sha256=expected,
+                )
+                try:
+                    lines = content.decode("utf-8").splitlines()
+                except UnicodeDecodeError:
+                    continue
+                for line_number, text in enumerate(lines, start=1):
+                    if needle not in text.casefold():
+                        continue
+                    if matching >= cursor:
+                        results.append({
+                            "path": path, "line": line_number, "text": text,
+                        })
+                    matching += 1
+                    if len(results) > max_results:
+                        break
+                if len(results) > max_results:
+                    break
+            more = len(results) > max_results
+            return {
+                "status": "ready",
+                "query": query,
+                "cursor": cursor,
+                "results": results[:max_results],
+                "nextCursor": cursor + max_results if more else None,
+                "snapshot": session.reader.snapshot(),
+            }
 
     @staticmethod
     def _read_context(

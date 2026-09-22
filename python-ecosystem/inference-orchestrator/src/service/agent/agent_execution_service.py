@@ -468,10 +468,10 @@ class AgentExecutionService(Generic[AgentOutputT]):
         # Keep review-specific response recovery lazy so importing the shared
         # agent API does not eagerly initialize the review orchestration package.
         from llm.reasoning_policy import ReasoningEffort
-        from service.review.orchestrator.json_utils import (
+        from service.agent.json_utils import (
             resolve_structured_output,
         )
-        from service.review.orchestrator.structured_output import (
+        from service.agent.structured_output import (
             invoke_structured_output,
         )
 

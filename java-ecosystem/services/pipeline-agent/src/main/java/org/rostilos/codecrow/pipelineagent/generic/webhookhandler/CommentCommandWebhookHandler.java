@@ -15,7 +15,6 @@ import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessReque
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
-import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.service.CommandAuthorizationService;
 import org.rostilos.codecrow.pipelineagent.generic.service.CommandAuthorizationService.AuthorizationResult;
@@ -183,32 +182,13 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
     ) {
         log.info("Handling analyze command for project={}, PR={}", project.getId(), payload.pullRequestId());
 
-        boolean promptDryRun = PromptDryRunMode.isEnabledForProject(project.getId());
-        if (promptDryRun) {
-            // A full-pipeline capture must traverse immutable PR acquisition,
-            // enrichment, structural retrieval, and Stage 0-3 even when this
-            // commit already has an analysis. PullRequestAnalysisProcessor also
-            // bypasses its persistence caches; bypass this command-level shortcut so
-            // the normal user trigger reaches that processor.
-            eventConsumer.accept(Map.of(
-                "type", "status",
-                "state", "cache_bypassed",
-                "message", "Prompt dry run bypassing the command analysis cache"
-            ));
-            log.warn(
-                "Prompt dry run bypassing comment-command analysis cache for project={}, PR={}",
-                project.getId(), payload.pullRequestId());
-        } else {
-            eventConsumer.accept(Map.of(
-                "type", "status",
-                "state", "checking_cache",
-                "message", "Checking for existing analysis..."
-            ));
-        }
+        eventConsumer.accept(Map.of(
+            "type", "status",
+            "state", "checking_cache",
+            "message", "Checking for existing analysis..."
+        ));
 
-        // Check for cached analysis only for a normal paid review. Prompt dry-run
-        // must reach the complete processor path regardless of prior results.
-        if (!promptDryRun && payload.commitHash() != null && payload.pullRequestId() != null) {
+        if (payload.commitHash() != null && payload.pullRequestId() != null) {
             Optional<CodeAnalysis> cachedAnalysis = codeAnalysisService.getCodeAnalysisCache(
                 project.getId(),
                 payload.commitHash(),

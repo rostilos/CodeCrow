@@ -8,7 +8,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.service.PromptSanitizationService;
-import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
@@ -84,35 +83,6 @@ class CommentCommandWebhookHandlerAnalyzeTest {
         when(authorizationService.checkAuthorization(any(), any(), any(), any()))
                 .thenReturn(new CommandAuthorizationService.AuthorizationResult(
                         true, "Authorized"));
-    }
-
-    @AfterEach
-    void clearDryRunSelection() {
-        System.clearProperty(PromptDryRunMode.ENABLED_KEY);
-        System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
-    }
-
-    @Test
-    void dryRunAnalyzeBypassesCommandCacheAndRunsCompleteProcessor() throws Exception {
-        System.setProperty(PromptDryRunMode.ENABLED_KEY, "true");
-        System.setProperty(PromptDryRunMode.PROJECT_IDS_KEY, "1");
-        when(pullRequestAnalysisProcessor.process(any(), any(), eq(project)))
-                .thenReturn(Map.of(
-                        "dryRun", true,
-                        "status", "prompt_capture_completed",
-                        "promptArtifact", Map.of("filename", "capture.json")));
-
-        WebhookResult result = handler.handle(analyzePayload(), project, events::add);
-
-        assertThat(result.success()).isTrue();
-        assertThat(events).anySatisfy(event -> {
-            assertThat(event)
-                    .containsEntry("type", "status")
-                    .containsEntry("state", "cache_bypassed");
-        });
-        verify(codeAnalysisService, never()).getCodeAnalysisCache(
-                anyLong(), anyString(), anyLong());
-        verify(pullRequestAnalysisProcessor).process(any(), any(), eq(project));
     }
 
     @Test

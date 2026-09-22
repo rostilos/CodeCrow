@@ -27,7 +27,6 @@ from model.enrichment import (
 
 # DTOs
 from model.dtos import (
-    IssueDTO,
     ReviewRequestDto,
     ReviewResponseDto,
     SummarizeRequestDto,
@@ -68,7 +67,6 @@ __all__ = [
     "EnrichmentStats",
     "PrEnrichmentDataDto",
     # DTOs
-    "IssueDTO",
     "ReviewRequestDto",
     "ReviewResponseDto",
     "SummarizeRequestDto",

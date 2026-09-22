@@ -683,7 +683,6 @@ public class ProjectController {
                                 request.branchAnalysisEnabled(),
                                 installationMethod,
                                 request.maxAnalysisTokenLimit(),
-                                request.useMcpTools(),
                                 request.taskContextAnalysisEnabled());
                 return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
         }
@@ -693,7 +692,6 @@ public class ProjectController {
                         Boolean branchAnalysisEnabled,
                         String installationMethod,
                         Integer maxAnalysisTokenLimit,
-                        Boolean useMcpTools,
                         Boolean taskContextAnalysisEnabled) {
         }
 

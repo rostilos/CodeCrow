@@ -5,6 +5,8 @@ from unittest.mock import patch
 import pytest
 
 from rag_pipeline.api.models import (
+    ReviewFileRequest,
+    ReviewSearchRequest,
     ReviewGraphQueryRequest,
     ReviewImpactRadiusRequest,
     ReviewMinimalContextRequest,
@@ -44,10 +46,12 @@ def test_operation_models_share_normalized_review_binding_and_bounded_defaults()
         target="Service.run",
     )
     unit = ReviewUnitRequest(**_binding(), unit_id="unit:service")
+    source = ReviewFileRequest(**_binding(), path="src/changed.py")
+    search = ReviewSearchRequest(**_binding(), query="createEvent")
 
     assert all(
         request.focus_paths == ["src/changed.py"]
-        for request in (minimal, impact, traverse, graph, unit)
+        for request in (minimal, impact, traverse, graph, unit, source, search)
     )
     assert minimal.focus_symbols == ["Service.run"]
     assert minimal.max_relations == 25
@@ -61,6 +65,10 @@ def test_operation_models_share_normalized_review_binding_and_bounded_defaults()
     assert graph.cursor == 0
     assert unit.offset == 0
     assert unit.max_characters == 12000
+    assert source.side == "proposed"
+    assert source.start_line == 1
+    assert source.end_line is None
+    assert search.cursor == 0
 
 
 def test_operation_models_preserve_explicit_cursor_budget_and_content_window():
@@ -116,8 +124,55 @@ def test_query_router_exposes_all_proposed_tree_operations():
         "/query/review-traverse",
         "/query/review-graph",
         "/query/review-unit",
+        "/query/review-file",
+        "/query/review-search",
         "/query/review-generation",
     }.issubset(paths)
+
+
+@patch("rag_pipeline.api.routers.query.ProposedTreeReviewContextService")
+@patch("rag_pipeline.api.routers.query._manager")
+def test_review_file_router_uses_the_sealed_review_binding(
+    manager_factory, service_class,
+):
+    from rag_pipeline.api.routers.query import review_file
+
+    request = ReviewFileRequest(
+        **_binding(), path="src/changed.py", side="target",
+        start_line=3, end_line=8,
+    )
+    service_class.return_value.get_review_file_content.return_value = {
+        "status": "ready", "content": "source\n",
+    }
+    assert review_file(request)["content"] == "source\n"
+    service_class.assert_called_once_with(manager_factory.return_value)
+    arguments = service_class.return_value.get_review_file_content.call_args.kwargs
+    assert arguments["review_collection_target"] == "sealed-review"
+    assert arguments["path"] == "src/changed.py"
+    assert (arguments["side"], arguments["start_line"], arguments["end_line"]) == (
+        "target", 3, 8,
+    )
+
+
+@patch("rag_pipeline.api.routers.query.ProposedTreeReviewContextService")
+@patch("rag_pipeline.api.routers.query._manager")
+def test_review_search_router_keeps_the_same_generation(
+    manager_factory, service_class,
+):
+    from rag_pipeline.api.routers.query import review_search
+
+    request = ReviewSearchRequest(
+        **_binding(), query="createEvent", cursor=100,
+    )
+    service_class.return_value.search_review_code.return_value = {
+        "status": "ready", "results": [],
+    }
+    assert review_search(request)["status"] == "ready"
+    arguments = service_class.return_value.search_review_code.call_args.kwargs
+    assert arguments["review_collection_target"] == "sealed-review"
+    assert (arguments["query"], arguments["cursor"]) == (
+        "createEvent", 100,
+    )
 
 
 @patch("rag_pipeline.api.routers.query.ProposedTreeReviewContextService")

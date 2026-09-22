@@ -7,11 +7,6 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from server.queue_consumer import RedisQueueConsumer
 from service.review.review_service import ReviewService
-from .prompt_dry_run_neutral_fixture import (
-    SECRET_API_KEY,
-    DeterministicRagSpy,
-    mixed_language_request,
-)
 
 
 class FakePipeline:
@@ -143,73 +138,6 @@ async def test_service_error_is_the_only_terminal_review_event():
         {"type": "error", "message": "provider failed"},
     ]
     assert sum(event["type"] in {"error", "final"} for event in events) == 1
-
-
-@pytest.mark.asyncio(loop_scope="function")
-async def test_neutral_mixed_language_dry_run_traverses_queue_handler(
-    monkeypatch,
-    tmp_path,
-):
-    monkeypatch.setenv("ANALYSIS_PROMPT_DRY_RUN_ENABLED", "true")
-    monkeypatch.setenv(
-        "ANALYSIS_PROMPT_DRY_RUN_OUTPUT_DIR",
-        str(tmp_path),
-    )
-    monkeypatch.setenv(
-        "ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_PER_FILE",
-        "1",
-    )
-    monkeypatch.setattr(
-        "service.review.plugin_context._plugin_host",
-        lambda: None,
-    )
-    request = mixed_language_request().model_copy(update={
-        "promptDryRun": True,
-        "promptDryRunId": "neutral-queued-replay",
-    })
-    review_service = ReviewService.__new__(ReviewService)
-    review_service.rag_client = DeterministicRagSpy()
-    review_service._review_semaphore = asyncio.Semaphore(1)
-
-    consumer = RedisQueueConsumer(review_service)
-    consumer._redis = FakeRedis()
-    payload = json.dumps({
-        "job_id": "neutral-queued-replay",
-        "request": request.model_dump(mode="json", by_alias=True),
-    })
-
-    await consumer._handle_job(payload)
-
-    events = [event for _, event in consumer._redis.events]
-    states = {
-        event.get("state")
-        for event in events
-        if event.get("state")
-    }
-    assert {
-        "acknowledged",
-        "prompt_dry_run_started",
-        "stage_0_started",
-        "stage_1_started",
-        "verification_started",
-        "stage_2_started",
-        "stage_3_started",
-        "review_evidence_completed",
-        "prompt_dry_run_completed",
-    } <= states
-    assert events[-1]["type"] == "final"
-    result = events[-1]["result"]
-    assert result["dryRun"] is True
-    artifact = result["promptArtifact"]
-    assert artifact["providerCalls"] == 0
-    assert artifact["pipeline"]["completed"] is True
-    assert SECRET_API_KEY not in json.dumps(events)
-    artifact_path = tmp_path / artifact["filename"]
-    assert artifact_path.is_file()
-    stored = json.loads(artifact_path.read_text(encoding="utf-8"))
-    assert stored["reviewIdentity"]["changedFiles"] == sorted(
-        request.changedFiles
-    )
 
 
 @pytest.mark.asyncio(loop_scope="function")

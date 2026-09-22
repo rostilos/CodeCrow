@@ -780,9 +780,6 @@ public class ProjectService implements IProjectService {
             java.util.List<String> excludePatterns) {
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
-        boolean useMcpTools = currentConfig != null
-                ? currentConfig.useMcpTools()
-                : ProjectConfig.DEFAULT_USE_MCP_TOOLS;
         String mainBranch = currentConfig != null ? currentConfig.mainBranch() : null;
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
@@ -796,7 +793,7 @@ public class ProjectService implements IProjectService {
         RagConfig ragConfig = new RagConfig(
                 enabled, branch, includePatterns, excludePatterns);
 
-        ProjectConfig newConfig = new ProjectConfig(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
+        ProjectConfig newConfig = new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands,
                 maxAnalysisTokenLimit, taskContextAnalysisEnabled);
         preserveProjectConfigExtensions(newConfig, currentConfig);
@@ -816,17 +813,12 @@ public class ProjectService implements IProjectService {
             Boolean branchAnalysisEnabled,
             InstallationMethod installationMethod,
             Integer maxAnalysisTokenLimit,
-            Boolean useMcpTools,
             Boolean taskContextAnalysisEnabled) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
 
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
-        boolean newUseMcpTools = useMcpTools != null ? useMcpTools
-                : (currentConfig != null
-                        ? currentConfig.useMcpTools()
-                        : ProjectConfig.DEFAULT_USE_MCP_TOOLS);
         String mainBranch = currentConfig != null ? currentConfig.mainBranch() : null;
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
@@ -849,7 +841,7 @@ public class ProjectService implements IProjectService {
         project.setPrAnalysisEnabled(newPrAnalysis != null ? newPrAnalysis : true);
         project.setBranchAnalysisEnabled(newBranchAnalysis != null ? newBranchAnalysis : true);
 
-        ProjectConfig newConfig = new ProjectConfig(useLocalMcp, newUseMcpTools, mainBranch, branchAnalysis, ragConfig,
+        ProjectConfig newConfig = new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
                 newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands, newMaxTokenLimit,
                 newTaskContextAnalysis);
         preserveProjectConfigExtensions(newConfig, currentConfig);
@@ -912,9 +904,6 @@ public class ProjectService implements IProjectService {
 
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
-        boolean useMcpTools = currentConfig != null
-                ? currentConfig.useMcpTools()
-                : ProjectConfig.DEFAULT_USE_MCP_TOOLS;
         String mainBranch = currentConfig != null ? currentConfig.mainBranch() : null;
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
@@ -950,7 +939,7 @@ public class ProjectService implements IProjectService {
                 enabled, rateLimit, rateLimitWindow, allowPublicRepoCommands, allowedCommands,
                 authorizationMode, allowPrAuthor);
 
-        ProjectConfig newConfig = new ProjectConfig(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
+        ProjectConfig newConfig = new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands,
                 maxAnalysisTokenLimit, taskContextAnalysisEnabled);
         preserveProjectConfigExtensions(newConfig, currentConfig);

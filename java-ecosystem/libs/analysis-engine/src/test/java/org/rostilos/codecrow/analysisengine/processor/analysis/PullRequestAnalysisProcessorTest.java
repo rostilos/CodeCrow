@@ -39,7 +39,6 @@ import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.model.VcsCommit;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.pr.PrIssueTrackingService;
-import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -129,9 +128,7 @@ class PullRequestAnalysisProcessorTest {
 
         @BeforeEach
         void setUp() {
-                System.setProperty(PromptDryRunMode.ENABLED_KEY, "false");
-                System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
-                lenient().when(taskImplementationEvidenceService.persistFromAnalysisResponse(
+                                lenient().when(taskImplementationEvidenceService.persistFromAnalysisResponse(
                                 any(), any()))
                                 .thenReturn(TaskImplementationEvidenceService.PersistenceResult.empty());
                 lenient().when(taskImplementationEvidenceService.copyForAnalysis(any(), any()))
@@ -157,12 +154,6 @@ class PullRequestAnalysisProcessorTest {
                                 astScopeEnricher,
                                 ragOperationsService,
                                 eventPublisher);
-        }
-
-        @AfterEach
-        void clearPromptDryRunProperties() {
-                System.clearProperty(PromptDryRunMode.ENABLED_KEY);
-                System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
         }
 
         private PrProcessRequest createRequest() {
@@ -430,70 +421,6 @@ class PullRequestAnalysisProcessorTest {
                 }
 
                 @Test
-                @DisplayName("should run full preparation but not persist or publish a prompt dry run")
-                void shouldNotPersistOrPublishPromptDryRun() throws Exception {
-                        System.setProperty(PromptDryRunMode.ENABLED_KEY, "true");
-                        System.setProperty(PromptDryRunMode.PROJECT_IDS_KEY, "1");
-                        PrProcessRequest request = createRequest();
-                        PullRequestAnalysisProcessor.EventConsumer consumer = mock(
-                                        PullRequestAnalysisProcessor.EventConsumer.class);
-                        VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
-                        when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
-                        when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
-                        when(project.getId()).thenReturn(1L);
-                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-                        when(analysisLockService.acquireLockWithWait(
-                                        any(), anyString(), any(), anyString(), anyLong(), any()))
-                                        .thenReturn(Optional.of("lock-key-123"));
-                        when(pullRequestService.createOrUpdatePullRequest(
-                                        anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
-                                        .thenReturn(pullRequest);
-                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
-                                        .thenReturn(reportingService);
-                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
-                                        .thenReturn(aiClientService);
-                        when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong()))
-                                        .thenReturn(List.of());
-                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
-                                        .thenReturn(List.of(aiAnalysisRequest));
-                        when(aiAnalysisRequest.getRawDiff()).thenReturn("diff");
-                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
-                        Map<String, Object> dryRunResponse = Map.of(
-                                        "dryRun", true,
-                                        "status", "prompt_capture_completed",
-                                        "promptArtifact", Map.of(
-                                                        "filename", "capture.json",
-                                                        "containerPath",
-                                                        "/app/logs/prompt-dry-runs/capture.json"));
-                        when(aiAnalysisClient.performAnalysis(any(), any()))
-                                        .thenAnswer(invocation -> {
-                                                @SuppressWarnings("unchecked")
-                                                java.util.function.Consumer<Map<String, Object>> eventHandler =
-                                                                invocation.getArgument(1);
-                                                eventHandler.accept(Map.of(
-                                                                "type", "status",
-                                                                "state", "processing",
-                                                                "message",
-                                                                "Review pipeline is still processing"));
-                                                return dryRunResponse;
-                                        });
-
-                        Map<String, Object> result = processor.process(request, consumer, project);
-
-                        assertThat(result).isEqualTo(dryRunResponse);
-                        verify(codeAnalysisService, never()).getCodeAnalysisCache(
-                                        anyLong(), anyString(), anyLong());
-                        verify(codeAnalysisService, never()).createAnalysisFromAiResponse(
-                                        any(), any(), anyLong(), anyString(), anyString(), anyString(),
-                                        any(), any(), any(), any(), any(), any());
-                        verify(analysisLockService).maintainLockLease("lock-key-123", 30);
-                        verify(lockLease, times(2)).confirmOwnership();
-                        verify(lockLease).close();
-                        verify(reportingService, never()).postAnalysisResults(
-                                        any(), any(), anyLong(), any(), any());
-                }
-
-                @Test
                 @DisplayName("should reject a quiet completed review when the independent lease heartbeat lost ownership")
                 void shouldRejectCompletedReviewAfterLockLeaseIsLost() throws Exception {
                         PrProcessRequest request = createRequest();
@@ -658,7 +585,6 @@ class PullRequestAnalysisProcessorTest {
                         when(request.getDeletedFiles()).thenReturn(deletedFiles);
                         when(request.getProposedTreeChangedFiles()).thenReturn(proposedTreeChangedFiles);
                         when(request.getProposedTreeDeletedFiles()).thenReturn(proposedTreeDeletedFiles);
-                        when(request.getUseMcpTools()).thenReturn(true);
                         when(request.getCurrentCommitHash()).thenReturn(sourceRevision);
                         when(request.getTargetHeadCommitHash()).thenReturn("target-head-sha");
                         when(request.getTargetBranchName()).thenReturn("main");
@@ -918,7 +844,6 @@ class PullRequestAnalysisProcessorTest {
                         VcsRepoInfo repoInfo = project.getEffectiveVcsRepoInfo();
                         when(repoInfo.getRepoWorkspace()).thenReturn("team");
                         when(repoInfo.getRepoSlug()).thenReturn("repo");
-                        when(aiAnalysisRequest.getUseMcpTools()).thenReturn(true);
                         when(aiAnalysisRequest.getTargetHeadCommitHash())
                                         .thenReturn("target-head-sha");
                         when(aiAnalysisRequest.getProposedTreeChangedFiles())

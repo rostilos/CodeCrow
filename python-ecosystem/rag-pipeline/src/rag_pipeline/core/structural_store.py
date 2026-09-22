@@ -2269,16 +2269,37 @@ class StructuralGraphWriter:
         rows = self.connection.execute(
             "SELECT relations.relation_id AS relation_id, "
             "relations.kind AS kind, relations.source AS source, "
-            "relations.target AS target, "
+            "relations.target AS target, relations.relation AS relation, "
             "relations.source_unit_id AS source_unit_id, "
             "relations.target_unit_id AS target_unit_id, "
-            "relations.path AS path, "
+            "relations.path AS path, relations.line AS line, "
             "relations.attributes_json AS attributes_json, "
             "group_concat(relation_paths.path, char(31)) AS indexed_paths "
             "FROM relations" + relation_join + " LEFT JOIN relation_paths ON "
             "relation_paths.relation_id = relations.relation_id "
             "GROUP BY relations.relation_id"
         )
+        callable_by_path: dict[str, list[tuple[int, int, str]]] = {}
+
+        def callable_at(path: str, line: int) -> str | None:
+            if path not in callable_by_path:
+                callable_by_path[path] = [
+                    (int(unit["start_line"]), int(unit["end_line"]), str(unit["unit_id"]))
+                    for unit in self.connection.execute(
+                        "SELECT unit_id, start_line, end_line FROM units "
+                        "WHERE path = ? AND kind IN "
+                        "('method', 'function', 'constructor', 'arrow_function')",
+                        (path,),
+                    )
+                ]
+            enclosing = [
+                unit for unit in callable_by_path[path]
+                if unit[0] <= line <= unit[1]
+            ]
+            if not enclosing:
+                return None
+            return min(enclosing, key=lambda unit: (unit[1] - unit[0], -unit[0]))[2]
+
         self.connection.executescript(
             "CREATE TEMP TABLE IF NOT EXISTS resolved_relation_endpoints("
             "relation_id TEXT PRIMARY KEY, source_unit_id TEXT, "
@@ -2312,7 +2333,14 @@ class StructuralGraphWriter:
             target_paths = tuple(
                 path for path in indexed_paths if path != row["path"]
             ) + source_paths
-            if row["source_unit_id"] is None:
+            is_call = str(row["relation"] or "").casefold().startswith("call")
+            located_source = (
+                callable_at(str(row["path"]), int(row["line"]))
+                if is_call else None
+            )
+            if located_source and located_source != row["source_unit_id"]:
+                updates["source_unit_id"] = located_source
+            elif row["source_unit_id"] is None:
                 resolved = resolve_name(
                     row["source"],
                     preferred_paths=source_paths,

@@ -3,7 +3,6 @@ Unit tests for model.dtos — all DTO models.
 """
 import pytest
 from model.dtos import (
-    IssueDTO,
     ReviewRequestDto,
     ReviewResponseDto,
     SummarizeRequestDto,
@@ -30,157 +29,25 @@ def _minimal_review_request(**overrides):
     return ReviewRequestDto(**defaults)
 
 
-# ── IssueDTO ─────────────────────────────────────────────────────
-
-class TestIssueDTO:
-
-    def test_all_optional(self):
-        dto = IssueDTO()
-        assert dto.id is None
-        assert dto.type is None
-        assert dto.file is None
-        assert dto.line is None
-
-    def test_from_dict(self):
-        dto = IssueDTO(
-            id="42",
-            type="security",
-            category="SECURITY",
-            severity="HIGH",
-            reason="SQL injection",
-            file="src/dao.py",
-            line=10,
-            status="open",
-        )
-        assert dto.id == "42"
-        assert dto.severity == "HIGH"
-        assert dto.line == 10
-
-    def test_resolution_fields(self):
-        dto = IssueDTO(
-            prVersion=2,
-            resolvedDescription="Fixed",
-            resolvedByCommit="abc123",
-            resolvedInPrVersion=3,
-        )
-        assert dto.prVersion == 2
-        assert dto.resolvedByCommit == "abc123"
-
-
 # ── ReviewRequestDto ─────────────────────────────────────────────
 
 class TestReviewRequestDto:
-
-    def test_minimal(self):
-        req = _minimal_review_request()
-        assert req.projectId == 1
-        assert req.aiProvider == "OPENAI"
-
-    def test_branch_alias(self):
-        """branch is an alias for targetBranchName."""
-        req = _minimal_review_request(branch="main")
-        assert req.targetBranchName == "main"
-
-    def test_get_rag_branch_with_pr_uses_target_as_repository_truth(self):
-        req = _minimal_review_request(
-            pullRequestId=42,
-            sourceBranchName="feat/x",
+    def test_pinned_review_inputs(self):
+        request = _minimal_review_request(
             targetBranchName="main",
-        )
-        assert req.get_rag_branch() == "main"
-
-    def test_get_rag_branch_without_pr(self):
-        req = _minimal_review_request(targetBranchName="develop")
-        assert req.get_rag_branch() == "develop"
-
-    def test_get_rag_branch_pr_no_source(self):
-        req = _minimal_review_request(pullRequestId=1, targetBranchName="main")
-        assert req.get_rag_branch() == "main"
-
-    def test_get_rag_branch_pr_without_target_does_not_fall_back_to_source(self):
-        req = _minimal_review_request(
-            pullRequestId=1,
-            sourceBranchName="rejected-source",
-        )
-        assert req.get_rag_branch() is None
-
-    def test_get_rag_base_branch_with_pr(self):
-        req = _minimal_review_request(pullRequestId=1, targetBranchName="main")
-        assert req.get_rag_base_branch() == "main"
-
-    def test_get_rag_base_branch_without_pr(self):
-        req = _minimal_review_request(targetBranchName="main")
-        assert req.get_rag_base_branch() is None
-
-    def test_target_head_commit_is_distinct_from_merge_base(self):
-        req = _minimal_review_request(
+            currentCommitHash="source-head",
             targetHeadCommitHash="target-head",
-            baseCommitHash="merge-base",
-        )
-        assert req.get_target_head_commit_hash() == "target-head"
-        assert req.baseCommitHash == "merge-base"
-
-    def test_target_head_commit_falls_back_to_legacy_base_field(self):
-        req = _minimal_review_request(baseCommitHash="legacy-target-head")
-        assert req.get_target_head_commit_hash() == "legacy-target-head"
-
-    def test_defaults(self):
-        req = _minimal_review_request()
-        assert req.changedFiles == []
-        assert req.deletedFiles == []
-        assert req.previousCodeAnalysisIssues == []
-        assert req.analysisMode == "FULL"
-        assert req.useMcpTools is True
-        assert req.mcpLocalOnly is False
-        assert req.ragEnabled is True
-
-    def test_project_can_disable_rag_for_one_review(self):
-        req = _minimal_review_request(ragEnabled=False)
-        assert req.ragEnabled is False
-
-    def test_project_can_disable_mcp_tools_for_one_review(self):
-        req = _minimal_review_request(useMcpTools=False)
-        assert req.useMcpTools is False
-
-    def test_request_can_require_provider_isolated_mcp(self):
-        req = _minimal_review_request(mcpLocalOnly=True)
-        assert req.mcpLocalOnly is True
-
-    def test_local_repository_snapshot_metadata(self):
-        req = _minimal_review_request(
-            localRepoPath="/tmp/review-snapshot",
-            localRepoTargetBranch="main",
-            localRepoRevision="abc123",
-            localRagRepoPath="/tmp/structural-snapshot",
+            localRepoRevision="target-head",
             localReviewOverlayPath="/tmp/review-overlay",
         )
-        assert req.localRepoPath == "/tmp/review-snapshot"
-        assert req.localRepoTargetBranch == "main"
-        assert req.localRepoRevision == "abc123"
-        assert req.localRagRepoPath == "/tmp/structural-snapshot"
-        assert req.localReviewOverlayPath == "/tmp/review-overlay"
+        assert request.targetBranchName == "main"
+        assert request.currentCommitHash == "source-head"
+        assert request.get_target_head_commit_hash() == "target-head"
+        assert request.localReviewOverlayPath == "/tmp/review-overlay"
 
-    def test_enrichment_data_none(self):
-        req = _minimal_review_request()
-        assert req.enrichmentData is None
-
-    def test_task_context_aliases(self):
-        req = _minimal_review_request(
-            task_context={"task_key": "PROJ-123", "task_summary": "Ship flow"}
-        )
-        assert req.taskContext["task_key"] == "PROJ-123"
-
-        req2 = _minimal_review_request(
-            taskContext={"taskKey": "PROJ-124", "taskSummary": "Fix flow"}
-        )
-        assert req2.taskContext["taskKey"] == "PROJ-124"
-
-    def test_task_history_context_aliases(self):
-        req = _minimal_review_request(task_history_context="PR #12 covered AC1")
-        assert req.taskHistoryContext == "PR #12 covered AC1"
-
-        req2 = _minimal_review_request(taskHistoryContext="PR #13 covered AC2")
-        assert req2.taskHistoryContext == "PR #13 covered AC2"
+    def test_target_head_can_use_legacy_base_metadata(self):
+        request = _minimal_review_request(baseCommitHash="base-head")
+        assert request.get_target_head_commit_hash() == "base-head"
 
 
 # ── ReviewResponseDto ────────────────────────────────────────────

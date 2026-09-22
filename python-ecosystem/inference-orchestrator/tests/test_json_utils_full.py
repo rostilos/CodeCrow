@@ -3,7 +3,7 @@ import json
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from pydantic import BaseModel, Field
-from service.review.orchestrator.json_utils import (
+from service.agent.json_utils import (
     JsonRepairInputTooLarge,
     parse_llm_response,
     repair_json_with_llm,

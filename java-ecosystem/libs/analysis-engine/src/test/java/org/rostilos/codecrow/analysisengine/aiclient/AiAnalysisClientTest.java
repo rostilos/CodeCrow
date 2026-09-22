@@ -12,7 +12,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.LocalRepositorySnapshot;
-import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.ParsedFileMetadataDto;
@@ -122,11 +121,6 @@ class AiAnalysisClientTest {
                 }
 
                 @Override
-                public boolean getUseMcpTools() {
-                        return false;
-                }
-
-                @Override
                 public org.rostilos.codecrow.core.model.codeanalysis.AnalysisType getAnalysisType() {
                         return null;
                 }
@@ -210,15 +204,7 @@ class AiAnalysisClientTest {
                 client = new AiAnalysisClient(restTemplate, queueService, objectMapper);
                 lenient().when(queueService.hasKey(AiAnalysisClient.CONSUMER_HEARTBEAT_KEY))
                                 .thenReturn(true);
-                System.setProperty(PromptDryRunMode.ENABLED_KEY, "false");
-                System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
-        }
-
-        @AfterEach
-        void clearPromptDryRunProperties() {
-                System.clearProperty(PromptDryRunMode.ENABLED_KEY);
-                System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
-        }
+                        }
 
         @Nested
         @DisplayName("performAnalysis() success paths")
@@ -258,41 +244,6 @@ class AiAnalysisClientTest {
                 }
 
                 @Test
-                @DisplayName("should route a selected project through prompt dry run")
-                void shouldRouteSelectedProjectThroughPromptDryRun() throws Exception {
-                        System.setProperty(PromptDryRunMode.ENABLED_KEY, "true");
-                        System.setProperty(PromptDryRunMode.PROJECT_IDS_KEY, "1");
-                        Map<String, Object> finalEvent = new HashMap<>();
-                        finalEvent.put("type", "final");
-                        finalEvent.put("result", Map.of(
-                                        "dryRun", true,
-                                        "status", "prompt_capture_completed",
-                                        "promptArtifact", Map.of(
-                                                        "filename", "capture.json",
-                                                        "containerPath", "/app/logs/prompt-dry-runs/capture.json")));
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
-
-                        Map<String, Object> response = client.performAnalysis(mockRequest);
-
-                        assertThat(response).containsEntry("dryRun", true);
-                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
-                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> queued = objectMapper.readValue(
-                                        payloadCaptor.getValue(), Map.class);
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> requestPayload =
-                                        (Map<String, Object>) queued.get("request");
-                        assertThat(requestPayload).containsEntry("promptDryRun", true);
-                        assertThat(requestPayload).containsEntry(
-                                        "aiApiKey", "dry-run-provider-disabled");
-                        assertThat(requestPayload.get("promptDryRunId")).isEqualTo(queued.get("job_id"));
-                        assertThat(requestPayload.get("oAuthClient")).isNull();
-                        assertThat(requestPayload.get("accessToken")).isNull();
-                }
-
-                @Test
                 @DisplayName("should include source and target branch names in queued request payload")
                 void shouldIncludeSourceAndTargetBranchNamesInQueuedRequestPayload() throws Exception {
                         Map<String, Object> finalEvent = new HashMap<>();
@@ -316,7 +267,7 @@ class AiAnalysisClientTest {
                         assertThat(requestPayload.get("targetBranchName")).isEqualTo("main");
                         assertThat(requestPayload.get("projectWorkspace")).isEqualTo("Codecrow");
                         assertThat(requestPayload.get("projectNamespace")).isEqualTo("codecrow-garden");
-                        assertThat(requestPayload.get("ragEnabled")).isEqualTo(true);
+                        assertThat(requestPayload).doesNotContainKeys("oAuthClient", "oAuthSecret", "accessToken");
                 }
 
                 @Test
@@ -475,7 +426,6 @@ class AiAnalysisClientTest {
                         Map<String, Object> requestPayload =
                                         (Map<String, Object>) queued.get("request");
                         assertThat(requestPayload)
-                                        .containsEntry("ragEnabled", false)
                                         .doesNotContainKeys(
                                                         "ragCollectionTarget",
                                                         "ragBaseGenerationManifestSha256");
@@ -520,12 +470,11 @@ class AiAnalysisClientTest {
                         assertThat(taskContext).containsEntry("task_key", "PROJ-123");
                         assertThat(taskContext).containsEntry("task_summary", "Add export");
                         assertThat(taskContext).containsEntry("status", "In Progress");
-                        assertThat(requestPayload.get("taskHistoryContext"))
-                                        .isEqualTo("PR #8 (MERGED) covered export setup");
+                        assertThat(requestPayload).doesNotContainKey("taskHistoryContext");
                 }
 
                 @Test
-                @DisplayName("should include previous issues in branch reconciliation queued request payload")
+                @DisplayName("should keep previous issues out of the review model request")
                 void shouldIncludePreviousIssuesInBranchReconciliationQueuedRequestPayload() throws Exception {
                         AiAnalysisRequest requestWithPreviousIssues = AiAnalysisRequestImpl.builder()
                                         .withProjectId(1L)
@@ -576,18 +525,12 @@ class AiAnalysisClientTest {
                         Map<String, Object> queued = objectMapper.readValue(payloadCaptor.getValue(), Map.class);
                         @SuppressWarnings("unchecked")
                         Map<String, Object> requestPayload = (Map<String, Object>) queued.get("request");
-                        @SuppressWarnings("unchecked")
-                        List<Map<String, Object>> previousIssues =
-                                        (List<Map<String, Object>>) requestPayload.get("previousCodeAnalysisIssues");
-
-                        assertThat(previousIssues).hasSize(1);
-                        assertThat(previousIssues.get(0)).containsEntry("id", "123");
-                        assertThat(previousIssues.get(0)).containsEntry("title", "SQL injection remains");
-                        assertThat(previousIssues.get(0)).containsEntry("file", "src/App.java");
+                        assertThat(requestPayload).doesNotContainKeys(
+                                        "previousCodeAnalysisIssues", "reconciliationFileContents");
                 }
 
                 @Test
-                @DisplayName("should include enrichmentData with full file content in queued request payload")
+                @DisplayName("should keep file enrichment out of the review model request")
                 void shouldIncludeEnrichmentDataWithFullFileContentInQueuedRequestPayload() throws Exception {
                         PrEnrichmentDataDto enrichmentData = new PrEnrichmentDataDto(
                                         List.of(FileContentDto.of(
@@ -606,7 +549,6 @@ class AiAnalysisClientTest {
                                         .withProjectAiConnectionTokenDecrypted("key")
                                         .withMaxAllowedTokens(1000)
                                         .withUseLocalMcp(false)
-                                        .withUseMcpTools(false)
                                         .withProjectMetadata("Codecrow", "codecrow-garden")
                                         .withTargetBranchName("main")
                                         .withSourceBranchName("feature/frontend/GR-2509")
@@ -633,22 +575,8 @@ class AiAnalysisClientTest {
                         Map<String, Object> queued = objectMapper.readValue(payloadCaptor.getValue(), Map.class);
                         @SuppressWarnings("unchecked")
                         Map<String, Object> requestPayload = (Map<String, Object>) queued.get("request");
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> serializedEnrichment = (Map<String, Object>) requestPayload.get("enrichmentData");
-                        @SuppressWarnings("unchecked")
-                        List<Map<String, Object>> fileContents = (List<Map<String, Object>>) serializedEnrichment.get("fileContents");
-                        @SuppressWarnings("unchecked")
-                        List<Map<String, Object>> fileMetadata = (List<Map<String, Object>>) serializedEnrichment.get("fileMetadata");
-
-                        assertThat(serializedEnrichment).isNotNull();
-                        assertThat(fileContents).hasSize(1);
-                        assertThat(fileContents.get(0).get("path")).isEqualTo(
-                                        "magento/app/design/frontend/Perspective/gardeningexpress/Magento_Catalog/templates/product/product-detail-page.phtml");
-                        assertThat(fileContents.get(0).get("content")).isEqualTo(
-                                        "<?php if ($productsToDisplay): ?>\n<div x-data=\"modal()\"></div>\n<?php endif; ?>");
-                        assertThat(fileMetadata).hasSize(1);
-                        assertThat(fileMetadata.get(0).get("path")).isEqualTo(
-                                        "magento/app/design/frontend/Perspective/gardeningexpress/Magento_Catalog/templates/product/product-detail-page.phtml");
+                        assertThat(requestPayload).doesNotContainKeys(
+                                        "enrichmentData", "projectCapabilities", "accessToken");
                 }
 
                 @Test
@@ -858,6 +786,23 @@ class AiAnalysisClientTest {
                         assertThatThrownBy(() -> client.performAnalysis(mockRequest))
                                         .isInstanceOf(IOException.class)
                                         .hasMessageContaining("Analysis failed: Model quota exceeded");
+                }
+
+                @Test
+                @DisplayName("should reject an incomplete review error with ordinary result fields")
+                void shouldRejectErrorStatus() throws Exception {
+                        Map<String, Object> finalEvent = Map.of(
+                                        "type", "final",
+                                        "result", Map.of(
+                                                        "status", "error",
+                                                        "comment", "Proposed-tree graph unavailable",
+                                                        "issues", List.of()));
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        assertThatThrownBy(() -> client.performAnalysis(mockRequest))
+                                        .isInstanceOf(IOException.class)
+                                        .hasMessageContaining("Proposed-tree graph unavailable");
                 }
 
                 @Test

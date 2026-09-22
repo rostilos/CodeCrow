@@ -1,5 +1,5 @@
 """
-Unit tests for service.review.orchestrator.json_utils — clean_json_text.
+Unit tests for service.agent.json_utils — clean_json_text.
 (parse_llm_response and repair_json_with_llm are async and need LLM mock — tested separately.)
 """
 import json
@@ -8,7 +8,7 @@ import pytest
 from pydantic import BaseModel
 from unittest.mock import AsyncMock, MagicMock
 
-from service.review.orchestrator.json_utils import (
+from service.agent.json_utils import (
     clean_json_text,
     load_json_with_local_repairs,
     parse_llm_response,

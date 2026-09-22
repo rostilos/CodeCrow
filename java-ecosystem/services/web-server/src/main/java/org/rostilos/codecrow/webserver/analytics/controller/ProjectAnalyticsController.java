@@ -535,6 +535,8 @@ public class ProjectAnalyticsController {
             case ACCEPTED:
             case REJECTED:
                 return "completed";
+            case PARTIAL:
+                return "partial";
             case ERROR:
                 return "failed";
             case PENDING:

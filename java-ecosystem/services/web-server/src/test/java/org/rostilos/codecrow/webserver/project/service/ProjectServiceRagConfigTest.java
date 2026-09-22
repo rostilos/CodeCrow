@@ -62,7 +62,6 @@ class ProjectServiceRagConfigTest {
         assertThat(rag.branch()).isEqualTo("main");
         assertThat(rag.includePatterns()).containsExactly("app/**");
         assertThat(rag.excludePatterns()).containsExactly("build/**");
-        assertThat(updated.getConfiguration().useMcpTools()).isTrue();
         verify(repositoryIndexBootstrapService).enqueueAfterCommit(project);
     }
 
@@ -79,14 +78,4 @@ class ProjectServiceRagConfigTest {
         assertThat(rag.excludePatterns()).containsExactly("generated/**");
     }
 
-    @Test
-    void ragUpdatePreservesExplicitlyDisabledMcpReviewSetting() {
-        project.getConfiguration().setUseMcpTools(false);
-
-        Project updated = projectService.updateRagConfig(
-                10L, 20L, false, "develop",
-                List.of("service/**"), List.of("generated/**"));
-
-        assertThat(updated.getConfiguration().useMcpTools()).isFalse();
-    }
 }

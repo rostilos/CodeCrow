@@ -1,1171 +1,634 @@
-import os
+"""Review changed behavior using one pinned proposed-tree graph."""
+
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
-import re
-from typing import Dict, Any, Optional, Callable
-from dotenv import load_dotenv
-from utils.mcp_runtime import configure_mcp_runtime
+import os
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping
 
-configure_mcp_runtime()
-
-from mcp_use import MCPClient
-
-from model.dtos import ReviewRequestDto
-from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
-from utils.response_parser import ResponseParser
-from utils.mcp_tool_serialization import (
-    install_per_connection_tool_serialization,
-)
+from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
+from model.dtos import ReviewRequestDto
 from service.rag.rag_client import RagClient
-from service.review.issue_processor import post_process_analysis_result
-from service.review.plugin_context import apply_plugin_file_policy
-from service.review.quality_capture import (
-    ReviewQualityCaptureSession,
-    create_quality_capture_session,
-    review_response_indicates_failure,
-    wrap_quality_capture_llm,
-)
-from service.review.evidence_scopes import (
-    process_review_evidence_scopes,
-    select_review_evidence_diff,
-)
-from utils.hunk_coverage import validate_acquired_diff_manifest
-from utils.error_sanitizer import create_user_friendly_error
-from service.review.orchestrator import MultiStageReviewOrchestrator
-from service.review.orchestrator.stage_1_tool_inventory import (
-    STAGE1_REVIEW_FILE_TOOL_NAME,
-    STAGE1_STRUCTURAL_TOOL_NAMES,
-)
 from service.review.snapshot_identity import (
     resolve_exact_structural_base_revision,
     validate_review_snapshot_identity,
 )
+from utils.diff_processor import HunkDisposition, process_raw_diff
+
 
 logger = logging.getLogger(__name__)
 
-class ReviewService:
-    """Service class for handling code review requests with streaming support."""
-    
-    # Maximum retries for LLM-based response fixing
-    MAX_FIX_RETRIES = 2
+_SYSTEM_PROMPT = """Review the changed behavior for actionable defects. The diff is
+the complete changed-code worklist. The graph is a navigation map, not proof
+that code is safe. Confirm a finding against exact source when the diff and
+graph do not already establish its failure mechanism. Inspect callers,
+implementations and tests when a change can affect them. Do not report style,
+speculative risks or issues outside the changed lines.
 
-    # Maximum concurrent reviews (each spawns a JVM subprocess + LLM calls)
+Return only one JSON object:
+{"reviewedHunkIds":["hunk id"],"findings":[{"partId":"hunk id",
+"file":"path","line":1,"severity":"HIGH|MEDIUM|LOW",
+"category":"BUG_RISK|SECURITY|PERFORMANCE|ERROR_HANDLING|ARCHITECTURE|CODE_QUALITY|TESTING",
+"title":"short defect","reason":"source-supported failure mechanism",
+"suggestedFixDescription":"practical fix"}],
+"reads":[{"kind":"graph|unit|file|diff|search","pattern":"for graph",
+"target":"for graph","cursor":0,"unitId":"for unit","offset":0,
+"path":"for file or diff","startLine":1,"endLine":20,
+"side":"proposed or target","query":"for literal search"}],
+"unresolvedReason":"if still uncertain"}
+
+Only include fields that apply to each requested read. A graph read uses
+pattern and target; a unit read uses unitId; a file read uses path and optional
+line range/side; a diff read uses path; a search uses query and optional cursor.
+You can request more reads on later
+turns, including other files. Put a hunk in reviewedHunkIds only after deciding
+whether it has a defect. Anchor each finding to an anchor line in its hunk.
+If evidence remains insufficient, leave that hunk unreviewed and say why.
+Do not repeat a read whose actual result is already supplied."""
+
+
+@dataclass(frozen=True)
+class ReviewPart:
+    id: str
+    path: str
+    diff: str
+    anchors: Mapping[int, str]
+    side: str
+
+
+def _parts(raw_diff: str) -> tuple[list[ReviewPart], list[str]]:
+    processed = process_raw_diff(raw_diff)
+    parts: list[ReviewPart] = []
+    unparsed: list[str] = []
+    if raw_diff.strip() and not processed.files:
+        return [], ["<diff>"]
+    for file in processed.files:
+        if file.is_binary or file.is_gitlink:
+            unparsed.append(file.path)
+            continue
+        if not file.hunks and (file.additions or file.deletions):
+            unparsed.append(file.path)
+        for hunk in file.hunks:
+            if hunk.disposition not in {
+                HunkDisposition.REVIEWABLE, HunkDisposition.DELETED,
+            }:
+                unparsed.append(hunk.path)
+                continue
+            added: dict[int, str] = {}
+            removed: dict[int, str] = {}
+            old_line, new_line = hunk.old_start, hunk.new_start
+            for line in hunk.content.splitlines()[1:]:
+                if line.startswith("+"):
+                    added[new_line] = line[1:]
+                    new_line += 1
+                elif line.startswith("-"):
+                    removed[old_line] = line[1:]
+                    old_line += 1
+                elif line.startswith(" "):
+                    old_line += 1
+                    new_line += 1
+            if added or removed:
+                parts.append(ReviewPart(
+                    id=hunk.id, path=hunk.path, diff=hunk.content,
+                    anchors=added or removed,
+                    side="proposed" if added else "target",
+                ))
+    return parts, list(dict.fromkeys(unparsed))
+
+
+def _response_text(response: Any) -> str:
+    content = getattr(response, "content", response)
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        return "\n".join(
+            str(item.get("text") or "")
+            for item in content
+            if isinstance(item, Mapping) and item.get("type") == "text"
+        ).strip()
+    return str(content).strip()
+
+
+def _parse_turn(response: Any) -> dict[str, Any]:
+    content = _response_text(response)
+    if content.startswith("```"):
+        content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    turn = json.loads(content)
+    if not isinstance(turn, dict):
+        raise ValueError("review model did not return the requested JSON object")
+    for field in ("reviewedHunkIds", "findings", "reads"):
+        value = turn.get(field)
+        if value is None:
+            turn[field] = []
+        elif field == "reviewedHunkIds" and isinstance(value, str):
+            turn[field] = [value]
+        elif field != "reviewedHunkIds" and isinstance(value, dict):
+            turn[field] = [value]
+        elif not isinstance(value, list):
+            raise ValueError(f"review model returned an invalid {field} field")
+    return turn
+
+
+def _compact_relation(value: Mapping[str, Any]) -> dict[str, Any]:
+    def endpoint(name: str) -> dict[str, Any]:
+        unit = value.get(name)
+        if not isinstance(unit, Mapping):
+            return {}
+        return {
+            key: unit.get(key)
+            for key in ("unitId", "qualifiedName", "path", "startLine")
+            if unit.get(key) is not None
+        }
+
+    return {
+        "kind": value.get("kind"),
+        "source": endpoint("sourceUnit"),
+        "target": endpoint("targetUnit"),
+        "origin": value.get("origin"),
+    }
+
+
+class ReviewService:
     MAX_CONCURRENT_REVIEWS = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4"))
 
-    # Hard timeout ceiling per review (seconds). Configurable via .env
-    REVIEW_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "1500"))
-    MCP_SESSION_INITIALIZATION_TIMEOUT_SECONDS = float(os.environ.get(
-        "MCP_SESSION_INITIALIZATION_TIMEOUT_SECONDS",
-        "30",
-    ))
-    MCP_SESSION_CLOSE_TIMEOUT_SECONDS = float(os.environ.get(
-        "MCP_SESSION_CLOSE_TIMEOUT_SECONDS",
-        "10",
-    ))
-    def __init__(self):
-        load_dotenv(interpolate=False)
-        self.default_jar_path = os.environ.get(
-            "MCP_SERVER_JAR",
-            #"/var/www/html/codecrow/codecrow-public/java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar",
-            "/app/codecrow-vcs-mcp-1.0.jar"
-        )
-        self.rag_client = RagClient()
+    def __init__(self, rag_client: RagClient | None = None):
+        self.rag_client = rag_client or RagClient()
         self._review_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_REVIEWS)
 
     async def process_review_request(
-            self,
-            request: ReviewRequestDto,
-            event_callback: Optional[Callable[[Dict], None]] = None
-    ) -> Dict[str, Any]:
-        """
-        Process a review request with optional event streaming.
-
-        Args:
-            request: The review request data
-            event_callback: Optional callback to receive progress events
-                          Expected signature: callback(event: Dict) -> None
-                          Events have structure: {"type": "status|progress|error|final", ...}
-
-        Returns:
-            Dict with "result" key containing the analysis result or error
-        """
-        # Validate before provider construction, MCP
-        # startup, or dry-run dispatch. Every review mode must describe the
-        # same exact immutable repository snapshot.
-        validate_review_snapshot_identity(request)
-        self._validate_local_only_mcp_request(request)
-        self._validate_required_structural_mcp_request(request)
-        async with self._review_semaphore:
-            if request.promptDryRun:
-                return await self._process_prompt_dry_run(request, event_callback)
-            quality_capture = create_quality_capture_session(request)
-            review_event_callback = (
-                quality_capture.wrap_event_callback(event_callback)
-                if quality_capture is not None
-                else event_callback
-            )
-            try:
-                response = await self._process_review(
-                    request=request,
-                    repo_path=None,
-                    event_callback=review_event_callback,
-                    quality_capture=quality_capture,
-                )
-            except BaseException as exception:
-                if quality_capture is not None:
-                    await quality_capture.complete(None, exception)
-                raise
-            if quality_capture is not None:
-                await quality_capture.complete(
-                    response,
-                    failed=review_response_indicates_failure(response),
-                )
-                self._emit_event(review_event_callback, {
-                    "type": "status",
-                    "state": "review_quality_capture_completed",
-                    "message": "Review quality capture completed",
-                    "qualityCapture": quality_capture.receipt(),
-                })
-            return response
-
-    async def _process_prompt_dry_run(
-            self,
-            request: ReviewRequestDto,
-            event_callback: Optional[Callable[[Dict], None]],
-    ) -> Dict[str, Any]:
-        """Run real context assembly with a capturing model and store its prompts."""
-        enabled = os.environ.get(
-            "ANALYSIS_PROMPT_DRY_RUN_ENABLED", "false"
-        ).strip().lower() in {"1", "true", "yes", "on"}
-        if not enabled:
-            raise ValueError(
-                "promptDryRun was requested while ANALYSIS_PROMPT_DRY_RUN_ENABLED is false"
-            )
-
-        try:
-            simulated_findings = int(os.environ.get(
-                "ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_PER_FILE", "6"
-            ))
-        except ValueError as exception:
-            raise ValueError(
-                "ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_PER_FILE must be an integer"
-            ) from exception
-        try:
-            simulated_findings_max_total = int(os.environ.get(
-                "ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_MAX_TOTAL", "24"
-            ))
-        except ValueError as exception:
-            raise ValueError(
-                "ANALYSIS_PROMPT_DRY_RUN_SYNTHETIC_FINDINGS_MAX_TOTAL must be an integer"
-            ) from exception
-
-        self._emit_event(event_callback, {
-            "type": "status",
-            "state": "prompt_dry_run_started",
-            "message": (
-                "Prompt dry run started: real project context will be assembled "
-                "without calling the review LLM"
-            ),
-        })
-        logger.info(
-            "prompt_dry_run_started project=%s pr=%s job=%s",
-            request.projectId,
-            request.pullRequestId,
-            request.promptDryRunId,
-        )
-
-        from service.review.prompt_dry_run import capture_and_store_review_prompts
-
-        summary = await capture_and_store_review_prompts(
-            request,
-            self._rag_client_for_request(request),
-            simulated_findings_per_file=simulated_findings,
-            simulated_findings_max_total=simulated_findings_max_total,
-            event_callback=event_callback,
-        )
-        self._emit_event(event_callback, {
-            "type": "status",
-            "state": "prompt_dry_run_completed",
-            "message": (
-                "Prompt dry run completed; artifact: "
-                f"{summary['promptArtifact']['containerPath']}"
-            ),
-            "promptArtifact": summary["promptArtifact"],
-        })
-        logger.info(
-            "prompt_dry_run_completed project=%s pr=%s job=%s artifact=%s "
-            "provider_calls=0",
-            request.projectId,
-            request.pullRequestId,
-            request.promptDryRunId,
-            summary["promptArtifact"]["containerPath"],
-        )
-        return {"result": summary}
-
-    async def _process_review(
-            self,
-            request: ReviewRequestDto,
-            repo_path: Optional[str] = None,
-            event_callback: Optional[Callable[[Dict], None]] = None,
-            quality_capture: Optional[ReviewQualityCaptureSession] = None,
-    ) -> Dict[str, Any]:
-        """
-        Internal method that handles both regular and local repo reviews.
-        
-        When rawDiff is provided:
-        - Diff is embedded directly in prompt (no need to call getPullRequestDiff)
-        - MCP agent still has access to all other tools (getFile, getComments, etc.)
-        
-        When rawDiff is not provided:
-        - MCP agent fetches diff via getPullRequestDiff tool
-
-        Emits events via event_callback:
-        - {"type": "status", "state": "started", "message": "..."}
-        - {"type": "status", "state": "mcp_initialized", "message": "..."}
-        - {"type": "progress", "step": N, "max_steps": M, "message": "..."}
-        - {"type": "mcp_output", "content": "...", "step": N}
-        - {"type": "final", "result": {...}}
-        - {"type": "error", "message": "..."}
-        """
-        self._validate_local_only_mcp_request(request)
-        self._validate_required_structural_mcp_request(request)
-        jar_path = self.default_jar_path
-
-        # An incremental execution owns the delta manifest. The full PR diff is
-        # still carried as snapshot context, but must not be validated or
-        # planned as though every historical PR path belonged to this run.
-        review_evidence_diff = select_review_evidence_diff(request)
-        has_raw_diff = bool(review_evidence_diff)
-
-        # ── MCP-free branch reconciliation fast path ──
-        # When Java provides pre-fetched file contents AND there are previous
-        # issues to reconcile, skip MCP entirely: no JVM subprocess, no tool
-        # calls — just a direct LLM call.
-        # This check is done BEFORE the jar existence check since MCP-free
-        # reconciliation doesn't need the jar at all.
-        # NOTE: When there are no previous issues (e.g. direct push with no
-        # prior review history), we fall through to the standard path which
-        # runs a full multi-stage review of the diff.
-        is_branch_reconciliation = request.analysisType == "BRANCH_ANALYSIS"
-        has_file_contents = bool(request.reconciliationFileContents)
-        has_previous_issues = bool(request.previousCodeAnalysisIssues)
-        if (
-            request.requireStructuralMcp
-            and is_branch_reconciliation
-            and has_file_contents
-            and has_previous_issues
-        ):
-            raise ValueError(
-                "Required structural MCP is incompatible with the MCP-free "
-                "branch-reconciliation path. No review-model stage was started."
-            )
-        needs_multistage_review = not (
-            is_branch_reconciliation and has_previous_issues
-        )
-
-        # Parse and prove the acquired diff before MCP startup, provider
-        # construction, or any repository-context query. Reconciliation
-        # requests intentionally carry an issue-scoped diff rather than the
-        # complete changed-file manifest, so their separate direct path is not
-        # subject to this full-review equality check.
-        processed_diff = None
-        full_pr_processed_diff = None
-        if has_raw_diff and needs_multistage_review:
-            evidence_scopes = process_review_evidence_scopes(request)
-            processed_diff = evidence_scopes.review
-            full_pr_processed_diff = evidence_scopes.full_pr
-            validate_acquired_diff_manifest(
-                request.changedFiles or (),
-                request.deletedFiles or (),
-                processed_diff,
-            )
-
-            logger.info(
-                f"Diff pre-processed: {processed_diff.total_files} files, "
-                f"+{processed_diff.total_additions}/-{processed_diff.total_deletions}, "
-                f"skipped: {processed_diff.skipped_files}"
-            )
-
-            # Incremental review and PR-wide reasoning use deliberately separate
-            # evidence scopes. Stage 0/1, hunk coverage, and publication anchors
-            # continue to use only ``processed_diff``
-            # (the delta). Stage 2 receives this bounded base-to-head parse so it
-            # cannot mistake a one-file delta for the complete PR state.
-            if (
-                request.analysisMode == "INCREMENTAL"
-                and request.deltaDiff
-            ):
-                if full_pr_processed_diff is not None:
-                    logger.info(
-                        "Full PR evidence scope prepared separately: %d files; "
-                        "review/publication scope remains %d delta files",
-                        len(full_pr_processed_diff.files),
-                        len(processed_diff.files),
-                    )
-                else:
-                    logger.warning(
-                        "Full PR evidence scope unavailable; continuing the "
-                        "delta review with PR-wide omission claims disabled"
-                    )
-            else:
-                full_pr_processed_diff = processed_diff
-
-            if processed_diff.truncated:
-                self._emit_event(event_callback, {
-                    "type": "warning",
-                    "message": processed_diff.truncation_reason
-                })
-
-        if is_branch_reconciliation and has_file_contents and has_previous_issues:
-            try:
-                async with asyncio.timeout(self.REVIEW_TIMEOUT_SECONDS):
-                    logger.info(
-                        "Branch reconciliation with %d pre-fetched files — skipping MCP",
-                        len(request.reconciliationFileContents),
-                    )
-                    self._emit_event(event_callback, {
-                        "type": "status",
-                        "state": "direct_reconciliation",
-                        "message": f"Direct reconciliation mode ({len(request.reconciliationFileContents)} files pre-fetched)"
-                    })
-
-                    llm = self._create_llm(request, quality_capture)
-                    pr_metadata = self._build_pr_metadata(request)
-                    num_issues = len(pr_metadata.get("previousCodeAnalysisIssues", []))
-                    logger.info(f"Branch reconciliation: {num_issues} previous issues to process (MCP-free)")
-
-                    orchestrator = MultiStageReviewOrchestrator(
-                        llm=llm,
-                        mcp_client=None,  # No MCP needed
-                        rag_client=None,
-                        event_callback=event_callback,
-                    )
-
-                    result = await orchestrator.execute_batched_branch_analysis(
-                        request, pr_metadata
-                    )
-
-                    # Post-process
-                    if result and 'issues' in result:
-                        result = post_process_analysis_result(result)
-
-                    self._emit_event(event_callback, {
-                        "type": "status",
-                        "state": "completed",
-                        "message": "Branch reconciliation completed (MCP-free)"
-                    })
-                    return {"result": result}
-
-            except TimeoutError:
-                timeout_msg = f"Review timed out after {self.REVIEW_TIMEOUT_SECONDS} seconds"
-                logger.error(timeout_msg)
-                self._emit_event(event_callback, {"type": "error", "message": timeout_msg})
-                error_response = ResponseParser.create_error_response(
-                    "Review timed out", timeout_msg
-                )
-                return {"result": error_response}
-
-            except Exception as e:
-                logger.error(f"Direct reconciliation failed: {str(e)}", exc_info=True)
-                sanitized_message = create_user_friendly_error(e)
-                error_response = ResponseParser.create_error_response(
-                    "Direct reconciliation failed", sanitized_message
-                )
-                self._emit_event(event_callback, {
-                    "type": "error",
-                    "message": sanitized_message
-                })
-                return {"result": error_response}
-
-        use_mcp_tools = bool(request.useMcpTools)
-        mcp_available = use_mcp_tools and os.path.exists(jar_path)
-        if (request.mcpLocalOnly or request.requireStructuralMcp) and not mcp_available:
-            raise RuntimeError(
-                "Required MCP precondition failed: the request-scoped VCS MCP "
-                "server is unavailable. No review-model stage was started."
-            )
-        if use_mcp_tools and not mcp_available:
-            logger.warning(
-                "Agentic repository tools requested but the VCS MCP server is "
-                "unavailable at %s; continuing with direct file-review prompts",
-                jar_path,
-            )
-            self._emit_event(event_callback, {
-                "type": "status",
-                "state": "mcp_degraded",
-                "message": (
-                    "Repository tools are unavailable; analysis will continue "
-                    "with the diff and prepared context"
-                ),
-            })
-        
-        client = None
-        try:
-            async with asyncio.timeout(self.REVIEW_TIMEOUT_SECONDS):
-                context = "with pre-fetched diff" if has_raw_diff else "fetching diff via MCP"
-                self._emit_event(event_callback, {
-                    "type": "status",
-                    "state": "started",
-                    "message": f"Analysis starting ({context})"
-                })
-
-                request_rag_client = self._rag_client_for_request(request)
-                agent_rag_client = self._rag_client_for_agent_tools()
-                await self._prepare_rag_review_generation(
-                    request,
-                    agent_rag_client,
-                    event_callback,
-                )
-                rag_mcp_context = self._build_rag_mcp_context(
-                    request,
-                    agent_rag_client,
-                )
-                if request.requireStructuralMcp:
-                    if request.ragReviewGenerationStatus != "ready":
-                        raise RuntimeError(
-                            "Required proposed-tree graph preparation did not "
-                            "produce a sealed ready generation; no review-model "
-                            "stage was started: "
-                            + str(
-                                request.ragReviewGenerationError
-                                or request.ragReviewGenerationStatus
-                            )
-                        )
-                    if rag_mcp_context is None:
-                        raise RuntimeError(
-                            "Required proposed-tree graph binding is incomplete; "
-                            "no review-model stage was started"
-                        )
-
-                # Provider construction is intentionally after every local-only
-                # request/binding precondition. No model invocation happens
-                # until the MCP sessions and exact-source preflight pass below.
-                llm = self._create_llm(request, quality_capture)
-                agent_service = None
-
-                if mcp_available:
-                    try:
-                        self._emit_event(event_callback, {
-                            "type": "status",
-                            "state": "mcp_initializing",
-                            "message": "Initializing repository tools"
-                        })
-                        config = MCPConfigBuilder.build_config(
-                            jar_path,
-                            self._build_jvm_props(request),
-                            rag_mcp_context=rag_mcp_context,
-                        )
-                        client = self._create_mcp_client(config)
-                        # Keep the agent runtime lazy for MCP-disabled reviews and
-                        # provider-free prompt capture.
-                        from service.agent import AgentExecutionService
-                        agent_service = AgentExecutionService(
-                            llm=llm,
-                            client=client,
-                        )
-                        structural_mcp_required = request.requireStructuralMcp
-                        optional_errors = await agent_service.initialize(
-                            required_server_names=(
-                                (
-                                    "codecrow-vcs-mcp",
-                                    "codecrow-rag-mcp",
-                                )
-                                if structural_mcp_required
-                                else ("codecrow-vcs-mcp",)
-                            ),
-                            optional_server_names=(
-                                ("codecrow-rag-mcp",)
-                                if (
-                                    rag_mcp_context is not None
-                                    and not structural_mcp_required
-                                )
-                                else ()
-                            ),
-                            session_timeout_seconds=(
-                                self.MCP_SESSION_INITIALIZATION_TIMEOUT_SECONDS
-                            ),
-                        )
-                        rag_start_error = optional_errors.get(
-                            "codecrow-rag-mcp"
-                        )
-                        if rag_start_error is not None:
-                            logger.warning(
-                                "Optional structural graph tools failed to start; "
-                                "continuing with repository tools without "
-                                "indexed relationships: %s",
-                                rag_start_error,
-                            )
-                            self._emit_event(event_callback, {
-                                "type": "status",
-                                "state": "rag_mcp_degraded",
-                                "message": (
-                                    "Structural graph tools are unavailable; "
-                                    "local repository tools remain available"
-                                ),
-                            })
-                        if structural_mcp_required:
-                            required_tool_names = (
-                                STAGE1_STRUCTURAL_TOOL_NAMES
-                                | {STAGE1_REVIEW_FILE_TOOL_NAME}
-                            )
-                            missing_tool_names = sorted(
-                                required_tool_names.difference(
-                                    agent_service.available_tool_names
-                                )
-                            )
-                            if missing_tool_names:
-                                raise RuntimeError(
-                                    "Required structural MCP inventory is "
-                                    "incomplete; missing: "
-                                    + ", ".join(missing_tool_names)
-                                )
-                        if request.mcpLocalOnly or request.requireStructuralMcp:
-                            preflight = await self._preflight_local_only_mcp(
-                                client,
-                                request,
-                            )
-                            self._emit_event(event_callback, {
-                                "type": "status",
-                                "state": "local_mcp_preflight_completed",
-                                "message": (
-                                    "Local proposed-source MCP passed its "
-                                    "request-binding preflight"
-                                ),
-                                "localMcpPreflight": preflight,
-                            })
-                        self._emit_event(event_callback, {
-                            "type": "status",
-                            "state": "mcp_initialized",
-                            "message": "Repository tools are ready"
-                        })
-                    except Exception as mcp_error:
-                        if request.mcpLocalOnly or request.requireStructuralMcp:
-                            logger.error(
-                                "Required MCP tools failed to initialize: %s",
-                                mcp_error,
-                                exc_info=True,
-                            )
-                            if client is not None:
-                                await self._close_mcp_sessions(
-                                    client,
-                                    context="required MCP initialization failure",
-                                )
-                            client = None
-                            raise RuntimeError(
-                                "Required repository/structural MCP "
-                                "tools failed to initialize; no review-model "
-                                "stage was started"
-                            ) from mcp_error
-                        logger.warning(
-                            "Optional agentic repository tools failed to "
-                            "initialize; continuing with direct Stage 1 prompts: %s",
-                            mcp_error,
-                            exc_info=True,
-                        )
-                        if client is not None:
-                            await self._close_mcp_sessions(
-                                client,
-                                context="optional MCP initialization failure",
-                            )
-                        client = None
-                        agent_service = None
-                        self._emit_event(event_callback, {
-                            "type": "status",
-                            "state": "mcp_degraded",
-                            "message": (
-                                "Repository tools could not start; analysis will "
-                                "continue with the diff and prepared context"
-                            ),
-                        })
-
-                # Use the new pipeline
-                self._emit_event(event_callback, {
-                    "type": "status",
-                    "state": "multi_stage_started",
-                    "message": "Starting Multi-Stage Review Pipeline"
-                })
-
-                # This replaces the monolithic _execute_review_with_streaming call
-                orchestrator = MultiStageReviewOrchestrator(
-                    llm=llm,
-                    mcp_client=client,
-                    rag_client=request_rag_client,
-                    event_callback=event_callback,
-                    agent_service=agent_service,
-                )
-
-                # Check for Branch Analysis / Reconciliation mode
-                if request.analysisType == "BRANCH_ANALYSIS":
-                     logger.info("Executing Branch Analysis & Reconciliation mode")
-                     pr_metadata = self._build_pr_metadata(request)
-                     num_issues = len(pr_metadata.get("previousCodeAnalysisIssues", []))
-                     logger.info(f"Branch reconciliation: {num_issues} previous issues to process")
-
-                     if num_issues > 0:
-                         # Use batched execution — splits large issue sets into
-                         # token-safe batches automatically.  Single-batch fast
-                         # path is handled inside execute_batched_branch_analysis.
-                         result = await orchestrator.execute_batched_branch_analysis(
-                             request, pr_metadata
-                         )
-                     else:
-                         # No previous issues to reconcile — this is a fresh
-                         # branch analysis (e.g. direct push with no prior
-                         # review history).  Run the full multi-stage review
-                         # pipeline on the diff instead of short-circuiting.
-                         logger.info(
-                             "Branch analysis: no previous issues — running "
-                             "fresh multi-stage review on the diff"
-                         )
-                         result = await orchestrator.orchestrate_review(
-                             request=request,
-                             processed_diff=processed_diff,
-                             full_pr_processed_diff=full_pr_processed_diff,
-                         )
-                else:
-                    # Execute review with Multi-Stage Orchestrator
-                    # Standard PR Review
-                    result = await orchestrator.orchestrate_review(
-                        request=request,
-                        processed_diff=processed_diff,
-                        full_pr_processed_diff=full_pr_processed_diff,
-                    )
-
-
-                # Post-process issues (no-op pass-through — Java handles all processing)
-                if result and 'issues' in result:
-                    self._emit_event(event_callback, {
-                        "type": "status",
-                        "state": "post_processing",
-                        "message": "Finalizing issues (Java-side post-processing handles line correction, dedup, diff cleanup)..."
-                    })
-                    
-                    result = post_process_analysis_result(result)
-
-                self._emit_event(event_callback, {
-                    "type": "status",
-                    "state": "completed",
-                    "message": "Pull Request analysis completed; the report is being generated..."
-                })
-
-                return {"result": result}
-
-        except TimeoutError:
-            timeout_msg = f"Review timed out after {self.REVIEW_TIMEOUT_SECONDS} seconds"
-            logger.error(timeout_msg)
-            self._emit_event(event_callback, {"type": "error", "message": timeout_msg})
-            error_response = ResponseParser.create_error_response(
-                "Review timed out", timeout_msg
-            )
-            return {"result": error_response}
-
-        except Exception as e:
-            # Log full error for debugging, but sanitize for user display
-            logger.error(f"Review processing failed: {str(e)}", exc_info=True)
-            sanitized_message = create_user_friendly_error(e)
-            
-            error_response = ResponseParser.create_error_response(
-                "Review execution failed", sanitized_message
-            )
-            self._emit_event(event_callback, {
-                "type": "error",
-                "message": sanitized_message
-            })
-            return {"result": error_response}
-        finally:
-            # Client ownership begins at construction, so timeout/cancellation
-            # during session startup cannot leave MCP child processes behind.
-            if client is not None:
-                await self._close_mcp_sessions(
-                    client,
-                    context="review completion",
-                )
-
-    async def _close_mcp_sessions(
-            self,
-            client: MCPClient,
-            *,
-            context: str,
-    ) -> None:
-        """Bound request-owned MCP teardown so it cannot strand a result."""
-        try:
-            async with asyncio.timeout(self.MCP_SESSION_CLOSE_TIMEOUT_SECONDS):
-                await client.close_all_sessions()
-        except TimeoutError:
-            logger.warning(
-                "MCP session cleanup timed out after %.1f seconds during %s; "
-                "continuing without waiting for teardown",
-                self.MCP_SESSION_CLOSE_TIMEOUT_SECONDS,
-                context,
-            )
-        except Exception as close_error:
-            logger.warning(
-                "Error closing MCP sessions during %s: %s",
-                context,
-                close_error,
-            )
-
-    def _build_jvm_props(
-            self,
-            request: ReviewRequestDto,
-    ) -> Dict[str, str]:
-        """Build JVM properties from request."""
-        return MCPConfigBuilder.build_jvm_props(
-            project_id=request.projectId,
-            pull_request_id=request.pullRequestId,
-            workspace=request.projectVcsWorkspace,
-            repo_slug=request.projectVcsRepoSlug,
-            oAuthClient=request.oAuthClient,
-            oAuthSecret=request.oAuthSecret,
-            access_token=request.accessToken,
-            max_allowed_tokens=request.maxAllowedTokens,
-            vcs_provider=request.vcsProvider,
-            vcs_base_url=request.vcsBaseUrl,
-            local_repo_path=request.localRepoPath,
-            local_repo_target_branch=request.localRepoTargetBranch,
-            local_repo_revision=request.localRepoRevision,
-            local_review_overlay_path=request.localReviewOverlayPath,
-            local_mcp_only=request.mcpLocalOnly is True,
-        )
-
-    def _validate_local_only_mcp_request(
-            self,
-            request: ReviewRequestDto,
-    ) -> None:
-        """Reject incomplete provider-isolated reviews before model startup."""
-        if request.mcpLocalOnly is not True:
-            return
-        if request.useMcpTools is not True:
-            raise ValueError(
-                "Local-only MCP precondition failed: useMcpTools must be true. "
-                "No review-model stage was started."
-            )
-        required_text = {
-            "localRepoPath": request.localRepoPath,
-            "localRepoTargetBranch": request.localRepoTargetBranch,
-            "localRepoRevision": request.localRepoRevision,
-            "localReviewOverlayPath": request.localReviewOverlayPath,
-            "projectVcsWorkspace": request.projectVcsWorkspace,
-            "projectVcsRepoSlug": request.projectVcsRepoSlug,
-        }
-        missing = sorted(
-            name
-            for name, value in required_text.items()
-            if not isinstance(value, str) or not value.strip()
-        )
-        if missing:
-            raise ValueError(
-                "Local-only MCP precondition failed: missing exact local/RAG "
-                "binding fields: "
-                + ", ".join(missing)
-                + ". No review-model stage was started."
-            )
-
-        missing_paths = sorted(
-            name
-            for name in (
-                "localRepoPath",
-                "localReviewOverlayPath",
-            )
-            if not os.path.isdir(str(required_text[name]))
-        )
-        if missing_paths:
-            raise ValueError(
-                "Local-only MCP precondition failed: staged directories are "
-                "unavailable: "
-                + ", ".join(missing_paths)
-                + ". No review-model stage was started."
-            )
-
-        exposed_credentials = sorted(
-            name
-            for name in ("accessToken", "oAuthClient", "oAuthSecret")
-            if isinstance(getattr(request, name, None), str)
-            and bool(getattr(request, name).strip())
-        )
-        if exposed_credentials:
-            raise ValueError(
-                "Local-only MCP precondition failed: provider credentials are "
-                "not allowed: "
-                + ", ".join(exposed_credentials)
-                + ". No review-model stage was started."
-            )
-
-    def _validate_required_structural_mcp_request(
-            self,
-            request: ReviewRequestDto,
-    ) -> None:
-        """Reject a structurally-enforced review before any provider activity."""
-        if request.requireStructuralMcp is not True:
-            return
-        if request.useMcpTools is not True:
-            raise ValueError(
-                "Required structural MCP precondition failed: useMcpTools must "
-                "be true. No review-model stage was started."
-            )
-        if request.ragEnabled is not True:
-            raise ValueError(
-                "Required structural MCP precondition failed: ragEnabled must "
-                "be true. No review-model stage was started."
-            )
-
-    @staticmethod
-    def _mcp_tool_payload(result: Any, tool_name: str) -> Dict[str, Any]:
-        if bool(
-            getattr(result, "isError", False)
-            or getattr(result, "is_error", False)
-        ):
-            raise RuntimeError(f"{tool_name} returned an MCP error")
-        for attribute in ("structuredContent", "structured_content"):
-            structured = getattr(result, attribute, None)
-            if isinstance(structured, dict):
-                return structured
-        text = "\n".join(
-            str(block.text)
-            for block in (getattr(result, "content", None) or ())
-            if isinstance(getattr(block, "text", None), str)
-        ).strip()
-        try:
-            payload = json.loads(text)
-        except (TypeError, json.JSONDecodeError) as exception:
-            raise RuntimeError(
-                f"{tool_name} returned no structured JSON payload"
-            ) from exception
-        if not isinstance(payload, dict):
-            raise RuntimeError(f"{tool_name} returned a non-object payload")
-        return payload
-
-    async def _preflight_local_only_mcp(
-            self,
-            client: MCPClient,
-            request: ReviewRequestDto,
-    ) -> Dict[str, Any]:
-        """Prove the request-bound proposed-source read before LLM use."""
-        sessions = client.get_all_active_sessions()
-        if not isinstance(sessions, dict):
-            raise RuntimeError("Local-only MCP sessions are unavailable")
-        vcs_session = sessions.get("codecrow-vcs-mcp")
-        if vcs_session is None:
-            raise RuntimeError(
-                "Local-only MCP preflight requires the repository session"
-            )
-
-        focus_paths = [
-            str(path).strip().replace("\\", "/").lstrip("/")
-            for path in (
-                *(request.changedFiles or ()),
-                *(request.deletedFiles or ()),
-            )
-            if isinstance(path, str) and path.strip()
-        ]
-        if not focus_paths:
-            raise RuntimeError(
-                "Local-only MCP preflight requires at least one changed path"
-            )
-        focus_path = focus_paths[0]
-
-        source_result = await vcs_session.call_tool(
-            "getReviewFileContent",
-            {
-                "workspace": request.projectVcsWorkspace,
-                "repoSlug": request.projectVcsRepoSlug,
-                "filePath": focus_path,
-            },
-        )
-        source = self._mcp_tool_payload(
-            source_result,
-            "getReviewFileContent",
-        )
-        if source.get("error"):
-            raise RuntimeError(
-                "Local-only proposed-tree source preflight failed: "
-                f"{source['error']}"
-            )
-        observed_path = str(source.get("filePath") or "").replace(
-            "\\", "/"
-        ).lstrip("/")
-        if (
-            observed_path != focus_path
-            or source.get("unavailable") is True
-            or source.get("source") not in {"review-overlay", "target-head"}
-        ):
-            raise RuntimeError(
-                "Local-only proposed-tree source preflight returned an "
-                "unbound or unavailable source"
-            )
-
-        return {
-            "status": "ready",
-            "focusPath": focus_path,
-            "baseRevision": request.localRepoRevision,
-            "sourceAuthority": source.get("source"),
-        }
-
-    def _build_rag_mcp_context(
-            self,
-            request: ReviewRequestDto,
-            rag_client: Optional[RagClient],
-    ) -> Optional[Dict[str, str]]:
-        """Return the exact request binding for proposed-tree graph tools."""
-        if rag_client is None:
-            return None
-        source_revision = (
-            request.currentCommitHash
-            or request.commitHash
-        )
-        base_revision = resolve_exact_structural_base_revision(request)
-        structural_repo_path = getattr(request, "localRagRepoPath", None)
-        if (
-            not isinstance(structural_repo_path, str)
-            or not structural_repo_path.strip()
-        ):
-            structural_repo_path = request.localRepoPath
-        context = {
-            "workspace": request.projectWorkspace,
-            "project": request.projectNamespace,
-            "branch": request.targetBranchName,
-            "revision": base_revision,
-            "source_revision": source_revision,
-            "target_repo_path": structural_repo_path,
-            "review_overlay_path": request.localReviewOverlayPath,
-            "manifest": request.ragBaseGenerationManifestSha256,
-            "collection_target": request.ragCollectionTarget,
-            "review_collection_target": request.ragReviewCollectionTarget,
-            "review_generation_manifest_sha256": (
-                request.ragReviewGenerationManifestSha256
-            ),
-        }
-        if not all(
-            isinstance(value, str) and bool(value.strip())
-            for value in context.values()
-        ):
-            logger.info(
-                "Stage 1 proposed-tree graph tool is unavailable because the "
-                "request has no complete target snapshot, review overlay, "
-                "revision binding, or exact sealed base generation; repository "
-                "tools remain available without indexed relationships"
-            )
-            return None
-
-        return context
-
-    async def _prepare_rag_review_generation(
-            self,
-            request: ReviewRequestDto,
-            rag_client: Optional[RagClient],
-            event_callback: Optional[Callable[[Dict], None]],
-    ) -> None:
-        """Prepare one sealed proposed-tree graph before MCP and Stage 1 fan-out."""
-
-        request.ragReviewGenerationStatus = "not_eligible"
-        request.ragReviewCollectionTarget = None
-        request.ragReviewGenerationManifestSha256 = None
-        request.ragReviewGenerationError = None
-        if rag_client is None or not bool(request.useMcpTools):
-            return
-
-        source_revision = request.currentCommitHash or request.commitHash
-        base_revision = resolve_exact_structural_base_revision(request)
-        structural_repo_path = getattr(request, "localRagRepoPath", None)
-        if (
-            not isinstance(structural_repo_path, str)
-            or not structural_repo_path.strip()
-        ):
-            structural_repo_path = request.localRepoPath
-        binding = {
-            "workspace": request.projectWorkspace,
-            "project": request.projectNamespace,
-            "target_branch": request.targetBranchName,
-            "base_revision": base_revision,
-            "source_revision": source_revision,
-            "target_repo_path": structural_repo_path,
-            "review_overlay_path": request.localReviewOverlayPath,
-            "base_collection_target": request.ragCollectionTarget,
-            "base_generation_manifest_sha256": (
-                request.ragBaseGenerationManifestSha256
-            ),
-        }
-        if not all(
-            isinstance(value, str) and bool(value.strip())
-            for value in binding.values()
-        ):
-            return
-
-        request.ragReviewGenerationStatus = "preparing"
-        self._emit_event(event_callback, {
-            "type": "status",
-            "state": "rag_review_generation_preparing",
-            "message": (
-                "Preparing one exact proposed-tree graph before Stage 1"
-            ),
-        })
-        try:
-            response = await rag_client.prepare_review_generation(**binding)
-        except Exception as error:
-            response = {
-                "status": "error",
-                "error": f"{type(error).__name__}: {error}",
-            }
-
-        status = str(response.get("status") or "").strip().casefold()
-        collection_target = response.get("collection_target")
-        generation_manifest = response.get("generation_manifest_sha256")
-        response_revision = response.get("source_revision")
-        ready = (
-            status == "ready"
-            and isinstance(collection_target, str)
-            and bool(collection_target.strip())
-            and isinstance(generation_manifest, str)
-            and re.fullmatch(r"[0-9a-f]{64}", generation_manifest) is not None
-            and response_revision == source_revision
-        )
-        if ready:
-            request.ragReviewGenerationStatus = "ready"
-            request.ragReviewCollectionTarget = collection_target
-            request.ragReviewGenerationManifestSha256 = generation_manifest
-            self._emit_event(event_callback, {
-                "type": "status",
-                "state": "rag_review_generation_ready",
-                "message": (
-                    "Exact proposed-tree graph is sealed and ready for "
-                    "read-only Stage 1 tools"
-                ),
-                "ragReviewGeneration": {
-                    "status": "ready",
-                    "sourceRevision": source_revision,
-                    "generationManifestSha256": generation_manifest,
-                    "cacheHit": response.get("cache_hit") is True,
-                },
-            })
-            return
-
-        error = str(
-            response.get("error")
-            or "proposed-tree generation preparation returned no sealed receipt"
-        ).strip()
-        request.ragReviewGenerationStatus = "unavailable"
-        request.ragReviewGenerationError = error
-        structural_required = request.requireStructuralMcp is True
-        logger.warning(
-            "%s proposed-tree graph preparation failed%s: %s",
-            "Required" if structural_required else "Optional",
-            (
-                "; the review will stop before model use"
-                if structural_required
-                else "; continuing with request-bound source review"
-            ),
-            error,
-        )
-        self._emit_event(event_callback, {
-            "type": "status",
-            "state": (
-                "rag_review_generation_failed"
-                if structural_required
-                else "rag_review_generation_degraded"
-            ),
-            "message": (
-                "Required structural graph preparation is unavailable; the "
-                "review will stop before model use"
-                if structural_required
-                else "Structural graph preparation is unavailable; Stage 1 "
-                "will continue with exact request-bound source"
-            ),
-            "ragReviewGeneration": {
-                "status": "unavailable",
-                "sourceRevision": source_revision,
-                "error": error,
-            },
-        })
-
-    def _rag_client_for_request(
-            self,
-            request: ReviewRequestDto,
-    ) -> Optional[RagClient]:
-        """Apply global and project-scoped RAG enablement without shared mutation."""
-        if not request.ragEnabled:
-            logger.info(
-                "RAG disabled for project request: project=%s PR=%s",
-                request.projectId,
-                request.pullRequestId or "n/a",
-            )
-            return None
-        if not bool(getattr(self.rag_client, "enabled", True)):
-            return None
-        return self.rag_client
-
-    def _rag_client_for_agent_tools(self) -> Optional[RagClient]:
-        """Expose on-demand structural tools whenever MCP analysis is active.
-
-        The caller already gates MCP session creation with ``useMcpTools``.
-        Project ``ragEnabled`` controls persistent branch indexing/retrieval;
-        it does not control the request-scoped proposed-tree generation, which
-        is built from the host's temporary snapshot and overlay.
-        """
-        if not bool(getattr(self.rag_client, "enabled", True)):
-            return None
-        return self.rag_client
-
-    def _create_mcp_client(self, config: Dict[str, Any]) -> MCPClient:
-        """Create MCP client from configuration."""
-        try:
-            return install_per_connection_tool_serialization(
-                MCPClient.from_dict(config)
-            )
-        except Exception as e:
-            raise Exception(f"Failed to construct MCPClient: {str(e)}")
-
-    def _create_llm(
         self,
         request: ReviewRequestDto,
-        quality_capture: Optional[ReviewQualityCaptureSession] = None,
-    ):
-        """Create LLM instance from request parameters."""
-        try:
-            # Log the model being used for this request
-            logger.info(
-                "Creating LLM for project %s PR %s: provider=%s, model=%s",
-                request.projectId,
-                request.pullRequestId or "n/a",
-                request.aiProvider,
-                request.aiModel,
-            )
-            
-            llm = LLMFactory.create_llm(
-                request.aiModel,
-                request.aiProvider,
-                request.aiApiKey,
-                ai_base_url=getattr(request, 'aiBaseUrl', None),
-                ai_custom_parameters=getattr(request, 'aiCustomParameters', None),
-            )
-            
-            return wrap_quality_capture_llm(llm, quality_capture)
-        except Exception as e:
-            raise Exception(f"Failed to create LLM instance: {str(e)}")
+        event_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        async with self._review_semaphore:
+            try:
+                return {"result": await self._review(request, event_callback)}
+            except Exception as error:
+                logger.exception(
+                    "Review incomplete for project=%s PR=%s",
+                    request.projectId, request.pullRequestId,
+                )
+                return {"result": {
+                    "status": "error",
+                    "comment": f"Review incomplete: {error}",
+                    "issues": [],
+                }}
 
-    def _build_pr_metadata(self, request: ReviewRequestDto) -> Dict[str, Any]:
-        """Build pull request metadata dictionary from request."""
-        metadata = {
-            "branch": request.get_rag_branch(),
-            "baseBranch": request.get_rag_base_branch(),
-            "commitHash": request.commitHash,
-            "pullRequestId": request.pullRequestId,
-            "repoSlug": request.projectVcsRepoSlug,
-            "workspace": request.projectVcsWorkspace,
-            "previousCodeAnalysisIssues": [
-                issue.dict(by_alias=True, exclude_none=True)
-                for issue in (request.previousCodeAnalysisIssues or [])
-            ]
+    async def _review(
+        self,
+        request: ReviewRequestDto,
+        callback: Callable[[dict[str, Any]], None] | None,
+    ) -> dict[str, Any]:
+        identity = validate_review_snapshot_identity(request)
+        base_revision = resolve_exact_structural_base_revision(request)
+        target_path = request.localRagRepoPath or request.localRepoPath
+        overlay_path = request.localReviewOverlayPath
+        raw_diff = (
+            request.deltaDiff
+            if str(request.analysisMode or "").upper() == "INCREMENTAL"
+            and request.deltaDiff else request.rawDiff
+        )
+        if not raw_diff:
+            raise ValueError("changed-code diff is unavailable")
+        parts, unparsed_paths = _parts(raw_diff)
+        if not parts and not unparsed_paths:
+            return {"status": "complete", "comment": "No changed text to review.", "issues": []}
+        if not parts:
+            return {
+                "status": "partial",
+                "comment": "Review incomplete: the changed text could not be parsed.",
+                "issues": [],
+                "reviewedHunkIds": [],
+                "unresolvedScopes": {
+                    f"path:{path}": "changed text could not be parsed into a hunk"
+                    for path in unparsed_paths
+                },
+            }
+        if not (base_revision and target_path and overlay_path):
+            raise ValueError("exact target snapshot and proposed-file overlay are required")
+        if not self.rag_client.enabled:
+            raise ValueError("proposed-tree graph service is unavailable")
+
+        binding: dict[str, Any] = {
+            "workspace": request.projectWorkspace,
+            "project": request.projectNamespace,
+            "target_branch": identity.target_branch,
+            "base_revision": base_revision,
+            "source_revision": identity.head_revision,
+            "target_repo_path": target_path,
+            "review_overlay_path": overlay_path,
         }
-        return metadata
+        if request.ragCollectionTarget and request.ragBaseGenerationManifestSha256:
+            binding["base_collection_target"] = request.ragCollectionTarget
+            binding["base_generation_manifest_sha256"] = (
+                request.ragBaseGenerationManifestSha256
+            )
+        self._emit(callback, "graph_preparing", "Preparing proposed-tree graph")
+        prepared = await self.rag_client.prepare_review_generation(**binding)
+        if (
+            prepared.get("status") != "ready"
+            or prepared.get("source_revision") != identity.head_revision
+        ):
+            raise ValueError(
+                str(prepared.get("error") or "proposed-tree graph is unavailable")
+            )
+        binding["review_collection_target"] = prepared.get("collection_target")
+        binding["review_generation_manifest_sha256"] = (
+            prepared.get("generation_manifest_sha256")
+        )
+        if not all((
+            binding["review_collection_target"],
+            binding["review_generation_manifest_sha256"],
+        )):
+            raise ValueError("proposed-tree graph has no read receipt")
+        self._emit(callback, "graph_ready", "Proposed-tree graph is ready")
+
+        groups, graph_context = await self._group_parts(parts, binding)
+        llm = LLMFactory.create_llm(
+            request.aiModel, request.aiProvider, request.aiApiKey,
+            ai_base_url=request.aiBaseUrl,
+            ai_custom_parameters=request.aiCustomParameters,
+        )
+        diff_by_path: dict[str, str] = {}
+        for part in parts:
+            diff_by_path[part.path] = (
+                diff_by_path.get(part.path, "") + part.diff + "\n"
+            )
+        findings: list[dict[str, Any]] = []
+        reviewed: set[str] = set()
+        unresolved: dict[str, str] = {}
+        read_cache: dict[str, dict[str, Any]] = {}
+        for number, group in enumerate(groups, start=1):
+            self._emit(
+                callback, "reviewing",
+                f"Reviewing related change {number}/{len(groups)}",
+            )
+            try:
+                group_findings, group_reviewed, reason = await self._review_group(
+                    llm, request, binding, group, graph_context,
+                    diff_by_path, read_cache,
+                )
+            except Exception as error:
+                logger.warning(
+                    "Related change review incomplete: project=%s PR=%s part=%s error=%s",
+                    request.projectId, request.pullRequestId, group[0].id, error,
+                )
+                group_findings, group_reviewed, reason = [], set(), str(error)
+            findings.extend(group_findings)
+            reviewed.update(group_reviewed)
+            for part in group:
+                if part.id not in group_reviewed:
+                    unresolved[part.id] = reason or "evidence was insufficient"
+        for path in unparsed_paths:
+            unresolved[f"path:{path}"] = "changed text could not be parsed into a hunk"
+        unique = {
+            (issue["file"], issue["line"], issue["title"].casefold()): issue
+            for issue in findings
+        }
+        status = "partial" if unresolved else "complete"
+        comment = f"Reviewed {len(reviewed)} of {len(parts)} changed-code parts."
+        if unresolved:
+            paths = sorted({
+                part.path for part in parts if part.id in unresolved
+            } | set(unparsed_paths))
+            comment = (
+                f"Partial review: {comment} {len(unresolved)} change scope(s) "
+                f"remain unresolved in: {', '.join(paths)}."
+            )
+        return {
+            "status": status,
+            "comment": comment,
+            "issues": list(unique.values()),
+            "reviewedHunkIds": sorted(reviewed),
+            "unresolvedScopes": unresolved,
+        }
+
+    async def _graph_results(
+        self,
+        binding: dict[str, Any],
+        *,
+        pattern: str,
+        target: str,
+        focus_path: str,
+    ) -> list[dict[str, Any]]:
+        values: list[dict[str, Any]] = []
+        cursor = 0
+        while True:
+            page = await self.rag_client.query_review_graph(
+                **binding, focus_paths=[focus_path],
+                pattern=pattern, target=target, cursor=cursor,
+                max_results=100, include_source=False,
+            )
+            if page.get("status") != "ready":
+                raise ValueError(
+                    str(page.get("error") or f"graph {pattern} query unavailable")
+                )
+            values.extend(
+                item for item in page.get("results") or []
+                if isinstance(item, dict)
+            )
+            next_cursor = page.get("nextCursor")
+            if next_cursor is None:
+                return values
+            next_cursor = int(next_cursor)
+            if next_cursor <= cursor:
+                raise ValueError("graph query did not advance its continuation")
+            cursor = next_cursor
+
+    async def _group_parts(
+        self,
+        parts: list[ReviewPart],
+        binding: dict[str, Any],
+    ) -> tuple[list[list[ReviewPart]], dict[str, dict[str, Any]]]:
+        by_path: dict[str, list[ReviewPart]] = {}
+        for part in parts:
+            by_path.setdefault(part.path, []).append(part)
+        unit_by_part: dict[str, dict[str, Any]] = {}
+        for path, path_parts in by_path.items():
+            units = await self._graph_results(
+                binding, pattern="file_summary", target=path, focus_path=path,
+            )
+            for part in path_parts:
+                lines = list(part.anchors)
+                candidates = [
+                    unit for unit in units
+                    if unit.get("unitId")
+                    and any(
+                        int(unit.get("startLine") or 0) <= line
+                        <= int(unit.get("endLine") or 0)
+                        for line in lines
+                    )
+                ]
+                if candidates:
+                    unit_by_part[part.id] = min(
+                        candidates,
+                        key=lambda unit: (
+                            int(unit.get("endLine") or 0)
+                            - int(unit.get("startLine") or 0)
+                        ),
+                    )
+
+        relations_by_unit: dict[str, list[dict[str, Any]]] = {}
+        unit_paths: dict[str, str] = {}
+        for part in parts:
+            unit = unit_by_part.get(part.id)
+            if unit:
+                unit_paths[str(unit["unitId"])] = part.path
+        for unit_id, path in unit_paths.items():
+            relations_by_unit[unit_id] = await self._graph_results(
+                binding, pattern="relations_of", target=unit_id,
+                focus_path=path,
+            )
+
+        parent = {part.id: part.id for part in parts}
+
+        def root(part_id: str) -> str:
+            while parent[part_id] != part_id:
+                parent[part_id] = parent[parent[part_id]]
+                part_id = parent[part_id]
+            return part_id
+
+        def join(left: str, right: str) -> None:
+            parent[root(right)] = root(left)
+
+        parts_by_unit: dict[str, list[str]] = {}
+        for part_id, unit in unit_by_part.items():
+            parts_by_unit.setdefault(str(unit["unitId"]), []).append(part_id)
+        for part_ids in parts_by_unit.values():
+            for part_id in part_ids[1:]:
+                join(part_ids[0], part_id)
+        for relations in relations_by_unit.values():
+            for relation in relations:
+                relation_kind = str(relation.get("kind") or "").upper()
+                relation_action = str(relation.get("relation") or "").lower()
+                if not (
+                    relation_action.startswith("call")
+                    or relation_action in {"implements", "extends", "tests"}
+                    or relation_kind in {"CALLS", "IMPLEMENTS", "EXTENDS", "TESTS"}
+                ):
+                    continue
+                source = relation.get("sourceUnit") or {}
+                target = relation.get("targetUnit") or {}
+                left = parts_by_unit.get(str(source.get("unitId") or ""), [])
+                right = parts_by_unit.get(str(target.get("unitId") or ""), [])
+                if left and right:
+                    join(left[0], right[0])
+        groups_by_root: dict[str, list[ReviewPart]] = {}
+        for part in parts:
+            groups_by_root.setdefault(root(part.id), []).append(part)
+        graph_context: dict[str, dict[str, Any]] = {}
+        for part in parts:
+            unit = unit_by_part.get(part.id)
+            if not unit:
+                continue
+            unit_id = str(unit["unitId"])
+            graph_context[part.id] = {
+                "unit": {
+                    key: unit.get(key)
+                    for key in (
+                        "unitId", "qualifiedName", "path", "kind",
+                        "startLine", "endLine",
+                    )
+                    if unit.get(key) is not None
+                },
+                "relations": [
+                    _compact_relation(relation)
+                    for relation in relations_by_unit.get(unit_id, [])
+                ],
+            }
+        return list(groups_by_root.values()), graph_context
+
+    async def _review_group(
+        self,
+        llm: Any,
+        request: ReviewRequestDto,
+        binding: dict[str, Any],
+        group: list[ReviewPart],
+        graph_context: dict[str, dict[str, Any]],
+        diff_by_path: dict[str, str],
+        read_cache: dict[str, dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], set[str], str]:
+        expected = {part.id for part in group}
+        parts_by_id = {part.id: part for part in group}
+        reviewed: set[str] = set()
+        findings: list[dict[str, Any]] = []
+        evidence: dict[str, dict[str, Any]] = {}
+        graph = list({
+            json.dumps(relation, sort_keys=True): relation
+            for part in group
+            for relation in graph_context.get(part.id, {}).get("relations", [])
+        }.values())
+        reason = ""
+        while reviewed != expected:
+            prompt = {
+                "changeParts": [
+                    {
+                        "id": part.id, "path": part.path,
+                        "side": part.side, "anchorLines": list(part.anchors),
+                        "diff": part.diff,
+                    }
+                    for part in group if part.id not in reviewed
+                ],
+                "graphRelations": graph,
+                "changedUnits": [
+                    graph_context[part.id]["unit"]
+                    for part in group if part.id in graph_context
+                ],
+                "readResults": list(evidence.values()),
+                "acceptedFindings": findings,
+                "prTitle": request.prTitle,
+                "prDescription": request.prDescription,
+                "projectRules": request.projectRules,
+                "taskContext": request.taskContext,
+            }
+            options = reasoning_request_kwargs(llm, ReasoningEffort.LOW)
+            if request.aiProvider.lower() in {"openrouter", "openai"}:
+                options["response_format"] = {"type": "json_object"}
+            try:
+                response = await llm.ainvoke([
+                    ("system", _SYSTEM_PROMPT),
+                    ("human", json.dumps(prompt, ensure_ascii=False)),
+                ], **options)
+            except Exception as error:
+                return findings, reviewed, str(error)
+            logger.info(
+                "Review model response: PR=%s usage=%s",
+                request.pullRequestId,
+                getattr(response, "usage_metadata", None),
+            )
+            try:
+                turn = _parse_turn(response)
+            except (TypeError, ValueError) as error:
+                return findings, reviewed, str(error)
+            new_reviewed = set()
+            for part_id in turn["reviewedHunkIds"]:
+                if isinstance(part_id, str) and part_id in expected:
+                    new_reviewed.add(part_id)
+            for value in turn["findings"]:
+                issue = self._finding(value, parts_by_id)
+                if issue:
+                    findings.append(issue)
+                    new_reviewed.add(str(value["partId"]))
+            new_reviewed.difference_update(reviewed)
+            reviewed.update(new_reviewed)
+            if reviewed == expected:
+                break
+            new_evidence = False
+            for read in turn["reads"]:
+                if not isinstance(read, dict):
+                    continue
+                key = json.dumps({
+                    "read": read,
+                    "focusPaths": (
+                        sorted({part.path for part in group})
+                        if read.get("kind") == "graph" else []
+                    ),
+                }, sort_keys=True, ensure_ascii=False)
+                if key not in read_cache:
+                    read_cache[key] = await self._execute_read(
+                        read, binding, group, diff_by_path,
+                    )
+                if key not in evidence:
+                    evidence[key] = {
+                        "request": read,
+                        "result": read_cache[key],
+                    }
+                    new_evidence = True
+            if not new_evidence and not new_reviewed:
+                reason = str(turn.get("unresolvedReason") or "No new evidence or decision")
+                break
+        return findings, reviewed, reason
+
+    async def _execute_read(
+        self,
+        read: dict[str, Any],
+        binding: dict[str, Any],
+        group: list[ReviewPart],
+        diff_by_path: dict[str, str],
+    ) -> dict[str, Any]:
+        kind = read.get("kind")
+        path = str(read.get("path") or "")
+        focus_paths = list(dict.fromkeys(part.path for part in group))
+        try:
+            if kind == "diff":
+                if path not in diff_by_path:
+                    return {"status": "missing", "path": path}
+                return {"status": "ready", "path": path, "diff": diff_by_path[path]}
+            if kind == "file":
+                start = int(read.get("startLine") or 1)
+                end = int(read.get("endLine") or 0) or None
+                return await self.rag_client.get_review_file_content(
+                    **binding, focus_paths=focus_paths,
+                    path=path, side=str(read.get("side") or "proposed"),
+                    start_line=start, end_line=end,
+                )
+            if kind == "unit":
+                return await self.rag_client.get_review_structural_unit(
+                    **binding, focus_paths=focus_paths,
+                    unit_id=str(read.get("unitId") or ""),
+                    offset=int(read.get("offset") or 0),
+                )
+            if kind == "graph":
+                return await self.rag_client.query_review_graph(
+                    **binding, focus_paths=focus_paths,
+                    pattern=str(read.get("pattern") or ""),
+                    target=str(read.get("target") or ""),
+                    cursor=int(read.get("cursor") or 0),
+                    include_source=False,
+                )
+            if kind == "search":
+                return await self.rag_client.search_review_code(
+                    **binding, focus_paths=focus_paths,
+                    query=str(read.get("query") or ""),
+                    cursor=int(read.get("cursor") or 0),
+                )
+            return {"status": "error", "error": f"unknown read kind: {kind}"}
+        except Exception as error:
+            return {"status": "error", "error": str(error)}
 
     @staticmethod
-    def _emit_event(callback: Optional[Callable[[Dict], None]], event: Dict[str, Any]) -> None:
-        """Safely emit an event via the callback."""
+    def _finding(
+        value: Any,
+        parts_by_id: dict[str, ReviewPart],
+    ) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        part = parts_by_id.get(str(value.get("partId") or ""))
+        if not part or value.get("file") != part.path:
+            return None
+        try:
+            line = int(value.get("line"))
+        except (TypeError, ValueError):
+            return None
+        if line not in part.anchors:
+            return None
+        title = str(value.get("title") or "").strip()
+        reason = str(value.get("reason") or "").strip()
+        if not title or not reason:
+            return None
+        return {
+            "file": part.path,
+            "line": line,
+            "codeSnippet": part.anchors[line],
+            "severity": str(value.get("severity") or "MEDIUM").upper(),
+            "category": str(value.get("category") or "BUG_RISK"),
+            "scope": "LINE",
+            "title": title,
+            "reason": reason,
+            "suggestedFixDescription": str(
+                value.get("suggestedFixDescription") or ""
+            ),
+        }
+
+    @staticmethod
+    def _emit(
+        callback: Callable[[dict[str, Any]], None] | None,
+        state: str,
+        message: str,
+    ) -> None:
         if callback:
-            try:
-                callback(event)
-            except Exception as e:
-                # Don't let callback errors break the processing
-                logger.warning(f"Event callback failed: {e}")
+            callback({"type": "status", "state": state, "message": message})

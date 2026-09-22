@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.LocalRepositorySnapshot;
-import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -135,22 +134,9 @@ public class AiAnalysisClient {
             }
 
             // Wrap the request with the jobId
-            boolean promptDryRun = PromptDryRunMode.isEnabledForProject(request.getProjectId());
             Map<String, Object> requestPayload = buildSerializableRequestPayload(
                     request,
                     localRepositorySnapshot);
-            requestPayload.put("promptDryRun", promptDryRun);
-            if (promptDryRun) {
-                requestPayload.put("promptDryRunId", jobId);
-                requestPayload.put("aiApiKey", "dry-run-provider-disabled");
-                requestPayload.put("oAuthClient", null);
-                requestPayload.put("oAuthSecret", null);
-                requestPayload.put("accessToken", null);
-                log.warn(
-                        "Prompt dry run enabled for project {} (Job ID: {}): "
-                                + "the review LLM will not be called",
-                        request.getProjectId(), jobId);
-            }
 
             Map<String, Object> jobPayload = Map.of(
                     "job_id", jobId,
@@ -235,9 +221,6 @@ public class AiAnalysisClient {
 
                         if (finalResult != null) {
                             log.info("AI async job {} completed successfully", jobId);
-                            if (isPromptDryRunResult(finalResult)) {
-                                return finalResult;
-                            }
                             return extractAndValidateAnalysisData(finalResult);
                         } else {
                             throw new IOException("AI service returned final event without a valid result payload");
@@ -327,10 +310,6 @@ public class AiAnalysisClient {
         }
     }
 
-    public static boolean isPromptDryRunResult(Map<String, Object> result) {
-        return result != null && Boolean.TRUE.equals(result.get("dryRun"));
-    }
-
     private Map<String, Object> buildSerializableRequestPayload(
             AiAnalysisRequest request,
             LocalRepositorySnapshot localRepositorySnapshot) {
@@ -346,33 +325,20 @@ public class AiAnalysisClient {
         payload.put("aiBaseUrl", request.getAiBaseUrl());
         payload.put("aiCustomParameters", parseAiCustomParameters(request.getAiCustomParameters()));
         payload.put("pullRequestId", request.getPullRequestId());
-        payload.put("oAuthClient", request.getOAuthClient());
-        payload.put("oAuthSecret", request.getOAuthSecret());
-        payload.put("accessToken", request.getAccessToken());
-        payload.put("maxAllowedTokens", request.getMaxAllowedTokens());
-        payload.put("useMcpTools", request.getUseMcpTools());
         if (localRepositorySnapshot != null) {
             payload.put("localRepoPath", localRepositorySnapshot.path());
             payload.put("localRepoTargetBranch", localRepositorySnapshot.targetBranch());
             payload.put("localRepoRevision", localRepositorySnapshot.revision());
             payload.put("localReviewOverlayPath", localRepositorySnapshot.reviewOverlayPath());
         }
-        payload.put("ragEnabled", request.getRagEnabled());
-        payload.put("analysisType", request.getAnalysisType());
-        payload.put("vcsProvider", request.getVcsProvider());
-        payload.put("vcsBaseUrl", request.getVcsBaseUrl());
         payload.put("prTitle", request.getPrTitle());
         payload.put("prDescription", request.getPrDescription());
         payload.put("taskContext", request.getTaskContext());
-        payload.put("taskHistoryContext", request.getTaskHistoryContext());
-        payload.put("changedFiles", request.getChangedFiles());
-        payload.put("deletedFiles", request.getDeletedFiles());
         payload.put("targetBranchName", request.getTargetBranchName());
         payload.put("sourceBranchName", request.getSourceBranchName());
         payload.put("rawDiff", request.getRawDiff());
         payload.put("analysisMode", request.getAnalysisMode());
         payload.put("deltaDiff", request.getDeltaDiff());
-        payload.put("previousCommitHash", request.getPreviousCommitHash());
         payload.put("currentCommitHash", request.getCurrentCommitHash());
         String targetHeadCommitHash = request.getTargetHeadCommitHash();
         payload.put("targetHeadCommitHash", targetHeadCommitHash);
@@ -402,11 +368,7 @@ public class AiAnalysisClient {
                     });
             }
         }
-        payload.put("previousCodeAnalysisIssues", request.getPreviousCodeAnalysisIssues());
-        payload.put("reconciliationFileContents", request.getReconciliationFileContents());
-        payload.put("projectCapabilities", request.getProjectCapabilities());
         if (request instanceof AiAnalysisRequestImpl impl) {
-            payload.put("enrichmentData", impl.getEnrichmentData());
             payload.put("projectRules", impl.getProjectRules());
         }
         return payload;
@@ -432,7 +394,8 @@ public class AiAnalysisClient {
 
             // Check for error response from Inference Orchestrator
             Object errorFlag = result.get("error");
-            if (Boolean.TRUE.equals(errorFlag) || "true".equals(String.valueOf(errorFlag))) {
+            if (Boolean.TRUE.equals(errorFlag) || "true".equals(String.valueOf(errorFlag))
+                    || "error".equals(result.get("status"))) {
                 String errorMessage = result.get("error_message") != null
                         ? String.valueOf(result.get("error_message"))
                         : String.valueOf(result.get("comment"));

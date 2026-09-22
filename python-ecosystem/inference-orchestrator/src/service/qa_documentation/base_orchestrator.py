@@ -38,7 +38,7 @@ def _env_int(name: str, default: int) -> int:
 # when the QA model is constructed.
 QA_INPUT_TOKEN_TARGET = max(
     10_000,
-    _env_int("REVIEW_STAGE1_BATCH_TOKEN_BUDGET", 60_000),
+    _env_int("QA_INPUT_TOKEN_TARGET", 60_000),
 )
 QA_INPUT_ESTIMATOR_SAFETY_TOKENS = 512
 QA_OUTPUT_CONTEXT_RESERVE_TOKENS = 20_000

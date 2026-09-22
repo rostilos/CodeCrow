@@ -2380,11 +2380,3 @@ async def test_named_server_empty_tool_inventory_is_not_silent():
     assert optional_service.available_tool_names == frozenset({
         "getBranchFileContent",
     })
-
-
-def test_review_local_agent_module_remains_a_compatibility_export():
-    from service.review.orchestrator.agents import (
-        RecursiveMCPAgent as ReviewRecursiveMCPAgent,
-    )
-
-    assert ReviewRecursiveMCPAgent is RecursiveMCPAgent

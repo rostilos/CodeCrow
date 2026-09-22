@@ -53,7 +53,6 @@ import java.util.TreeMap;
 import java.util.stream.Collectors;
 
 import org.rostilos.codecrow.analysisengine.util.DiffFingerprintUtil;
-import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.model.VcsCommit;
@@ -187,8 +186,10 @@ public class PullRequestAnalysisProcessor {
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
             // Get all previous analyses for this PR to provide full issue history to AI
             List<CodeAnalysis> allPrAnalyses = codeAnalysisService.getAllPrAnalyses(
-                    project.getId(),
-                    request.getPullRequestId());
+                    project.getId(), request.getPullRequestId()).stream()
+                    .filter(analysis -> analysis.getStatus()
+                            == org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.ACCEPTED)
+                    .toList();
 
             // Get the most recent analysis for incremental diff calculation
             Optional<CodeAnalysis> previousAnalysis = allPrAnalyses.isEmpty()
@@ -224,14 +225,11 @@ public class PullRequestAnalysisProcessor {
             AiAnalysisRequest aiRequest = aiRequests.get(0);
             observeTargetBranchGeneration(project, aiRequest, consumer);
             String diffFingerprint = computeReviewIdentity(aiRequest);
-            boolean promptDryRun = PromptDryRunMode.isEnabledForProject(project.getId());
-
-            if (!promptDryRun) {
-                CacheHitType cacheHit = postAnalysisCacheIfExist(
+            CacheHitType cacheHit = postAnalysisCacheIfExist(
                         project, pullRequest, request.getCommitHash(), request.getPullRequestId(),
                         reportingService, request.getPlaceholderCommentId(), request.getTargetBranchName(),
                         request.getSourceBranchName(), diffFingerprint, lockLease);
-                if (cacheHit != CacheHitType.NONE) {
+            if (cacheHit != CacheHitType.NONE) {
                     requireConfirmedLease(lockLease);
                     publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                             AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
@@ -239,26 +237,20 @@ public class PullRequestAnalysisProcessor {
                     return Map.of("status", cacheStatus, "cached", true);
                 }
 
-                if (postDiffFingerprintCacheIfExist(
+            if (postDiffFingerprintCacheIfExist(
                         request, diffFingerprint, project, pullRequest, aiRequest, reportingService,
                         lockLease
-                )) {
+            )) {
                     requireConfirmedLease(lockLease);
                     publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                             AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
                     return Map.of("status", "cached_by_fingerprint", "cached", true);
-                }
-            } else {
-                log.warn(
-                        "Prompt dry run bypassing analysis caches for project={}, PR={}",
-                        project.getId(), request.getPullRequestId());
             }
 
             Map<String, Object> aiResponse;
             Map<String, String> proposedFileContents = extractFileContents(aiRequest);
             Optional<LocalRepositorySnapshotService.PreparedSnapshot> localSnapshot = Optional.empty();
-            if (!promptDryRun
-                    && aiRequest.getUseMcpTools()) {
+            {
                 VcsRepoInfo repository = ProjectVcsInfoRetriever.getVcsInfo(project);
                 List<String> proposedTreeChangedFiles = proposedTreeChangedFiles(aiRequest);
                 List<String> proposedTreeDeletedFiles = proposedTreeDeletedFiles(aiRequest);
@@ -296,18 +288,11 @@ public class PullRequestAnalysisProcessor {
                 });
             }
             requireConfirmedLease(lockLease);
-
-            if (AiAnalysisClient.isPromptDryRunResult(aiResponse)) {
-                Object artifact = aiResponse.get("promptArtifact");
-                log.warn(
-                        "Prompt dry run completed for project={}, PR={}; artifact={}",
-                        project.getId(), request.getPullRequestId(), artifact);
+            boolean partialReview = "partial".equals(aiResponse.get("status"));
+            if (partialReview) {
                 emitEvent(consumer, Map.of(
-                        "type", "info",
-                        "state", "prompt_dry_run_completed",
-                        "message", "Prompt dry run completed without publishing an analysis",
-                        "promptArtifact", artifact != null ? artifact : Map.of()));
-                return aiResponse;
+                        "type", "warning",
+                        "message", "Review is incomplete; findings are partial and unresolved changes remain"));
             }
 
             // === Extract file contents from enrichment data for line hash computation ===
@@ -367,7 +352,9 @@ public class PullRequestAnalysisProcessor {
 
             // === Deterministic PR issue tracking against previous iteration ===
             try {
-                if (previousAnalysis.isPresent()) {
+                if (!partialReview && previousAnalysis.isPresent()
+                        && previousAnalysis.get().getStatus()
+                        == org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.ACCEPTED) {
                     CodeAnalysis previous = previousAnalysis.get();
                     boolean refreshedSameRecord = newAnalysis == previous
                             || (newAnalysis.getId() != null && newAnalysis.getId().equals(previous.getId()));
@@ -405,13 +392,19 @@ public class PullRequestAnalysisProcessor {
 
             // === DAG: Mark PR commits as ANALYZED ===
             requireConfirmedLease(lockLease);
-            markPrCommitsAnalyzed(project, request, newAnalysis);
+            if (!partialReview) {
+                markPrCommitsAnalyzed(project, request, newAnalysis);
+            }
 
             // Publish successful completion event
             requireConfirmedLease(lockLease);
             publishAnalysisCompletedEvent(project, request, correlationId, startTime,
-                    AnalysisCompletedEvent.CompletionStatus.SUCCESS, issuesFound,
-                    allChangedFiles != null ? allChangedFiles.size() : 0, null);
+                    partialReview
+                            ? AnalysisCompletedEvent.CompletionStatus.PARTIAL_SUCCESS
+                            : AnalysisCompletedEvent.CompletionStatus.SUCCESS,
+                    issuesFound,
+                    allChangedFiles != null ? allChangedFiles.size() : 0,
+                    partialReview ? String.valueOf(aiResponse.get("unresolvedScopes")) : null);
 
             return aiResponse;
         } catch (IOException e) {
@@ -917,31 +910,13 @@ public class PullRequestAnalysisProcessor {
         putIdentity(inputs, "model", request.getAiModel());
         putIdentity(inputs, "baseUrl", request.getAiBaseUrl());
         putIdentity(inputs, "customParameters", request.getAiCustomParameters());
-        putIdentity(inputs, "maxTokens", request.getMaxAllowedTokens());
-        putIdentity(inputs, "useLocalMcp", request.getUseLocalMcp());
-        putIdentity(inputs, "useMcpTools", request.getUseMcpTools());
-        putIdentity(inputs, "ragEnabled", request.getRagEnabled());
-        putIdentity(inputs, "analysisType", request.getAnalysisType());
         putIdentity(inputs, "analysisMode", request.getAnalysisMode());
         putIdentity(inputs, "projectRules", request.getProjectRules());
-        putIdentity(inputs, "taskHistory", request.getTaskHistoryContext());
-        if (request.getProjectCapabilities() != null) {
-            putIdentity(inputs, "pluginSelection", request.getProjectCapabilities().fingerprint());
-        }
         if (request.getTaskContext() != null) {
             request.getTaskContext().entrySet().stream()
                     .sorted(Map.Entry.comparingByKey())
                     .forEach(entry -> putIdentity(
                             inputs, "taskContext:" + entry.getKey(), entry.getValue()));
-        }
-        List<String> previousIssues = request.getPreviousCodeAnalysisIssues() == null
-                ? List.of()
-                : request.getPreviousCodeAnalysisIssues().stream()
-                        .map(String::valueOf)
-                        .sorted()
-                        .toList();
-        for (int index = 0; index < previousIssues.size(); index++) {
-            putIdentity(inputs, "previousIssue:" + index, previousIssues.get(index));
         }
         putIdentity(inputs, "changedFiles", sortedValues(request.getChangedFiles()));
         putIdentity(inputs, "deletedFiles", sortedValues(request.getDeletedFiles()));

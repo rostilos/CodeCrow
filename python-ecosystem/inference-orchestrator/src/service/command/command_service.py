@@ -77,7 +77,7 @@ def _env_int(name: str, default: int) -> int:
 # prevented from generating an arbitrarily large command response.
 COMMAND_INPUT_TOKEN_TARGET = max(
     10_000,
-    _env_int("REVIEW_STAGE1_BATCH_TOKEN_BUDGET", 60_000),
+    _env_int("COMMAND_INPUT_TOKEN_TARGET", 60_000),
 )
 COMMAND_CONTEXT_RESERVE_TOKENS = 20_000
 COMMAND_ESTIMATOR_SAFETY_TOKENS = 256
