@@ -65,12 +65,11 @@ CODECROW_LOCAL_IMAGE_PREFIX=codecrow-local \
 CODECROW_DEPLOY_SERVICES=all \
 deployment/ci/ci-build.sh
 
-echo "--- 5. Shutting down existing services cleanly ---"
+echo "--- 5. Starting the locally loaded CI-equivalent images ---"
 cd "$DOCKER_PATH"
-docker compose down --remove-orphans
-
-echo "--- 6. Starting the locally loaded CI-equivalent images ---"
-docker compose up -d --no-build --wait
+# The local database may contain migrations from another pre-release checkout.
+# Keep migrations enabled while allowing that existing local history.
+docker compose -f docker-compose.yml -f docker-compose.local-build.yml up -d --no-build --wait
 
 echo "--- Deployment Complete! Services are up and healthy. ---"
-docker compose ps
+docker compose -f docker-compose.yml -f docker-compose.local-build.yml ps

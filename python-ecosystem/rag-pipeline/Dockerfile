@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY python-ecosystem/rag-pipeline/requirements.txt .
+COPY python-ecosystem/rag-pipeline/requirements.txt python-ecosystem/rag-pipeline/requirements.lock ./
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 

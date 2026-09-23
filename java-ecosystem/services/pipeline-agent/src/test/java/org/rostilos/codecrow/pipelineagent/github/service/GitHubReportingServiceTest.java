@@ -16,6 +16,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -68,6 +69,7 @@ class GitHubReportingServiceTest {
         when(repoInfo.getRepoSlug()).thenReturn("repo");
         when(repoInfo.getVcsConnection()).thenReturn(connection);
         org.mockito.Mockito.lenient().when(analysis.getCommitHash()).thenReturn("head-sha");
+        org.mockito.Mockito.lenient().when(analysis.getStatus()).thenReturn(AnalysisStatus.ACCEPTED);
 
         inlineIssue = new AnalysisSummary.IssueSummary(
                 IssueSeverity.HIGH,

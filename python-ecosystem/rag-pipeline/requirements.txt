@@ -1,3 +1,4 @@
+-c requirements.lock
 # Core dependencies
 python-dotenv>=1.0.0,<2.0.0
 

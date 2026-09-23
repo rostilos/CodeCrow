@@ -6,7 +6,7 @@ ENV MCP_USE_ANONYMIZED_TELEMETRY=false
 WORKDIR /app
 
 # --- Builder Stage 1: Install Dependencies ---
-COPY python-ecosystem/inference-orchestrator/src/requirements.txt .
+COPY python-ecosystem/inference-orchestrator/src/requirements.txt python-ecosystem/inference-orchestrator/src/requirements.lock ./
 
 # Install build dependencies required by some Python packages
 RUN apt-get update && \

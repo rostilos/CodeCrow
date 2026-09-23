@@ -5,9 +5,6 @@ import subprocess
 
 import pytest
 
-from tools.review_quality.isolated_paired_quality_capture import (
-    load_local_capture_case,
-)
 from tools.review_quality.neutral_corpus import (
     CASE_DEFINITIONS,
     FIXTURE_PATH,
@@ -99,7 +96,7 @@ def test_materialization_is_byte_and_revision_deterministic(tmp_path):
 
 
 @pytest.mark.parametrize("case_id", tuple(CASE_DEFINITIONS))
-def test_every_materialized_case_passes_capture_source_validation(
+def test_every_materialized_case_has_exact_local_manifest(
     tmp_path,
     case_id,
 ):
@@ -108,23 +105,23 @@ def test_every_materialized_case_passes_capture_source_validation(
         case_ids=(case_id,),
     )
     item = report["cases"][0]
+    repository = tmp_path / "corpus" / case_id / "repository"
+    manifest = json.loads((
+        tmp_path / "corpus" / case_id / "case.json"
+    ).read_text(encoding="utf-8"))
 
-    loaded = load_local_capture_case(
-        tmp_path / "corpus" / case_id / "case.json",
-        temporary_root=tmp_path / "loaded",
-        maximum_files=20,
-        maximum_changed_lines=2_000,
-        maximum_repository_files=2_000,
-        maximum_repository_bytes=20_000_000,
-    )
-
-    assert loaded.case_id == case_id
-    assert loaded.languages == tuple(item["languages"])
-    assert loaded.candidate_plugins == tuple(item["candidatePlugins"])
-    assert loaded.request_plugins == tuple(item["requestPlugins"])
-    assert loaded.repository.base_revision == item["baseCommit"]
-    assert loaded.repository.head_revision == item["headCommit"]
-    assert loaded.repository.changed_files == tuple(item["changedFiles"])
+    assert manifest["caseId"] == case_id
+    assert manifest["repositoryPath"] == str(repository.resolve())
+    assert manifest["languages"] == item["languages"]
+    assert manifest["candidatePlugins"] == item["candidatePlugins"]
+    assert manifest["requestPlugins"] == item["requestPlugins"]
+    assert manifest["baseCommit"] == item["baseCommit"]
+    assert manifest["headCommit"] == item["headCommit"]
+    assert _git(repository, "rev-parse", "HEAD") == item["headCommit"]
+    assert _git(
+        repository, "diff", "--name-only",
+        item["baseCommit"], item["headCommit"],
+    ).splitlines() == item["changedFiles"]
 
 
 def test_definitions_have_stable_nonempty_digests_and_evidence():

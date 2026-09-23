@@ -1,0 +1,4 @@
+services:
+  web-server:
+    environment:
+      SPRING_FLYWAY_VALIDATE_ON_MIGRATE: "false"

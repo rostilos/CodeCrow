@@ -13,9 +13,10 @@ class AnalysisStatusTest {
     void shouldHaveAllExpectedValues() {
         AnalysisStatus[] values = AnalysisStatus.values();
         
-        assertThat(values).hasSize(4);
+        assertThat(values).hasSize(5);
         assertThat(values).contains(
                 AnalysisStatus.ACCEPTED,
+                AnalysisStatus.PARTIAL,
                 AnalysisStatus.REJECTED,
                 AnalysisStatus.PENDING,
                 AnalysisStatus.ERROR

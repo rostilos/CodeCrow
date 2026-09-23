@@ -1,3 +1,4 @@
+-c requirements.lock
 asyncio
 fastapi
 uvicorn
