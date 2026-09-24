@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/223184244",
+  "status": 200,
+  "etag": "W/\"329bfe120e073662b0b1e09af2751aa1bcadd46f6c2fcf651a46a2b1d64daafb\"",
+  "headers": {
+    "ETag": "W/\"329bfe120e073662b0b1e09af2751aa1bcadd46f6c2fcf651a46a2b1d64daafb\"",
+    "Last-Modified": "Sat, 22 Aug 2026 11:56:28 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "2",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/223184244",
+    "pull_request_review_id": 162259177,
+    "id": 223184244,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDIyMzE4NDI0NA==",
+    "diff_hunk": "@@ -94,6 +94,8 @@ public function getMethodReturnType($typeName, $methodName)\n      *  'validatePassword' => 'boolean'\n      * ]\n      * </pre>\n+     * @throws \\InvalidArgumentException",
+    "path": "lib/internal/Magento/Framework/Reflection/MethodsMap.php",
+    "commit_id": "9f1d4bfa763f23a5a25f14bae95455dca3e4628f",
+    "original_commit_id": "dfda40787fda0b0abe58520a74b72820f2c7fed7",
+    "user": {
+      "login": "okorshenko",
+      "id": 7325075,
+      "node_id": "MDQ6VXNlcjczMjUwNzU=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7325075?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/okorshenko",
+      "html_url": "https://github.com/okorshenko",
+      "followers_url": "https://api.github.com/users/okorshenko/followers",
+      "following_url": "https://api.github.com/users/okorshenko/following{/other_user}",
+      "gists_url": "https://api.github.com/users/okorshenko/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/okorshenko/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/okorshenko/subscriptions",
+      "organizations_url": "https://api.github.com/users/okorshenko/orgs",
+      "repos_url": "https://api.github.com/users/okorshenko/repos",
+      "events_url": "https://api.github.com/users/okorshenko/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/okorshenko/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "please add description if which exception will be thrown",
+    "created_at": "2018-10-06T14:44:46Z",
+    "updated_at": "2018-10-07T11:08:43Z",
+    "html_url": "https://github.com/magento/magento2/pull/18416#discussion_r223184244",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/18416",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/223184244"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/18416#discussion_r223184244"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/18416"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/223184244/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 97,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 4,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485439177",
+  "status": 200,
+  "fetchedAt": "2026-08-26T01:52:54Z",
+  "etag": "W/\"f01b94080efee0a4b43ec9c7972ef46c499cd00a7a6f4500292ae84f0d733470\"",
+  "headers": {
+    "ETag": "W/\"f01b94080efee0a4b43ec9c7972ef46c499cd00a7a6f4500292ae84f0d733470\"",
+    "Last-Modified": "Thu, 05 Mar 2026 12:07:23 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "54",
+    "X-RateLimit-Reset": "1787712770"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485439177",
+    "pull_request_review_id": 484785803,
+    "id": 485439177,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTQzOTE3Nw==",
+    "diff_hunk": "@@ -0,0 +1,19 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminOpenCatalogProductPageActionGroup\">\n+        <annotations>\n+            <description>Open catalog product page.</description>",
+    "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AdminOpenCatalogProductPageActionGroup.xml",
+    "commit_id": "971df442e92225ed2f4469ff21b9d1540c1e6cc1",
+    "original_commit_id": "b8ce61b1572259f447fad11bc776735e777f3bc3",
+    "user": {
+      "login": "Usik2203",
+      "id": 13517181,
+      "node_id": "MDQ6VXNlcjEzNTE3MTgx",
+      "avatar_url": "https://avatars.githubusercontent.com/u/13517181?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/Usik2203",
+      "html_url": "https://github.com/Usik2203",
+      "followers_url": "https://api.github.com/users/Usik2203/followers",
+      "following_url": "https://api.github.com/users/Usik2203/following{/other_user}",
+      "gists_url": "https://api.github.com/users/Usik2203/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/Usik2203/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/Usik2203/subscriptions",
+      "organizations_url": "https://api.github.com/users/Usik2203/orgs",
+      "repos_url": "https://api.github.com/users/Usik2203/repos",
+      "events_url": "https://api.github.com/users/Usik2203/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/Usik2203/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**Done**",
+    "created_at": "2020-09-09T08:39:50Z",
+    "updated_at": "2020-09-17T15:59:09Z",
+    "html_url": "https://github.com/magento/magento2/pull/29931#discussion_r485439177",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29931",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485439177"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/29931#discussion_r485439177"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/29931"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485439177/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 13,
+    "side": "RIGHT",
+    "in_reply_to_id": 484492160,
+    "author_association": "CONTRIBUTOR",
+    "original_position": 13,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "f1adcbc393f473c043accc8025a0cd925613b97a2ecc2429a2d3632292219bb1",
+  "envelopeSha256": "24d16994b02850e83adc2c3f898ad04cf9bf65fa85657f09bf012e07a8b299b9"
+}

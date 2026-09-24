@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/174077538",
+  "status": 200,
+  "etag": "W/\"8b1a307f2f9e87d6a42e9e13aa4c590f2ce137964394657a90258e4d0ba66fc6\"",
+  "headers": {
+    "ETag": "W/\"8b1a307f2f9e87d6a42e9e13aa4c590f2ce137964394657a90258e4d0ba66fc6\"",
+    "Last-Modified": "Thu, 20 Aug 2026 11:50:46 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "23",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/174077538",
+    "pull_request_review_id": 103367569,
+    "id": 174077538,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDE3NDA3NzUzOA==",
+    "diff_hunk": "@@ -36,21 +37,28 @@ class Download extends ImportController\n      */\n     protected $fileFactory;\n \n+    /**\n+     * @var \\Magento\\ImportExport\\Model\\Import\\SampleFileProvider\n+     */\n+    private $sampleFileProvider;\n+\n     /**\n      * Constructor\n      *\n      * @param \\Magento\\Backend\\App\\Action\\Context $context\n      * @param \\Magento\\Framework\\App\\Response\\Http\\FileFactory $fileFactory\n      * @param \\Magento\\Framework\\Controller\\Result\\RawFactory $resultRawFactory\n      * @param \\Magento\\Framework\\Filesystem\\Directory\\ReadFactory $readFactory\n+     * @param \\Magento\\ImportExport\\Model\\Import\\SampleFileProvider $sampleFileProvider",
+    "path": "app/code/Magento/ImportExport/Controller/Adminhtml/Import/Download.php",
+    "commit_id": "d62db82ca4fcdfb5299c59afc5f44ee0ded8db83",
+    "original_commit_id": "992bb67a9cfd55931ca158fcc8644138e6fd75d7",
+    "user": {
+      "login": "ishakhsuvarov",
+      "id": 5747062,
+      "node_id": "MDQ6VXNlcjU3NDcwNjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/5747062?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/ishakhsuvarov",
+      "html_url": "https://github.com/ishakhsuvarov",
+      "followers_url": "https://api.github.com/users/ishakhsuvarov/followers",
+      "following_url": "https://api.github.com/users/ishakhsuvarov/following{/other_user}",
+      "gists_url": "https://api.github.com/users/ishakhsuvarov/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/ishakhsuvarov/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/ishakhsuvarov/subscriptions",
+      "organizations_url": "https://api.github.com/users/ishakhsuvarov/orgs",
+      "repos_url": "https://api.github.com/users/ishakhsuvarov/repos",
+      "events_url": "https://api.github.com/users/ishakhsuvarov/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/ishakhsuvarov/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Incorrect order of params in docBlock",
+    "created_at": "2018-03-13T10:20:55Z",
+    "updated_at": "2018-03-27T12:02:16Z",
+    "html_url": "https://github.com/magento/magento2/pull/13434#discussion_r174077538",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/13434",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/174077538"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/13434#discussion_r174077538"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/13434"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/174077538/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 52,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 24,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

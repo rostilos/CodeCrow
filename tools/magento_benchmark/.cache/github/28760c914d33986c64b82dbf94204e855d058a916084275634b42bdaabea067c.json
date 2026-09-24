@@ -1,0 +1,82 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819362053",
+  "status": 200,
+  "etag": "W/\"474e2d4bb7b1a2c45f46cc50451a309d895413e3b6647b38d033239972b224ff\"",
+  "headers": {
+    "ETag": "W/\"474e2d4bb7b1a2c45f46cc50451a309d895413e3b6647b38d033239972b224ff\"",
+    "Last-Modified": "Tue, 23 Jun 2026 13:03:21 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "8",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819362053",
+    "pull_request_review_id": 2399574858,
+    "id": 1819362053,
+    "node_id": "PRRC_kwDOACwCD85scUMF",
+    "diff_hunk": "@@ -1,16 +1,26 @@\n <?php\n /**\n- * Copyright © Magento, Inc. All rights reserved.\n- * See COPYING.txt for license details.\n+ * Copyright 2024 Adobe\n+ * All Rights Reserved.\n+ *\n+ * NOTICE: All information contained herein is, and remains\n+ * the property of Adobe and its suppliers, if any. The intellectual\n+ * and technical concepts contained herein are proprietary to Adobe\n+ * and its suppliers and are protected by all applicable intellectual\n+ * property laws, including trade secret and copyright laws.\n+ * Dissemination of this information or reproduction of this material\n+ * is strictly forbidden unless prior written permission is obtained from\n+ * Adobe.",
+    "path": "app/code/Magento/PageCache/Model/App/Request/Http/IdentifierForSave.php",
+    "commit_id": "ebcc80635c977a15c96ca99b731334f608dd7ef3",
+    "original_commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+    "user": {
+      "login": "Bashev",
+      "id": 1854269,
+      "node_id": "MDQ6VXNlcjE4NTQyNjk=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1854269?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/Bashev",
+      "html_url": "https://github.com/Bashev",
+      "followers_url": "https://api.github.com/users/Bashev/followers",
+      "following_url": "https://api.github.com/users/Bashev/following{/other_user}",
+      "gists_url": "https://api.github.com/users/Bashev/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/Bashev/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/Bashev/subscriptions",
+      "organizations_url": "https://api.github.com/users/Bashev/orgs",
+      "repos_url": "https://api.github.com/users/Bashev/repos",
+      "events_url": "https://api.github.com/users/Bashev/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/Bashev/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "It's better to be moved to separate file  COPYING.txt or LICENSE.txt for better opportunity for update the policies. \r\n\r\nIt's takes years to remove @author tag (comments block) from files, what will happens if all files requires updated license ...",
+    "created_at": "2024-10-28T16:18:41Z",
+    "updated_at": "2024-10-28T16:18:42Z",
+    "html_url": "https://github.com/magento/magento2/pull/39099#discussion_r1819362053",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1819362053"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/39099#discussion_r1819362053"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819362053/reactions",
+      "total_count": 1,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 13,
+    "side": "RIGHT",
+    "in_reply_to_id": 1819305393,
+    "author_association": "CONTRIBUTOR",
+    "original_position": 15,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

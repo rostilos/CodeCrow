@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/522914250",
+  "status": 200,
+  "etag": "W/\"cfab981bdc6cb11228e11cff1a592f97c39eaaef13eaf17d5626b0b5b4590550\"",
+  "headers": {
+    "ETag": "W/\"cfab981bdc6cb11228e11cff1a592f97c39eaaef13eaf17d5626b0b5b4590550\"",
+    "Last-Modified": "Thu, 11 Jun 2026 14:37:00 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "40",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/522914250",
+    "pull_request_review_id": 530014365,
+    "id": 522914250,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUyMjkxNDI1MA==",
+    "diff_hunk": "@@ -1122,5 +1124,20 @@\n             \"CATALOG_PRODUCT_FRONTEND_ACTION_VISITOR_ID_PRODUCT_ID_TYPE_ID\": true,\n             \"CATALOG_PRODUCT_FRONTEND_ACTION_CUSTOMER_ID_PRODUCT_ID_TYPE_ID\": true\n         }\n+    },\n+    \"catalog_compare_list\": {\n+        \"column\": {\n+            \"list_id\": true,\n+            \"list_id_mask\": true,\n+            \"customer_id\": true\n+        },\n+        \"index\": {\n+            \"CATALOG_COMPARE_LIST_LIST_ID_MASK\": true,\n+            \"CATALOG_COMPARE_LIST_CUSTOMER_ID\": true\n+        },\n+        \"constraint\": {\n+            \"PRIMARY\": true,\n+            \"CATALOG_COMPARE_LIST_CUSTOMER_ID_CUSTOMER_ENTITY_ENTITY_ID\": true\n+        }\n     }\n-}\n+}",
+    "path": "app/code/Magento/Catalog/etc/db_schema_whitelist.json",
+    "commit_id": "b2a1894a4a6899c0c1bdfbfaa9f916c6b4e341c9",
+    "original_commit_id": "6474eaafb35245547065a0362cf356fe2a38f6f4",
+    "user": {
+      "login": "andrewbess",
+      "id": 10788564,
+      "node_id": "MDQ6VXNlcjEwNzg4NTY0",
+      "avatar_url": "https://avatars.githubusercontent.com/u/10788564?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/andrewbess",
+      "html_url": "https://github.com/andrewbess",
+      "followers_url": "https://api.github.com/users/andrewbess/followers",
+      "following_url": "https://api.github.com/users/andrewbess/following{/other_user}",
+      "gists_url": "https://api.github.com/users/andrewbess/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/andrewbess/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/andrewbess/subscriptions",
+      "organizations_url": "https://api.github.com/users/andrewbess/orgs",
+      "repos_url": "https://api.github.com/users/andrewbess/repos",
+      "events_url": "https://api.github.com/users/andrewbess/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/andrewbess/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Hello @Usik2203 \r\nThank you for your contribution\r\n\r\nPlease don't forget to add a new line at end of file\r\n```suggestion\r\n}\r\n\r\n```",
+    "created_at": "2020-11-13T12:16:42Z",
+    "updated_at": "2020-12-03T16:38:06Z",
+    "html_url": "https://github.com/magento/magento2/pull/29047#discussion_r522914250",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29047",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/522914250"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/29047#discussion_r522914250"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/29047"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/522914250/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 1143,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 41,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

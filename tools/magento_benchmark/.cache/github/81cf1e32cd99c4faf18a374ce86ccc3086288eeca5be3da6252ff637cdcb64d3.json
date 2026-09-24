@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/167904619",
+  "status": 200,
+  "etag": "W/\"4949dd271b25df031899b418ed1285a1210b6b9736639b368f313acef4e43155\"",
+  "headers": {
+    "ETag": "W/\"4949dd271b25df031899b418ed1285a1210b6b9736639b368f313acef4e43155\"",
+    "Last-Modified": "Fri, 08 May 2026 18:47:53 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "58",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/167904619",
+    "pull_request_review_id": 96188222,
+    "id": 167904619,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDE2NzkwNDYxOQ==",
+    "diff_hunk": "@@ -113,8 +128,21 @@ public function __construct(\n         $this->_categoryCollectionFactory = $categoryCollectionFactory;\n         $this->_eventManager = $eventManager;\n         $this->connectionName  = 'catalog';\n-        $this->serializer = $serializer ?: \\Magento\\Framework\\App\\ObjectManager::getInstance()\n+        $this->serializer = $serializer ?: ObjectManager::getInstance()\n             ->get(\\Magento\\Framework\\Serialize\\Serializer\\Json::class);\n+        $this->metadataService = $metaDataService ?? ObjectManager::getInstance()\n+            ->get(CategoryAttributeRepositoryInterface::class);\n+    }\n+\n+    public function getCustomAttributesCodes()\n+    {\n+        if ($this->customAttributesCodes === null) {\n+            $this->customAttributesCodes = $this->getEavAttributesCodes($this->metadataService);\n+            $this->customAttributesCodes = array_values(\n+                array_diff($this->customAttributesCodes, CategoryInterface::ATTRIBUTES)\n+            );\n+        }\n+        return $this->customAttributesCodes;",
+    "path": "app/code/Magento/Catalog/Model/ResourceModel/Category.php",
+    "commit_id": "f286a9857a023d0907874a1f206eba5afa047534",
+    "original_commit_id": "ab558bdc08fb0f4610682218acc3a427fb5cb5e3",
+    "user": {
+      "login": "jameshalsall",
+      "id": 499932,
+      "node_id": "MDQ6VXNlcjQ5OTkzMg==",
+      "avatar_url": "https://avatars.githubusercontent.com/u/499932?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/jameshalsall",
+      "html_url": "https://github.com/jameshalsall",
+      "followers_url": "https://api.github.com/users/jameshalsall/followers",
+      "following_url": "https://api.github.com/users/jameshalsall/following{/other_user}",
+      "gists_url": "https://api.github.com/users/jameshalsall/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/jameshalsall/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/jameshalsall/subscriptions",
+      "organizations_url": "https://api.github.com/users/jameshalsall/orgs",
+      "repos_url": "https://api.github.com/users/jameshalsall/repos",
+      "events_url": "https://api.github.com/users/jameshalsall/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/jameshalsall/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "In the case of products we can improve this even further for larger datasets, as it stands here it will work great for a small number of attributes (< 500) but as soon as we start to go upward of that figure the performance will fall through the floor (each attribute loaded results in `Magento\\Eav\\Model\\ResourceModel\\Entity\\Attribute::_afterLoad` being called which in turn runs a select query to join additional attribute data).\r\n\r\nIn my current project we have ~2200 custom attributes, but all of our attribute sets are small (< 100 custom attributes in each one), the problem is that this method loads every attribute regardless of the product's attribute set, to fix it I pulled in this PR as a patch and then changed this method to the following:\r\n\r\n```php\r\n    public function getCustomAttributesCodes($attributeSetId)\r\n    {\r\n        if (!isset($this->customAttributesCodes[$attributeSetId])) {\r\n            $codes = [];\r\n            $criteria = $this->searchCriteriaBuilder->addFilter('attribute_set_id', $attributeSetId, 'eq');\r\n            $attributes = $this->attributeRepository->getList($criteria->create())->getItems();\r\n\r\n            if (is_array($attributes)) {\r\n                /** @var $attribute \\Magento\\Framework\\Api\\MetadataObjectInterface */\r\n                foreach ($attributes as $attribute) {\r\n                    $codes[] = $attribute->getAttributeCode();\r\n                }\r\n            }\r\n\r\n            $codes = array_values(\r\n                array_diff($codes, ProductInterface::ATTRIBUTES)\r\n            );\r\n\r\n            $this->customAttributesCodes[$attributeSetId] = $codes;\r\n        }\r\n\r\n        return $this->customAttributesCodes[$attributeSetId];\r\n    }\r\n```\r\n\r\nthen had the `Magento\\Catalog\\Model\\Product` pass through the product's attribute set ID, this way we only ever load the attributes for the current attribute set\r\n\r\nI think the memoization based on attribute set ID in the `$this->customAttributesCodes[$attributeSetId]` is not required because resource model instances are not shared across products, but I might be wrong  so I've left it in there for safety\r\n\r\nwhilst this would result in a few more queries (1 for each different attribute set to get the attributes relevant for that product) it means that creating a product is not affected by the total number of attributes in Magento, only by the number of attributes in the product's attribute set",
+    "created_at": "2018-02-13T15:42:39Z",
+    "updated_at": "2018-02-21T14:56:35Z",
+    "html_url": "https://github.com/magento/magento2/pull/13308#discussion_r167904619",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/13308",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/167904619"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/13308#discussion_r167904619"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/13308"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/167904619/reactions",
+      "total_count": 3,
+      "+1": 3,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 145,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 64,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

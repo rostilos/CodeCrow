@@ -1,0 +1,435 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/33841/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T15:36:17Z",
+  "etag": "W/\"b84893a34d1c56475bcc8b693ecb9ba361aab3ae634d88fd9e80ebd500eb1708\"",
+  "headers": {
+    "ETag": "W/\"b84893a34d1c56475bcc8b693ecb9ba361aab3ae634d88fd9e80ebd500eb1708\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "16",
+    "X-RateLimit-Reset": "1786981658"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/692109287",
+      "pull_request_review_id": 733986392,
+      "id": 692109287,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY5MjEwOTI4Nw==",
+      "diff_hunk": "@@ -0,0 +1,114 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\Directory\\Setup\\Patch\\Data;\n+\n+use Magento\\Directory\\Setup\\DataInstaller;\n+use Magento\\Directory\\Setup\\DataInstallerFactory;\n+use Magento\\Framework\\Setup\\ModuleDataSetupInterface;\n+use Magento\\Framework\\Setup\\Patch\\DataPatchInterface;\n+\n+/**\n+ * Add Ukraine Regions\n+ */\n+class AddDataForUkraine implements DataPatchInterface\n+{\n+    /**\n+     * @var ModuleDataSetupInterface\n+     */\n+    private $moduleDataSetup;\n+\n+    /**\n+     * @var DataInstallerFactory\n+     */\n+    private $dataInstallerFactory;\n+\n+    /**\n+     * AddDataForUkraine constructor.\n+     *\n+     * @param ModuleDataSetupInterface $moduleDataSetup\n+     * @param DataInstallerFactory $dataInstallerFactory\n+     */\n+    public function __construct(\n+        ModuleDataSetupInterface $moduleDataSetup,\n+        DataInstallerFactory $dataInstallerFactory\n+    ) {\n+        $this->moduleDataSetup = $moduleDataSetup;\n+        $this->dataInstallerFactory = $dataInstallerFactory;\n+    }\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function apply()\n+    {\n+        /** @var DataInstaller $dataInstaller */\n+        $dataInstaller = $this->dataInstallerFactory->create();\n+        $dataInstaller->addCountryRegions(\n+            $this->moduleDataSetup->getConnection(),\n+            $this->getDataForUkraine()\n+        );\n+\n+        return $this;\n+    }\n+\n+    /**\n+     * Ukraine regions data.\n+     *\n+     * @return array\n+     */\n+    private function getDataForUkraine()",
+      "path": "app/code/Magento/Directory/Setup/Patch/Data/AddDataForUkraine.php",
+      "commit_id": "27eb9912e9abb867cff85e6a2b03f547998fb182",
+      "original_commit_id": "a48b019dc2ba5e840afec5abed09826b4e68f5a7",
+      "user": {
+        "login": "eduard13",
+        "id": 15868188,
+        "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/eduard13",
+        "html_url": "https://github.com/eduard13",
+        "followers_url": "https://api.github.com/users/eduard13/followers",
+        "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+        "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+        "organizations_url": "https://api.github.com/users/eduard13/orgs",
+        "repos_url": "https://api.github.com/users/eduard13/repos",
+        "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/eduard13/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please move the private method at the end of class\r\n```suggestion\r\n    private function getDataForUkraine(): array\r\n```",
+      "created_at": "2021-08-19T13:27:10Z",
+      "updated_at": "2021-08-19T13:28:23Z",
+      "html_url": "https://github.com/magento/magento2/pull/33841#discussion_r692109287",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33841",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/692109287"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33841#discussion_r692109287"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33841"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/692109287/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 64,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 64,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/692109823",
+      "pull_request_review_id": 733986392,
+      "id": 692109823,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY5MjEwOTgyMw==",
+      "diff_hunk": "@@ -0,0 +1,114 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\Directory\\Setup\\Patch\\Data;\n+\n+use Magento\\Directory\\Setup\\DataInstaller;\n+use Magento\\Directory\\Setup\\DataInstallerFactory;\n+use Magento\\Framework\\Setup\\ModuleDataSetupInterface;\n+use Magento\\Framework\\Setup\\Patch\\DataPatchInterface;\n+\n+/**\n+ * Add Ukraine Regions\n+ */\n+class AddDataForUkraine implements DataPatchInterface\n+{\n+    /**\n+     * @var ModuleDataSetupInterface\n+     */\n+    private $moduleDataSetup;\n+\n+    /**\n+     * @var DataInstallerFactory\n+     */\n+    private $dataInstallerFactory;\n+\n+    /**\n+     * AddDataForUkraine constructor.\n+     *",
+      "path": "app/code/Magento/Directory/Setup/Patch/Data/AddDataForUkraine.php",
+      "commit_id": "27eb9912e9abb867cff85e6a2b03f547998fb182",
+      "original_commit_id": "a48b019dc2ba5e840afec5abed09826b4e68f5a7",
+      "user": {
+        "login": "eduard13",
+        "id": 15868188,
+        "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/eduard13",
+        "html_url": "https://github.com/eduard13",
+        "followers_url": "https://api.github.com/users/eduard13/followers",
+        "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+        "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+        "organizations_url": "https://api.github.com/users/eduard13/orgs",
+        "repos_url": "https://api.github.com/users/eduard13/repos",
+        "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/eduard13/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Lets remove this comment, since doesn't provide any useful information.\r\n```suggestion\r\n```",
+      "created_at": "2021-08-19T13:27:47Z",
+      "updated_at": "2021-08-19T13:28:23Z",
+      "html_url": "https://github.com/magento/magento2/pull/33841#discussion_r692109823",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33841",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/692109823"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33841#discussion_r692109823"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33841"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/692109823/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": 31,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 32,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 32,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/692132866",
+      "pull_request_review_id": 734018407,
+      "id": 692132866,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY5MjEzMjg2Ng==",
+      "diff_hunk": "@@ -0,0 +1,114 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\Directory\\Setup\\Patch\\Data;\n+\n+use Magento\\Directory\\Setup\\DataInstaller;\n+use Magento\\Directory\\Setup\\DataInstallerFactory;\n+use Magento\\Framework\\Setup\\ModuleDataSetupInterface;\n+use Magento\\Framework\\Setup\\Patch\\DataPatchInterface;\n+\n+/**\n+ * Add Ukraine Regions\n+ */\n+class AddDataForUkraine implements DataPatchInterface\n+{\n+    /**\n+     * @var ModuleDataSetupInterface\n+     */\n+    private $moduleDataSetup;\n+\n+    /**\n+     * @var DataInstallerFactory\n+     */\n+    private $dataInstallerFactory;\n+\n+    /**\n+     * AddDataForUkraine constructor.\n+     *",
+      "path": "app/code/Magento/Directory/Setup/Patch/Data/AddDataForUkraine.php",
+      "commit_id": "27eb9912e9abb867cff85e6a2b03f547998fb182",
+      "original_commit_id": "a48b019dc2ba5e840afec5abed09826b4e68f5a7",
+      "user": {
+        "login": "Den4ik",
+        "id": 1129623,
+        "node_id": "MDQ6VXNlcjExMjk2MjM=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1129623?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/Den4ik",
+        "html_url": "https://github.com/Den4ik",
+        "followers_url": "https://api.github.com/users/Den4ik/followers",
+        "following_url": "https://api.github.com/users/Den4ik/following{/other_user}",
+        "gists_url": "https://api.github.com/users/Den4ik/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/Den4ik/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/Den4ik/subscriptions",
+        "organizations_url": "https://api.github.com/users/Den4ik/orgs",
+        "repos_url": "https://api.github.com/users/Den4ik/repos",
+        "events_url": "https://api.github.com/users/Den4ik/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/Den4ik/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I'm not sure that it's really blocking approve PR. We have 80% of files with similar comment and I don't see any problems with this comment",
+      "created_at": "2021-08-19T13:53:40Z",
+      "updated_at": "2021-08-19T13:59:03Z",
+      "html_url": "https://github.com/magento/magento2/pull/33841#discussion_r692132866",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33841",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/692132866"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33841#discussion_r692132866"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33841"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/692132866/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": 31,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 32,
+      "side": "RIGHT",
+      "in_reply_to_id": 692109823,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 32,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/692136734",
+      "pull_request_review_id": 734018407,
+      "id": 692136734,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY5MjEzNjczNA==",
+      "diff_hunk": "@@ -0,0 +1,114 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\Directory\\Setup\\Patch\\Data;\n+\n+use Magento\\Directory\\Setup\\DataInstaller;\n+use Magento\\Directory\\Setup\\DataInstallerFactory;\n+use Magento\\Framework\\Setup\\ModuleDataSetupInterface;\n+use Magento\\Framework\\Setup\\Patch\\DataPatchInterface;\n+\n+/**\n+ * Add Ukraine Regions\n+ */\n+class AddDataForUkraine implements DataPatchInterface\n+{\n+    /**\n+     * @var ModuleDataSetupInterface\n+     */\n+    private $moduleDataSetup;\n+\n+    /**\n+     * @var DataInstallerFactory\n+     */\n+    private $dataInstallerFactory;\n+\n+    /**\n+     * AddDataForUkraine constructor.\n+     *\n+     * @param ModuleDataSetupInterface $moduleDataSetup\n+     * @param DataInstallerFactory $dataInstallerFactory\n+     */\n+    public function __construct(\n+        ModuleDataSetupInterface $moduleDataSetup,\n+        DataInstallerFactory $dataInstallerFactory\n+    ) {\n+        $this->moduleDataSetup = $moduleDataSetup;\n+        $this->dataInstallerFactory = $dataInstallerFactory;\n+    }\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function apply()\n+    {\n+        /** @var DataInstaller $dataInstaller */\n+        $dataInstaller = $this->dataInstallerFactory->create();\n+        $dataInstaller->addCountryRegions(\n+            $this->moduleDataSetup->getConnection(),\n+            $this->getDataForUkraine()\n+        );\n+\n+        return $this;\n+    }\n+\n+    /**\n+     * Ukraine regions data.\n+     *\n+     * @return array\n+     */\n+    private function getDataForUkraine()",
+      "path": "app/code/Magento/Directory/Setup/Patch/Data/AddDataForUkraine.php",
+      "commit_id": "27eb9912e9abb867cff85e6a2b03f547998fb182",
+      "original_commit_id": "a48b019dc2ba5e840afec5abed09826b4e68f5a7",
+      "user": {
+        "login": "Den4ik",
+        "id": 1129623,
+        "node_id": "MDQ6VXNlcjExMjk2MjM=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1129623?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/Den4ik",
+        "html_url": "https://github.com/Den4ik",
+        "followers_url": "https://api.github.com/users/Den4ik/followers",
+        "following_url": "https://api.github.com/users/Den4ik/following{/other_user}",
+        "gists_url": "https://api.github.com/users/Den4ik/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/Den4ik/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/Den4ik/subscriptions",
+        "organizations_url": "https://api.github.com/users/Den4ik/orgs",
+        "repos_url": "https://api.github.com/users/Den4ik/repos",
+        "events_url": "https://api.github.com/users/Den4ik/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/Den4ik/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "👍 agree with return type",
+      "created_at": "2021-08-19T13:57:41Z",
+      "updated_at": "2021-08-19T13:59:03Z",
+      "html_url": "https://github.com/magento/magento2/pull/33841#discussion_r692136734",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33841",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/692136734"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33841#discussion_r692136734"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33841"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/692136734/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 64,
+      "side": "RIGHT",
+      "in_reply_to_id": 692109287,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 64,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/696309321",
+      "pull_request_review_id": 739057729,
+      "id": 696309321,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY5NjMwOTMyMQ==",
+      "diff_hunk": "@@ -0,0 +1,112 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\Directory\\Setup\\Patch\\Data;\n+\n+use Magento\\Directory\\Setup\\DataInstaller;\n+use Magento\\Directory\\Setup\\DataInstallerFactory;\n+use Magento\\Framework\\Setup\\ModuleDataSetupInterface;\n+use Magento\\Framework\\Setup\\Patch\\DataPatchInterface;\n+\n+/**\n+ * Add Ukraine Regions\n+ */\n+class AddDataForUkraine implements DataPatchInterface\n+{\n+    /**\n+     * @var ModuleDataSetupInterface\n+     */\n+    private $moduleDataSetup;\n+\n+    /**\n+     * @var DataInstallerFactory\n+     */\n+    private $dataInstallerFactory;\n+\n+    /**\n+     * @param ModuleDataSetupInterface $moduleDataSetup\n+     * @param DataInstallerFactory $dataInstallerFactory\n+     */\n+    public function __construct(\n+        ModuleDataSetupInterface $moduleDataSetup,\n+        DataInstallerFactory $dataInstallerFactory\n+    ) {\n+        $this->moduleDataSetup = $moduleDataSetup;\n+        $this->dataInstallerFactory = $dataInstallerFactory;\n+    }\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function apply()\n+    {\n+        /** @var DataInstaller $dataInstaller */\n+        $dataInstaller = $this->dataInstallerFactory->create();\n+        $dataInstaller->addCountryRegions(\n+            $this->moduleDataSetup->getConnection(),\n+            $this->getDataForUkraine()\n+        );\n+\n+        return $this;\n+    }\n+\n+    /**\n+     * Ukraine regions data.\n+     *\n+     * @return array\n+     */\n+    private function getDataForUkraine(): array\n+    {\n+        return [\n+            ['UA', 'UA-71', 'Cherkaska oblast'],",
+      "path": "app/code/Magento/Directory/Setup/Patch/Data/AddDataForUkraine.php",
+      "commit_id": "27eb9912e9abb867cff85e6a2b03f547998fb182",
+      "original_commit_id": "50e0ca7d046a2991208f3d2bdb42517fdb862fdf",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "where did you get these region codes?",
+      "created_at": "2021-08-26T05:47:59Z",
+      "updated_at": "2021-08-26T05:48:03Z",
+      "html_url": "https://github.com/magento/magento2/pull/33841#discussion_r696309321",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33841",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/696309321"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33841#discussion_r696309321"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33841"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/696309321/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 65,
+      "original_line": 65,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 65,
+      "position": 65,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/696356774",
+      "pull_request_review_id": 739117558,
+      "id": 696356774,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY5NjM1Njc3NA==",
+      "diff_hunk": "@@ -0,0 +1,112 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\Directory\\Setup\\Patch\\Data;\n+\n+use Magento\\Directory\\Setup\\DataInstaller;\n+use Magento\\Directory\\Setup\\DataInstallerFactory;\n+use Magento\\Framework\\Setup\\ModuleDataSetupInterface;\n+use Magento\\Framework\\Setup\\Patch\\DataPatchInterface;\n+\n+/**\n+ * Add Ukraine Regions\n+ */\n+class AddDataForUkraine implements DataPatchInterface\n+{\n+    /**\n+     * @var ModuleDataSetupInterface\n+     */\n+    private $moduleDataSetup;\n+\n+    /**\n+     * @var DataInstallerFactory\n+     */\n+    private $dataInstallerFactory;\n+\n+    /**\n+     * @param ModuleDataSetupInterface $moduleDataSetup\n+     * @param DataInstallerFactory $dataInstallerFactory\n+     */\n+    public function __construct(\n+        ModuleDataSetupInterface $moduleDataSetup,\n+        DataInstallerFactory $dataInstallerFactory\n+    ) {\n+        $this->moduleDataSetup = $moduleDataSetup;\n+        $this->dataInstallerFactory = $dataInstallerFactory;\n+    }\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function apply()\n+    {\n+        /** @var DataInstaller $dataInstaller */\n+        $dataInstaller = $this->dataInstallerFactory->create();\n+        $dataInstaller->addCountryRegions(\n+            $this->moduleDataSetup->getConnection(),\n+            $this->getDataForUkraine()\n+        );\n+\n+        return $this;\n+    }\n+\n+    /**\n+     * Ukraine regions data.\n+     *\n+     * @return array\n+     */\n+    private function getDataForUkraine(): array\n+    {\n+        return [\n+            ['UA', 'UA-71', 'Cherkaska oblast'],",
+      "path": "app/code/Magento/Directory/Setup/Patch/Data/AddDataForUkraine.php",
+      "commit_id": "27eb9912e9abb867cff85e6a2b03f547998fb182",
+      "original_commit_id": "50e0ca7d046a2991208f3d2bdb42517fdb862fdf",
+      "user": {
+        "login": "duxabilii",
+        "id": 966145,
+        "node_id": "MDQ6VXNlcjk2NjE0NQ==",
+        "avatar_url": "https://avatars.githubusercontent.com/u/966145?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/duxabilii",
+        "html_url": "https://github.com/duxabilii",
+        "followers_url": "https://api.github.com/users/duxabilii/followers",
+        "following_url": "https://api.github.com/users/duxabilii/following{/other_user}",
+        "gists_url": "https://api.github.com/users/duxabilii/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/duxabilii/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/duxabilii/subscriptions",
+        "organizations_url": "https://api.github.com/users/duxabilii/orgs",
+        "repos_url": "https://api.github.com/users/duxabilii/repos",
+        "events_url": "https://api.github.com/users/duxabilii/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/duxabilii/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "All ISO Codes are available here\r\nhttps://www.iso.org/obp/ui/#iso:code:3166:UA\r\nhttps://en.wikipedia.org/wiki/ISO_3166-2:UA",
+      "created_at": "2021-08-26T07:16:44Z",
+      "updated_at": "2021-08-26T07:17:13Z",
+      "html_url": "https://github.com/magento/magento2/pull/33841#discussion_r696356774",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33841",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/696356774"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33841#discussion_r696356774"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33841"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/696356774/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 65,
+      "original_line": 65,
+      "side": "RIGHT",
+      "in_reply_to_id": 696309321,
+      "author_association": "MEMBER",
+      "original_position": 65,
+      "position": 65,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "0a7b546c9907a87956cf54b4324447ad0c367bc7bbcf1be8278349ea0c3a493b",
+  "cacheDigest": "7ff92ef82f722ca289e109c576fd178528af5c3d6bee33f04fdd9ecd89d88147"
+}

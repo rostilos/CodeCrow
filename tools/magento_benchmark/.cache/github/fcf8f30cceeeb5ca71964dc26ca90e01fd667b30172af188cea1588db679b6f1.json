@@ -1,0 +1,15 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/128371605",
+  "status": 404,
+  "etag": null,
+  "headers": {
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "57",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "message": "Not Found",
+    "documentation_url": "https://docs.github.com/rest/pulls/comments#get-a-review-comment-for-a-pull-request",
+    "status": "404"
+  }
+}

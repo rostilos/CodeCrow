@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/384640287",
+  "status": 200,
+  "etag": "W/\"85faf99de36ac9552a623228ab8972398a2915be6780a81db49603c30ddd0c8f\"",
+  "headers": {
+    "ETag": "W/\"85faf99de36ac9552a623228ab8972398a2915be6780a81db49603c30ddd0c8f\"",
+    "Last-Modified": "Thu, 02 Apr 2026 00:20:55 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "48",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/384640287",
+    "pull_request_review_id": 365087577,
+    "id": 384640287,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM4NDY0MDI4Nw==",
+    "diff_hunk": "@@ -3,28 +3,38 @@\n  * Copyright © Magento, Inc. All rights reserved.\n  * See COPYING.txt for license details.\n  */\n+\n namespace Magento\\Framework\\App\\Action;\n \n+use Magento\\Framework\\App\\ActionFlag;\n use Magento\\Framework\\App\\RequestInterface;\n+use Magento\\Framework\\App\\Response\\RedirectInterface;\n use Magento\\Framework\\App\\ResponseInterface;\n-use Magento\\Framework\\Controller\\ResultInterface;\n+use Magento\\Framework\\App\\ViewInterface;\n+use Magento\\Framework\\Event\\ManagerInterface as EventManagerInterface;\n use Magento\\Framework\\Exception\\NotFoundException;\n+use Magento\\Framework\\Message\\ManagerInterface as MessageManagerInterface;\n+use Magento\\Framework\\ObjectManagerInterface;\n+use Magento\\Framework\\Profiler;\n+use Magento\\Framework\\UrlInterface;\n \n /**\n  * Extend from this class to create actions controllers in frontend area of your application.\n  * It contains standard action behavior (event dispatching, flag checks)\n  * Action classes that do not extend from this class will lose this behavior and might not function correctly\n  *\n- * TODO: Remove this class. Allow implementation of Action Controllers by just implementing Action Interface.\n+ * @TODO: Remove this class. Allow implementation of Action Controllers by just implementing Action Interface.",
+    "path": "lib/internal/Magento/Framework/App/Action/Action.php",
+    "commit_id": "2658fba6af471e4b1343b4b6819590625b5e6547",
+    "original_commit_id": "472e808b54b1af1baed3b47955faa51379493f75",
+    "user": {
+      "login": "lenaorobei",
+      "id": 17548019,
+      "node_id": "MDQ6VXNlcjE3NTQ4MDE5",
+      "avatar_url": "https://avatars.githubusercontent.com/u/17548019?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/lenaorobei",
+      "html_url": "https://github.com/lenaorobei",
+      "followers_url": "https://api.github.com/users/lenaorobei/followers",
+      "following_url": "https://api.github.com/users/lenaorobei/following{/other_user}",
+      "gists_url": "https://api.github.com/users/lenaorobei/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/lenaorobei/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/lenaorobei/subscriptions",
+      "organizations_url": "https://api.github.com/users/lenaorobei/orgs",
+      "repos_url": "https://api.github.com/users/lenaorobei/repos",
+      "events_url": "https://api.github.com/users/lenaorobei/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/lenaorobei/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "This message is a little confusing. Thanks to this PR we will `Allow implementation of Action Controllers by just implementing Action Interface.`. Let's just remove it. `@deprecated`  should be good enough. ",
+    "created_at": "2020-02-26T17:15:10Z",
+    "updated_at": "2020-02-26T20:00:23Z",
+    "html_url": "https://github.com/magento/magento2/pull/26778#discussion_r384640287",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/26778",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/384640287"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/26778#discussion_r384640287"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/26778"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/384640287/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 26,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 26,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

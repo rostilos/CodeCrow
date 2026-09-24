@@ -1,0 +1,82 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/483184451",
+  "status": 200,
+  "etag": "W/\"8f736c1a9e27ad5d1471826f65487c676765950077928a1af916f2f3fc176b54\"",
+  "headers": {
+    "ETag": "W/\"8f736c1a9e27ad5d1471826f65487c676765950077928a1af916f2f3fc176b54\"",
+    "Last-Modified": "Mon, 13 Jul 2026 22:09:44 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "2",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/483184451",
+    "pull_request_review_id": 482111102,
+    "id": 483184451,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4MzE4NDQ1MQ==",
+    "diff_hunk": "@@ -0,0 +1,84 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\MediaGalleryRenditions\\Plugin;\n+\n+use Magento\\Framework\\App\\Filesystem\\DirectoryList;\n+use Magento\\Framework\\Filesystem;\n+use Magento\\MediaGalleryApi\\Api\\DeleteAssetsByPathsInterface;\n+use Magento\\MediaGalleryRenditionsApi\\Api\\GetRenditionPathInterface;\n+use Psr\\Log\\LoggerInterface;\n+\n+/**\n+ * Remove renditions when assets are removed\n+ */\n+class RemoveRenditions\n+{\n+    /**\n+     * @var GetRenditionPathInterface\n+     */\n+    private $getRenditionPath;\n+\n+    /**\n+     * @var Filesystem\n+     */\n+    private $filesystem;\n+\n+    /**\n+     * @var LoggerInterface\n+     */\n+    private $log;\n+\n+    /**\n+     * @param GetRenditionPathInterface $getRenditionPath\n+     * @param Filesystem $filesystem\n+     * @param LoggerInterface $log\n+     */\n+    public function __construct(\n+        GetRenditionPathInterface $getRenditionPath,\n+        Filesystem $filesystem,\n+        LoggerInterface $log\n+    ) {\n+        $this->getRenditionPath = $getRenditionPath;\n+        $this->filesystem = $filesystem;\n+        $this->log = $log;\n+    }\n+\n+    /**\n+     * Remove renditions when assets are removed\n+     *\n+     * @param DeleteAssetsByPathsInterface $deleteAssetsByPaths\n+     * @param \\Closure $proceed\n+     * @param array $paths\n+     */\n+    public function aroundExecute(",
+    "path": "app/code/Magento/MediaGalleryRenditions/Plugin/RemoveRenditions.php",
+    "commit_id": "b05edaba64e80cf8c17f7449d7da08f9a7918deb",
+    "original_commit_id": "a55b88012ad40be7bcc64bda42b52e67e0c0b073",
+    "user": {
+      "login": "sidolov",
+      "id": 11355520,
+      "node_id": "MDQ6VXNlcjExMzU1NTIw",
+      "avatar_url": "https://avatars.githubusercontent.com/u/11355520?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/sidolov",
+      "html_url": "https://github.com/sidolov",
+      "followers_url": "https://api.github.com/users/sidolov/followers",
+      "following_url": "https://api.github.com/users/sidolov/following{/other_user}",
+      "gists_url": "https://api.github.com/users/sidolov/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/sidolov/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/sidolov/subscriptions",
+      "organizations_url": "https://api.github.com/users/sidolov/orgs",
+      "repos_url": "https://api.github.com/users/sidolov/repos",
+      "events_url": "https://api.github.com/users/sidolov/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/sidolov/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Please, check the document: https://devdocs.magento.com/guides/v2.4/extension-dev-guide/plugins.html Parameters in after plugins are already supported.",
+    "created_at": "2020-09-03T18:45:04Z",
+    "updated_at": "2020-09-10T10:23:49Z",
+    "html_url": "https://github.com/magento/magento2/pull/29889#discussion_r483184451",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29889",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/483184451"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/29889#discussion_r483184451"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/29889"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/483184451/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 58,
+    "side": "RIGHT",
+    "in_reply_to_id": 483161246,
+    "author_association": "CONTRIBUTOR",
+    "original_position": 58,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

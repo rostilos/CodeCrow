@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/564563416",
+  "status": 200,
+  "etag": "W/\"518b2d8f8374568c8c6119ff8d8eafe74c4b7533ebf91be372c780e7c573e712\"",
+  "headers": {
+    "ETag": "W/\"518b2d8f8374568c8c6119ff8d8eafe74c4b7533ebf91be372c780e7c573e712\"",
+    "Last-Modified": "Mon, 09 Jun 2025 18:27:45 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "12",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/564563416",
+    "pull_request_review_id": 576416497,
+    "id": 564563416,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU2NDU2MzQxNg==",
+    "diff_hunk": "@@ -379,13 +380,13 @@ private function addFilteringByChildProductsToSelect(Select $select, Store $stor\n             []\n         )->joinLeft(\n             ['child_cpsd' => $this->getTable('catalog_product_entity_int')],\n-            'child_cpsd.' . $linkField . ' = '. 'relation_product_entity.' . $linkField\n+            'child_cpsd.' . $linkField . ' = ' . 'relation_product_entity.' . $linkField",
+    "path": "app/code/Magento/Catalog/Model/Indexer/Category/Product/AbstractAction.php",
+    "commit_id": "95f9e7a62efe65c2a7301a876a665989cb6eb8a2",
+    "original_commit_id": "7f93862cb00930bf335ca30c0d970c10de47e886",
+    "user": {
+      "login": "cpartica",
+      "id": 11950741,
+      "node_id": "MDQ6VXNlcjExOTUwNzQx",
+      "avatar_url": "https://avatars.githubusercontent.com/u/11950741?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/cpartica",
+      "html_url": "https://github.com/cpartica",
+      "followers_url": "https://api.github.com/users/cpartica/followers",
+      "following_url": "https://api.github.com/users/cpartica/following{/other_user}",
+      "gists_url": "https://api.github.com/users/cpartica/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/cpartica/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/cpartica/subscriptions",
+      "organizations_url": "https://api.github.com/users/cpartica/orgs",
+      "repos_url": "https://api.github.com/users/cpartica/repos",
+      "events_url": "https://api.github.com/users/cpartica/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/cpartica/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "is there a safer alternative to this?\r\njust concatenating strings as parameters to a mysql query could lead to a sql injection",
+    "created_at": "2021-01-26T14:42:40Z",
+    "updated_at": "2021-01-27T12:24:37Z",
+    "html_url": "https://github.com/magento/magento2/pull/31822#discussion_r564563416",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31822",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/564563416"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/31822#discussion_r564563416"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/31822"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/564563416/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 383,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 34,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

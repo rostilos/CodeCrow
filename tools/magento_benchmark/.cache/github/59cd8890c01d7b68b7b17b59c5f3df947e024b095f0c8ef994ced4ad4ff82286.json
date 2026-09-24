@@ -1,0 +1,82 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/2102065341",
+  "status": 200,
+  "etag": "W/\"12f327367c10cd8b0eaf72433e6de0a61cb32580647f6d278ee18184401dcf87\"",
+  "headers": {
+    "ETag": "W/\"12f327367c10cd8b0eaf72433e6de0a61cb32580647f6d278ee18184401dcf87\"",
+    "Last-Modified": "Fri, 21 Aug 2026 19:21:05 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "25",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/2102065341",
+    "pull_request_review_id": 2860449940,
+    "id": 2102065341,
+    "node_id": "PRRC_kwDOACwCD859Svi9",
+    "diff_hunk": "@@ -88,6 +89,11 @@ class Price implements ResetAfterRequestInterface\n      */\n     private $tierPriceExtensionFactory;\n \n+    /**\n+     * @var SpecialPriceService|null\n+     */\n+    protected ?SpecialPriceService $specialPriceService;",
+    "path": "app/code/Magento/Catalog/Model/Product/Type/Price.php",
+    "commit_id": "bd6ef727bea8e531ba26aad079c03fefad48e949",
+    "original_commit_id": "706ee4c1d102cdfa3ce211740ed524160a81a3d2",
+    "user": {
+      "login": "Den4ik",
+      "id": 1129623,
+      "node_id": "MDQ6VXNlcjExMjk2MjM=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1129623?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/Den4ik",
+      "html_url": "https://github.com/Den4ik",
+      "followers_url": "https://api.github.com/users/Den4ik/followers",
+      "following_url": "https://api.github.com/users/Den4ik/following{/other_user}",
+      "gists_url": "https://api.github.com/users/Den4ik/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/Den4ik/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/Den4ik/subscriptions",
+      "organizations_url": "https://api.github.com/users/Den4ik/orgs",
+      "repos_url": "https://api.github.com/users/Den4ik/repos",
+      "events_url": "https://api.github.com/users/Den4ik/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/Den4ik/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "It will require Core Team approval.\r\ncc @engcom-Hotel ",
+    "created_at": "2025-05-22T09:19:54Z",
+    "updated_at": "2025-05-22T09:19:55Z",
+    "html_url": "https://github.com/magento/magento2/pull/39690#discussion_r2102065341",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39690",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/2102065341"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/39690#discussion_r2102065341"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/39690"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/2102065341/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 95,
+    "side": "RIGHT",
+    "in_reply_to_id": 2099849661,
+    "author_association": "CONTRIBUTOR",
+    "original_position": 15,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

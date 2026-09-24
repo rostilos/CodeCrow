@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/352297914",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:27Z",
+  "etag": "W/\"31a6b2431b4521b8e0fd4d889a4eab55817d139278c2e8dd4764a240d2604ced\"",
+  "headers": {
+    "ETag": "W/\"31a6b2431b4521b8e0fd4d889a4eab55817d139278c2e8dd4764a240d2604ced\"",
+    "Last-Modified": "Fri, 22 May 2026 22:10:58 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "48",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/352297914",
+    "pull_request_review_id": 324903314,
+    "id": 352297914,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM1MjI5NzkxNA==",
+    "diff_hunk": "@@ -49,7 +49,8 @@ public function install(ModuleDataSetupInterface $setup, ModuleContextInterface\n         foreach (array_keys($this->configInterface->getIndexers()) as $indexerId) {\n             $indexer = $this->indexerFactory->create()->load($indexerId);\n             if ($indexer->isScheduled()) {\n-                $indexer->getView()->unsubscribe()->subscribe();\n+                $indexer->setScheduled(false);",
+    "path": "app/code/Magento/Indexer/Setup/RecurringData.php",
+    "commit_id": "28de31a6dbc839138103d40eff6403ae4aad5970",
+    "original_commit_id": "532d2d8d4e22e938fe5fc80e61774fe36347f932",
+    "user": {
+      "login": "kandy",
+      "id": 100289,
+      "node_id": "MDQ6VXNlcjEwMDI4OQ==",
+      "avatar_url": "https://avatars.githubusercontent.com/u/100289?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/kandy",
+      "html_url": "https://github.com/kandy",
+      "followers_url": "https://api.github.com/users/kandy/followers",
+      "following_url": "https://api.github.com/users/kandy/following{/other_user}",
+      "gists_url": "https://api.github.com/users/kandy/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/kandy/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/kandy/subscriptions",
+      "organizations_url": "https://api.github.com/users/kandy/orgs",
+      "repos_url": "https://api.github.com/users/kandy/repos",
+      "events_url": "https://api.github.com/users/kandy/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/kandy/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Please test that this not cause change log cleanup",
+    "created_at": "2019-11-30T18:27:27Z",
+    "updated_at": "2021-03-03T19:44:20Z",
+    "html_url": "https://github.com/magento/magento2/pull/25859#discussion_r352297914",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/25859",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/352297914"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/25859#discussion_r352297914"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/25859"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/352297914/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 52,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 5,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "4f359e9507a29eb5e4ca301cbd5568f36624b147c1121bc188197c22fd311269",
+  "envelopeSha256": "d3cb7b3119deab61adb1a2b320e0f07041553e1e57951e680c4913346d5d57e4"
+}

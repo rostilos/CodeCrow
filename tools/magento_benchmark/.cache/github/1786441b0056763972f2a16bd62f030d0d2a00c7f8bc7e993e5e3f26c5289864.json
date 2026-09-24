@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/385480626",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:29Z",
+  "etag": "W/\"83a6e1a35b7e56d170b8584fffed851a51a8cd5a02ab1c196c6819ebef53c5f8\"",
+  "headers": {
+    "ETag": "W/\"83a6e1a35b7e56d170b8584fffed851a51a8cd5a02ab1c196c6819ebef53c5f8\"",
+    "Last-Modified": "Tue, 02 Jun 2026 04:07:31 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "44",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/385480626",
+    "pull_request_review_id": 366129846,
+    "id": 385480626,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM4NTQ4MDYyNg==",
+    "diff_hunk": "@@ -0,0 +1,94 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\Backend\\Model\\Dashboard\\Chart;\n+\n+use DateTimeZone;\n+use Magento\\Framework\\Stdlib\\DateTime\\TimezoneInterface;\n+use Magento\\Reports\\Model\\ResourceModel\\Order\\CollectionFactory;\n+\n+/**\n+ * Dashboard chart dates retriever\n+ */\n+class Date\n+{\n+    /**\n+     * @var TimezoneInterface\n+     */\n+    private $localeDate;\n+\n+    /**\n+     * @var CollectionFactory\n+     */\n+    private $collectionFactory;\n+\n+    /**\n+     * Date constructor.\n+     * @param CollectionFactory $collectionFactory\n+     * @param TimezoneInterface $localeDate\n+     */\n+    public function __construct(\n+        CollectionFactory $collectionFactory,\n+        TimezoneInterface $localeDate\n+    ) {\n+        $this->localeDate = $localeDate;\n+        $this->collectionFactory = $collectionFactory;\n+    }\n+\n+    /**\n+     * Get chart dates data by period\n+     *\n+     * @param string $period\n+     *\n+     * @return array\n+     */\n+    public function getByPeriod($period): array\n+    {\n+        [$dateStart, $dateEnd] = $this->collectionFactory->create()->getDateRange(\n+            $period,\n+            '',\n+            '',\n+            true\n+        );\n+\n+        $timezoneLocal = $this->localeDate->getConfigTimezone();\n+\n+        $dateStart->setTimezone(new DateTimeZone($timezoneLocal));\n+        $dateEnd->setTimezone(new DateTimeZone($timezoneLocal));\n+\n+        if ($period === '24h') {\n+            $dateEnd->modify('-1 hour');\n+        } else {\n+            $dateEnd->setTime(23, 59, 59);\n+            $dateStart->setTime(0, 0, 0);\n+        }\n+\n+        $dates = [];\n+\n+        while ($dateStart <= $dateEnd) {\n+            switch ($period) {\n+                case '7d':",
+    "path": "app/code/Magento/Backend/Model/Dashboard/Chart/Date.php",
+    "commit_id": "7fc4e5c079270e8ff6586eb54df96d458447fd6b",
+    "original_commit_id": "d00b206e048d04c72382dd592bfed550fa891e12",
+    "user": {
+      "login": "edenduong",
+      "id": 8234209,
+      "node_id": "MDQ6VXNlcjgyMzQyMDk=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/8234209?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/edenduong",
+      "html_url": "https://github.com/edenduong",
+      "followers_url": "https://api.github.com/users/edenduong/followers",
+      "following_url": "https://api.github.com/users/edenduong/following{/other_user}",
+      "gists_url": "https://api.github.com/users/edenduong/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/edenduong/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/edenduong/subscriptions",
+      "organizations_url": "https://api.github.com/users/edenduong/orgs",
+      "repos_url": "https://api.github.com/users/edenduong/repos",
+      "events_url": "https://api.github.com/users/edenduong/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/edenduong/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "I think we should get the value from `const`",
+    "created_at": "2020-02-28T02:37:26Z",
+    "updated_at": "2020-03-21T00:31:38Z",
+    "html_url": "https://github.com/magento/magento2/pull/26923#discussion_r385480626",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/26923",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/385480626"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/26923#discussion_r385480626"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/26923"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/385480626/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 74,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 74,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "8f0c8e75a0d346fd951cf550587cbe089a686fe78c4480c788b0a54af3a7f4cf",
+  "envelopeSha256": "9557691e6d36778ef7305ec83ab39ba520583b93168e65f0af26924e472c96a0"
+}

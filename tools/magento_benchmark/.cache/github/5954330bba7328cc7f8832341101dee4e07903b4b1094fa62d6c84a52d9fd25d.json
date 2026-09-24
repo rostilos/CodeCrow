@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551197031",
+  "status": 200,
+  "etag": "W/\"c534e0a59bc8d3c9a4e8435d0d70c37e2b0a81a4e7f5dfd28fa1c820ee1b1f1b\"",
+  "headers": {
+    "ETag": "W/\"c534e0a59bc8d3c9a4e8435d0d70c37e2b0a81a4e7f5dfd28fa1c820ee1b1f1b\"",
+    "Last-Modified": "Sun, 04 Jan 2026 09:43:32 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "20",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551197031",
+    "pull_request_review_id": 560878493,
+    "id": 551197031,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MTE5NzAzMQ==",
+    "diff_hunk": "@@ -44,8 +46,9 @@\n         <!-- Verify we see updated large tax rate(from the above step) on the tax rate grid page -->\n         <actionGroup ref=\"AdminTaxRateGridOpenPageActionGroup\" stepKey=\"goToTaxRateIndex4\"/>\n         <click selector=\"{{AdminDataGridHeaderSection.clearFilters}}\" stepKey=\"clickClearFilters2\"/>\n-        <fillField selector=\"{{AdminTaxRateGridSection.filterByTaxIdentifier}}\" userInput=\"{{defaultTaxRateWithLargeRate.code}}\" stepKey=\"fillTaxIdentifierField3\"/>\n-        <click selector=\"{{AdminTaxRateGridSection.search}}\" stepKey=\"clickSearch2\"/>",
+    "path": "app/code/Magento/Tax/Test/Mftf/Test/UpdateLargeTaxRateEntityTest.xml",
+    "commit_id": "b27192192625201017270454c210c22b40c1c039",
+    "original_commit_id": "8fde38be1a6df2041286292a69e197630a0edfa6",
+    "user": {
+      "login": "eduard13",
+      "id": 15868188,
+      "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/eduard13",
+      "html_url": "https://github.com/eduard13",
+      "followers_url": "https://api.github.com/users/eduard13/followers",
+      "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+      "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+      "organizations_url": "https://api.github.com/users/eduard13/orgs",
+      "repos_url": "https://api.github.com/users/eduard13/repos",
+      "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/eduard13/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "We should preserve the `clickSearch2` reference, this is the reason of the SVC failing.",
+    "created_at": "2021-01-04T09:20:46Z",
+    "updated_at": "2021-01-17T21:05:48Z",
+    "html_url": "https://github.com/magento/magento2/pull/31454#discussion_r551197031",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31454",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/551197031"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/31454#discussion_r551197031"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/31454"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551197031/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 48,
+    "original_line": 48,
+    "side": "LEFT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 16,
+    "position": 20,
+    "subject_type": "line"
+  }
+}

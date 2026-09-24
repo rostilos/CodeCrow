@@ -1,0 +1,225 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/31957/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T14:47:16Z",
+  "etag": "W/\"a355378fa51f68a9ce9fca792367538389aade1bc4ee0d3d2e550f45a37ec50b\"",
+  "headers": {
+    "ETag": "W/\"a355378fa51f68a9ce9fca792367538389aade1bc4ee0d3d2e550f45a37ec50b\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "45",
+    "X-RateLimit-Reset": "1786980089"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/569339845",
+      "pull_request_review_id": 582266933,
+      "id": 569339845,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU2OTMzOTg0NQ==",
+      "diff_hunk": "@@ -42,30 +51,43 @@ protected function setUp(): void\n     }\n \n     /**\n-     * Loads order entity by provided order increment ID.\n+     * Test that Packaging popup renders\n      *\n-     * @param string $incrementId\n-     * @return OrderInterface\n+     * @magentoDataFixture Magento/Shipping/_files/shipping_with_carrier_data.php\n      */\n-    private function getOrderByIncrementId(string $incrementId) : OrderInterface\n+    public function testGetCommentsHtml(): void\n     {\n-        /** @var SearchCriteria $searchCriteria */\n-        $searchCriteria = $this->objectManager->get(SearchCriteriaBuilder::class)\n-            ->addFilter('increment_id', $incrementId)\n-            ->create();\n-\n-        $items = $this->orderRepository->getList($searchCriteria)\n-            ->getItems();\n+        $expectedNeedle = \"packaging.setItemQtyCallback(function(itemId){\n+            var item = $$('[name=\\\"shipment[items]['+itemId+']\\\"]')[0],\n+                itemTitle = $('order_item_' + itemId + '_title');\n+            if (!itemTitle && !item) {\n+                return 0;\n+            }\n+            if (item && !isNaN(item.value)) {\n+                return item.value;\n+            }\n+        });\";\n+        $this->assertStringContainsString($expectedNeedle, $this->getHtml());\n+    }\n \n-        return array_pop($items);\n+    /**\n+     * Verify currency code on custom value field\n+     *\n+     * @magentoDataFixture Magento/Shipping/_files/shipping_with_carrier_data_different_currency_code.php\n+     */\n+    public function testGetCurrencyCodeCustomValue ()\n+    {\n+        $expectedCurrencyCode = '<span class=\"customs-value-currency\">",
+      "path": "dev/tests/integration/testsuite/Magento/Shipping/Block/Adminhtml/Order/AddToPackageTest.php",
+      "commit_id": "7d639eccd2ae9cf3f4fa15c3b13b24e84e760df0",
+      "original_commit_id": "8c6dd037d6f055c0f06b582507677b7847c86680",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "This check is too unstable. Any change in formatting will break test\r\nI Suggest extract value and check it\r\n```\r\n$template = '/<span class=\"customs-value-currency\">\\s*?(?<currency>[A-Za-z]+)\\s*?<\\/span>/';\r\n$matches = [];\r\npreg_match($template, $text, $matches);\r\n$currency = $matches['currency'] ?? null;\r\nassert...\r\n```\r\n",
+      "created_at": "2021-02-03T11:31:13Z",
+      "updated_at": "2021-02-03T12:23:17Z",
+      "html_url": "https://github.com/magento/magento2/pull/31957#discussion_r569339845",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31957",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/569339845"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31957#discussion_r569339845"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31957"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/569339845/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 80,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 73,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/569340078",
+      "pull_request_review_id": 582266933,
+      "id": 569340078,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU2OTM0MDA3OA==",
+      "diff_hunk": "@@ -0,0 +1,50 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+use Magento\\Catalog\\Api\\ProductRepositoryInterface;\n+use Magento\\Sales\\Api\\Data\\OrderInterfaceFactory;\n+use Magento\\Sales\\Api\\OrderRepositoryInterface;\n+use Magento\\Sales\\Model\\Order;\n+use Magento\\Sales\\Model\\Order\\ShipmentFactory;\n+use Magento\\TestFramework\\Helper\\Bootstrap;\n+use Magento\\TestFramework\\Workaround\\Override\\Fixture\\Resolver;\n+use Magento\\Framework\\DB\\Transaction;\n+\n+Resolver::getInstance()->requireDataFixture('Magento/Sales/_files/order_with_customer.php');\n+\n+$objectManager = Bootstrap::getObjectManager();\n+/** @var Transaction $transaction */\n+$transaction = $objectManager->get(Transaction::class);\n+/** @var ProductRepositoryInterface $productRepository */\n+$productRepository = $objectManager->create(ProductRepositoryInterface::class);",
+      "path": "dev/tests/integration/testsuite/Magento/Shipping/_files/shipping_with_carrier_data_different_currency_code.php",
+      "commit_id": "7d639eccd2ae9cf3f4fa15c3b13b24e84e760df0",
+      "original_commit_id": "8c6dd037d6f055c0f06b582507677b7847c86680",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "please use get() for product repository",
+      "created_at": "2021-02-03T11:31:42Z",
+      "updated_at": "2021-02-03T12:23:17Z",
+      "html_url": "https://github.com/magento/magento2/pull/31957#discussion_r569340078",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31957",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/569340078"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31957#discussion_r569340078"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31957"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/569340078/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 23,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 23,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/569340288",
+      "pull_request_review_id": 582266933,
+      "id": 569340288,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU2OTM0MDI4OA==",
+      "diff_hunk": "@@ -0,0 +1,50 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+use Magento\\Catalog\\Api\\ProductRepositoryInterface;\n+use Magento\\Sales\\Api\\Data\\OrderInterfaceFactory;\n+use Magento\\Sales\\Api\\OrderRepositoryInterface;\n+use Magento\\Sales\\Model\\Order;\n+use Magento\\Sales\\Model\\Order\\ShipmentFactory;\n+use Magento\\TestFramework\\Helper\\Bootstrap;\n+use Magento\\TestFramework\\Workaround\\Override\\Fixture\\Resolver;\n+use Magento\\Framework\\DB\\Transaction;\n+\n+Resolver::getInstance()->requireDataFixture('Magento/Sales/_files/order_with_customer.php');\n+\n+$objectManager = Bootstrap::getObjectManager();\n+/** @var Transaction $transaction */\n+$transaction = $objectManager->get(Transaction::class);\n+/** @var ProductRepositoryInterface $productRepository */\n+$productRepository = $objectManager->create(ProductRepositoryInterface::class);\n+$product = $productRepository->get('simple');\n+/** @var Order $order */\n+$order = $objectManager->get(OrderInterfaceFactory::class)->create()->loadByIncrementId('100000001');\n+$order->setShippingDescription('UPS Next Day Air')\n+    ->setShippingMethod('ups_11')\n+    ->setOrderCurrencyCode('FR')\n+    ->setShippingAmount(0)\n+    ->setCouponCode('1234567890')\n+    ->setDiscountDescription('1234567890');\n+\n+/** @var OrderRepositoryInterface $orderRepository */\n+$orderRepository = $objectManager->create(OrderRepositoryInterface::class);\n+$orderRepository->save($order);\n+\n+$shipmentItems = [];\n+foreach ($order->getItems() as $orderItem) {\n+    $shipmentItems[$orderItem->getId()] = $orderItem->getQtyOrdered();\n+}\n+$tracking = [\n+    'carrier_code' => 'ups',\n+    'title' => 'United Parcel Service',\n+    'number' => '987654321'",
+      "path": "dev/tests/integration/testsuite/Magento/Shipping/_files/shipping_with_carrier_data_different_currency_code.php",
+      "commit_id": "7d639eccd2ae9cf3f4fa15c3b13b24e84e760df0",
+      "original_commit_id": "8c6dd037d6f055c0f06b582507677b7847c86680",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "add comma",
+      "created_at": "2021-02-03T11:32:05Z",
+      "updated_at": "2021-02-03T12:23:17Z",
+      "html_url": "https://github.com/magento/magento2/pull/31957#discussion_r569340288",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31957",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/569340288"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31957#discussion_r569340288"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31957"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/569340288/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 45,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 45,
+      "position": 1,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "ee8ba55f7d463421a8856f99ee848668daf09eda2c2bcf28a80b6583a748c31e",
+  "cacheDigest": "c5070346d8602224767d2fdffd6595a7cf32ab4b23a80c230f61a1d74d872538"
+}

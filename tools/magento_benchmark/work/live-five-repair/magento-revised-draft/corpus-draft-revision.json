@@ -1,0 +1,456 @@
+{
+  "kind": "codecrow-magento2-draft-revision",
+  "generatedAt": "2026-08-17T16:49:57Z",
+  "sourceMode": "live",
+  "githubApiVersion": "2022-11-28",
+  "repository": "magento/magento2",
+  "defaultBranch": "2.4-develop",
+  "sourceDraftFileSha256": "bcf5c0613b4d9fe798ff0f2408b81effb74e8dab333994d8a9fefc49f5c62bb9",
+  "sourceDraftSha256": "613fef3959034aebc08eab510b36d46b9b6bfc1ee77046b117d1882f1220b142",
+  "discoveryDigest": "f87bd5a438239504b158c8b8ef45db23ba92f2f640298be9dcb9c9f7a6968ae7",
+  "discoveryKind": "codecrow-magento2-targeted-review-discovery",
+  "candidateSetDigest": "c1e4be664141243fcbf4afe1da2eb00c06416ee39e847d392dc39a01d74b281a",
+  "choicesFileSha256": "6b9f1c3035f83070dfa5fb02ac222885f8b8461e628d18002dd8ca2893d3430d",
+  "choicesSha256": "090135b68264c988e8968f5d07d00892bbbd85e39c0ca3bf4d29770b24110fe9",
+  "replacementPolicy": {
+    "selection": "explicit_operator_supplied_candidate_and_comment_ids",
+    "caseOrder": "replace_in_source_slot",
+    "sizeBands": "preserve_exact_source_distribution",
+    "draftDiffRenameDetection": "disabled",
+    "semanticAdjudication": "not_performed"
+  },
+  "replacements": [
+    {
+      "sourceCaseId": "magento2-pr-31957-8c6dd037d6f0",
+      "sourcePullRequest": 31957,
+      "sourceSizeBand": "small",
+      "replacementCaseId": "magento2-pr-39099-e4fce5a7b896",
+      "pullRequest": 39099,
+      "headSha": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+      "commentIds": [
+        1819089463,
+        1819095028,
+        1819305393
+      ],
+      "candidateDigest": "1ace07a104478db87d46775a37b30aa93686230af4db0674cdcdf3613834de09",
+      "caseDigest": "d79536085844ed0b82ba4a32a285e3b6eec0d0bd527ab2979e385778967b5c49",
+      "submittedReviewEvidence": {
+        "source": "pull-review-records",
+        "endpoints": [
+          "/repos/magento/magento2/pulls/39099/reviews/2399130286",
+          "/repos/magento/magento2/pulls/39099/reviews/2399139487",
+          "/repos/magento/magento2/pulls/39099/reviews/2399484952"
+        ],
+        "fallbackReason": null,
+        "primaryFailure": null,
+        "recordResponseSha256": {
+          "2399130286": "378c7c0af5dc8f63446f88f9333049b8bf53ccd0f14b736f3ddeacc9241c1453",
+          "2399139487": "71d9355929b0776eeef605ad005bf61e403d8d32361b8e7d50e497e0798b0194",
+          "2399484952": "9d087d168f53ffffef85c0a855dab37587022c299f87fb1742260fdbc4fba5d3"
+        },
+        "sourceMode": "live",
+        "records": [
+          {
+            "id": 2399130286,
+            "node_id": "PRR_kwDOACwCD86O_9Ku",
+            "user": {
+              "login": "ilnytskyi",
+              "id": 3192770,
+              "node_id": "MDQ6VXNlcjMxOTI3NzA=",
+              "avatar_url": "https://avatars.githubusercontent.com/u/3192770?u=3b2d07c1870f8a29742daa0a04d978c0f9f8e9d2&v=4",
+              "gravatar_id": "",
+              "url": "https://api.github.com/users/ilnytskyi",
+              "html_url": "https://github.com/ilnytskyi",
+              "followers_url": "https://api.github.com/users/ilnytskyi/followers",
+              "following_url": "https://api.github.com/users/ilnytskyi/following{/other_user}",
+              "gists_url": "https://api.github.com/users/ilnytskyi/gists{/gist_id}",
+              "starred_url": "https://api.github.com/users/ilnytskyi/starred{/owner}{/repo}",
+              "subscriptions_url": "https://api.github.com/users/ilnytskyi/subscriptions",
+              "organizations_url": "https://api.github.com/users/ilnytskyi/orgs",
+              "repos_url": "https://api.github.com/users/ilnytskyi/repos",
+              "events_url": "https://api.github.com/users/ilnytskyi/events{/privacy}",
+              "received_events_url": "https://api.github.com/users/ilnytskyi/received_events",
+              "type": "User",
+              "user_view_type": "public",
+              "site_admin": false
+            },
+            "body": "",
+            "state": "COMMENTED",
+            "html_url": "https://github.com/magento/magento2/pull/39099#pullrequestreview-2399130286",
+            "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+            "author_association": "MEMBER",
+            "_links": {
+              "html": {
+                "href": "https://github.com/magento/magento2/pull/39099#pullrequestreview-2399130286"
+              },
+              "pull_request": {
+                "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+              }
+            },
+            "submitted_at": "2024-10-28T13:47:09Z",
+            "commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679"
+          },
+          {
+            "id": 2399139487,
+            "node_id": "PRR_kwDOACwCD86O__af",
+            "user": {
+              "login": "ilnytskyi",
+              "id": 3192770,
+              "node_id": "MDQ6VXNlcjMxOTI3NzA=",
+              "avatar_url": "https://avatars.githubusercontent.com/u/3192770?u=3b2d07c1870f8a29742daa0a04d978c0f9f8e9d2&v=4",
+              "gravatar_id": "",
+              "url": "https://api.github.com/users/ilnytskyi",
+              "html_url": "https://github.com/ilnytskyi",
+              "followers_url": "https://api.github.com/users/ilnytskyi/followers",
+              "following_url": "https://api.github.com/users/ilnytskyi/following{/other_user}",
+              "gists_url": "https://api.github.com/users/ilnytskyi/gists{/gist_id}",
+              "starred_url": "https://api.github.com/users/ilnytskyi/starred{/owner}{/repo}",
+              "subscriptions_url": "https://api.github.com/users/ilnytskyi/subscriptions",
+              "organizations_url": "https://api.github.com/users/ilnytskyi/orgs",
+              "repos_url": "https://api.github.com/users/ilnytskyi/repos",
+              "events_url": "https://api.github.com/users/ilnytskyi/events{/privacy}",
+              "received_events_url": "https://api.github.com/users/ilnytskyi/received_events",
+              "type": "User",
+              "user_view_type": "public",
+              "site_admin": false
+            },
+            "body": "",
+            "state": "COMMENTED",
+            "html_url": "https://github.com/magento/magento2/pull/39099#pullrequestreview-2399139487",
+            "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+            "author_association": "MEMBER",
+            "_links": {
+              "html": {
+                "href": "https://github.com/magento/magento2/pull/39099#pullrequestreview-2399139487"
+              },
+              "pull_request": {
+                "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+              }
+            },
+            "submitted_at": "2024-10-28T13:50:26Z",
+            "commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679"
+          },
+          {
+            "id": 2399484952,
+            "node_id": "PRR_kwDOACwCD86PBTwY",
+            "user": {
+              "login": "hostep",
+              "id": 85479,
+              "node_id": "MDQ6VXNlcjg1NDc5",
+              "avatar_url": "https://avatars.githubusercontent.com/u/85479?u=25886a2a78111515166e5cbf9a14343bde80186a&v=4",
+              "gravatar_id": "",
+              "url": "https://api.github.com/users/hostep",
+              "html_url": "https://github.com/hostep",
+              "followers_url": "https://api.github.com/users/hostep/followers",
+              "following_url": "https://api.github.com/users/hostep/following{/other_user}",
+              "gists_url": "https://api.github.com/users/hostep/gists{/gist_id}",
+              "starred_url": "https://api.github.com/users/hostep/starred{/owner}{/repo}",
+              "subscriptions_url": "https://api.github.com/users/hostep/subscriptions",
+              "organizations_url": "https://api.github.com/users/hostep/orgs",
+              "repos_url": "https://api.github.com/users/hostep/repos",
+              "events_url": "https://api.github.com/users/hostep/events{/privacy}",
+              "received_events_url": "https://api.github.com/users/hostep/received_events",
+              "type": "User",
+              "user_view_type": "public",
+              "site_admin": false
+            },
+            "body": "",
+            "state": "COMMENTED",
+            "html_url": "https://github.com/magento/magento2/pull/39099#pullrequestreview-2399484952",
+            "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+            "author_association": "CONTRIBUTOR",
+            "_links": {
+              "html": {
+                "href": "https://github.com/magento/magento2/pull/39099#pullrequestreview-2399484952"
+              },
+              "pull_request": {
+                "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+              }
+            },
+            "submitted_at": "2024-10-28T15:44:35Z",
+            "commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679"
+          }
+        ]
+      }
+    },
+    {
+      "sourceCaseId": "magento2-pr-29081-6f9a2743df52",
+      "sourcePullRequest": 29081,
+      "sourceSizeBand": "small",
+      "replacementCaseId": "magento2-pr-40023-4582620cceb3",
+      "pullRequest": 40023,
+      "headSha": "4582620cceb3c852e4691e30b7c025fcdc7ff4cf",
+      "commentIds": [
+        2348826803
+      ],
+      "candidateDigest": "188d82a2965bf45b4875045661b913d83d2a2840f0b7166dd0b620b8ee1ad90c",
+      "caseDigest": "671407a622ce80f99f966089b656d11234181c5dd8574d0f8ae188fc7f375363",
+      "submittedReviewEvidence": {
+        "source": "pull-review-records",
+        "endpoints": [
+          "/repos/magento/magento2/pulls/40023/reviews/3224353290"
+        ],
+        "fallbackReason": null,
+        "primaryFailure": null,
+        "recordResponseSha256": {
+          "3224353290": "2a7d1a425b621ba1c533ece31bc4c921ce71c8d7aee3ea090055300a32e97eae"
+        },
+        "sourceMode": "live",
+        "records": [
+          {
+            "id": 3224353290,
+            "node_id": "PRR_kwDOACwCD87AL7oK",
+            "user": {
+              "login": "engcom-Hotel",
+              "id": 51681618,
+              "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+              "avatar_url": "https://avatars.githubusercontent.com/u/51681618?u=cfc267420e8da86e0e6678883e414b34991ba337&v=4",
+              "gravatar_id": "",
+              "url": "https://api.github.com/users/engcom-Hotel",
+              "html_url": "https://github.com/engcom-Hotel",
+              "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+              "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+              "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+              "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+              "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+              "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+              "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+              "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+              "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+              "type": "User",
+              "user_view_type": "public",
+              "site_admin": false
+            },
+            "body": "Hello @KrasnoshchokBohdan,\r\n\r\nThanks for the contribution!\r\n\r\nThis is good to have PR. but please have a look into the below review comment.\r\n\r\nThanks",
+            "state": "CHANGES_REQUESTED",
+            "html_url": "https://github.com/magento/magento2/pull/40023#pullrequestreview-3224353290",
+            "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/40023",
+            "author_association": "CONTRIBUTOR",
+            "_links": {
+              "html": {
+                "href": "https://github.com/magento/magento2/pull/40023#pullrequestreview-3224353290"
+              },
+              "pull_request": {
+                "href": "https://api.github.com/repos/magento/magento2/pulls/40023"
+              }
+            },
+            "submitted_at": "2025-09-15T12:33:47Z",
+            "commit_id": "4582620cceb3c852e4691e30b7c025fcdc7ff4cf"
+          }
+        ]
+      }
+    },
+    {
+      "sourceCaseId": "magento2-pr-29207-cc4c5d0f2178",
+      "sourcePullRequest": 29207,
+      "sourceSizeBand": "small",
+      "replacementCaseId": "magento2-pr-37362-58467b85045c",
+      "pullRequest": 37362,
+      "headSha": "58467b85045cef860a88c2e447cc2b338ce6f571",
+      "commentIds": [
+        1850098743
+      ],
+      "candidateDigest": "deb98c9d056471f2082637692edf36bff7f5577f9daf61d3d9abee80761223cf",
+      "caseDigest": "309349bafb30f334bc0cd36cd8b5b907b25db83c63f3a9e448683ea4d0af0e60",
+      "submittedReviewEvidence": {
+        "source": "pull-review-records",
+        "endpoints": [
+          "/repos/magento/magento2/pulls/37362/reviews/2448279103"
+        ],
+        "fallbackReason": null,
+        "primaryFailure": null,
+        "recordResponseSha256": {
+          "2448279103": "0c8c2f79bf6e42a068b81f772e2279ee52f49d71d24db159a4272db9323a104e"
+        },
+        "sourceMode": "live",
+        "records": [
+          {
+            "id": 2448279103,
+            "node_id": "PRR_kwDOACwCD86R7cY_",
+            "user": {
+              "login": "engcom-Hotel",
+              "id": 51681618,
+              "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+              "avatar_url": "https://avatars.githubusercontent.com/u/51681618?u=cfc267420e8da86e0e6678883e414b34991ba337&v=4",
+              "gravatar_id": "",
+              "url": "https://api.github.com/users/engcom-Hotel",
+              "html_url": "https://github.com/engcom-Hotel",
+              "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+              "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+              "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+              "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+              "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+              "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+              "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+              "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+              "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+              "type": "User",
+              "user_view_type": "public",
+              "site_admin": false
+            },
+            "body": "Hello @Bashev,\r\n\r\nPlease address the review comments below.\r\n\r\nthanks",
+            "state": "CHANGES_REQUESTED",
+            "html_url": "https://github.com/magento/magento2/pull/37362#pullrequestreview-2448279103",
+            "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/37362",
+            "author_association": "CONTRIBUTOR",
+            "_links": {
+              "html": {
+                "href": "https://github.com/magento/magento2/pull/37362#pullrequestreview-2448279103"
+              },
+              "pull_request": {
+                "href": "https://api.github.com/repos/magento/magento2/pulls/37362"
+              }
+            },
+            "submitted_at": "2024-11-20T10:58:44Z",
+            "commit_id": "58467b85045cef860a88c2e447cc2b338ce6f571"
+          }
+        ]
+      }
+    },
+    {
+      "sourceCaseId": "magento2-pr-27064-b1480fbb4e12",
+      "sourcePullRequest": 27064,
+      "sourceSizeBand": "small",
+      "replacementCaseId": "magento2-pr-38270-5b77b2c64924",
+      "pullRequest": 38270,
+      "headSha": "5b77b2c64924993b4ad6530196918d84ea3aad41",
+      "commentIds": [
+        1751316514,
+        1751317681,
+        1751338954,
+        1751340624
+      ],
+      "candidateDigest": "75a3a40755986a62bc5af2136379fcb87f92e533aa158241d411cbf108d3458e",
+      "caseDigest": "8d3fc7ced8a77ad51bee731d4100f92fde751d6698524f57aea3c472bdf51056",
+      "submittedReviewEvidence": {
+        "source": "pull-review-records",
+        "endpoints": [
+          "/repos/magento/magento2/pulls/38270/reviews/2291449099"
+        ],
+        "fallbackReason": null,
+        "primaryFailure": null,
+        "recordResponseSha256": {
+          "2291449099": "b2362f5db3f86823e4fd5e8d02622ee4c7f8f69de4d087e5329c93f8b417733e"
+        },
+        "sourceMode": "live",
+        "records": [
+          {
+            "id": 2291449099,
+            "node_id": "PRR_kwDOACwCD86IlL0L",
+            "user": {
+              "login": "engcom-Hotel",
+              "id": 51681618,
+              "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+              "avatar_url": "https://avatars.githubusercontent.com/u/51681618?u=cfc267420e8da86e0e6678883e414b34991ba337&v=4",
+              "gravatar_id": "",
+              "url": "https://api.github.com/users/engcom-Hotel",
+              "html_url": "https://github.com/engcom-Hotel",
+              "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+              "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+              "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+              "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+              "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+              "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+              "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+              "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+              "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+              "type": "User",
+              "user_view_type": "public",
+              "site_admin": false
+            },
+            "body": "Hello @rogerdz,\r\n\r\nThe changes seems good to me but please fix the below review comments.\r\n\r\nThanks",
+            "state": "CHANGES_REQUESTED",
+            "html_url": "https://github.com/magento/magento2/pull/38270#pullrequestreview-2291449099",
+            "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/38270",
+            "author_association": "CONTRIBUTOR",
+            "_links": {
+              "html": {
+                "href": "https://github.com/magento/magento2/pull/38270#pullrequestreview-2291449099"
+              },
+              "pull_request": {
+                "href": "https://api.github.com/repos/magento/magento2/pulls/38270"
+              }
+            },
+            "submitted_at": "2024-09-10T10:39:43Z",
+            "commit_id": "5b77b2c64924993b4ad6530196918d84ea3aad41"
+          }
+        ]
+      }
+    },
+    {
+      "sourceCaseId": "magento2-pr-32620-df94b8aef4a8",
+      "sourcePullRequest": 32620,
+      "sourceSizeBand": "small",
+      "replacementCaseId": "magento2-pr-30699-8aa0f015fef7",
+      "pullRequest": 30699,
+      "headSha": "8aa0f015fef7326ce9afee9878e6b265224528ca",
+      "commentIds": [
+        1495445100
+      ],
+      "candidateDigest": "9c2b887bdf20914b3696e71596c634822f44d7a6c1dee911315011f83a0f83dd",
+      "caseDigest": "d1b5d2233b72dba5bb3377d14758ea63a477177cd8e15fde144abe4ec856ac74",
+      "submittedReviewEvidence": {
+        "source": "pull-review-records",
+        "endpoints": [
+          "/repos/magento/magento2/pulls/30699/reviews/1889806373"
+        ],
+        "fallbackReason": null,
+        "primaryFailure": null,
+        "recordResponseSha256": {
+          "1889806373": "fcdf5fe53f29cd6e8e0b0f6555773f8443cacc35e17867c96c6593e2ef38befc"
+        },
+        "sourceMode": "live",
+        "records": [
+          {
+            "id": 1889806373,
+            "node_id": "PRR_kwDOACwCD85wpCgl",
+            "user": {
+              "login": "engcom-Hotel",
+              "id": 51681618,
+              "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+              "avatar_url": "https://avatars.githubusercontent.com/u/51681618?u=cfc267420e8da86e0e6678883e414b34991ba337&v=4",
+              "gravatar_id": "",
+              "url": "https://api.github.com/users/engcom-Hotel",
+              "html_url": "https://github.com/engcom-Hotel",
+              "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+              "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+              "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+              "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+              "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+              "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+              "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+              "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+              "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+              "type": "User",
+              "user_view_type": "public",
+              "site_admin": false
+            },
+            "body": "Hello @fredden,\r\n\r\nThanks for the collaboration!\r\n\r\nPlease have a look into the review point below and resolve the failed automated tests, they seem due to PR changes.\r\n\r\nThanks",
+            "state": "CHANGES_REQUESTED",
+            "html_url": "https://github.com/magento/magento2/pull/30699#pullrequestreview-1889806373",
+            "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+            "author_association": "CONTRIBUTOR",
+            "_links": {
+              "html": {
+                "href": "https://github.com/magento/magento2/pull/30699#pullrequestreview-1889806373"
+              },
+              "pull_request": {
+                "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+              }
+            },
+            "submitted_at": "2024-02-20T09:07:27Z",
+            "commit_id": "8aa0f015fef7326ce9afee9878e6b265224528ca"
+          }
+        ]
+      }
+    }
+  ],
+  "outputDraftSha256": "543d2d703353554884494de0c28be17a9bb0056eda57ae423dea6b33543829b1",
+  "artifacts": {
+    "corpusDraftFileSha256": "70cc1d3b0ad4ad557be183e9be57289cca305ebbd4211873358ee7dcee20441c",
+    "checksumFileSha256": "1134aea91c1a5ad30dce7ea491c87a61e8644dd2ecf03ce925c3da8710b36dd9",
+    "auditFileSha256": "dbbc1c49bb46bcc57127a4d972e56dbdae92eebe6e92972023a7a0ab38e1e212",
+    "curationTemplateFileSha256": "b0647b0d84a8b944e3f078622ed1fb6562832e07eddceb746d72aa4c1c72868d"
+  },
+  "revisionDigest": "2d23130d4287223df1728ef4e65e65ece3873acca0a3030416fc54f22391c714"
+}

@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/432066199",
+  "status": 200,
+  "etag": "W/\"db355fb1fd257b05063c223636fb216dcb7515153a2208d2cd6cea5ccbf54a17\"",
+  "headers": {
+    "ETag": "W/\"db355fb1fd257b05063c223636fb216dcb7515153a2208d2cd6cea5ccbf54a17\"",
+    "Last-Modified": "Mon, 17 Aug 2026 11:56:11 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "36",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/432066199",
+    "pull_request_review_id": 420418003,
+    "id": 432066199,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQzMjA2NjE5OQ==",
+    "diff_hunk": "@@ -0,0 +1,28 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\Quote\\Model\\Cart;\n+\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Quote\\Model\\Cart\\Data\\AddProductsToCartOutput;\n+\n+/**\n+ * Unified approach to add products to the Shopping Cart.",
+    "path": "app/code/Magento/Quote/Model/Cart/AddProductsToCartInterface.php",
+    "commit_id": "a556345e619e79c123b881090e893d33f67dae61",
+    "original_commit_id": "b391029c861dd3cc237e2b0127fb668ac60c8b8b",
+    "user": {
+      "login": "paliarush",
+      "id": 10828073,
+      "node_id": "MDQ6VXNlcjEwODI4MDcz",
+      "avatar_url": "https://avatars.githubusercontent.com/u/10828073?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/paliarush",
+      "html_url": "https://github.com/paliarush",
+      "followers_url": "https://api.github.com/users/paliarush/followers",
+      "following_url": "https://api.github.com/users/paliarush/following{/other_user}",
+      "gists_url": "https://api.github.com/users/paliarush/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/paliarush/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/paliarush/subscriptions",
+      "organizations_url": "https://api.github.com/users/paliarush/orgs",
+      "repos_url": "https://api.github.com/users/paliarush/repos",
+      "events_url": "https://api.github.com/users/paliarush/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/paliarush/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Should we introduce storefront API instead (in `Magento/Quote/Api` directory)? Then it should also be responsible for authorization checks. Current approach seems unreliable and can lead to pretty serious security vulnerabilities in case of mistake in the client implementation.",
+    "created_at": "2020-05-28T19:22:27Z",
+    "updated_at": "2020-08-11T00:26:31Z",
+    "html_url": "https://github.com/magento/magento2/pull/27914#discussion_r432066199",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27914",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/432066199"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/27914#discussion_r432066199"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/27914"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/432066199/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 14,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 14,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/532825853",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:41Z",
+  "etag": "W/\"c75be443273d8e8a92a8a100b64c198b218575110701466fae3f22abefa18292\"",
+  "headers": {
+    "ETag": "W/\"c75be443273d8e8a92a8a100b64c198b218575110701466fae3f22abefa18292\"",
+    "Last-Modified": "Mon, 05 Aug 2024 20:11:58 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "20",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/532825853",
+    "pull_request_review_id": 541199955,
+    "id": 532825853,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUzMjgyNTg1Mw==",
+    "diff_hunk": "@@ -22,8 +22,9 @@\n             <createData entity=\"Simple_US_Customer\" after=\"createCategory\" stepKey=\"createCustomer\"/>\n         </before>\n         <after>\n+            <!-- Logout customer -->\n+            <actionGroup ref=\"StorefrontCustomerLogoutActionGroup\" stepKey=\"customerLogoutStorefront\"/>",
+    "path": "app/code/Magento/Swatches/Test/Mftf/Test/StorefrontCustomerCanChangeProductOptionsUsingSwatchesTest.xml",
+    "commit_id": "7e25908e44517949e2246604b3ec8f66d3eeb666",
+    "original_commit_id": "9e2aa7c385a94dc0abb6d8339ed2c6f4052a664b",
+    "user": {
+      "login": "danmooney2",
+      "id": 30629803,
+      "node_id": "MDQ6VXNlcjMwNjI5ODAz",
+      "avatar_url": "https://avatars.githubusercontent.com/u/30629803?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/danmooney2",
+      "html_url": "https://github.com/danmooney2",
+      "followers_url": "https://api.github.com/users/danmooney2/followers",
+      "following_url": "https://api.github.com/users/danmooney2/following{/other_user}",
+      "gists_url": "https://api.github.com/users/danmooney2/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/danmooney2/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/danmooney2/subscriptions",
+      "organizations_url": "https://api.github.com/users/danmooney2/orgs",
+      "repos_url": "https://api.github.com/users/danmooney2/repos",
+      "events_url": "https://api.github.com/users/danmooney2/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/danmooney2/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Please use the same step key: logoutFromCustomer",
+    "created_at": "2020-11-30T18:56:18Z",
+    "updated_at": "2020-12-01T21:00:22Z",
+    "html_url": "https://github.com/magento/magento2/pull/31101#discussion_r532825853",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31101",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/532825853"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/31101#discussion_r532825853"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/31101"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/532825853/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 26,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 5,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "744731ee9cda2fabfd7107dab86461b2021fb472977552ed34cb767521e3ffc6",
+  "envelopeSha256": "9f82f741b8563678b03fa6d399b16f5d3120a71f866a168d78510269c71d5982"
+}

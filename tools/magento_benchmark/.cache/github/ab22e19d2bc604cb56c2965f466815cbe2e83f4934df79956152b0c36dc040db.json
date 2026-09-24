@@ -1,0 +1,505 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/33106/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T15:48:03Z",
+  "etag": "W/\"0ec56afe2d0f3c4fed60f82b5f7c0483e14c885d84b6dafc678bd7f4078e8357\"",
+  "headers": {
+    "ETag": "W/\"0ec56afe2d0f3c4fed60f82b5f7c0483e14c885d84b6dafc678bd7f4078e8357\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "56",
+    "X-RateLimit-Reset": "1786985277"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/677619649",
+      "pull_request_review_id": 716142623,
+      "id": 677619649,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3NzYxOTY0OQ==",
+      "diff_hunk": "@@ -0,0 +1,109 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\QuoteGraphQl\\Model\\Resolver;\n+\n+use Magento\\Framework\\Exception\\LocalizedException;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Exception\\StateException;\n+use Magento\\Framework\\GraphQl\\Config\\Element\\Field;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlAuthorizationException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlInputException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlNoSuchEntityException;\n+use Magento\\Framework\\GraphQl\\Query\\ResolverInterface;\n+use Magento\\Framework\\GraphQl\\Schema\\Type\\ResolveInfo;\n+use Magento\\GraphQl\\Model\\Query\\ContextInterface;\n+use Magento\\Quote\\Api\\GuestCartManagementInterface;\n+use Magento\\Quote\\Model\\Cart\\CustomerCartResolver;\n+use Magento\\QuoteGraphQl\\Model\\Cart\\GetCartForUser;\n+\n+/**\n+ * Assign the customer to the guest cart resolver\n+ *\n+ * @SuppressWarnings(PHPMD.LongVariable)\n+ */\n+class AssignCustomerToGuestCart implements ResolverInterface\n+{\n+    /**\n+     * @var GetCartForUser\n+     */\n+    private $getCartForUser;\n+\n+    /**\n+     * @var CustomerCartResolver\n+     */\n+    private $customerCartResolver;\n+\n+    /**\n+     * @var GuestCartManagementInterface\n+     */\n+    private $guestCartManagementInterface;\n+\n+    /**\n+     * @param GetCartForUser $getCartForUser\n+     * @param GuestCartManagementInterface $guestCartManagementInterface\n+     * @param CustomerCartResolver $customerCartResolver\n+     */\n+    public function __construct(\n+        GetCartForUser $getCartForUser,\n+        GuestCartManagementInterface $guestCartManagementInterface,\n+        CustomerCartResolver $customerCartResolver\n+    ) {\n+        $this->getCartForUser = $getCartForUser;\n+        $this->guestCartManagementInterface = $guestCartManagementInterface;\n+        $this->customerCartResolver = $customerCartResolver;\n+    }\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function resolve(\n+        Field $field,\n+        $context,\n+        ResolveInfo $info,\n+        array $value = null,\n+        array $args = null\n+    ) {\n+        /** @var ContextInterface $context */\n+        if (false === $context->getExtensionAttributes()->getIsCustomer()) {\n+            throw new GraphQlAuthorizationException(__(\n+                'The current customer isn\\'t authorized.'\n+            ));\n+        }\n+\n+        $currentUserId = $context->getUserId();\n+        $guestMaskedCartId = $args['cart_id'];\n+        $storeId = (int)$context->getExtensionAttributes()->getStore()->getId();\n+\n+        $this->getCartForUser->execute($guestMaskedCartId,null, $storeId);",
+      "path": "app/code/Magento/QuoteGraphQl/Model/Resolver/AssignCustomerToGuestCart.php",
+      "commit_id": "6daaf31467324d62e149721ab6ba21c1e6a23939",
+      "original_commit_id": "9ced6e086a9196fbd73af6d72b47c003e0822988",
+      "user": {
+        "login": "aleron75",
+        "id": 1199894,
+        "node_id": "MDQ6VXNlcjExOTk4OTQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1199894?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/aleron75",
+        "html_url": "https://github.com/aleron75",
+        "followers_url": "https://api.github.com/users/aleron75/followers",
+        "following_url": "https://api.github.com/users/aleron75/following{/other_user}",
+        "gists_url": "https://api.github.com/users/aleron75/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/aleron75/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/aleron75/subscriptions",
+        "organizations_url": "https://api.github.com/users/aleron75/orgs",
+        "repos_url": "https://api.github.com/users/aleron75/repos",
+        "events_url": "https://api.github.com/users/aleron75/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/aleron75/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hello, please add a space after `$guestMaskedCartId,` parameter (i.e. before `null` parameter) to avoid coding style complains. Thanks!",
+      "created_at": "2021-07-27T16:36:05Z",
+      "updated_at": "2021-07-27T17:00:29Z",
+      "html_url": "https://github.com/magento/magento2/pull/33106#discussion_r677619649",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33106",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/677619649"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33106#discussion_r677619649"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33106"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/677619649/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 82,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 82,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/677620305",
+      "pull_request_review_id": 716143501,
+      "id": 677620305,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3NzYyMDMwNQ==",
+      "diff_hunk": "@@ -0,0 +1,109 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\QuoteGraphQl\\Model\\Resolver;\n+\n+use Magento\\Framework\\Exception\\LocalizedException;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Exception\\StateException;\n+use Magento\\Framework\\GraphQl\\Config\\Element\\Field;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlAuthorizationException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlInputException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlNoSuchEntityException;\n+use Magento\\Framework\\GraphQl\\Query\\ResolverInterface;\n+use Magento\\Framework\\GraphQl\\Schema\\Type\\ResolveInfo;\n+use Magento\\GraphQl\\Model\\Query\\ContextInterface;\n+use Magento\\Quote\\Api\\GuestCartManagementInterface;\n+use Magento\\Quote\\Model\\Cart\\CustomerCartResolver;\n+use Magento\\QuoteGraphQl\\Model\\Cart\\GetCartForUser;\n+\n+/**\n+ * Assign the customer to the guest cart resolver\n+ *\n+ * @SuppressWarnings(PHPMD.LongVariable)\n+ */\n+class AssignCustomerToGuestCart implements ResolverInterface\n+{\n+    /**\n+     * @var GetCartForUser\n+     */\n+    private $getCartForUser;\n+\n+    /**\n+     * @var CustomerCartResolver\n+     */\n+    private $customerCartResolver;\n+\n+    /**\n+     * @var GuestCartManagementInterface\n+     */\n+    private $guestCartManagementInterface;\n+\n+    /**\n+     * @param GetCartForUser $getCartForUser\n+     * @param GuestCartManagementInterface $guestCartManagementInterface\n+     * @param CustomerCartResolver $customerCartResolver\n+     */\n+    public function __construct(\n+        GetCartForUser $getCartForUser,\n+        GuestCartManagementInterface $guestCartManagementInterface,\n+        CustomerCartResolver $customerCartResolver\n+    ) {\n+        $this->getCartForUser = $getCartForUser;\n+        $this->guestCartManagementInterface = $guestCartManagementInterface;\n+        $this->customerCartResolver = $customerCartResolver;\n+    }\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function resolve(\n+        Field $field,\n+        $context,\n+        ResolveInfo $info,\n+        array $value = null,\n+        array $args = null\n+    ) {\n+        /** @var ContextInterface $context */\n+        if (false === $context->getExtensionAttributes()->getIsCustomer()) {\n+            throw new GraphQlAuthorizationException(__(\n+                'The current customer isn\\'t authorized.'\n+            ));\n+        }\n+\n+        $currentUserId = $context->getUserId();\n+        $guestMaskedCartId = $args['cart_id'];",
+      "path": "app/code/Magento/QuoteGraphQl/Model/Resolver/AssignCustomerToGuestCart.php",
+      "commit_id": "6daaf31467324d62e149721ab6ba21c1e6a23939",
+      "original_commit_id": "9ced6e086a9196fbd73af6d72b47c003e0822988",
+      "user": {
+        "login": "danielrussob",
+        "id": 13854502,
+        "node_id": "MDQ6VXNlcjEzODU0NTAy",
+        "avatar_url": "https://avatars.githubusercontent.com/u/13854502?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/danielrussob",
+        "html_url": "https://github.com/danielrussob",
+        "followers_url": "https://api.github.com/users/danielrussob/followers",
+        "following_url": "https://api.github.com/users/danielrussob/following{/other_user}",
+        "gists_url": "https://api.github.com/users/danielrussob/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/danielrussob/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/danielrussob/subscriptions",
+        "organizations_url": "https://api.github.com/users/danielrussob/orgs",
+        "repos_url": "https://api.github.com/users/danielrussob/repos",
+        "events_url": "https://api.github.com/users/danielrussob/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/danielrussob/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hello @khrystynastolbova,\r\nthank you for your contribution\r\n\r\ncould you add a check on cart_id?\r\n\r\n if (empty($args['cart_id'])) {\r\n            throw new GraphQlInputException(__('Required parameter \"cart_id\" is missing'));\r\n        } ",
+      "created_at": "2021-07-27T16:37:00Z",
+      "updated_at": "2021-07-27T16:45:27Z",
+      "html_url": "https://github.com/magento/magento2/pull/33106#discussion_r677620305",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33106",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/677620305"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33106#discussion_r677620305"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33106"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/677620305/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 79,
+      "original_line": 79,
+      "side": "RIGHT",
+      "author_association": "NONE",
+      "original_position": 79,
+      "position": 79,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/677628390",
+      "pull_request_review_id": 716142623,
+      "id": 677628390,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3NzYyODM5MA==",
+      "diff_hunk": "@@ -0,0 +1,109 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\QuoteGraphQl\\Model\\Resolver;\n+\n+use Magento\\Framework\\Exception\\LocalizedException;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Exception\\StateException;\n+use Magento\\Framework\\GraphQl\\Config\\Element\\Field;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlAuthorizationException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlInputException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlNoSuchEntityException;\n+use Magento\\Framework\\GraphQl\\Query\\ResolverInterface;\n+use Magento\\Framework\\GraphQl\\Schema\\Type\\ResolveInfo;\n+use Magento\\GraphQl\\Model\\Query\\ContextInterface;\n+use Magento\\Quote\\Api\\GuestCartManagementInterface;\n+use Magento\\Quote\\Model\\Cart\\CustomerCartResolver;\n+use Magento\\QuoteGraphQl\\Model\\Cart\\GetCartForUser;\n+\n+/**\n+ * Assign the customer to the guest cart resolver\n+ *\n+ * @SuppressWarnings(PHPMD.LongVariable)\n+ */\n+class AssignCustomerToGuestCart implements ResolverInterface\n+{\n+    /**\n+     * @var GetCartForUser\n+     */\n+    private $getCartForUser;\n+\n+    /**\n+     * @var CustomerCartResolver\n+     */\n+    private $customerCartResolver;\n+\n+    /**\n+     * @var GuestCartManagementInterface\n+     */\n+    private $guestCartManagementInterface;\n+\n+    /**\n+     * @param GetCartForUser $getCartForUser\n+     * @param GuestCartManagementInterface $guestCartManagementInterface\n+     * @param CustomerCartResolver $customerCartResolver\n+     */\n+    public function __construct(\n+        GetCartForUser $getCartForUser,\n+        GuestCartManagementInterface $guestCartManagementInterface,\n+        CustomerCartResolver $customerCartResolver\n+    ) {\n+        $this->getCartForUser = $getCartForUser;\n+        $this->guestCartManagementInterface = $guestCartManagementInterface;\n+        $this->customerCartResolver = $customerCartResolver;\n+    }\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function resolve(\n+        Field $field,\n+        $context,\n+        ResolveInfo $info,\n+        array $value = null,\n+        array $args = null\n+    ) {\n+        /** @var ContextInterface $context */\n+        if (false === $context->getExtensionAttributes()->getIsCustomer()) {\n+            throw new GraphQlAuthorizationException(__(\n+                'The current customer isn\\'t authorized.'\n+            ));\n+        }\n+\n+        $currentUserId = $context->getUserId();\n+        $guestMaskedCartId = $args['cart_id'];\n+        $storeId = (int)$context->getExtensionAttributes()->getStore()->getId();\n+\n+        $this->getCartForUser->execute($guestMaskedCartId,null, $storeId);\n+\n+        try {\n+            $this->guestCartManagementInterface->assignCustomer($guestMaskedCartId, $currentUserId, $storeId);\n+        } catch (NoSuchEntityException $e) {\n+            $message = $e->getMessage();\n+            if (str_contains($message, 'No such entity with cartId = ')) {",
+      "path": "app/code/Magento/QuoteGraphQl/Model/Resolver/AssignCustomerToGuestCart.php",
+      "commit_id": "6daaf31467324d62e149721ab6ba21c1e6a23939",
+      "original_commit_id": "9ced6e086a9196fbd73af6d72b47c003e0822988",
+      "user": {
+        "login": "aleron75",
+        "id": 1199894,
+        "node_id": "MDQ6VXNlcjExOTk4OTQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1199894?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/aleron75",
+        "html_url": "https://github.com/aleron75",
+        "followers_url": "https://api.github.com/users/aleron75/followers",
+        "following_url": "https://api.github.com/users/aleron75/following{/other_user}",
+        "gists_url": "https://api.github.com/users/aleron75/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/aleron75/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/aleron75/subscriptions",
+        "organizations_url": "https://api.github.com/users/aleron75/orgs",
+        "repos_url": "https://api.github.com/users/aleron75/repos",
+        "events_url": "https://api.github.com/users/aleron75/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/aleron75/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I may be wrong but don't you think that checking against a specific string could be fragile? \r\nLet me explain: in case the exception message changes or is translated, this condition could be not satisfiable anymore.\r\n\r\nI don't get the reason for changing the exception message here, can you elaborate on this to identify together an alternative solution? \r\n\r\nThank you!",
+      "created_at": "2021-07-27T16:47:37Z",
+      "updated_at": "2021-07-27T17:00:29Z",
+      "html_url": "https://github.com/magento/magento2/pull/33106#discussion_r677628390",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33106",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/677628390"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33106#discussion_r677628390"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33106"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/677628390/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 88,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 88,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/679803936",
+      "pull_request_review_id": 718917771,
+      "id": 679803936,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3OTgwMzkzNg==",
+      "diff_hunk": "@@ -0,0 +1,109 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\QuoteGraphQl\\Model\\Resolver;\n+\n+use Magento\\Framework\\Exception\\LocalizedException;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Exception\\StateException;\n+use Magento\\Framework\\GraphQl\\Config\\Element\\Field;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlAuthorizationException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlInputException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlNoSuchEntityException;\n+use Magento\\Framework\\GraphQl\\Query\\ResolverInterface;\n+use Magento\\Framework\\GraphQl\\Schema\\Type\\ResolveInfo;\n+use Magento\\GraphQl\\Model\\Query\\ContextInterface;\n+use Magento\\Quote\\Api\\GuestCartManagementInterface;\n+use Magento\\Quote\\Model\\Cart\\CustomerCartResolver;\n+use Magento\\QuoteGraphQl\\Model\\Cart\\GetCartForUser;\n+\n+/**\n+ * Assign the customer to the guest cart resolver\n+ *\n+ * @SuppressWarnings(PHPMD.LongVariable)\n+ */\n+class AssignCustomerToGuestCart implements ResolverInterface\n+{\n+    /**\n+     * @var GetCartForUser\n+     */\n+    private $getCartForUser;\n+\n+    /**\n+     * @var CustomerCartResolver\n+     */\n+    private $customerCartResolver;\n+\n+    /**\n+     * @var GuestCartManagementInterface\n+     */\n+    private $guestCartManagementInterface;\n+\n+    /**\n+     * @param GetCartForUser $getCartForUser\n+     * @param GuestCartManagementInterface $guestCartManagementInterface\n+     * @param CustomerCartResolver $customerCartResolver\n+     */\n+    public function __construct(\n+        GetCartForUser $getCartForUser,\n+        GuestCartManagementInterface $guestCartManagementInterface,\n+        CustomerCartResolver $customerCartResolver\n+    ) {\n+        $this->getCartForUser = $getCartForUser;\n+        $this->guestCartManagementInterface = $guestCartManagementInterface;\n+        $this->customerCartResolver = $customerCartResolver;\n+    }\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function resolve(\n+        Field $field,\n+        $context,\n+        ResolveInfo $info,\n+        array $value = null,\n+        array $args = null\n+    ) {\n+        /** @var ContextInterface $context */\n+        if (false === $context->getExtensionAttributes()->getIsCustomer()) {\n+            throw new GraphQlAuthorizationException(__(\n+                'The current customer isn\\'t authorized.'\n+            ));\n+        }\n+\n+        $currentUserId = $context->getUserId();\n+        $guestMaskedCartId = $args['cart_id'];\n+        $storeId = (int)$context->getExtensionAttributes()->getStore()->getId();\n+\n+        $this->getCartForUser->execute($guestMaskedCartId,null, $storeId);\n+\n+        try {\n+            $this->guestCartManagementInterface->assignCustomer($guestMaskedCartId, $currentUserId, $storeId);\n+        } catch (NoSuchEntityException $e) {\n+            $message = $e->getMessage();\n+            if (str_contains($message, 'No such entity with cartId = ')) {",
+      "path": "app/code/Magento/QuoteGraphQl/Model/Resolver/AssignCustomerToGuestCart.php",
+      "commit_id": "6daaf31467324d62e149721ab6ba21c1e6a23939",
+      "original_commit_id": "9ced6e086a9196fbd73af6d72b47c003e0822988",
+      "user": {
+        "login": "khrystynastolbova",
+        "id": 79088059,
+        "node_id": "MDQ6VXNlcjc5MDg4MDU5",
+        "avatar_url": "https://avatars.githubusercontent.com/u/79088059?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/khrystynastolbova",
+        "html_url": "https://github.com/khrystynastolbova",
+        "followers_url": "https://api.github.com/users/khrystynastolbova/followers",
+        "following_url": "https://api.github.com/users/khrystynastolbova/following{/other_user}",
+        "gists_url": "https://api.github.com/users/khrystynastolbova/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/khrystynastolbova/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/khrystynastolbova/subscriptions",
+        "organizations_url": "https://api.github.com/users/khrystynastolbova/orgs",
+        "repos_url": "https://api.github.com/users/khrystynastolbova/repos",
+        "events_url": "https://api.github.com/users/khrystynastolbova/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/khrystynastolbova/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hi @aleron75. You are right it could be fragile. I just wanted to avoid displaying non hashed cartId for the client",
+      "created_at": "2021-07-30T09:56:55Z",
+      "updated_at": "2021-07-30T09:56:56Z",
+      "html_url": "https://github.com/magento/magento2/pull/33106#discussion_r679803936",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33106",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/679803936"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33106#discussion_r679803936"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33106"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/679803936/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 88,
+      "side": "RIGHT",
+      "in_reply_to_id": 677628390,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 88,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/679832672",
+      "pull_request_review_id": 718955597,
+      "id": 679832672,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3OTgzMjY3Mg==",
+      "diff_hunk": "@@ -0,0 +1,109 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\QuoteGraphQl\\Model\\Resolver;\n+\n+use Magento\\Framework\\Exception\\LocalizedException;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Exception\\StateException;\n+use Magento\\Framework\\GraphQl\\Config\\Element\\Field;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlAuthorizationException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlInputException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlNoSuchEntityException;\n+use Magento\\Framework\\GraphQl\\Query\\ResolverInterface;\n+use Magento\\Framework\\GraphQl\\Schema\\Type\\ResolveInfo;\n+use Magento\\GraphQl\\Model\\Query\\ContextInterface;\n+use Magento\\Quote\\Api\\GuestCartManagementInterface;\n+use Magento\\Quote\\Model\\Cart\\CustomerCartResolver;\n+use Magento\\QuoteGraphQl\\Model\\Cart\\GetCartForUser;\n+\n+/**\n+ * Assign the customer to the guest cart resolver\n+ *\n+ * @SuppressWarnings(PHPMD.LongVariable)\n+ */\n+class AssignCustomerToGuestCart implements ResolverInterface\n+{\n+    /**\n+     * @var GetCartForUser\n+     */\n+    private $getCartForUser;\n+\n+    /**\n+     * @var CustomerCartResolver\n+     */\n+    private $customerCartResolver;\n+\n+    /**\n+     * @var GuestCartManagementInterface\n+     */\n+    private $guestCartManagementInterface;\n+\n+    /**\n+     * @param GetCartForUser $getCartForUser\n+     * @param GuestCartManagementInterface $guestCartManagementInterface\n+     * @param CustomerCartResolver $customerCartResolver\n+     */\n+    public function __construct(\n+        GetCartForUser $getCartForUser,\n+        GuestCartManagementInterface $guestCartManagementInterface,\n+        CustomerCartResolver $customerCartResolver\n+    ) {\n+        $this->getCartForUser = $getCartForUser;\n+        $this->guestCartManagementInterface = $guestCartManagementInterface;\n+        $this->customerCartResolver = $customerCartResolver;\n+    }\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function resolve(\n+        Field $field,\n+        $context,\n+        ResolveInfo $info,\n+        array $value = null,\n+        array $args = null\n+    ) {\n+        /** @var ContextInterface $context */\n+        if (false === $context->getExtensionAttributes()->getIsCustomer()) {\n+            throw new GraphQlAuthorizationException(__(\n+                'The current customer isn\\'t authorized.'\n+            ));\n+        }\n+\n+        $currentUserId = $context->getUserId();\n+        $guestMaskedCartId = $args['cart_id'];",
+      "path": "app/code/Magento/QuoteGraphQl/Model/Resolver/AssignCustomerToGuestCart.php",
+      "commit_id": "6daaf31467324d62e149721ab6ba21c1e6a23939",
+      "original_commit_id": "9ced6e086a9196fbd73af6d72b47c003e0822988",
+      "user": {
+        "login": "eduard13",
+        "id": 15868188,
+        "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/eduard13",
+        "html_url": "https://github.com/eduard13",
+        "followers_url": "https://api.github.com/users/eduard13/followers",
+        "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+        "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+        "organizations_url": "https://api.github.com/users/eduard13/orgs",
+        "repos_url": "https://api.github.com/users/eduard13/repos",
+        "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/eduard13/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hi @danielrussob, actually `cart_id` is a required field at the schema level, and personally don't see the reason to have an additional check for that.",
+      "created_at": "2021-07-30T10:48:51Z",
+      "updated_at": "2021-07-30T10:48:52Z",
+      "html_url": "https://github.com/magento/magento2/pull/33106#discussion_r679832672",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33106",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/679832672"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33106#discussion_r679832672"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33106"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/679832672/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 79,
+      "original_line": 79,
+      "side": "RIGHT",
+      "in_reply_to_id": 677620305,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 79,
+      "position": 79,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/679870956",
+      "pull_request_review_id": 719004806,
+      "id": 679870956,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3OTg3MDk1Ng==",
+      "diff_hunk": "@@ -0,0 +1,109 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\QuoteGraphQl\\Model\\Resolver;\n+\n+use Magento\\Framework\\Exception\\LocalizedException;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Exception\\StateException;\n+use Magento\\Framework\\GraphQl\\Config\\Element\\Field;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlAuthorizationException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlInputException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlNoSuchEntityException;\n+use Magento\\Framework\\GraphQl\\Query\\ResolverInterface;\n+use Magento\\Framework\\GraphQl\\Schema\\Type\\ResolveInfo;\n+use Magento\\GraphQl\\Model\\Query\\ContextInterface;\n+use Magento\\Quote\\Api\\GuestCartManagementInterface;\n+use Magento\\Quote\\Model\\Cart\\CustomerCartResolver;\n+use Magento\\QuoteGraphQl\\Model\\Cart\\GetCartForUser;\n+\n+/**\n+ * Assign the customer to the guest cart resolver\n+ *\n+ * @SuppressWarnings(PHPMD.LongVariable)\n+ */\n+class AssignCustomerToGuestCart implements ResolverInterface\n+{\n+    /**\n+     * @var GetCartForUser\n+     */\n+    private $getCartForUser;\n+\n+    /**\n+     * @var CustomerCartResolver\n+     */\n+    private $customerCartResolver;\n+\n+    /**\n+     * @var GuestCartManagementInterface\n+     */\n+    private $guestCartManagementInterface;\n+\n+    /**\n+     * @param GetCartForUser $getCartForUser\n+     * @param GuestCartManagementInterface $guestCartManagementInterface\n+     * @param CustomerCartResolver $customerCartResolver\n+     */\n+    public function __construct(\n+        GetCartForUser $getCartForUser,\n+        GuestCartManagementInterface $guestCartManagementInterface,\n+        CustomerCartResolver $customerCartResolver\n+    ) {\n+        $this->getCartForUser = $getCartForUser;\n+        $this->guestCartManagementInterface = $guestCartManagementInterface;\n+        $this->customerCartResolver = $customerCartResolver;\n+    }\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function resolve(\n+        Field $field,\n+        $context,\n+        ResolveInfo $info,\n+        array $value = null,\n+        array $args = null\n+    ) {\n+        /** @var ContextInterface $context */\n+        if (false === $context->getExtensionAttributes()->getIsCustomer()) {\n+            throw new GraphQlAuthorizationException(__(\n+                'The current customer isn\\'t authorized.'\n+            ));\n+        }\n+\n+        $currentUserId = $context->getUserId();\n+        $guestMaskedCartId = $args['cart_id'];\n+        $storeId = (int)$context->getExtensionAttributes()->getStore()->getId();\n+\n+        $this->getCartForUser->execute($guestMaskedCartId,null, $storeId);\n+\n+        try {\n+            $this->guestCartManagementInterface->assignCustomer($guestMaskedCartId, $currentUserId, $storeId);\n+        } catch (NoSuchEntityException $e) {\n+            $message = $e->getMessage();\n+            if (str_contains($message, 'No such entity with cartId = ')) {",
+      "path": "app/code/Magento/QuoteGraphQl/Model/Resolver/AssignCustomerToGuestCart.php",
+      "commit_id": "6daaf31467324d62e149721ab6ba21c1e6a23939",
+      "original_commit_id": "9ced6e086a9196fbd73af6d72b47c003e0822988",
+      "user": {
+        "login": "khrystynastolbova",
+        "id": 79088059,
+        "node_id": "MDQ6VXNlcjc5MDg4MDU5",
+        "avatar_url": "https://avatars.githubusercontent.com/u/79088059?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/khrystynastolbova",
+        "html_url": "https://github.com/khrystynastolbova",
+        "followers_url": "https://api.github.com/users/khrystynastolbova/followers",
+        "following_url": "https://api.github.com/users/khrystynastolbova/following{/other_user}",
+        "gists_url": "https://api.github.com/users/khrystynastolbova/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/khrystynastolbova/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/khrystynastolbova/subscriptions",
+        "organizations_url": "https://api.github.com/users/khrystynastolbova/orgs",
+        "repos_url": "https://api.github.com/users/khrystynastolbova/repos",
+        "events_url": "https://api.github.com/users/khrystynastolbova/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/khrystynastolbova/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Maybe that will be enough\r\n```\r\n} catch (NoSuchEntityException $e) {\r\n    $message = __('Could not find a cart with ID \"%masked_cart_id\"', ['masked_cart_id' => $guestMaskedCartId]);\r\n }\r\n```\r\n",
+      "created_at": "2021-07-30T12:01:31Z",
+      "updated_at": "2021-07-30T12:01:32Z",
+      "html_url": "https://github.com/magento/magento2/pull/33106#discussion_r679870956",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33106",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/679870956"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33106#discussion_r679870956"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33106"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/679870956/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 88,
+      "side": "RIGHT",
+      "in_reply_to_id": 677628390,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 88,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/679967992",
+      "pull_request_review_id": 719135456,
+      "id": 679967992,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3OTk2Nzk5Mg==",
+      "diff_hunk": "@@ -0,0 +1,109 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\QuoteGraphQl\\Model\\Resolver;\n+\n+use Magento\\Framework\\Exception\\LocalizedException;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Exception\\StateException;\n+use Magento\\Framework\\GraphQl\\Config\\Element\\Field;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlAuthorizationException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlInputException;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlNoSuchEntityException;\n+use Magento\\Framework\\GraphQl\\Query\\ResolverInterface;\n+use Magento\\Framework\\GraphQl\\Schema\\Type\\ResolveInfo;\n+use Magento\\GraphQl\\Model\\Query\\ContextInterface;\n+use Magento\\Quote\\Api\\GuestCartManagementInterface;\n+use Magento\\Quote\\Model\\Cart\\CustomerCartResolver;\n+use Magento\\QuoteGraphQl\\Model\\Cart\\GetCartForUser;\n+\n+/**\n+ * Assign the customer to the guest cart resolver\n+ *\n+ * @SuppressWarnings(PHPMD.LongVariable)\n+ */\n+class AssignCustomerToGuestCart implements ResolverInterface\n+{\n+    /**\n+     * @var GetCartForUser\n+     */\n+    private $getCartForUser;\n+\n+    /**\n+     * @var CustomerCartResolver\n+     */\n+    private $customerCartResolver;\n+\n+    /**\n+     * @var GuestCartManagementInterface\n+     */\n+    private $guestCartManagementInterface;\n+\n+    /**\n+     * @param GetCartForUser $getCartForUser\n+     * @param GuestCartManagementInterface $guestCartManagementInterface\n+     * @param CustomerCartResolver $customerCartResolver\n+     */\n+    public function __construct(\n+        GetCartForUser $getCartForUser,\n+        GuestCartManagementInterface $guestCartManagementInterface,\n+        CustomerCartResolver $customerCartResolver\n+    ) {\n+        $this->getCartForUser = $getCartForUser;\n+        $this->guestCartManagementInterface = $guestCartManagementInterface;\n+        $this->customerCartResolver = $customerCartResolver;\n+    }\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function resolve(\n+        Field $field,\n+        $context,\n+        ResolveInfo $info,\n+        array $value = null,\n+        array $args = null\n+    ) {\n+        /** @var ContextInterface $context */\n+        if (false === $context->getExtensionAttributes()->getIsCustomer()) {\n+            throw new GraphQlAuthorizationException(__(\n+                'The current customer isn\\'t authorized.'\n+            ));\n+        }\n+\n+        $currentUserId = $context->getUserId();\n+        $guestMaskedCartId = $args['cart_id'];\n+        $storeId = (int)$context->getExtensionAttributes()->getStore()->getId();\n+\n+        $this->getCartForUser->execute($guestMaskedCartId,null, $storeId);\n+\n+        try {\n+            $this->guestCartManagementInterface->assignCustomer($guestMaskedCartId, $currentUserId, $storeId);\n+        } catch (NoSuchEntityException $e) {\n+            $message = $e->getMessage();\n+            if (str_contains($message, 'No such entity with cartId = ')) {",
+      "path": "app/code/Magento/QuoteGraphQl/Model/Resolver/AssignCustomerToGuestCart.php",
+      "commit_id": "6daaf31467324d62e149721ab6ba21c1e6a23939",
+      "original_commit_id": "9ced6e086a9196fbd73af6d72b47c003e0822988",
+      "user": {
+        "login": "aleron75",
+        "id": 1199894,
+        "node_id": "MDQ6VXNlcjExOTk4OTQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1199894?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/aleron75",
+        "html_url": "https://github.com/aleron75",
+        "followers_url": "https://api.github.com/users/aleron75/followers",
+        "following_url": "https://api.github.com/users/aleron75/following{/other_user}",
+        "gists_url": "https://api.github.com/users/aleron75/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/aleron75/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/aleron75/subscriptions",
+        "organizations_url": "https://api.github.com/users/aleron75/orgs",
+        "repos_url": "https://api.github.com/users/aleron75/repos",
+        "events_url": "https://api.github.com/users/aleron75/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/aleron75/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "@khrystynastolbova approved :+1: ",
+      "created_at": "2021-07-30T14:26:26Z",
+      "updated_at": "2021-07-30T14:26:26Z",
+      "html_url": "https://github.com/magento/magento2/pull/33106#discussion_r679967992",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33106",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/679967992"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33106#discussion_r679967992"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33106"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/679967992/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 88,
+      "side": "RIGHT",
+      "in_reply_to_id": 677628390,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 88,
+      "position": 1,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "1912c0a460d3d38bf0fdc06875366a50bd6443d15c95b26974b81be2a6577379",
+  "cacheDigest": "e3631ddf4d489545172b3fbe5935ddba443b09f3f51df5e58c14d75cf8c42264"
+}

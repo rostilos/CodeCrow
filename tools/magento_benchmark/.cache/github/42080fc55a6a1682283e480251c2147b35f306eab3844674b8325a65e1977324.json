@@ -1,0 +1,88 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/325134518",
+  "status": 200,
+  "fetchedAt": "2026-08-26T01:52:51Z",
+  "etag": "W/\"2b8a8ef0d4abf76d97b843f665c2a7f16c0a469164e579a1f2963d616c5b3650\"",
+  "headers": {
+    "ETag": "W/\"2b8a8ef0d4abf76d97b843f665c2a7f16c0a469164e579a1f2963d616c5b3650\"",
+    "Last-Modified": "Mon, 01 Dec 2025 18:27:30 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "59",
+    "X-RateLimit-Reset": "1787712770"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/325134518",
+    "pull_request_review_id": 289218942,
+    "id": 325134518,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDMyNTEzNDUxOA==",
+    "diff_hunk": "@@ -86,6 +86,11 @@\n                     <comment>To show VAT number on Storefront, set Show VAT Number on Storefront option to Yes.</comment>\n                     <source_model>Magento\\Config\\Model\\Config\\Source\\Yesno</source_model>\n                 </field>\n+                <field id=\"email_required_create_order\" translate=\"label comment\" type=\"select\" sortOrder=\"58\" showInDefault=\"1\" showInWebsite=\"1\" showInStore=\"1\" canRestore=\"1\">",
+    "path": "app/code/Magento/Customer/etc/adminhtml/system.xml",
+    "commit_id": "864f396105002f43bddb0e86bf67b75955494b84",
+    "original_commit_id": "d78361ee7b1ecfd207a0415f982055beceb9fa5e",
+    "user": {
+      "login": "solwininfotech",
+      "id": 16253886,
+      "node_id": "MDQ6VXNlcjE2MjUzODg2",
+      "avatar_url": "https://avatars.githubusercontent.com/u/16253886?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/solwininfotech",
+      "html_url": "https://github.com/solwininfotech",
+      "followers_url": "https://api.github.com/users/solwininfotech/followers",
+      "following_url": "https://api.github.com/users/solwininfotech/following{/other_user}",
+      "gists_url": "https://api.github.com/users/solwininfotech/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/solwininfotech/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/solwininfotech/subscriptions",
+      "organizations_url": "https://api.github.com/users/solwininfotech/orgs",
+      "repos_url": "https://api.github.com/users/solwininfotech/repos",
+      "events_url": "https://api.github.com/users/solwininfotech/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/solwininfotech/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "@swnsma \r\n\r\nDone.\r\n\r\nPlease review it.",
+    "created_at": "2019-09-17T12:20:54Z",
+    "updated_at": "2020-03-18T14:22:44Z",
+    "html_url": "https://github.com/magento/magento2/pull/24479#discussion_r325134518",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/24479",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/325134518"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/24479#discussion_r325134518"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/24479"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/325134518/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 89,
+    "side": "RIGHT",
+    "in_reply_to_id": 321726595,
+    "author_association": "CONTRIBUTOR",
+    "original_position": 4,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "9292d2fc3b654f501a07e6beb3b520f33d3379d145f5cd443887fa2885d78190",
+  "envelopeSha256": "e841fd6310873f5f3c6f32a17d33ce53b079ebbc6073555f103a17ab72100046"
+}

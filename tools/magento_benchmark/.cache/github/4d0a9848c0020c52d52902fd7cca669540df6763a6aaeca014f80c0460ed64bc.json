@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/185714218",
+  "status": 200,
+  "etag": "W/\"7c3156824f9ce6725366e0a812eff051dcf49d875de53d3f22cfcf262af8796b\"",
+  "headers": {
+    "ETag": "W/\"7c3156824f9ce6725366e0a812eff051dcf49d875de53d3f22cfcf262af8796b\"",
+    "Last-Modified": "Tue, 11 Aug 2026 01:38:34 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "3",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/185714218",
+    "pull_request_review_id": 117157680,
+    "id": 185714218,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDE4NTcxNDIxOA==",
+    "diff_hunk": "@@ -82,6 +89,7 @@ public function __construct(\n         AttributeValueFactory $attributeValueFactory,\n         CustomAttributeTypeLocatorInterface $customAttributeTypeLocator,\n         MethodsMap $methodsMap,\n+        \\Magento\\Framework\\ObjectManager\\ConfigInterface $config,",
+    "path": "lib/internal/Magento/Framework/Webapi/ServiceInputProcessor.php",
+    "commit_id": "4426cdb5bf0ef1a3460520f2e0e6e911906c6125",
+    "original_commit_id": "a63a3b50e57d57b62cace4d2d94cbb06936342a2",
+    "user": {
+      "login": "VladimirZaets",
+      "id": 8035672,
+      "node_id": "MDQ6VXNlcjgwMzU2NzI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/8035672?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/VladimirZaets",
+      "html_url": "https://github.com/VladimirZaets",
+      "followers_url": "https://api.github.com/users/VladimirZaets/followers",
+      "following_url": "https://api.github.com/users/VladimirZaets/following{/other_user}",
+      "gists_url": "https://api.github.com/users/VladimirZaets/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/VladimirZaets/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/VladimirZaets/subscriptions",
+      "organizations_url": "https://api.github.com/users/VladimirZaets/orgs",
+      "repos_url": "https://api.github.com/users/VladimirZaets/repos",
+      "events_url": "https://api.github.com/users/VladimirZaets/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/VladimirZaets/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Hi, @phoenix128 , due to [Magento backward-compatible guide](http://devdocs.magento.com/guides/v2.2/contributor-guide/backward-compatible-development/) we can't add required parament to the constructor. \r\nPlease add the optional parameter and take instance from `ObjectManager`, as example:\r\n`$this->storeManager = $storeManager ?: \\Magento\\Framework\\App\\ObjectManager::getInstance()>get(\\Magento\\Store\\Model\\StoreManagerInterface::class);`\r\n    ",
+    "created_at": "2018-05-03T07:30:58Z",
+    "updated_at": "2018-05-16T10:07:05Z",
+    "html_url": "https://github.com/magento/magento2/pull/14801#discussion_r185714218",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/14801",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/185714218"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/14801#discussion_r185714218"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/14801"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/185714218/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 92,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 32,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

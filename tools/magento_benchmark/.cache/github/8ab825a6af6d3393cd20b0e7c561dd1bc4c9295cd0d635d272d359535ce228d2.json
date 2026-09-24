@@ -1,0 +1,157 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/38729/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T15:36:11Z",
+  "etag": "W/\"fa909f0d5c5b72bde3087660ae26c650d46d55675df548bcba5632ed70a1ea7c\"",
+  "headers": {
+    "ETag": "W/\"fa909f0d5c5b72bde3087660ae26c650d46d55675df548bcba5632ed70a1ea7c\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "18",
+    "X-RateLimit-Reset": "1786981658"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1618684038",
+      "pull_request_review_id": 2085071864,
+      "id": 1618684038,
+      "node_id": "PRRC_kwDOACwCD85geyiG",
+      "diff_hunk": "@@ -220,6 +225,14 @@ public function getTimeout()\n         return $this->deploymentConfig->get(self::PARAM_TIMEOUT);\n     }\n \n+    /**\n+     * @inheritdoc\n+     */\n+    public function getRetries()",
+      "path": "lib/internal/Magento/Framework/Session/SaveHandler/Redis/Config.php",
+      "commit_id": "bc13dc0d6e5968351214a8c0b6baee0f6e906460",
+      "original_commit_id": "bc13dc0d6e5968351214a8c0b6baee0f6e906460",
+      "user": {
+        "login": "engcom-Hotel",
+        "id": 51681618,
+        "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/51681618?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/engcom-Hotel",
+        "html_url": "https://github.com/engcom-Hotel",
+        "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+        "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+        "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+        "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+        "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+        "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please add the return type for this method.",
+      "created_at": "2024-05-29T10:58:54Z",
+      "updated_at": "2024-05-29T11:28:52Z",
+      "html_url": "https://github.com/magento/magento2/pull/38729#discussion_r1618684038",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/38729",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1618684038"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/38729#discussion_r1618684038"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/38729"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1618684038/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 231,
+      "original_line": 231,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 19,
+      "position": 19,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1632215134",
+      "pull_request_review_id": 2106120070,
+      "id": 1632215134,
+      "node_id": "PRRC_kwDOACwCD85hSaBe",
+      "diff_hunk": "@@ -220,6 +225,14 @@ public function getTimeout()\n         return $this->deploymentConfig->get(self::PARAM_TIMEOUT);\n     }\n \n+    /**\n+     * @inheritdoc\n+     */\n+    public function getRetries()",
+      "path": "lib/internal/Magento/Framework/Session/SaveHandler/Redis/Config.php",
+      "commit_id": "bc13dc0d6e5968351214a8c0b6baee0f6e906460",
+      "original_commit_id": "bc13dc0d6e5968351214a8c0b6baee0f6e906460",
+      "user": {
+        "login": "TuVanDev",
+        "id": 5556060,
+        "node_id": "MDQ6VXNlcjU1NTYwNjA=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/5556060?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/TuVanDev",
+        "html_url": "https://github.com/TuVanDev",
+        "followers_url": "https://api.github.com/users/TuVanDev/followers",
+        "following_url": "https://api.github.com/users/TuVanDev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/TuVanDev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/TuVanDev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/TuVanDev/subscriptions",
+        "organizations_url": "https://api.github.com/users/TuVanDev/orgs",
+        "repos_url": "https://api.github.com/users/TuVanDev/repos",
+        "events_url": "https://api.github.com/users/TuVanDev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/TuVanDev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hi @engcom-Alfa , this method is similar to other methods in the Config class. If we add the return type to this method, we should also add the return types to other methods for code consistency.\r\n```\r\n    /**\r\n     * @inheritdoc\r\n     */\r\n    public function getPassword()\r\n    {\r\n        return $this->deploymentConfig->get(self::PARAM_PASSWORD);\r\n    }\r\n    /**\r\n     * @inheritdoc\r\n     */\r\n    public function getTimeout()\r\n    {\r\n        return $this->deploymentConfig->get(self::PARAM_TIMEOUT);\r\n    }\r\n\r\n    /**\r\n     * @inheritdoc\r\n     */\r\n    public function getRetries()\r\n        {\r\n        return $this->deploymentConfig->get(self::PARAM_RETRIES);\r\n    }\r\n```\r\nI understand that the changes in this pull request may result in failed tests, as the classes `Magento\\Framework\\Session\\SaveHandler\\Redis\\Config` and `Magento\\Setup\\Model\\ConfigOptionsList\\Session` have not been updated for years. Unfortunately, I don't currently have the time to address this issue, so I would greatly appreciate it if someone could assist me with resolving it.",
+      "created_at": "2024-06-09T09:04:56Z",
+      "updated_at": "2024-06-09T09:04:56Z",
+      "html_url": "https://github.com/magento/magento2/pull/38729#discussion_r1632215134",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/38729",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1632215134"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/38729#discussion_r1632215134"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/38729"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1632215134/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 231,
+      "original_line": 231,
+      "side": "RIGHT",
+      "in_reply_to_id": 1618684038,
+      "author_association": "MEMBER",
+      "original_position": 19,
+      "position": 19,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "d97c7ee04ff2ebe115a5155649dd293f5e01b1ef0c3a854b246384e5d7ed65ca",
+  "cacheDigest": "261f38e5ca4edd738c8013bdc3635b12dbac1d5096e7b27adb1f7e07893ded19"
+}

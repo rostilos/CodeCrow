@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/682798113",
+  "status": 200,
+  "etag": "W/\"0ce981fd731b9d2f61223ab70d95132bd1eaa0c9b0503a6a5500ccb0d8555cba\"",
+  "headers": {
+    "ETag": "W/\"0ce981fd731b9d2f61223ab70d95132bd1eaa0c9b0503a6a5500ccb0d8555cba\"",
+    "Last-Modified": "Tue, 02 Jun 2026 04:07:31 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "15",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/682798113",
+    "pull_request_review_id": 722525489,
+    "id": 682798113,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY4Mjc5ODExMw==",
+    "diff_hunk": "@@ -43,39 +49,34 @@\n             <actionGroup ref=\"AdminLogoutActionGroup\" stepKey=\"logout\"/>\n         </after>\n \n-        <!-- Create new customer order -->\n-        <actionGroup ref=\"NavigateToNewOrderPageExistingCustomerActionGroup\" stepKey=\"navigateToNewOrderWithExistingCustomer\">\n-            <argument name=\"customer\" value=\"$$simpleCustomer$$\"/>\n-        </actionGroup>\n+        <comment userInput=\"Comment is added to preserve the step key for backward compatibility\" stepKey=\"navigateToNewOrderWithExistingCustomer\"/>\n+        <comment userInput=\"Comment is added to preserve the step key for backward compatibility\" stepKey=\"addSimpleProductToTheOrder\"/>\n+        <comment userInput=\"Comment is added to preserve the step key for backward compatibility\" stepKey=\"selectFlatRateShippingMethod\"/>\n+        <comment userInput=\"Comment is added to preserve the step key for backward compatibility\" stepKey=\"waitForPaymentOptions\"/>\n+        <comment userInput=\"Comment is added to preserve the step key for backward compatibility\" stepKey=\"selectCashOnDeliveryPaymentOption\"/>\n \n-        <!-- Add Simple product to order -->\n-        <actionGroup ref=\"AddSimpleProductToOrderActionGroup\" stepKey=\"addSimpleProductToTheOrder\">\n-            <argument name=\"product\" value=\"$$simpleProduct$$\"/>\n-        </actionGroup>\n-\n-        <!-- Select FlatRate shipping method -->\n-        <actionGroup ref=\"AdminSelectFlatRateShippingMethodActionGroup\" stepKey=\"selectFlatRateShippingMethod\"/>\n+        <updateData createDataKey=\"createCustomerCart\" entity=\"CashOnDeliveryOrderPaymentMethod\" stepKey=\"submitOrder\">\n+            <requiredEntity createDataKey=\"createCustomerCart\"/>\n+        </updateData>\n \n-        <!-- Select Cash On Delivery payment method -->\n-        <waitForElementVisible selector=\"{{AdminOrderFormPaymentSection.paymentBlock}}\" stepKey=\"waitForPaymentOptions\"/>\n-        <checkOption selector=\"{{AdminOrderFormPaymentSection.cashOnDeliveryOption}}\" stepKey=\"selectCashOnDeliveryPaymentOption\"/>\n-        <actionGroup ref=\"AdminOrderClickSubmitOrderActionGroup\" stepKey=\"submitOrder\" />\n+        <comment userInput=\"Comment is added to preserve the step key for backward compatibility\" stepKey=\"verifyCreatedOrderInformation\"/>\n+        <comment userInput=\"Comment is added to preserve the step key for backward compatibility\" stepKey=\"orderId\"/>\n \n-        <!--Verify order information-->\n-        <actionGroup ref=\"VerifyCreatedOrderInformationActionGroup\" stepKey=\"verifyCreatedOrderInformation\"/>\n-        <grabTextFrom selector=\"|Order # (\\d+)|\" stepKey=\"orderId\"/>\n+        <actionGroup ref=\"AdminOpenOrderViewPageByOrderIdActionGroup\" stepKey=\"openOrder\">\n+            <argument name=\"orderId\" value=\"$createCustomerCart.return$\"/>\n+        </actionGroup>\n \n-        <!-- Cancel the Order -->\n         <actionGroup ref=\"CancelPendingOrderActionGroup\" stepKey=\"cancelPendingOrder\"/>\n-\n-        <!--Log in to Storefront as Customer  -->\n+    \n         <actionGroup ref=\"LoginToStorefrontActionGroup\" stepKey=\"signUp\">\n             <argument name=\"Customer\" value=\"$$simpleCustomer$$\"/>\n         </actionGroup>\n-\n-        <!-- Assert Order status in frontend grid -->\n-        <click selector=\"{{StorefrontCustomerSidebarSection.sidebarCurrentTab('My Orders')}}\" stepKey=\"clickOnMyOrders\"/>\n-        <waitForPageLoad stepKey=\"waitForOrderDetailsToLoad\"/>\n-        <seeElement selector=\"{{StorefrontCustomerOrderViewSection.orderStatusInGrid('$orderId', 'Canceled')}}\" stepKey=\"seeOrderStatusInGrid\"/>\n+    \n+        <getData entity=\"GetOrderData\" stepKey=\"getOrderData\">\n+            <requiredEntity createDataKey=\"createCustomerCart\"/>\n+        </getData>\n+        <actionGroup ref=\"StorefrontOpenMyOrdersPageActionGroup\" stepKey=\"clickOnMyOrders\"/>\n+        <comment userInput=\"Comment is added to preserve the step key for backward compatibility\" stepKey=\"waitForOrderDetailsToLoad\"/>\n+        <seeElement selector=\"{{StorefrontCustomerOrderViewSection.orderStatusInGrid('$createCustomerCart.increment_id$', 'Canceled')}}\" stepKey=\"seeOrderStatusInGrid\"/>",
+    "path": "app/code/Magento/Sales/Test/Mftf/Test/AdminCancelTheCreatedOrderWithCashOnDeliveryPaymentMethodTest.xml",
+    "commit_id": "00d9a6b20f3d8b1202be11cc411ba11a983c4d8f",
+    "original_commit_id": "4c8908f2b4721cdc4be2fd10b93fb963f2a72979",
+    "user": {
+      "login": "edenduong",
+      "id": 8234209,
+      "node_id": "MDQ6VXNlcjgyMzQyMDk=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/8234209?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/edenduong",
+      "html_url": "https://github.com/edenduong",
+      "followers_url": "https://api.github.com/users/edenduong/followers",
+      "following_url": "https://api.github.com/users/edenduong/following{/other_user}",
+      "gists_url": "https://api.github.com/users/edenduong/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/edenduong/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/edenduong/subscriptions",
+      "organizations_url": "https://api.github.com/users/edenduong/orgs",
+      "repos_url": "https://api.github.com/users/edenduong/repos",
+      "events_url": "https://api.github.com/users/edenduong/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/edenduong/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "I think can move to action group with argument",
+    "created_at": "2021-08-04T16:59:41Z",
+    "updated_at": "2021-08-04T17:00:23Z",
+    "html_url": "https://github.com/magento/magento2/pull/33667#discussion_r682798113",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33667",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/682798113"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/33667#discussion_r682798113"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/33667"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/682798113/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 80,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 89,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/196934293",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:23Z",
+  "etag": "W/\"33b89919cf880c2c7fe1fc1b3a079644cecd0eaf477f290a53ff1bafd24ee5c0\"",
+  "headers": {
+    "ETag": "W/\"33b89919cf880c2c7fe1fc1b3a079644cecd0eaf477f290a53ff1bafd24ee5c0\"",
+    "Last-Modified": "Wed, 24 Sep 2025 11:51:08 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "56",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/196934293",
+    "pull_request_review_id": 130577019,
+    "id": 196934293,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDE5NjkzNDI5Mw==",
+    "diff_hunk": "@@ -79,6 +89,16 @@ public function getFileSizeService()\n         return $this->_fileSizeService;\n     }\n \n+    /**\n+     * Get image config\n+     *\n+     * @return \\Magento\\Framework\\Image\\Adapter\\ConfigInterface\n+     */\n+    public function getImageConfigService()\n+    {\n+        return $this->imageConfig;",
+    "path": "app/code/Magento/Backend/Block/Media/Uploader.php",
+    "commit_id": "507d18335294ec85a9c7ea76dcab29957a02b44d",
+    "original_commit_id": "f7b4a66bb4122e1251a2272c7172ea34b38296ef",
+    "user": {
+      "login": "orlangur",
+      "id": 642698,
+      "node_id": "MDQ6VXNlcjY0MjY5OA==",
+      "avatar_url": "https://avatars.githubusercontent.com/u/642698?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/orlangur",
+      "html_url": "https://github.com/orlangur",
+      "followers_url": "https://api.github.com/users/orlangur/followers",
+      "following_url": "https://api.github.com/users/orlangur/following{/other_user}",
+      "gists_url": "https://api.github.com/users/orlangur/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/orlangur/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/orlangur/subscriptions",
+      "organizations_url": "https://api.github.com/users/orlangur/orgs",
+      "repos_url": "https://api.github.com/users/orlangur/repos",
+      "events_url": "https://api.github.com/users/orlangur/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/orlangur/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Such method must be eliminated as it violates Law of Demeter, inject needed classes into blocks directly and introduce methods like `getImageMaxWidth`.",
+    "created_at": "2018-06-20T20:37:56Z",
+    "updated_at": "2018-08-15T09:35:48Z",
+    "html_url": "https://github.com/magento/magento2/pull/15942#discussion_r196934293",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/15942",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/196934293"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/15942#discussion_r196934293"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/15942"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/196934293/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 99,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 46,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "51618583d35918d5e8182743dfb8810ff333131a598ac58925638c8fb72a8d93",
+  "envelopeSha256": "d634557e07f332d24cad93d473c95f5d492e29d81017dd4c185640cbfaa6ddb2"
+}

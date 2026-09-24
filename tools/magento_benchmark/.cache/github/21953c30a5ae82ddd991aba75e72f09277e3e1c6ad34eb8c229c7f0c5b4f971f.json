@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/476493911",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:32Z",
+  "etag": "W/\"d4ca79370c922fdc6fe6f9ec10332926ccfdc163dcde53ccfcf4708fc5d29a7a\"",
+  "headers": {
+    "ETag": "W/\"d4ca79370c922fdc6fe6f9ec10332926ccfdc163dcde53ccfcf4708fc5d29a7a\"",
+    "Last-Modified": "Mon, 13 Jul 2026 22:09:44 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "37",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/476493911",
+    "pull_request_review_id": 474535384,
+    "id": 476493911,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ3NjQ5MzkxMQ==",
+    "diff_hunk": "@@ -11,6 +11,7 @@\n                 + '<span data-price-amount=\"' + priceUtils.formatPrice(item.price, currencyFormat) + '\"'\n                 + ' data-price-type=\"\"' + ' class=\"price-wrapper \">'\n                 + '<span class=\"price\">' + priceUtils.formatPrice(item.price, currencyFormat) + '</span>'\n+                + '<span class=\"price\"> excl. tax ' + priceUtils.formatPrice(item.excl_tax_price, currencyFormat) + '</span>",
+    "path": "app/code/Magento/ConfigurableProduct/view/base/templates/product/price/tier_price.phtml",
+    "commit_id": "c440566dd58217ef7d3d1cd3b72be7b72236b0b6",
+    "original_commit_id": "0b839e9d296bc5f76ccec215ea8562bafce65a74",
+    "user": {
+      "login": "sidolov",
+      "id": 11355520,
+      "node_id": "MDQ6VXNlcjExMzU1NTIw",
+      "avatar_url": "https://avatars.githubusercontent.com/u/11355520?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/sidolov",
+      "html_url": "https://github.com/sidolov",
+      "followers_url": "https://api.github.com/users/sidolov/followers",
+      "following_url": "https://api.github.com/users/sidolov/following{/other_user}",
+      "gists_url": "https://api.github.com/users/sidolov/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/sidolov/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/sidolov/subscriptions",
+      "organizations_url": "https://api.github.com/users/sidolov/orgs",
+      "repos_url": "https://api.github.com/users/sidolov/repos",
+      "events_url": "https://api.github.com/users/sidolov/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/sidolov/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "`excl. tax` should be translated ",
+    "created_at": "2020-08-25T14:29:21Z",
+    "updated_at": "2020-09-23T07:32:24Z",
+    "html_url": "https://github.com/magento/magento2/pull/27953#discussion_r476493911",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27953",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/476493911"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/27953#discussion_r476493911"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/27953"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/476493911/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 14,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 4,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "140dac6c8d017347d3b64db8f7bd64d52a4cb2cd0712b549dd75677821b6b4f0",
+  "envelopeSha256": "04d38197bd93f5bdf398503f4a6411e16a7c665db9c1ce253c922b859ed75eaa"
+}

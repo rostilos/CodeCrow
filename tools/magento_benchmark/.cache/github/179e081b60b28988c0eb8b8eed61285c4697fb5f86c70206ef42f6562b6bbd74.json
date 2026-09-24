@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/703421223",
+  "status": 200,
+  "etag": "W/\"f55a3c0809f384a430a364049d94e54a65823f1359968d68539eff7eb67f0ac6\"",
+  "headers": {
+    "ETag": "W/\"f55a3c0809f384a430a364049d94e54a65823f1359968d68539eff7eb67f0ac6\"",
+    "Last-Modified": "Fri, 21 Aug 2026 19:21:05 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "14",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/703421223",
+    "pull_request_review_id": 747855869,
+    "id": 703421223,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDcwMzQyMTIyMw==",
+    "diff_hunk": "@@ -0,0 +1,33 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminFillAndSaveCustomerAddressInformationActionGroup\">\n+        <annotations>\n+            <description>Fills and Saves Customer Address information.</description>\n+        </annotations>\n+        <arguments>\n+            <argument name=\"address\" type=\"entity\"/>\n+        </arguments>\n+       \n+        <fillField userInput=\"{{address.firstname}}\" selector=\"{{AdminCustomerAddressesSection.firstNameForAddress}}\" stepKey=\"fillFirstName\"/>\n+        <fillField userInput=\"{{address.lastname}}\" selector=\"{{AdminCustomerAddressesSection.lastNameForAddress}}\" stepKey=\"fillLastName\"/>\n+        <fillField userInput=\"{{address.company}}\" selector=\"{{AdminCustomerAddressesSection.company}}\" stepKey=\"fillCompany\"/>\n+        <fillField userInput=\"{{address.street[0]}}\" selector=\"{{AdminCustomerAddressesSection.streetAddress}}\" stepKey=\"fillStreet\"/>\n+        <fillField userInput=\"{{address.city}}\" selector=\"{{AdminCustomerAddressesSection.city}}\" stepKey=\"fillCity\"/>\n+        <click selector=\"{{AdminCustomerAddressesSection.country}}\" stepKey=\"clickCountryToOpenListOfCountries\"/>\n+        <click selector=\"{{AdminCustomerAddressesSection.countryId(address.country_id)}}\" stepKey=\"fillCountry\"/>\n+        <fillField userInput=\"{{address.postcode}}\" selector=\"{{AdminCustomerAddressesSection.zip}}\" stepKey=\"fillPostcode\"/>\n+        <fillField userInput=\"{{address.telephone}}\" selector=\"{{AdminCustomerAddressesSection.phoneNumber}}\" stepKey=\"fillTelephone\"/>\n+        <click selector=\"{{AdminCustomerAddressesSection.region}}\" stepKey=\"clickRegionToOpenListOfRegions\"/>\n+        <click selector=\"{{AdminCustomerAddressesSection.regionId(address.state)}}\" stepKey=\"fillRegion\"/>\n+        <click selector=\"{{AdminCustomerAddressesSection.saveAddress}}\" stepKey=\"clickSaveCustomerAddressOnAddUpdateAddressForm\"/>\n+        <waitForPageLoad stepKey=\"waitForNewAddressIsCreated\"/>\n+    </actionGroup>\n+</actionGroups>",
+    "path": "app/code/Magento/Customer/Test/Mftf/ActionGroup/AdminFillAndSaveCustomerlAddressInformationActionGroup.xml",
+    "commit_id": "f87fb386d7ad737c7204ecc27ed55294814fa988",
+    "original_commit_id": "b9ecbf5e9e87696afaa749e0f2e25b424b57543d",
+    "user": {
+      "login": "Den4ik",
+      "id": 1129623,
+      "node_id": "MDQ6VXNlcjExMjk2MjM=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1129623?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/Den4ik",
+      "html_url": "https://github.com/Den4ik",
+      "followers_url": "https://api.github.com/users/Den4ik/followers",
+      "following_url": "https://api.github.com/users/Den4ik/following{/other_user}",
+      "gists_url": "https://api.github.com/users/Den4ik/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/Den4ik/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/Den4ik/subscriptions",
+      "organizations_url": "https://api.github.com/users/Den4ik/orgs",
+      "repos_url": "https://api.github.com/users/Den4ik/repos",
+      "events_url": "https://api.github.com/users/Den4ik/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/Den4ik/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Please add new line at the end of file",
+    "created_at": "2021-09-07T11:21:12Z",
+    "updated_at": "2021-09-07T11:21:45Z",
+    "html_url": "https://github.com/magento/magento2/pull/33999#discussion_r703421223",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33999",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/703421223"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/33999#discussion_r703421223"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/33999"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/703421223/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 33,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 33,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

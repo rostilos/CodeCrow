@@ -1,0 +1,504 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/32730/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T15:48:01Z",
+  "etag": "W/\"e0480fdd2263b68fac6072768dfdae307b09e8f6c0fdcbd9ae136c67130a1cad\"",
+  "headers": {
+    "ETag": "W/\"e0480fdd2263b68fac6072768dfdae307b09e8f6c0fdcbd9ae136c67130a1cad\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "57",
+    "X-RateLimit-Reset": "1786985277"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/612376514",
+      "pull_request_review_id": 634496106,
+      "id": 612376514,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDYxMjM3NjUxNA==",
+      "diff_hunk": "@@ -78,6 +75,7 @@ public function execute()\n             );\n             $this->dataPersistor->clear('contact_us');\n         } catch (LocalizedException $e) {\n+            $this->logger->error($e);",
+      "path": "app/code/Magento/Contact/Controller/Index/Post.php",
+      "commit_id": "5d43aac4b0431250bc629e6a11f4d0671f8bd135",
+      "original_commit_id": "cd766d16dba9d3d040824c30bb4b3b0f56491d6c",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I suppose we should not log LocalizedException. LocalizedException intended for showing to user, not for logging.\r\nYou should intercept real transport exception and log it. I suggest to do it here\r\n\\Magento\\Framework\\Mail\\Transport::sendMessage\r\n\\Magento\\Email\\Model\\Transport::sendMessage\r\n in catch section where actually MailException created\r\n\r\nI'd also changed implementation and dont show real transport exception to user as it done \r\n```\r\nthrow new MailException(new Phrase($e->getMessage()), $e);\r\n```\r\nIt can be potentially security issue. But create something like:\r\n```\r\nthrow new MailException(new Phrase('Mail transport failure'), $e); // don't forget add translation\r\n```\r\n",
+      "created_at": "2021-04-13T11:54:08Z",
+      "updated_at": "2021-04-13T14:03:53Z",
+      "html_url": "https://github.com/magento/magento2/pull/32730#discussion_r612376514",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/32730",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/612376514"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/32730#discussion_r612376514"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/32730"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/612376514/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 78,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 72,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/612425151",
+      "pull_request_review_id": 634559505,
+      "id": 612425151,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDYxMjQyNTE1MQ==",
+      "diff_hunk": "@@ -78,6 +75,7 @@ public function execute()\n             );\n             $this->dataPersistor->clear('contact_us');\n         } catch (LocalizedException $e) {\n+            $this->logger->error($e);",
+      "path": "app/code/Magento/Contact/Controller/Index/Post.php",
+      "commit_id": "5d43aac4b0431250bc629e6a11f4d0671f8bd135",
+      "original_commit_id": "cd766d16dba9d3d040824c30bb4b3b0f56491d6c",
+      "user": {
+        "login": "engcom-Kilo",
+        "id": 60192090,
+        "node_id": "MDQ6VXNlcjYwMTkyMDkw",
+        "avatar_url": "https://avatars.githubusercontent.com/u/60192090?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/engcom-Kilo",
+        "html_url": "https://github.com/engcom-Kilo",
+        "followers_url": "https://api.github.com/users/engcom-Kilo/followers",
+        "following_url": "https://api.github.com/users/engcom-Kilo/following{/other_user}",
+        "gists_url": "https://api.github.com/users/engcom-Kilo/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/engcom-Kilo/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/engcom-Kilo/subscriptions",
+        "organizations_url": "https://api.github.com/users/engcom-Kilo/orgs",
+        "repos_url": "https://api.github.com/users/engcom-Kilo/repos",
+        "events_url": "https://api.github.com/users/engcom-Kilo/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/engcom-Kilo/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Done",
+      "created_at": "2021-04-13T13:02:11Z",
+      "updated_at": "2021-04-13T14:03:53Z",
+      "html_url": "https://github.com/magento/magento2/pull/32730#discussion_r612425151",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/32730",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/612425151"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/32730#discussion_r612425151"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/32730"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/612425151/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 78,
+      "side": "RIGHT",
+      "in_reply_to_id": 612376514,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 72,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/612468243",
+      "pull_request_review_id": 634618276,
+      "id": 612468243,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDYxMjQ2ODI0Mw==",
+      "diff_hunk": "@@ -100,7 +110,8 @@ public function sendMessage()\n \n             $this->laminasTransport->send($laminasMessage);\n         } catch (\\Exception $e) {\n-            throw new MailException(new Phrase($e->getMessage()), $e);\n+            $this->logger->error($e->getMessage());",
+      "path": "app/code/Magento/Email/Model/Transport.php",
+      "commit_id": "5d43aac4b0431250bc629e6a11f4d0671f8bd135",
+      "original_commit_id": "a51d1066ef3df2b66d88adefc817143b36cf8e91",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I believe it's better to log whole exception, including the stack trace, otherwise it would be too hard to detect where the exception happened\r\n```suggestion\r\n            $this->logger->error($e);\r\n```",
+      "created_at": "2021-04-13T13:53:01Z",
+      "updated_at": "2021-04-13T14:03:53Z",
+      "html_url": "https://github.com/magento/magento2/pull/32730#discussion_r612468243",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/32730",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/612468243"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/32730#discussion_r612468243"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/32730"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/612468243/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 113,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 53,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/612469264",
+      "pull_request_review_id": 634618276,
+      "id": 612469264,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDYxMjQ2OTI2NA==",
+      "diff_hunk": "@@ -45,7 +56,8 @@ public function sendMessage()\n                 LaminasMessage::fromString($this->message->getRawMessage())\n             );\n         } catch (\\Exception $e) {\n-            throw new MailException(new Phrase($e->getMessage()), $e);\n+            $this->logger->error($e->getMessage());",
+      "path": "lib/internal/Magento/Framework/Mail/Transport.php",
+      "commit_id": "5d43aac4b0431250bc629e6a11f4d0671f8bd135",
+      "original_commit_id": "a51d1066ef3df2b66d88adefc817143b36cf8e91",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "same here\r\n```suggestion\r\n            $this->logger->error($e);\r\n```",
+      "created_at": "2021-04-13T13:54:12Z",
+      "updated_at": "2021-04-13T14:03:53Z",
+      "html_url": "https://github.com/magento/magento2/pull/32730#discussion_r612469264",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/32730",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/612469264"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/32730#discussion_r612469264"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/32730"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/612469264/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 59,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 51,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/612478582",
+      "pull_request_review_id": 634632820,
+      "id": 612478582,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDYxMjQ3ODU4Mg==",
+      "diff_hunk": "@@ -100,7 +110,8 @@ public function sendMessage()\n \n             $this->laminasTransport->send($laminasMessage);\n         } catch (\\Exception $e) {\n-            throw new MailException(new Phrase($e->getMessage()), $e);\n+            $this->logger->error($e->getMessage());",
+      "path": "app/code/Magento/Email/Model/Transport.php",
+      "commit_id": "5d43aac4b0431250bc629e6a11f4d0671f8bd135",
+      "original_commit_id": "a51d1066ef3df2b66d88adefc817143b36cf8e91",
+      "user": {
+        "login": "engcom-Kilo",
+        "id": 60192090,
+        "node_id": "MDQ6VXNlcjYwMTkyMDkw",
+        "avatar_url": "https://avatars.githubusercontent.com/u/60192090?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/engcom-Kilo",
+        "html_url": "https://github.com/engcom-Kilo",
+        "followers_url": "https://api.github.com/users/engcom-Kilo/followers",
+        "following_url": "https://api.github.com/users/engcom-Kilo/following{/other_user}",
+        "gists_url": "https://api.github.com/users/engcom-Kilo/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/engcom-Kilo/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/engcom-Kilo/subscriptions",
+        "organizations_url": "https://api.github.com/users/engcom-Kilo/orgs",
+        "repos_url": "https://api.github.com/users/engcom-Kilo/repos",
+        "events_url": "https://api.github.com/users/engcom-Kilo/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/engcom-Kilo/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Changed",
+      "created_at": "2021-04-13T14:04:58Z",
+      "updated_at": "2021-04-13T14:04:58Z",
+      "html_url": "https://github.com/magento/magento2/pull/32730#discussion_r612478582",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/32730",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/612478582"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/32730#discussion_r612478582"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/32730"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/612478582/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 113,
+      "side": "RIGHT",
+      "in_reply_to_id": 612468243,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 53,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/618140599",
+      "pull_request_review_id": 641851442,
+      "id": 618140599,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDYxODE0MDU5OQ==",
+      "diff_hunk": "@@ -100,7 +110,8 @@ public function sendMessage()\n \n             $this->laminasTransport->send($laminasMessage);\n         } catch (\\Exception $e) {\n-            throw new MailException(new Phrase($e->getMessage()), $e);\n+            $this->logger->error($e);\n+            throw new MailException(new Phrase('Unable to send mail. Please try again later.'));",
+      "path": "app/code/Magento/Email/Model/Transport.php",
+      "commit_id": "5d43aac4b0431250bc629e6a11f4d0671f8bd135",
+      "original_commit_id": "5d43aac4b0431250bc629e6a11f4d0671f8bd135",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "@engcom-Kilo @zakdma, we have regression here. The original exception should be passed as a 2nd param here to understand why it failed, as it was in the past.",
+      "created_at": "2021-04-22T07:15:30Z",
+      "updated_at": "2021-04-22T07:15:30Z",
+      "html_url": "https://github.com/magento/magento2/pull/32730#discussion_r618140599",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/32730",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/618140599"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/32730#discussion_r618140599"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/32730"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/618140599/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 114,
+      "original_line": 114,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 54,
+      "position": 54,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/663814905",
+      "pull_request_review_id": 699024695,
+      "id": 663814905,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY2MzgxNDkwNQ==",
+      "diff_hunk": "@@ -100,7 +110,8 @@ public function sendMessage()\n \n             $this->laminasTransport->send($laminasMessage);\n         } catch (\\Exception $e) {\n-            throw new MailException(new Phrase($e->getMessage()), $e);\n+            $this->logger->error($e);\n+            throw new MailException(new Phrase('Unable to send mail. Please try again later.'));",
+      "path": "app/code/Magento/Email/Model/Transport.php",
+      "commit_id": "5d43aac4b0431250bc629e6a11f4d0671f8bd135",
+      "original_commit_id": "5d43aac4b0431250bc629e6a11f4d0671f8bd135",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "FYI here is a PR that fixes this regression https://github.com/magento/magento2/pull/33419",
+      "created_at": "2021-07-05T10:16:20Z",
+      "updated_at": "2021-07-05T10:16:20Z",
+      "html_url": "https://github.com/magento/magento2/pull/32730#discussion_r663814905",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/32730",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/663814905"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/32730#discussion_r663814905"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/32730"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/663814905/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 114,
+      "original_line": 114,
+      "side": "RIGHT",
+      "in_reply_to_id": 618140599,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 54,
+      "position": 54,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "3322713570be9d80d290896aa976879077235bf6cbe2459cc022268dafde0ca4",
+  "cacheDigest": "acdd9b7db1ae01ab26b5e94c5634724a0a23a7d8f16481bddb6c3296e0a533f2"
+}

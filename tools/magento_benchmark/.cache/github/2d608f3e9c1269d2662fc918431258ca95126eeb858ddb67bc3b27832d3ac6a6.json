@@ -1,0 +1,436 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/33919/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T15:36:23Z",
+  "etag": "W/\"5e5f3c7d7e887a7d8fcffa59ad6f29410ba87837867c9605087a96195c2858fe\"",
+  "headers": {
+    "ETag": "W/\"5e5f3c7d7e887a7d8fcffa59ad6f29410ba87837867c9605087a96195c2858fe\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "14",
+    "X-RateLimit-Reset": "1786981658"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/697249704",
+      "pull_request_review_id": 740265146,
+      "id": 697249704,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY5NzI0OTcwNA==",
+      "diff_hunk": "@@ -1024,11 +1024,23 @@ private function createEcKeys(): array\n             if (!openssl_pkey_export($privateResource, $esPrivate, 'pass')) {\n                 throw new \\RuntimeException('Failed to read EC private key');\n             }\n-            openssl_free_key($privateResource);\n+            $this->freeResource($privateResource);\n             $ecKeys[$bits] = [$esPrivate, $esPublic];\n             unset($privateResource, $esPublic, $esPrivate);\n         }\n \n         return $ecKeys;\n     }\n+\n+    /**\n+     * @param mixed $resource\n+     *\n+     * @return void\n+     */\n+    private function freeResource($resource): void\n+    {\n+        if (\\is_resource($resource) && (version_compare(PHP_VERSION, '8.0') < 0)) {\n+            openssl_free_key($resource);\n+        }\n+    }",
+      "path": "dev/tests/integration/testsuite/Magento/Framework/Jwt/JwtManagerTest.php",
+      "commit_id": "55890fff69e90787aa08759002e1892757c4bdb7",
+      "original_commit_id": "be59ce08cb769fb172702f700944f60cf1da7669",
+      "user": {
+        "login": "Den4ik",
+        "id": 1129623,
+        "node_id": "MDQ6VXNlcjExMjk2MjM=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1129623?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/Den4ik",
+        "html_url": "https://github.com/Den4ik",
+        "followers_url": "https://api.github.com/users/Den4ik/followers",
+        "following_url": "https://api.github.com/users/Den4ik/following{/other_user}",
+        "gists_url": "https://api.github.com/users/Den4ik/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/Den4ik/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/Den4ik/subscriptions",
+        "organizations_url": "https://api.github.com/users/Den4ik/orgs",
+        "repos_url": "https://api.github.com/users/Den4ik/repos",
+        "events_url": "https://api.github.com/users/Den4ik/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/Den4ik/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I believe that we can move this method into `trait` and use in both files\r\n`lib/internal/Magento/Framework/Jwt/JwkFactory.php` and `dev/tests/integration/testsuite/Magento/Framework/Jwt/JwtManagerTest.php`",
+      "created_at": "2021-08-27T08:22:35Z",
+      "updated_at": "2021-08-27T08:25:01Z",
+      "html_url": "https://github.com/magento/magento2/pull/33919#discussion_r697249704",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33919",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/697249704"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33919#discussion_r697249704"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33919"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/697249704/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 1034,
+      "original_start_line": 1034,
+      "start_side": "RIGHT",
+      "line": 1045,
+      "original_line": 1045,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 32,
+      "position": 32,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/698326791",
+      "pull_request_review_id": 741442273,
+      "id": 698326791,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY5ODMyNjc5MQ==",
+      "diff_hunk": "@@ -1024,11 +1024,23 @@ private function createEcKeys(): array\n             if (!openssl_pkey_export($privateResource, $esPrivate, 'pass')) {\n                 throw new \\RuntimeException('Failed to read EC private key');\n             }\n-            openssl_free_key($privateResource);\n+            $this->freeResource($privateResource);\n             $ecKeys[$bits] = [$esPrivate, $esPublic];\n             unset($privateResource, $esPublic, $esPrivate);\n         }\n \n         return $ecKeys;\n     }\n+\n+    /**\n+     * @param mixed $resource\n+     *\n+     * @return void\n+     */\n+    private function freeResource($resource): void\n+    {\n+        if (\\is_resource($resource) && (version_compare(PHP_VERSION, '8.0') < 0)) {\n+            openssl_free_key($resource);\n+        }\n+    }",
+      "path": "dev/tests/integration/testsuite/Magento/Framework/Jwt/JwtManagerTest.php",
+      "commit_id": "55890fff69e90787aa08759002e1892757c4bdb7",
+      "original_commit_id": "be59ce08cb769fb172702f700944f60cf1da7669",
+      "user": {
+        "login": "andrewbess",
+        "id": 10788564,
+        "node_id": "MDQ6VXNlcjEwNzg4NTY0",
+        "avatar_url": "https://avatars.githubusercontent.com/u/10788564?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/andrewbess",
+        "html_url": "https://github.com/andrewbess",
+        "followers_url": "https://api.github.com/users/andrewbess/followers",
+        "following_url": "https://api.github.com/users/andrewbess/following{/other_user}",
+        "gists_url": "https://api.github.com/users/andrewbess/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/andrewbess/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/andrewbess/subscriptions",
+        "organizations_url": "https://api.github.com/users/andrewbess/orgs",
+        "repos_url": "https://api.github.com/users/andrewbess/repos",
+        "events_url": "https://api.github.com/users/andrewbess/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/andrewbess/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hello @Den4ik \r\nThank you for your notice.\r\nI think creating a new class, a new trait to cover only two places in the Magento is overkill.\r\nWe checked all possible repositories of Magento.\r\nThere are only 2 places when function openssl_free_key() is called.\r\nThe both places you can see in this PR.\r\n",
+      "created_at": "2021-08-30T09:15:08Z",
+      "updated_at": "2021-08-30T09:15:09Z",
+      "html_url": "https://github.com/magento/magento2/pull/33919#discussion_r698326791",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33919",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/698326791"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33919#discussion_r698326791"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33919"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/698326791/reactions",
+        "total_count": 2,
+        "+1": 2,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 1034,
+      "original_start_line": 1034,
+      "start_side": "RIGHT",
+      "line": 1045,
+      "original_line": 1045,
+      "side": "RIGHT",
+      "in_reply_to_id": 697249704,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 32,
+      "position": 32,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/698387032",
+      "pull_request_review_id": 741517750,
+      "id": 698387032,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY5ODM4NzAzMg==",
+      "diff_hunk": "@@ -1024,11 +1024,23 @@ private function createEcKeys(): array\n             if (!openssl_pkey_export($privateResource, $esPrivate, 'pass')) {\n                 throw new \\RuntimeException('Failed to read EC private key');\n             }\n-            openssl_free_key($privateResource);\n+            $this->freeResource($privateResource);\n             $ecKeys[$bits] = [$esPrivate, $esPublic];\n             unset($privateResource, $esPublic, $esPrivate);\n         }\n \n         return $ecKeys;\n     }\n+\n+    /**\n+     * @param mixed $resource\n+     *\n+     * @return void\n+     */\n+    private function freeResource($resource): void\n+    {\n+        if (\\is_resource($resource) && (version_compare(PHP_VERSION, '8.0') < 0)) {\n+            openssl_free_key($resource);\n+        }\n+    }",
+      "path": "dev/tests/integration/testsuite/Magento/Framework/Jwt/JwtManagerTest.php",
+      "commit_id": "55890fff69e90787aa08759002e1892757c4bdb7",
+      "original_commit_id": "be59ce08cb769fb172702f700944f60cf1da7669",
+      "user": {
+        "login": "Den4ik",
+        "id": 1129623,
+        "node_id": "MDQ6VXNlcjExMjk2MjM=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1129623?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/Den4ik",
+        "html_url": "https://github.com/Den4ik",
+        "followers_url": "https://api.github.com/users/Den4ik/followers",
+        "following_url": "https://api.github.com/users/Den4ik/following{/other_user}",
+        "gists_url": "https://api.github.com/users/Den4ik/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/Den4ik/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/Den4ik/subscriptions",
+        "organizations_url": "https://api.github.com/users/Den4ik/orgs",
+        "repos_url": "https://api.github.com/users/Den4ik/repos",
+        "events_url": "https://api.github.com/users/Den4ik/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/Den4ik/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Ok",
+      "created_at": "2021-08-30T10:51:23Z",
+      "updated_at": "2021-08-30T10:51:23Z",
+      "html_url": "https://github.com/magento/magento2/pull/33919#discussion_r698387032",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33919",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/698387032"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33919#discussion_r698387032"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33919"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/698387032/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 1034,
+      "original_start_line": 1034,
+      "start_side": "RIGHT",
+      "line": 1045,
+      "original_line": 1045,
+      "side": "RIGHT",
+      "in_reply_to_id": 697249704,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 32,
+      "position": 32,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/698388716",
+      "pull_request_review_id": 741519887,
+      "id": 698388716,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY5ODM4ODcxNg==",
+      "diff_hunk": "@@ -1024,11 +1024,23 @@ private function createEcKeys(): array\n             if (!openssl_pkey_export($privateResource, $esPrivate, 'pass')) {\n                 throw new \\RuntimeException('Failed to read EC private key');\n             }\n-            openssl_free_key($privateResource);\n+            $this->freeResource($privateResource);\n             $ecKeys[$bits] = [$esPrivate, $esPublic];\n             unset($privateResource, $esPublic, $esPrivate);\n         }\n \n         return $ecKeys;\n     }\n+\n+    /**\n+     * @param mixed $resource\n+     *\n+     * @return void\n+     */\n+    private function freeResource($resource): void\n+    {\n+        if (\\is_resource($resource) && (version_compare(PHP_VERSION, '8.0') < 0)) {\n+            openssl_free_key($resource);\n+        }\n+    }",
+      "path": "dev/tests/integration/testsuite/Magento/Framework/Jwt/JwtManagerTest.php",
+      "commit_id": "55890fff69e90787aa08759002e1892757c4bdb7",
+      "original_commit_id": "be59ce08cb769fb172702f700944f60cf1da7669",
+      "user": {
+        "login": "Den4ik",
+        "id": 1129623,
+        "node_id": "MDQ6VXNlcjExMjk2MjM=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1129623?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/Den4ik",
+        "html_url": "https://github.com/Den4ik",
+        "followers_url": "https://api.github.com/users/Den4ik/followers",
+        "following_url": "https://api.github.com/users/Den4ik/following{/other_user}",
+        "gists_url": "https://api.github.com/users/Den4ik/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/Den4ik/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/Den4ik/subscriptions",
+        "organizations_url": "https://api.github.com/users/Den4ik/orgs",
+        "repos_url": "https://api.github.com/users/Den4ik/repos",
+        "events_url": "https://api.github.com/users/Den4ik/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/Den4ik/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I do not consider using the trait as overkill.\n\nBut your opinion is also important and may be differ from mine.",
+      "created_at": "2021-08-30T10:54:36Z",
+      "updated_at": "2021-08-30T10:54:36Z",
+      "html_url": "https://github.com/magento/magento2/pull/33919#discussion_r698388716",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33919",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/698388716"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33919#discussion_r698388716"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33919"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/698388716/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 1034,
+      "original_start_line": 1034,
+      "start_side": "RIGHT",
+      "line": 1045,
+      "original_line": 1045,
+      "side": "RIGHT",
+      "in_reply_to_id": 697249704,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 32,
+      "position": 32,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/700227420",
+      "pull_request_review_id": 743946478,
+      "id": 700227420,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDcwMDIyNzQyMA==",
+      "diff_hunk": "@@ -210,7 +210,7 @@ protected function _testObsoleteClasses($content)\n         foreach (self::$_classes as $row) {\n             list($class, , $replacement) = $row;\n             $this->_assertNotRegExp(\n-                '/[^a-z\\d_]' . preg_quote($class, '/') . '[^a-z\\d_\\\\\\\\]/iS',\n+                '/[^a-z\\d_\\$]' . preg_quote($class, '/') . '[^a-z\\d_\\\\\\\\]/iS',",
+      "path": "dev/tests/static/testsuite/Magento/Test/Legacy/ObsoleteCodeTest.php",
+      "commit_id": "55890fff69e90787aa08759002e1892757c4bdb7",
+      "original_commit_id": "55890fff69e90787aa08759002e1892757c4bdb7",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "could you explain this change?",
+      "created_at": "2021-09-01T13:44:16Z",
+      "updated_at": "2021-09-01T13:44:17Z",
+      "html_url": "https://github.com/magento/magento2/pull/33919#discussion_r700227420",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33919",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/700227420"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33919#discussion_r700227420"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33919"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/700227420/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 213,
+      "original_line": 213,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 5,
+      "position": 5,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/700270457",
+      "pull_request_review_id": 744006126,
+      "id": 700270457,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDcwMDI3MDQ1Nw==",
+      "diff_hunk": "@@ -210,7 +210,7 @@ protected function _testObsoleteClasses($content)\n         foreach (self::$_classes as $row) {\n             list($class, , $replacement) = $row;\n             $this->_assertNotRegExp(\n-                '/[^a-z\\d_]' . preg_quote($class, '/') . '[^a-z\\d_\\\\\\\\]/iS',\n+                '/[^a-z\\d_\\$]' . preg_quote($class, '/') . '[^a-z\\d_\\\\\\\\]/iS',",
+      "path": "dev/tests/static/testsuite/Magento/Test/Legacy/ObsoleteCodeTest.php",
+      "commit_id": "55890fff69e90787aa08759002e1892757c4bdb7",
+      "original_commit_id": "55890fff69e90787aa08759002e1892757c4bdb7",
+      "user": {
+        "login": "andrewbess",
+        "id": 10788564,
+        "node_id": "MDQ6VXNlcjEwNzg4NTY0",
+        "avatar_url": "https://avatars.githubusercontent.com/u/10788564?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/andrewbess",
+        "html_url": "https://github.com/andrewbess",
+        "followers_url": "https://api.github.com/users/andrewbess/followers",
+        "following_url": "https://api.github.com/users/andrewbess/following{/other_user}",
+        "gists_url": "https://api.github.com/users/andrewbess/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/andrewbess/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/andrewbess/subscriptions",
+        "organizations_url": "https://api.github.com/users/andrewbess/orgs",
+        "repos_url": "https://api.github.com/users/andrewbess/repos",
+        "events_url": "https://api.github.com/users/andrewbess/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/andrewbess/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hello @ihor-sviziev \r\nThank you for your question.\r\nThis part of the `legacy` test was incorrect.\r\nWe had a problem in class `Magento\\Framework\\Webapi\\Rest\\Request\\Deserializer\\Xml` with param in constructor `$xmlParser` because `XMLParser` class is obsolete.\r\nSo, the regular expression was not fully correct.\r\nWe fixed it. \r\n\r\ncc @Den4ik ",
+      "created_at": "2021-09-01T14:29:17Z",
+      "updated_at": "2021-09-01T14:49:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/33919#discussion_r700270457",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33919",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/700270457"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33919#discussion_r700270457"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33919"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/700270457/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 213,
+      "original_line": 213,
+      "side": "RIGHT",
+      "in_reply_to_id": 700227420,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 5,
+      "position": 5,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "7f275e7483409758146ef37c366ffe468639473b25ec639df0ca6f93141831e3",
+  "cacheDigest": "c1ae75ec7656e6099df52187641b4ce29a1b31ec5f94a764099ddf5247cfd7dd"
+}

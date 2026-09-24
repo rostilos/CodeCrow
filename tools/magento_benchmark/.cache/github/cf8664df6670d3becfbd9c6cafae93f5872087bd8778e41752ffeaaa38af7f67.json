@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/350943524",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:26Z",
+  "etag": "W/\"74db5cd5fb8e70b63efc5594fab7128de2813bd2fb8d8b98585d2681ccb68a0b\"",
+  "headers": {
+    "ETag": "W/\"74db5cd5fb8e70b63efc5594fab7128de2813bd2fb8d8b98585d2681ccb68a0b\"",
+    "Last-Modified": "Tue, 11 Aug 2026 01:38:34 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "50",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/350943524",
+    "pull_request_review_id": 323236803,
+    "id": 350943524,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM1MDk0MzUyNA==",
+    "diff_hunk": "@@ -98,7 +98,9 @@ define([\n \n                         /** @inheritdoc */\n                         always: function (e) {\n-                            e.stopImmediatePropagation();\n+                            if (e) {",
+    "path": "app/code/Magento/Checkout/view/frontend/web/js/sidebar.js",
+    "commit_id": "437fab3b783eb68460d283214f41f6b9d9fcb49f",
+    "original_commit_id": "db51191275245123b84d772a80820454a2cb5631",
+    "user": {
+      "login": "VladimirZaets",
+      "id": 8035672,
+      "node_id": "MDQ6VXNlcjgwMzU2NzI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/8035672?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/VladimirZaets",
+      "html_url": "https://github.com/VladimirZaets",
+      "followers_url": "https://api.github.com/users/VladimirZaets/followers",
+      "following_url": "https://api.github.com/users/VladimirZaets/following{/other_user}",
+      "gists_url": "https://api.github.com/users/VladimirZaets/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/VladimirZaets/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/VladimirZaets/subscriptions",
+      "organizations_url": "https://api.github.com/users/VladimirZaets/orgs",
+      "repos_url": "https://api.github.com/users/VladimirZaets/repos",
+      "events_url": "https://api.github.com/users/VladimirZaets/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/VladimirZaets/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Do we really need to check is event exists? It's framework lifecycle methods and the event should be always presented",
+    "created_at": "2019-11-26T19:38:18Z",
+    "updated_at": "2020-02-18T12:35:01Z",
+    "html_url": "https://github.com/magento/magento2/pull/25349#discussion_r350943524",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/25349",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/350943524"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/25349#discussion_r350943524"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/25349"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/350943524/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 101,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 5,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "2a4fc005391c15484b4bfd5fd00ee55ad95b251e609a6bd6a69c6db28d1e9518",
+  "envelopeSha256": "76e31f49fbc607a184342a7532740f727c5f7d289024448b7baf4a4ebc350df4"
+}

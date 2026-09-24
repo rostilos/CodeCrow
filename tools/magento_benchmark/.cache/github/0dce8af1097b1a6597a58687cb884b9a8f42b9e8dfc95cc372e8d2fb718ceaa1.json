@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/423288568",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:32Z",
+  "etag": "W/\"a837b5e441c6bda016420dc8a6f2b44923ce4905eb53fe70f97c2805504a8953\"",
+  "headers": {
+    "ETag": "W/\"a837b5e441c6bda016420dc8a6f2b44923ce4905eb53fe70f97c2805504a8953\"",
+    "Last-Modified": "Mon, 13 Jul 2026 16:27:07 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "38",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/423288568",
+    "pull_request_review_id": 409446629,
+    "id": 423288568,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQyMzI4ODU2OA==",
+    "diff_hunk": "@@ -0,0 +1,76 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\QuoteBundleOptions\\Model\\Cart\\BuyRequest;\n+\n+use Magento\\Framework\\Exception\\LocalizedException;\n+use Magento\\Quote\\Model\\Cart\\BuyRequest\\BuyRequestDataProviderInterface;\n+use Magento\\Quote\\Model\\Cart\\Data\\CartItem;\n+\n+/**\n+ * Data provider for bundle product buy requests\n+ */\n+class BundleDataProvider implements BuyRequestDataProviderInterface\n+{\n+    private const OPTION_TYPE = 'bundle';\n+\n+    /**\n+     * @inheritdoc\n+     *\n+     * @throws LocalizedException\n+     */\n+    public function execute(CartItem $cartItem): array\n+    {\n+        $bundleOptionsData = [];\n+\n+        foreach ($cartItem->getSelectedOptions() as $optionData) {\n+            // phpcs:ignore Magento2.Functions.DiscouragedFunction\n+            $optionData = \\explode('/', base64_decode($optionData->getId()));\n+\n+            if ($this->isProviderApplicable($optionData) === false) {\n+                continue;\n+            }\n+            $this->validateInput($optionData);\n+\n+            [, $optionId, $optionValueId, $optionQuantity] = $optionData;\n+            $bundleOptionsData['bundle_option'][$optionId] = $optionValueId;\n+            $bundleOptionsData['bundle_option_qty'][$optionId] = $optionQuantity;\n+        }\n+\n+        return $bundleOptionsData;\n+    }\n+\n+    /**\n+     * Checks whether this provider is applicable for the current option\n+     *\n+     * @param array $optionData\n+     * @return bool\n+     */\n+    private function isProviderApplicable(array $optionData): bool\n+    {\n+        if ($optionData[0] !== self::OPTION_TYPE) {\n+            return false;\n+        }\n+\n+        return true;\n+    }\n+\n+    /**\n+     * Validates the provided options structure\n+     *\n+     * @param array $optionData\n+     * @throws LocalizedException\n+     */\n+    private function validateInput(array $optionData): void\n+    {\n+        if (count($optionData) !== 4) {\n+            $errorMessage = __('Wrong format of the entered option data. ' .\n+                'Must be \"bundle/option_id/option_value_id/option_quantity\"');",
+    "path": "app/code/Magento/QuoteBundleOptions/Model/Cart/BuyRequest/BundleDataProvider.php",
+    "commit_id": "a556345e619e79c123b881090e893d33f67dae61",
+    "original_commit_id": "b9e28fd3dc2b32a03984f4f62fc5cf612842932f",
+    "user": {
+      "login": "mslabko",
+      "id": 416649,
+      "node_id": "MDQ6VXNlcjQxNjY0OQ==",
+      "avatar_url": "https://avatars.githubusercontent.com/u/416649?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/mslabko",
+      "html_url": "https://github.com/mslabko",
+      "followers_url": "https://api.github.com/users/mslabko/followers",
+      "following_url": "https://api.github.com/users/mslabko/following{/other_user}",
+      "gists_url": "https://api.github.com/users/mslabko/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/mslabko/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/mslabko/subscriptions",
+      "organizations_url": "https://api.github.com/users/mslabko/orgs",
+      "repos_url": "https://api.github.com/users/mslabko/repos",
+      "events_url": "https://api.github.com/users/mslabko/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/mslabko/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "We cannot expose implementation details to Customer. \"id\" should be interpreted as one unit. Current implementation with encoded value just a workaround until UUID will be introduced in Magento (see details in https://github.com/magento/architecture/blob/master/design-documents/graph-ql/coverage/add-items-to-cart-single-mutation.md#options)\r\n\r\nMaybe we can log it just for debug purpose and throw a generic error message aka \"Provided option %1 is not valid product with SKU %2\". I think log details is acceptable and will help/save time during debug. @akaplya  what do you think? ",
+    "created_at": "2020-05-11T20:07:38Z",
+    "updated_at": "2020-08-11T00:26:31Z",
+    "html_url": "https://github.com/magento/magento2/pull/27914#discussion_r423288568",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27914",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/423288568"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/27914#discussion_r423288568"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/27914"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/423288568/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 72,
+    "side": "RIGHT",
+    "author_association": "MEMBER",
+    "original_position": 72,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "199636bc2756e19754d50d2e090aec9aff533530e0f3561d135e2ab5ae1db689",
+  "envelopeSha256": "0c1eca33e10e72580a602d90d1397be443b735a27ee6cb1fade3d5fd0fc878ed"
+}

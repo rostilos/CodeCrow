@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/365762027",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:28Z",
+  "etag": "W/\"d1d2d76725b810ab743543f76c47c9ccbefee1992672d4dbcd298e62cf8fc8f8\"",
+  "headers": {
+    "ETag": "W/\"d1d2d76725b810ab743543f76c47c9ccbefee1992672d4dbcd298e62cf8fc8f8\"",
+    "Last-Modified": "Thu, 13 Aug 2026 10:56:31 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "46",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/365762027",
+    "pull_request_review_id": 341788416,
+    "id": 365762027,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM2NTc2MjAyNw==",
+    "diff_hunk": "@@ -217,17 +227,19 @@ protected function getWebsitesWithDefaultStores($websiteId = null)\n      *\n      * @param int $productId\n      * @param int $websiteId\n-     * @return $this\n+     * @return void\n      */\n     protected function processParents($productId, $websiteId)\n     {\n-        $parentIds = [];\n+        $parentIds = [[]];\n         foreach ($this->getProductTypeInstances() as $typeInstance) {\n             /* @var $typeInstance AbstractType */\n-            $parentIds = array_merge($parentIds, $typeInstance->getParentIdsByChild($productId));\n+            $parentIds[] = $typeInstance->getParentIdsByChild($productId);\n         }\n \n-        if (!$parentIds) {\n+        $parentIds = array_merge(...$parentIds);\n+\n+        if (empty($parentIds)) {\n             return $this;",
+    "path": "app/code/Magento/CatalogInventory/Model/StockIndex.php",
+    "commit_id": "e8f56322d6ecc522cd55d881b137dc8ed94ec61c",
+    "original_commit_id": "0228d4bf27c243d10b0dfcef56cca5bd13579f8a",
+    "user": {
+      "login": "ihor-sviziev",
+      "id": 1873745,
+      "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/ihor-sviziev",
+      "html_url": "https://github.com/ihor-sviziev",
+      "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+      "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+      "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+      "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+      "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+      "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "I think it should be like this to be valid\r\n```suggestion\r\n            return;\r\n```",
+    "created_at": "2020-01-13T11:45:07Z",
+    "updated_at": "2020-01-30T13:12:11Z",
+    "html_url": "https://github.com/magento/magento2/pull/26355#discussion_r365762027",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/26355",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/365762027"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/26355#discussion_r365762027"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/26355"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/365762027/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 243,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 101,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "08b95a9c726b5fc8d135104dff04d5ec6ab6b8d50b25b151905f1191b8c8d1e9",
+  "envelopeSha256": "004b6cd031975ad3beb87aa72688901bf0f16e463fecf17c271fee72f714c7a8"
+}

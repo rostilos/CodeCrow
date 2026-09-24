@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/219664083",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:24Z",
+  "etag": "W/\"7639b1bd2f766cc1b5bb8cf6b77a10c60cbc11485035dbd13299a91db874d7c8\"",
+  "headers": {
+    "ETag": "W/\"7639b1bd2f766cc1b5bb8cf6b77a10c60cbc11485035dbd13299a91db874d7c8\"",
+    "Last-Modified": "Thu, 25 Jun 2026 16:47:03 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "55",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/219664083",
+    "pull_request_review_id": 157902100,
+    "id": 219664083,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDIxOTY2NDA4Mw==",
+    "diff_hunk": "@@ -156,7 +157,8 @@\n     </table>\n     <table name=\"catalogrule_customer_group\" resource=\"default\" engine=\"innodb\"\n            comment=\"Catalog Rules To Customer Groups Relations\">\n-        <column xsi:type=\"int\" name=\"rule_id\" padding=\"10\" unsigned=\"true\" nullable=\"false\" identity=\"false\"/>\n+        <column xsi:type=\"int\" name=\"rule_id\" padding=\"10\" unsigned=\"true\" nullable=\"false\" identity=\"false\"\n+                comment=\"Rule Id\"/>",
+    "path": "app/code/Magento/CatalogRule/etc/db_schema.xml",
+    "commit_id": "e20dfc360361d783643b42d2ef7c20206eeed51e",
+    "original_commit_id": "d4d23fd42adfec7c39e51d698fffa55a060b68c6",
+    "user": {
+      "login": "rogyar",
+      "id": 2148959,
+      "node_id": "MDQ6VXNlcjIxNDg5NTk=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2148959?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/rogyar",
+      "html_url": "https://github.com/rogyar",
+      "followers_url": "https://api.github.com/users/rogyar/followers",
+      "following_url": "https://api.github.com/users/rogyar/following{/other_user}",
+      "gists_url": "https://api.github.com/users/rogyar/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/rogyar/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/rogyar/subscriptions",
+      "organizations_url": "https://api.github.com/users/rogyar/orgs",
+      "repos_url": "https://api.github.com/users/rogyar/repos",
+      "events_url": "https://api.github.com/users/rogyar/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/rogyar/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Should it be `Rule ID` as well? :)",
+    "created_at": "2018-09-22T07:27:44Z",
+    "updated_at": "2018-09-22T18:54:24Z",
+    "html_url": "https://github.com/magento/magento2/pull/18122#discussion_r219664083",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/18122",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/219664083"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/18122#discussion_r219664083"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/18122"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/219664083/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 161,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 25,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "dbaf340fb79cb799c137b9875e30bb45b9b3e7e4f4da62afa2b63ef4fa39cfde",
+  "envelopeSha256": "2ab26d92043b84410e81725e68f96283eaa7bdc4c20054f3b89441f7f7e5a621"
+}

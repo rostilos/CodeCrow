@@ -1,0 +1,435 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/27064/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T14:47:27Z",
+  "etag": "W/\"aa298152c4b8410f2b59a6e20ba28cd579ab3f5396378f128fd123b42c97ef22\"",
+  "headers": {
+    "ETag": "W/\"aa298152c4b8410f2b59a6e20ba28cd579ab3f5396378f128fd123b42c97ef22\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "42",
+    "X-RateLimit-Reset": "1786980089"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/388452061",
+      "pull_request_review_id": 369775398,
+      "id": 388452061,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM4ODQ1MjA2MQ==",
+      "diff_hunk": "@@ -138,6 +138,41 @@ public function testFaxEnabled(): void\n         $this->assertContains('title=\"Fax\"', $block->toHtml());\n     }\n \n+    /**\n+     * @magentoAppIsolation enabled\n+     * @magentoDbIsolation enabled\n+     * @return void\n+     */\n+    public function testTelephoneWithStoreLabel(): void\n+    {\n+        /** @var \\Magento\\Store\\Model\\StoreManager $storeManager */\n+        $storeManager = Bootstrap::getObjectManager()->create(\n+            \\Magento\\Store\\Model\\StoreManagerInterface::class\n+        );\n+        $websites = $storeManager->getWebsites();\n+        /** @var \\Magento\\Eav\\Model\\Config $eavConfig */\n+        $eavConfig = Bootstrap::getObjectManager()->create(\n+            \\Magento\\Eav\\Model\\Config::class\n+        );\n+        $model = $eavConfig->getAttribute('customer_address', 'telephone');\n+        $storeLabels = $model->getStoreLabels();\n+        foreach ($websites as $website) {\n+            $storeLabels[$website->getId()] = 'Phone NumberX';",
+      "path": "dev/tests/integration/testsuite/Magento/Customer/Block/Form/RegisterTest.php",
+      "commit_id": "e9b4cf0a7cc4e726bf5c3c24b76f63edce321f09",
+      "original_commit_id": "5749b24d5090354c2f5fd3d6569b1297b3810a1b",
+      "user": {
+        "login": "swnsma",
+        "id": 9420807,
+        "node_id": "MDQ6VXNlcjk0MjA4MDc=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/9420807?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/swnsma",
+        "html_url": "https://github.com/swnsma",
+        "followers_url": "https://api.github.com/users/swnsma/followers",
+        "following_url": "https://api.github.com/users/swnsma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/swnsma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/swnsma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/swnsma/subscriptions",
+        "organizations_url": "https://api.github.com/users/swnsma/orgs",
+        "repos_url": "https://api.github.com/users/swnsma/repos",
+        "events_url": "https://api.github.com/users/swnsma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/swnsma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Could you try to use store id instead of website id?",
+      "created_at": "2020-03-05T17:36:55Z",
+      "updated_at": "2020-06-22T11:26:27Z",
+      "html_url": "https://github.com/magento/magento2/pull/27064#discussion_r388452061",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27064",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/388452061"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/27064#discussion_r388452061"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/27064"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/388452061/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 160,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 23,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/388602089",
+      "pull_request_review_id": 369957990,
+      "id": 388602089,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM4ODYwMjA4OQ==",
+      "diff_hunk": "@@ -138,6 +138,41 @@ public function testFaxEnabled(): void\n         $this->assertContains('title=\"Fax\"', $block->toHtml());\n     }\n \n+    /**\n+     * @magentoAppIsolation enabled\n+     * @magentoDbIsolation enabled\n+     * @return void\n+     */\n+    public function testTelephoneWithStoreLabel(): void\n+    {\n+        /** @var \\Magento\\Store\\Model\\StoreManager $storeManager */\n+        $storeManager = Bootstrap::getObjectManager()->create(\n+            \\Magento\\Store\\Model\\StoreManagerInterface::class\n+        );\n+        $websites = $storeManager->getWebsites();\n+        /** @var \\Magento\\Eav\\Model\\Config $eavConfig */\n+        $eavConfig = Bootstrap::getObjectManager()->create(\n+            \\Magento\\Eav\\Model\\Config::class\n+        );\n+        $model = $eavConfig->getAttribute('customer_address', 'telephone');\n+        $storeLabels = $model->getStoreLabels();\n+        foreach ($websites as $website) {\n+            $storeLabels[$website->getId()] = 'Phone NumberX';",
+      "path": "dev/tests/integration/testsuite/Magento/Customer/Block/Form/RegisterTest.php",
+      "commit_id": "e9b4cf0a7cc4e726bf5c3c24b76f63edce321f09",
+      "original_commit_id": "5749b24d5090354c2f5fd3d6569b1297b3810a1b",
+      "user": {
+        "login": "nntoan",
+        "id": 3891429,
+        "node_id": "MDQ6VXNlcjM4OTE0Mjk=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/3891429?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/nntoan",
+        "html_url": "https://github.com/nntoan",
+        "followers_url": "https://api.github.com/users/nntoan/followers",
+        "following_url": "https://api.github.com/users/nntoan/following{/other_user}",
+        "gists_url": "https://api.github.com/users/nntoan/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/nntoan/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/nntoan/subscriptions",
+        "organizations_url": "https://api.github.com/users/nntoan/orgs",
+        "repos_url": "https://api.github.com/users/nntoan/repos",
+        "events_url": "https://api.github.com/users/nntoan/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/nntoan/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Let me try @swnsma ",
+      "created_at": "2020-03-05T22:22:59Z",
+      "updated_at": "2020-06-22T11:26:27Z",
+      "html_url": "https://github.com/magento/magento2/pull/27064#discussion_r388602089",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27064",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/388602089"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/27064#discussion_r388602089"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/27064"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/388602089/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 160,
+      "side": "RIGHT",
+      "in_reply_to_id": 388452061,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 23,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/393267735",
+      "pull_request_review_id": 375528642,
+      "id": 393267735,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM5MzI2NzczNQ==",
+      "diff_hunk": "@@ -12,6 +12,7 @@\n /**\n  * Test class for \\Magento\\Customer\\Block\\Form\\Register\n  *\n+ * @codingStandardsIgnoreFile",
+      "path": "dev/tests/integration/testsuite/Magento/Customer/Block/Form/RegisterTest.php",
+      "commit_id": "e9b4cf0a7cc4e726bf5c3c24b76f63edce321f09",
+      "original_commit_id": "b1480fbb4e127ffd9e36e7a78d1b380a9b90321a",
+      "user": {
+        "login": "swnsma",
+        "id": 9420807,
+        "node_id": "MDQ6VXNlcjk0MjA4MDc=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/9420807?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/swnsma",
+        "html_url": "https://github.com/swnsma",
+        "followers_url": "https://api.github.com/users/swnsma/followers",
+        "following_url": "https://api.github.com/users/swnsma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/swnsma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/swnsma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/swnsma/subscriptions",
+        "organizations_url": "https://api.github.com/users/swnsma/orgs",
+        "repos_url": "https://api.github.com/users/swnsma/repos",
+        "events_url": "https://api.github.com/users/swnsma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/swnsma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please remove the annotation.\r\nIt causes exception during Integration tests execution.",
+      "created_at": "2020-03-16T19:38:47Z",
+      "updated_at": "2020-06-22T11:26:27Z",
+      "html_url": "https://github.com/magento/magento2/pull/27064#discussion_r393267735",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27064",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/393267735"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/27064#discussion_r393267735"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/27064"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/393267735/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 15,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 4,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/393268054",
+      "pull_request_review_id": 375528642,
+      "id": 393268054,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM5MzI2ODA1NA==",
+      "diff_hunk": "@@ -0,0 +1,19 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+//@codingStandardsIgnoreFile\n+/** @var \\Magento\\Customer\\Model\\Attribute $model */\n+$model = \\Magento\\TestFramework\\Helper\\Bootstrap::getObjectManager()->create(\\Magento\\Customer\\Model\\Attribute::class);\n+/** @var \\Magento\\Store\\Model\\StoreManagerInterface $storeManager */\n+$storeManager = \\Magento\\TestFramework\\Helper\\Bootstrap::getObjectManager()->create(\\Magento\\Store\\Model\\StoreManager::class);\n+$model->loadByCode('customer_address', 'city');\n+$storeLabels = $model->getStoreLabels();\n+$websites = $storeManager->getWebsites();",
+      "path": "dev/tests/integration/testsuite/Magento/Customer/_files/attribute_city_store_label_address.php",
+      "commit_id": "e9b4cf0a7cc4e726bf5c3c24b76f63edce321f09",
+      "original_commit_id": "b1480fbb4e127ffd9e36e7a78d1b380a9b90321a",
+      "user": {
+        "login": "swnsma",
+        "id": 9420807,
+        "node_id": "MDQ6VXNlcjk0MjA4MDc=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/9420807?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/swnsma",
+        "html_url": "https://github.com/swnsma",
+        "followers_url": "https://api.github.com/users/swnsma/followers",
+        "following_url": "https://api.github.com/users/swnsma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/swnsma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/swnsma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/swnsma/subscriptions",
+        "organizations_url": "https://api.github.com/users/swnsma/orgs",
+        "repos_url": "https://api.github.com/users/swnsma/repos",
+        "events_url": "https://api.github.com/users/swnsma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/swnsma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please use stores instead of websites.\r\nCurrently it works correctly only because test run in single store mode.",
+      "created_at": "2020-03-16T19:39:28Z",
+      "updated_at": "2020-06-22T11:26:27Z",
+      "html_url": "https://github.com/magento/magento2/pull/27064#discussion_r393268054",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27064",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/393268054"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/27064#discussion_r393268054"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/27064"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/393268054/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 13,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 13,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/393420913",
+      "pull_request_review_id": 375712595,
+      "id": 393420913,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM5MzQyMDkxMw==",
+      "diff_hunk": "@@ -0,0 +1,19 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+//@codingStandardsIgnoreFile\n+/** @var \\Magento\\Customer\\Model\\Attribute $model */\n+$model = \\Magento\\TestFramework\\Helper\\Bootstrap::getObjectManager()->create(\\Magento\\Customer\\Model\\Attribute::class);\n+/** @var \\Magento\\Store\\Model\\StoreManagerInterface $storeManager */\n+$storeManager = \\Magento\\TestFramework\\Helper\\Bootstrap::getObjectManager()->create(\\Magento\\Store\\Model\\StoreManager::class);\n+$model->loadByCode('customer_address', 'city');\n+$storeLabels = $model->getStoreLabels();\n+$websites = $storeManager->getWebsites();",
+      "path": "dev/tests/integration/testsuite/Magento/Customer/_files/attribute_city_store_label_address.php",
+      "commit_id": "e9b4cf0a7cc4e726bf5c3c24b76f63edce321f09",
+      "original_commit_id": "b1480fbb4e127ffd9e36e7a78d1b380a9b90321a",
+      "user": {
+        "login": "nntoan",
+        "id": 3891429,
+        "node_id": "MDQ6VXNlcjM4OTE0Mjk=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/3891429?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/nntoan",
+        "html_url": "https://github.com/nntoan",
+        "followers_url": "https://api.github.com/users/nntoan/followers",
+        "following_url": "https://api.github.com/users/nntoan/following{/other_user}",
+        "gists_url": "https://api.github.com/users/nntoan/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/nntoan/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/nntoan/subscriptions",
+        "organizations_url": "https://api.github.com/users/nntoan/orgs",
+        "repos_url": "https://api.github.com/users/nntoan/repos",
+        "events_url": "https://api.github.com/users/nntoan/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/nntoan/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "This does not sound right to me, I used this also in production site with `getWebsites()`?",
+      "created_at": "2020-03-17T03:07:41Z",
+      "updated_at": "2020-06-22T11:26:27Z",
+      "html_url": "https://github.com/magento/magento2/pull/27064#discussion_r393420913",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27064",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/393420913"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/27064#discussion_r393420913"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/27064"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/393420913/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 13,
+      "side": "RIGHT",
+      "in_reply_to_id": 393268054,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 13,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/393563834",
+      "pull_request_review_id": 375888394,
+      "id": 393563834,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM5MzU2MzgzNA==",
+      "diff_hunk": "@@ -0,0 +1,19 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+//@codingStandardsIgnoreFile\n+/** @var \\Magento\\Customer\\Model\\Attribute $model */\n+$model = \\Magento\\TestFramework\\Helper\\Bootstrap::getObjectManager()->create(\\Magento\\Customer\\Model\\Attribute::class);\n+/** @var \\Magento\\Store\\Model\\StoreManagerInterface $storeManager */\n+$storeManager = \\Magento\\TestFramework\\Helper\\Bootstrap::getObjectManager()->create(\\Magento\\Store\\Model\\StoreManager::class);\n+$model->loadByCode('customer_address', 'city');\n+$storeLabels = $model->getStoreLabels();\n+$websites = $storeManager->getWebsites();",
+      "path": "dev/tests/integration/testsuite/Magento/Customer/_files/attribute_city_store_label_address.php",
+      "commit_id": "e9b4cf0a7cc4e726bf5c3c24b76f63edce321f09",
+      "original_commit_id": "b1480fbb4e127ffd9e36e7a78d1b380a9b90321a",
+      "user": {
+        "login": "swnsma",
+        "id": 9420807,
+        "node_id": "MDQ6VXNlcjk0MjA4MDc=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/9420807?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/swnsma",
+        "html_url": "https://github.com/swnsma",
+        "followers_url": "https://api.github.com/users/swnsma/followers",
+        "following_url": "https://api.github.com/users/swnsma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/swnsma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/swnsma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/swnsma/subscriptions",
+        "organizations_url": "https://api.github.com/users/swnsma/orgs",
+        "repos_url": "https://api.github.com/users/swnsma/repos",
+        "events_url": "https://api.github.com/users/swnsma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/swnsma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "You could check the method **\\Magento\\Eav\\Model\\ResourceModel\\Entity\\Attribute::_saveStoreLabels**\r\nwhich is used to save 'Store Labels' and the structure of the table which is used to store labels.\r\n<img width=\"653\" alt=\"Screen Shot 2020-03-17 at 11 52 45 AM\" src=\"https://user-images.githubusercontent.com/9420807/76844969-c5938400-6846-11ea-9098-e9d13e75b2b6.png\">\r\n You can see direct reference to store 'store' table.\r\n\r\nOtherwise, they should have the name 'Website Labels', right? :)",
+      "created_at": "2020-03-17T10:00:52Z",
+      "updated_at": "2020-06-22T11:26:27Z",
+      "html_url": "https://github.com/magento/magento2/pull/27064#discussion_r393563834",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27064",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/393563834"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/27064#discussion_r393563834"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/27064"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/393563834/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 13,
+      "side": "RIGHT",
+      "in_reply_to_id": 393268054,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 13,
+      "position": 1,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "09ed830b34b161d23843e5e28537468061d497763f3215948d616daaeb62c451",
+  "cacheDigest": "759020ee456553bc8c42f06a5a6154f649789c47062a215cde1ae651bb4afa3f"
+}

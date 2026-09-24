@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/880263581",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:44Z",
+  "etag": "W/\"c083f2b5e6e6adbbd57c3ab5e3ab90bb37697b26ed102526fb465b4a791a3d23\"",
+  "headers": {
+    "ETag": "W/\"c083f2b5e6e6adbbd57c3ab5e3ab90bb37697b26ed102526fb465b4a791a3d23\"",
+    "Last-Modified": "Fri, 21 Aug 2026 19:21:05 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "14",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/880263581",
+    "pull_request_review_id": 982873096,
+    "id": 880263581,
+    "node_id": "PRRC_kwDOACwCD840d8Gd",
+    "diff_hunk": "@@ -14,6 +16,27 @@\n  */\n class Header extends \\Magento\\Framework\\View\\Element\\Template\n {\n+    /**\n+     * @var Escaper\n+     */\n+    protected $escaper;\n+\n+    /**\n+     * Constructor\n+     *\n+     * @param \\Magento\\Framework\\View\\Element\\Template\\Context $context\n+     * @param Magento\\Framework\\Escaper $escaper\n+     * @param array $data\n+     */\n+    public function __construct(\n+        \\Magento\\Framework\\View\\Element\\Template\\Context $context,\n+        \\Magento\\Framework\\Escaper $escaper,\n+        array $data = []\n+    ) {\n+        $this->_escaper = $escaper;",
+    "path": "app/code/Magento/Theme/Block/Html/Header.php",
+    "commit_id": "42f14143807b0f707aeed60c86042e9dd3c3dd86",
+    "original_commit_id": "deef79a7e0dc61ef17dd94275ae131c42d1272db",
+    "user": {
+      "login": "Den4ik",
+      "id": 1129623,
+      "node_id": "MDQ6VXNlcjExMjk2MjM=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1129623?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/Den4ik",
+      "html_url": "https://github.com/Den4ik",
+      "followers_url": "https://api.github.com/users/Den4ik/followers",
+      "following_url": "https://api.github.com/users/Den4ik/following{/other_user}",
+      "gists_url": "https://api.github.com/users/Den4ik/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/Den4ik/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/Den4ik/subscriptions",
+      "organizations_url": "https://api.github.com/users/Den4ik/orgs",
+      "repos_url": "https://api.github.com/users/Den4ik/repos",
+      "events_url": "https://api.github.com/users/Den4ik/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/Den4ik/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Property declared at line 22 don't has underscore.\r\nPlease don't use underscored variables and properties.",
+    "created_at": "2022-05-24T09:14:04Z",
+    "updated_at": "2022-05-24T09:16:16Z",
+    "html_url": "https://github.com/magento/magento2/pull/34061#discussion_r880263581",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/34061",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/880263581"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/34061#discussion_r880263581"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/34061"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/880263581/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 36,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 30,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "40a5e99e3295e51de079b3a6d91703c539ff68721f66331ac8a999312361f0e5",
+  "envelopeSha256": "b3a939689c3a7659c93b941e40961b9420bb9fe70b9c679aeea0f5bd04de3a46"
+}

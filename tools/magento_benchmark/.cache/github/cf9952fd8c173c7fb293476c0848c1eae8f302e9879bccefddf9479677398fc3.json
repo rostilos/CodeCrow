@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1965114906",
+  "status": 200,
+  "etag": "W/\"3ee228dccebfef4d4bedd2bea60507879c2077c6cb05cb96e23db821046c0fc1\"",
+  "headers": {
+    "ETag": "W/\"3ee228dccebfef4d4bedd2bea60507879c2077c6cb05cb96e23db821046c0fc1\"",
+    "Last-Modified": "Thu, 02 Jul 2026 09:30:38 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "6",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1965114906",
+    "pull_request_review_id": 2632425816,
+    "id": 1965114906,
+    "node_id": "PRRC_kwDOACwCD851IUYa",
+    "diff_hunk": "@@ -1,7 +1,7 @@\n <?php\n /**\n- * Copyright © Magento, Inc. All rights reserved.\n- * See COPYING.txt for license details.\n+ * Copyright 2013 Adobe ",
+    "path": "app/code/Magento/ImportExport/Model/Import.php",
+    "commit_id": "c92be00f71cc6454202a83c245b2d36e6b8889fb",
+    "original_commit_id": "c8f8262683cee7a070bd861e36aa8dccc5556f46",
+    "user": {
+      "login": "engcom-Hotel",
+      "id": 51681618,
+      "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/51681618?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/engcom-Hotel",
+      "html_url": "https://github.com/engcom-Hotel",
+      "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+      "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+      "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+      "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+      "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+      "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "The file has been created in 2011, so please make 2011 instead of 2013",
+    "created_at": "2025-02-21T09:00:30Z",
+    "updated_at": "2025-02-21T09:02:28Z",
+    "html_url": "https://github.com/magento/magento2/pull/39307#discussion_r1965114906",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39307",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1965114906"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/39307#discussion_r1965114906"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/39307"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1965114906/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 3,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 5,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

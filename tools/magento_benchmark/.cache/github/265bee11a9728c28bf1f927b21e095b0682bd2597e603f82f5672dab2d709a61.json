@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/452864240",
+  "status": 200,
+  "etag": "W/\"5e92e7df94e6664eaeaefcfa732abf14471429798cbe00d40f835f8f79a0ed31\"",
+  "headers": {
+    "ETag": "W/\"5e92e7df94e6664eaeaefcfa732abf14471429798cbe00d40f835f8f79a0ed31\"",
+    "Last-Modified": "Fri, 14 Feb 2025 19:30:53 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "43",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/452864240",
+    "pull_request_review_id": 446428321,
+    "id": 452864240,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1Mjg2NDI0MA==",
+    "diff_hunk": "@@ -0,0 +1,222 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\Quote\\Model\\Cart;\n+\n+use Magento\\Catalog\\Api\\ProductRepositoryInterface;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Quote\\Api\\CartRepositoryInterface;\n+use Magento\\Quote\\Api\\Data\\CartInterface;\n+use Magento\\Quote\\Model\\Cart\\BuyRequest\\BuyRequestBuilder;\n+use Magento\\Quote\\Model\\Cart\\Data\\AddProductsToCartOutput;\n+use Magento\\Quote\\Model\\MaskedQuoteIdToQuoteIdInterface;\n+use Magento\\Quote\\Model\\Quote;\n+use Magento\\Framework\\Message\\MessageInterface;\n+\n+/**\n+ * Unified approach to add products to the Shopping Cart.\n+ * Client code must validate, that customer is eligible to call service with provided {cartId} and {cartItems}\n+ */\n+class AddProductsToCart\n+{\n+    /**#@+\n+     * Error message codes\n+     */\n+    private const ERROR_PRODUCT_NOT_FOUND = 'PRODUCT_NOT_FOUND';\n+    private const ERROR_INSUFFICIENT_STOCK = 'INSUFFICIENT_STOCK';\n+    private const ERROR_NOT_SALABLE = 'NOT_SALABLE';\n+    private const ERROR_UNDEFINED = 'UNDEFINED';\n+    /**#@-*/\n+\n+    /**\n+     * List of error messages and codes.\n+     */\n+    private const MESSAGE_CODES = [\n+        'The required options you selected are not available' => self::ERROR_NOT_SALABLE,\n+        'Product that you are trying to add is not available' => self::ERROR_NOT_SALABLE,\n+        'This product is out of stock' => self::ERROR_NOT_SALABLE,\n+        'There are no source items' => self::ERROR_NOT_SALABLE,\n+        'The fewest you may purchase is' => self::ERROR_INSUFFICIENT_STOCK,\n+        'The most you may purchase is' => self::ERROR_INSUFFICIENT_STOCK,\n+        'The requested qty is not available' => self::ERROR_INSUFFICIENT_STOCK,\n+    ];\n+\n+    /**\n+     * @var ProductRepositoryInterface\n+     */\n+    private $productRepository;\n+\n+    /**\n+     * @var array\n+     */\n+    private $errors = [];\n+\n+    /**\n+     * @var CartRepositoryInterface\n+     */\n+    private $cartRepository;\n+\n+    /**\n+     * @var MaskedQuoteIdToQuoteIdInterface\n+     */\n+    private $maskedQuoteIdToQuoteId;\n+\n+    /**\n+     * @var BuyRequestBuilder\n+     */\n+    private $requestBuilder;\n+\n+    /**\n+     * @param ProductRepositoryInterface $productRepository\n+     * @param CartRepositoryInterface $cartRepository\n+     * @param MaskedQuoteIdToQuoteIdInterface $maskedQuoteIdToQuoteId\n+     * @param BuyRequestBuilder $requestBuilder\n+     */\n+    public function __construct(\n+        ProductRepositoryInterface $productRepository,\n+        CartRepositoryInterface $cartRepository,\n+        MaskedQuoteIdToQuoteIdInterface $maskedQuoteIdToQuoteId,\n+        BuyRequestBuilder $requestBuilder\n+    ) {\n+        $this->productRepository = $productRepository;\n+        $this->cartRepository = $cartRepository;\n+        $this->maskedQuoteIdToQuoteId = $maskedQuoteIdToQuoteId;\n+        $this->requestBuilder = $requestBuilder;\n+    }\n+\n+    /**\n+     * Add cart items to the cart\n+     *\n+     * @param string $maskedCartId\n+     * @param Data\\CartItem[] $cartItems\n+     * @return AddProductsToCartOutput\n+     * @throws NoSuchEntityException Could not find a Cart with provided $maskedCartId\n+     */\n+    public function execute(string $maskedCartId, array $cartItems): AddProductsToCartOutput\n+    {\n+        $cartId = $this->maskedQuoteIdToQuoteId->execute($maskedCartId);\n+        $cart = $this->cartRepository->get($cartId);\n+\n+        foreach ($cartItems as $n => $cartItem) {",
+    "path": "app/code/Magento/Quote/Model/Cart/AddProductsToCart.php",
+    "commit_id": "a556345e619e79c123b881090e893d33f67dae61",
+    "original_commit_id": "4c08148d81850a0a717bf2625ea286664766b423",
+    "user": {
+      "login": "avattam06",
+      "id": 40216012,
+      "node_id": "MDQ6VXNlcjQwMjE2MDEy",
+      "avatar_url": "https://avatars.githubusercontent.com/u/40216012?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/avattam06",
+      "html_url": "https://github.com/avattam06",
+      "followers_url": "https://api.github.com/users/avattam06/followers",
+      "following_url": "https://api.github.com/users/avattam06/following{/other_user}",
+      "gists_url": "https://api.github.com/users/avattam06/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/avattam06/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/avattam06/subscriptions",
+      "organizations_url": "https://api.github.com/users/avattam06/orgs",
+      "repos_url": "https://api.github.com/users/avattam06/repos",
+      "events_url": "https://api.github.com/users/avattam06/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/avattam06/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Can we change the variable $n to a more meaningful name?",
+    "created_at": "2020-07-10T14:04:02Z",
+    "updated_at": "2020-08-11T00:26:31Z",
+    "html_url": "https://github.com/magento/magento2/pull/27914#discussion_r452864240",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27914",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/452864240"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/27914#discussion_r452864240"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/27914"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/452864240/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 104,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 104,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

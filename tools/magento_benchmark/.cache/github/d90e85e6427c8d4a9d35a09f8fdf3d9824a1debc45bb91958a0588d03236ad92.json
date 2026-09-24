@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/218705307",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:24Z",
+  "etag": "W/\"d73c6e87873f20aeaa5098aeaafe4641b0c1c38dab983d08e25299009a385f77\"",
+  "headers": {
+    "ETag": "W/\"d73c6e87873f20aeaa5098aeaafe4641b0c1c38dab983d08e25299009a385f77\"",
+    "Last-Modified": "Mon, 13 Jul 2026 22:09:44 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "54",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/218705307",
+    "pull_request_review_id": 156698091,
+    "id": 218705307,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDIxODcwNTMwNw==",
+    "diff_hunk": "@@ -968,11 +976,12 @@ public function getAllowedCurrencies()\n         return explode(',', $this->getConfig($this->_currencyInstalled));\n     }\n \n-    /**\n-     * Retrieve store current currency\n-     *\n-     * @return Currency\n-     */\n+\t/**\n+\t * Retrieve store current currency\n+\t *\n+\t * @return Currency\n+\t * @throws \\Magento\\Framework\\Exception\\LocalizedException\n+\t */",
+    "path": "app/code/Magento/Store/Model/Store.php",
+    "commit_id": "09c9d74436a6eebe3a141b198e9463fe9c3f0f5f",
+    "original_commit_id": "1e4dd7d86305c48709001082c4865b3460161cbd",
+    "user": {
+      "login": "sidolov",
+      "id": 11355520,
+      "node_id": "MDQ6VXNlcjExMzU1NTIw",
+      "avatar_url": "https://avatars.githubusercontent.com/u/11355520?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/sidolov",
+      "html_url": "https://github.com/sidolov",
+      "followers_url": "https://api.github.com/users/sidolov/followers",
+      "following_url": "https://api.github.com/users/sidolov/following{/other_user}",
+      "gists_url": "https://api.github.com/users/sidolov/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/sidolov/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/sidolov/subscriptions",
+      "organizations_url": "https://api.github.com/users/sidolov/orgs",
+      "repos_url": "https://api.github.com/users/sidolov/repos",
+      "events_url": "https://api.github.com/users/sidolov/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/sidolov/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Please, check comment indentation ",
+    "created_at": "2018-09-19T08:06:44Z",
+    "updated_at": "2018-12-11T12:51:07Z",
+    "html_url": "https://github.com/magento/magento2/pull/18124#discussion_r218705307",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/18124",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/218705307"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/18124#discussion_r218705307"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/18124"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/218705307/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 984,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 117,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "b6fb13a03f0e163db210190ed7e7513fc921f38535cf6ae5e395594981331331",
+  "envelopeSha256": "dde51bea8511dbcafcd158d3d89448791b6efbc2660af07bcdf16f4e3f72ed57"
+}

@@ -1,0 +1,88 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/518900610",
+  "status": 200,
+  "fetchedAt": "2026-08-26T01:52:55Z",
+  "etag": "W/\"26e37b9ef24f27b8cc994741353b4529568158a9d2adf458cb961f7b4885a487\"",
+  "headers": {
+    "ETag": "W/\"26e37b9ef24f27b8cc994741353b4529568158a9d2adf458cb961f7b4885a487\"",
+    "Last-Modified": "Thu, 05 Mar 2026 12:07:23 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "52",
+    "X-RateLimit-Reset": "1787712770"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/518900610",
+    "pull_request_review_id": 525357563,
+    "id": 518900610,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUxODkwMDYxMA==",
+    "diff_hunk": "@@ -573,6 +577,40 @@\n             <column name=\"store_id\"/>\n         </index>\n     </table>\n+    <table name=\"catalog_compare_list\" resource=\"default\" engine=\"innodb\" comment=\"Catalog Compare List with hash Table\">\n+        <column xsi:type=\"int\" name=\"list_id\" padding=\"10\" unsigned=\"true\" nullable=\"false\"\n+                identity=\"true\" comment=\"Compare List ID\"/>\n+        <column xsi:type=\"int\" name=\"customer_id\" padding=\"10\" unsigned=\"true\" nullable=\"true\" identity=\"false\"\n+                comment=\"Customer ID\"/>\n+        <constraint xsi:type=\"primary\" referenceId=\"PRIMARY\">\n+            <column name=\"list_id\"/>\n+        </constraint>\n+        <constraint xsi:type=\"foreign\" referenceId=\"CATALOG_COMPARE_LIST_CUSTOMER_ID_CUSTOMER_ENTITY_ENTITY_ID\"\n+                    table=\"catalog_compare_list\" column=\"customer_id\" referenceTable=\"customer_entity\"\n+                    referenceColumn=\"entity_id\" onDelete=\"CASCADE\"/>\n+        <index referenceId=\"CATALOG_COMPARE_LIST_VISITOR_ID_CUSTOMER_ID\" indexType=\"btree\">\n+            <column name=\"customer_id\"/>\n+        </index>\n+    </table>\n+    <table name=\"list_id_mask\" resource=\"default\" engine=\"innodb\" comment=\"List ID and masked ID mapping\">",
+    "path": "app/code/Magento/Catalog/etc/db_schema.xml",
+    "commit_id": "b2a1894a4a6899c0c1bdfbfaa9f916c6b4e341c9",
+    "original_commit_id": "2857996ff429192286a27206ade4ea10c5ba25c2",
+    "user": {
+      "login": "Usik2203",
+      "id": 13517181,
+      "node_id": "MDQ6VXNlcjEzNTE3MTgx",
+      "avatar_url": "https://avatars.githubusercontent.com/u/13517181?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/Usik2203",
+      "html_url": "https://github.com/Usik2203",
+      "followers_url": "https://api.github.com/users/Usik2203/followers",
+      "following_url": "https://api.github.com/users/Usik2203/following{/other_user}",
+      "gists_url": "https://api.github.com/users/Usik2203/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/Usik2203/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/Usik2203/subscriptions",
+      "organizations_url": "https://api.github.com/users/Usik2203/orgs",
+      "repos_url": "https://api.github.com/users/Usik2203/repos",
+      "events_url": "https://api.github.com/users/Usik2203/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/Usik2203/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**Done** Table was removed",
+    "created_at": "2020-11-06T17:33:17Z",
+    "updated_at": "2020-12-03T16:38:06Z",
+    "html_url": "https://github.com/magento/magento2/pull/29047#discussion_r518900610",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29047",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/518900610"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/29047#discussion_r518900610"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/29047"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/518900610/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 595,
+    "side": "RIGHT",
+    "in_reply_to_id": 517788701,
+    "author_association": "CONTRIBUTOR",
+    "original_position": 37,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "4a6c7c221f2303f64855efc5a770fb790760c0f42ca1bb548efed4f633918e35",
+  "envelopeSha256": "00396d1ed699e4893774e7cb41bb69abb9f96201a78e7be1bd5c3dbe21295684"
+}

@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/321726595",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:26Z",
+  "etag": "W/\"e8133695f10fa659c999e1cfcc2b31709a9b14f3bfe6d41e0b1394b98eba1227\"",
+  "headers": {
+    "ETag": "W/\"e8133695f10fa659c999e1cfcc2b31709a9b14f3bfe6d41e0b1394b98eba1227\"",
+    "Last-Modified": "Fri, 10 Jul 2026 05:51:50 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "51",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/321726595",
+    "pull_request_review_id": 284853083,
+    "id": 321726595,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDMyMTcyNjU5NQ==",
+    "diff_hunk": "@@ -86,6 +86,11 @@\n                     <comment>To show VAT number on Storefront, set Show VAT Number on Storefront option to Yes.</comment>\n                     <source_model>Magento\\Config\\Model\\Config\\Source\\Yesno</source_model>\n                 </field>\n+                <field id=\"email_required_create_order\" translate=\"label comment\" type=\"select\" sortOrder=\"58\" showInDefault=\"1\" showInWebsite=\"1\" showInStore=\"1\" canRestore=\"1\">",
+    "path": "app/code/Magento/Customer/etc/adminhtml/system.xml",
+    "commit_id": "864f396105002f43bddb0e86bf67b75955494b84",
+    "original_commit_id": "d78361ee7b1ecfd207a0415f982055beceb9fa5e",
+    "user": {
+      "login": "swnsma",
+      "id": 9420807,
+      "node_id": "MDQ6VXNlcjk0MjA4MDc=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/9420807?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/swnsma",
+      "html_url": "https://github.com/swnsma",
+      "followers_url": "https://api.github.com/users/swnsma/followers",
+      "following_url": "https://api.github.com/users/swnsma/following{/other_user}",
+      "gists_url": "https://api.github.com/users/swnsma/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/swnsma/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/swnsma/subscriptions",
+      "organizations_url": "https://api.github.com/users/swnsma/orgs",
+      "repos_url": "https://api.github.com/users/swnsma/repos",
+      "events_url": "https://api.github.com/users/swnsma/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/swnsma/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "I think that this configuration is more relevant to the 'Magento_Sales' module.",
+    "created_at": "2019-09-06T13:11:28Z",
+    "updated_at": "2020-03-18T14:22:44Z",
+    "html_url": "https://github.com/magento/magento2/pull/24479#discussion_r321726595",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/24479",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/321726595"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/24479#discussion_r321726595"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/24479"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/321726595/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 89,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 4,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "4597574d955ad77f9a9a8268bd93bddf8da008080cda161e41a8e81e5aac78de",
+  "envelopeSha256": "921321f29b88eec19bbdfcc4b6e7bd82122cc1a30b78080afd401aac51577bcd"
+}

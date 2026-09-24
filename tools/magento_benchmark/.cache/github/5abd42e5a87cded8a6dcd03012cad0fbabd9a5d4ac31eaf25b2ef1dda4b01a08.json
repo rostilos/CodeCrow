@@ -1,0 +1,88 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/532943304",
+  "status": 200,
+  "fetchedAt": "2026-08-26T01:52:56Z",
+  "etag": "W/\"ced765ddebc34470ab5e273ee57ebc74134b2e49ed8d145c035e44ab79651fd1\"",
+  "headers": {
+    "ETag": "W/\"ced765ddebc34470ab5e273ee57ebc74134b2e49ed8d145c035e44ab79651fd1\"",
+    "Last-Modified": "Sat, 15 Aug 2026 15:13:52 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "50",
+    "X-RateLimit-Reset": "1787712770"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/532943304",
+    "pull_request_review_id": 541344499,
+    "id": 532943304,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUzMjk0MzMwNA==",
+    "diff_hunk": "@@ -22,8 +22,9 @@\n             <createData entity=\"Simple_US_Customer\" after=\"createCategory\" stepKey=\"createCustomer\"/>\n         </before>\n         <after>\n+            <!-- Logout customer -->\n+            <actionGroup ref=\"StorefrontCustomerLogoutActionGroup\" stepKey=\"customerLogoutStorefront\"/>",
+    "path": "app/code/Magento/Swatches/Test/Mftf/Test/StorefrontCustomerCanChangeProductOptionsUsingSwatchesTest.xml",
+    "commit_id": "7e25908e44517949e2246604b3ec8f66d3eeb666",
+    "original_commit_id": "9e2aa7c385a94dc0abb6d8339ed2c6f4052a664b",
+    "user": {
+      "login": "sagar1dahiwala",
+      "id": 15347516,
+      "node_id": "MDQ6VXNlcjE1MzQ3NTE2",
+      "avatar_url": "https://avatars.githubusercontent.com/u/15347516?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/sagar1dahiwala",
+      "html_url": "https://github.com/sagar1dahiwala",
+      "followers_url": "https://api.github.com/users/sagar1dahiwala/followers",
+      "following_url": "https://api.github.com/users/sagar1dahiwala/following{/other_user}",
+      "gists_url": "https://api.github.com/users/sagar1dahiwala/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/sagar1dahiwala/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/sagar1dahiwala/subscriptions",
+      "organizations_url": "https://api.github.com/users/sagar1dahiwala/orgs",
+      "repos_url": "https://api.github.com/users/sagar1dahiwala/repos",
+      "events_url": "https://api.github.com/users/sagar1dahiwala/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/sagar1dahiwala/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "updated.",
+    "created_at": "2020-11-30T22:25:15Z",
+    "updated_at": "2020-12-01T21:00:22Z",
+    "html_url": "https://github.com/magento/magento2/pull/31101#discussion_r532943304",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31101",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/532943304"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/31101#discussion_r532943304"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/31101"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/532943304/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 26,
+    "side": "RIGHT",
+    "in_reply_to_id": 532825853,
+    "author_association": "CONTRIBUTOR",
+    "original_position": 5,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "3da590fc906d6945b948ab00407ce8573af60c1a2cd0280e5a1c14864626fd42",
+  "envelopeSha256": "55bd6425348d0999dd7e5e57f5427c920cc32e1450dee328e0e6c61f1dc00852"
+}

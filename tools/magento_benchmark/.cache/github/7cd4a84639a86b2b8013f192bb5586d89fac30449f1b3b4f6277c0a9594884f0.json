@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/359217940",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:27Z",
+  "etag": "W/\"5d9ef93d660f3474abbadc1e79efb73c36383d050e856586ebfaf96890d93759\"",
+  "headers": {
+    "ETag": "W/\"5d9ef93d660f3474abbadc1e79efb73c36383d050e856586ebfaf96890d93759\"",
+    "Last-Modified": "Tue, 21 Feb 2023 12:05:41 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "47",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/359217940",
+    "pull_request_review_id": 333809359,
+    "id": 359217940,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM1OTIxNzk0MA==",
+    "diff_hunk": "@@ -799,3 +799,5 @@ Refunds,Refunds\n \"Allow Zero GrandTotal\",\"Allow Zero GrandTotal\"\n \"Could not save the shipment tracking\",\"Could not save the shipment tracking\"\n \"Please enter a coupon code!\",\"Please enter a coupon code!\"\n+\"Please enter a coupon code!\",\"Please enter a coupon code!\"",
+    "path": "app/code/Magento/Sales/i18n/en_US.csv",
+    "commit_id": "c4baf83e4d811ba436b4fdb1205f9abdf4f655f9",
+    "original_commit_id": "74ffaf38a237204517d51e6cfd21421949335979",
+    "user": {
+      "login": "engcom-Alfa",
+      "id": 51679138,
+      "node_id": "MDQ6VXNlcjUxNjc5MTM4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/51679138?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/engcom-Alfa",
+      "html_url": "https://github.com/engcom-Alfa",
+      "followers_url": "https://api.github.com/users/engcom-Alfa/followers",
+      "following_url": "https://api.github.com/users/engcom-Alfa/following{/other_user}",
+      "gists_url": "https://api.github.com/users/engcom-Alfa/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/engcom-Alfa/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/engcom-Alfa/subscriptions",
+      "organizations_url": "https://api.github.com/users/engcom-Alfa/orgs",
+      "repos_url": "https://api.github.com/users/engcom-Alfa/repos",
+      "events_url": "https://api.github.com/users/engcom-Alfa/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/engcom-Alfa/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "@edenduong Could you remove the duplicate phrase?",
+    "created_at": "2019-12-18T08:47:04Z",
+    "updated_at": "2019-12-18T08:57:38Z",
+    "html_url": "https://github.com/magento/magento2/pull/26051#discussion_r359217940",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/26051",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/359217940"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/26051#discussion_r359217940"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/26051"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/359217940/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 802,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 4,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "a1ced6070374d85f6efd31a9920f4f0dcfa0f60922d0589a33f7f799a52f88c4",
+  "envelopeSha256": "f1e23e97d655576d1291aba880b01c6f5b34a7480771acff705b795bb15f9714"
+}

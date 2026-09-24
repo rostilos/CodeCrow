@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/540743357",
+  "status": 200,
+  "etag": "W/\"ceb987e7220bac48fd91bb42d03235559d8cada9ebd9946a6e4d8318d84f67de\"",
+  "headers": {
+    "ETag": "W/\"ceb987e7220bac48fd91bb42d03235559d8cada9ebd9946a6e4d8318d84f67de\"",
+    "Last-Modified": "Thu, 25 Jun 2026 16:47:03 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "33",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/540743357",
+    "pull_request_review_id": 549855865,
+    "id": 540743357,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU0MDc0MzM1Nw==",
+    "diff_hunk": "@@ -0,0 +1,21 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"StorefrontAssertProductNameIsNotOnProductMainPageActionGroup\">",
+    "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/StorefrontAssertProductNameIsNotOnProductMainPageActionGroup.xml",
+    "commit_id": "2561d079d55b8a6d3882faefea4f8b1ba882d2af",
+    "original_commit_id": "99cfcaa7cf5d6e26d53a23f13b466bd19c82ec3a",
+    "user": {
+      "login": "rogyar",
+      "id": 2148959,
+      "node_id": "MDQ6VXNlcjIxNDg5NTk=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2148959?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/rogyar",
+      "html_url": "https://github.com/rogyar",
+      "followers_url": "https://api.github.com/users/rogyar/followers",
+      "following_url": "https://api.github.com/users/rogyar/following{/other_user}",
+      "gists_url": "https://api.github.com/users/rogyar/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/rogyar/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/rogyar/subscriptions",
+      "organizations_url": "https://api.github.com/users/rogyar/orgs",
+      "repos_url": "https://api.github.com/users/rogyar/repos",
+      "events_url": "https://api.github.com/users/rogyar/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/rogyar/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Please, rename the action group according to the correct naming conventions ",
+    "created_at": "2020-12-11T07:29:34Z",
+    "updated_at": "2021-01-12T11:44:28Z",
+    "html_url": "https://github.com/magento/magento2/pull/31240#discussion_r540743357",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31240",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/540743357"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/31240#discussion_r540743357"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/31240"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/540743357/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 10,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 10,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/452933151",
+  "status": 200,
+  "etag": "W/\"81c8d258bd9c9f7340eb5f7ba82deff25e161237c687d8b28bebb9a9ccb1d22d\"",
+  "headers": {
+    "ETag": "W/\"81c8d258bd9c9f7340eb5f7ba82deff25e161237c687d8b28bebb9a9ccb1d22d\"",
+    "Last-Modified": "Tue, 25 Aug 2026 14:01:18 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "31",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/452933151",
+    "pull_request_review_id": 446508913,
+    "id": 452933151,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1MjkzMzE1MQ==",
+    "diff_hunk": "@@ -0,0 +1,109 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\MediaContentCatalog\\Model;\n+\n+use Magento\\Eav\\Model\\Config;\n+use Magento\\Framework\\App\\ResourceConnection;\n+use Magento\\MediaContentApi\\Model\\GetAssetIdByContentFieldInterface;\n+\n+/**\n+ * Class responsible to return Asset id by eav content field\n+ */\n+class GetAssetIdByEavContentField implements GetAssetIdByContentFieldInterface\n+{\n+    private const TABLE_CONTENT_ASSET = 'media_content_asset';\n+\n+    /**\n+     * @var ResourceConnection\n+     */\n+    private $connection;\n+\n+    /**\n+     * @var Config\n+     */\n+    private $config;\n+\n+    /**\n+     * @var string\n+     */\n+    private $attributeCode;\n+\n+    /**\n+     * @var string\n+     */\n+    private $entityType;\n+\n+    /**\n+     * @var array\n+     */\n+    private $valueMap;\n+\n+    /**\n+     * GetAssetIdByEavContentStatus constructor.\n+     *\n+     * @param ResourceConnection $resource\n+     * @param Config $config\n+     * @param string $attributeCode\n+     * @param string $entityType\n+     * @param array $valueMap\n+     */\n+    public function __construct(\n+        ResourceConnection $resource,\n+        Config $config,\n+        string $attributeCode,\n+        string $entityType,\n+        array $valueMap = []\n+    ) {\n+        $this->connection = $resource;\n+        $this->config = $config;\n+        $this->attributeCode = $attributeCode;\n+        $this->entityType = $entityType;\n+        $this->valueMap = $valueMap;\n+    }\n+\n+    /**\n+     * @inheritDoc\n+     */\n+    public function execute(string $value): array\n+    {\n+        $statusAttribute = $this->config->getAttribute($this->entityType, $this->attributeCode);\n+\n+        $sql = $this->connection->getConnection()->select()->from(\n+            ['asset_content_table' => $this->connection->getTableName(self::TABLE_CONTENT_ASSET)],\n+            ['asset_id']\n+        )->where(\n+            'entity_type = ?',\n+            $this->entityType\n+        )->joinInner(\n+            ['entity_eav_type' => $statusAttribute->getBackendTable()],\n+            'asset_content_table.entity_id = entity_eav_type.' . $statusAttribute->getEntityIdField() .\n+            ' AND entity_eav_type.attribute_id = ' .\n+            $statusAttribute->getAttributeId(),\n+            []\n+        )->where(\n+            'entity_eav_type.value = ?',\n+            $this->getValueFromMap($value)\n+        );\n+\n+        return $this->connection->getConnection()->fetchCol($sql);\n+    }\n+\n+    /**\n+     * Get a value from a value map\n+     *\n+     * @param string $value\n+     * @return string\n+     */\n+    private function getValueFromMap(string $value): string\n+    {\n+        if (count($this->valueMap) > 0 && array_key_exists($value, $this->valueMap)) {\n+            return $this->valueMap[$value];\n+        }\n+        return $value;",
+    "path": "app/code/Magento/MediaContentCatalog/Model/GetAssetIdByEavContentField.php",
+    "commit_id": "095dcc631d8e84ece779f7d4490e4a980fb61360",
+    "original_commit_id": "545f886e6b97b30f083592d05c589239aa07ab6b",
+    "user": {
+      "login": "sivaschenko",
+      "id": 2028541,
+      "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/sivaschenko",
+      "html_url": "https://github.com/sivaschenko",
+      "followers_url": "https://api.github.com/users/sivaschenko/followers",
+      "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+      "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+      "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+      "repos_url": "https://api.github.com/users/sivaschenko/repos",
+      "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Can this method implementation be simplified to\r\n```suggestion\r\n        return $this->valueMap[$value] ?? $value;\r\n```",
+    "created_at": "2020-07-10T16:00:34Z",
+    "updated_at": "2020-07-17T13:05:52Z",
+    "html_url": "https://github.com/magento/magento2/pull/29058#discussion_r452933151",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29058",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/452933151"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/29058#discussion_r452933151"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/29058"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/452933151/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 107,
+    "side": "RIGHT",
+    "author_association": "MEMBER",
+    "original_position": 107,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

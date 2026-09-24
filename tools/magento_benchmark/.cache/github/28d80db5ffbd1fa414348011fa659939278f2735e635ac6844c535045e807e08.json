@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/2075047721",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:48Z",
+  "etag": "W/\"a19808aa874c80e71c89da70fe6496561c9addd1779c93529078049892ddbeaa\"",
+  "headers": {
+    "ETag": "W/\"a19808aa874c80e71c89da70fe6496561c9addd1779c93529078049892ddbeaa\"",
+    "Last-Modified": "Thu, 02 Jul 2026 09:30:38 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "6",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/2075047721",
+    "pull_request_review_id": 2817384303,
+    "id": 2075047721,
+    "node_id": "PRRC_kwDOACwCD857rrcp",
+    "diff_hunk": "@@ -60,11 +60,17 @@ protected function _calculate($rule, $item, $qty, $rulePercent)\n         $baseItemOriginalPrice = $this->validator->getItemBaseOriginalPrice($item);\n \n         $_rulePct = $rulePercent / 100;\n-        $discountData->setAmount(($qty * $itemPrice - $item->getDiscountAmount()) * $_rulePct);\n-        $discountData->setBaseAmount(($qty * $baseItemPrice - $item->getBaseDiscountAmount()) * $_rulePct);\n-        $discountData->setOriginalAmount(($qty * $itemOriginalPrice - $item->getDiscountAmount()) * $_rulePct);\n+        $discountData->setAmount(\n+            number_format((($qty * $itemPrice - $item->getDiscountAmount()) * $_rulePct), 2, '.', '')",
+    "path": "app/code/Magento/SalesRule/Model/Rule/Action/Discount/ByPercent.php",
+    "commit_id": "e1d974e7f0f48e33903d6f3375a4e99f18b7b8c9",
+    "original_commit_id": "4615e8620020db25ea09e400888eabad358101d5",
+    "user": {
+      "login": "engcom-Hotel",
+      "id": 51681618,
+      "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/51681618?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/engcom-Hotel",
+      "html_url": "https://github.com/engcom-Hotel",
+      "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+      "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+      "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+      "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+      "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+      "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "As discussed I think we can use the `round` method here",
+    "created_at": "2025-05-06T09:06:56Z",
+    "updated_at": "2025-05-06T09:09:37Z",
+    "html_url": "https://github.com/magento/magento2/pull/39687#discussion_r2075047721",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39687",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/2075047721"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/39687#discussion_r2075047721"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/39687"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/2075047721/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 64,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 18,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "c1f09971e85bf69bd4ed0d63ca020ef95fdb5b27720727a7659ea000f7967776",
+  "envelopeSha256": "6f69704155cc86cd4055b3233d2e250d6f00169fa42413b8beb8e90c2a1ebfaa"
+}

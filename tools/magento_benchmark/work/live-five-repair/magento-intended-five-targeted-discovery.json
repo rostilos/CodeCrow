@@ -1,0 +1,3490 @@
+{
+  "kind": "codecrow-magento2-targeted-review-discovery",
+  "generatedAt": "2026-08-17T16:48:34Z",
+  "sourceMode": "live",
+  "githubApiVersion": "2022-11-28",
+  "repository": "magento/magento2",
+  "source": {
+    "apiUrl": "https://api.github.com",
+    "endpointTemplate": "/repos/{repository}/pulls/{pull_request}/comments",
+    "paginationPolicy": {
+      "method": "GET",
+      "firstPage": 1,
+      "perPage": 100,
+      "pageParameter": "page",
+      "termination": "first_short_page",
+      "concurrency": "sequential_in_requested_pull_request_order",
+      "deduplication": "none_duplicate_comment_ids_fail",
+      "coverage": "complete_current_surviving_review_comment_list_for_each_explicit_pull_request"
+    }
+  },
+  "filterPolicy": {
+    "version": "magento2-review-candidate-discovery-2026-07-29",
+    "scope": "candidate_generation_only_not_gold_eligibility",
+    "predicateOrder": [
+      "root_non_reply_inline_comment",
+      "human_github_user",
+      "submitted_review_identity_present",
+      "original_commit_identity_present",
+      "nonempty_path_and_body",
+      "right_side_original_or_current_anchor",
+      "canonical_repository_pull_request_url",
+      "positive_comment_and_review_ids",
+      "lowercase_full_original_commit_sha",
+      "nonempty_reviewer_and_created_updated_timestamps"
+    ],
+    "grouping": [
+      "canonical_pull_request_number",
+      "exact_original_commit_id"
+    ],
+    "actionableHint": {
+      "pattern": "\\b(add|avoid|break|bug|change|could|incorrect|instead|missing|move|must|need|please|recommend|remove|risk|should|wrong)\\b",
+      "flags": [
+        "IGNORECASE"
+      ],
+      "purpose": "ranking_hint_only_not_semantic_label"
+    },
+    "rejectionReasons": [
+      "not_root_human_right_review_comment",
+      "noncanonical_pull_request_url",
+      "invalid_candidate_identity"
+    ]
+  },
+  "orderingPolicy": {
+    "pullRequests": "caller_order_preserved_and_digest_bound",
+    "pages": "ascending_numeric_within_each_pull_request",
+    "candidates": [
+      "caller_pull_request_order",
+      "actionableHintCount_descending",
+      "reviewCommentCount_descending",
+      "headSha_ascending"
+    ],
+    "commentIds": "ascending_numeric",
+    "reviewers": "ascending_unicode_codepoint_unique"
+  },
+  "pullRequests": [
+    39099,
+    40023,
+    37362,
+    38270,
+    30699
+  ],
+  "pullRequestCount": 5,
+  "pulls": [
+    {
+      "pullRequest": 39099,
+      "endpoint": "/repos/magento/magento2/pulls/39099/comments",
+      "pageCount": 1,
+      "terminationReason": "short_page",
+      "pageDigests": [
+        "597b52e8f8a1c43ca6371b4bf8d3158b7af4a48f7196ee6bac507bef62d4312f"
+      ],
+      "rawCommentCount": 11,
+      "rawCommentPopulationDigest": "7959a122778644cedb0d72ebcf11c36042b9099cf1cefd97b776627fca4c0fb8",
+      "rejectedCommentCount": 7,
+      "rejectionCounts": {
+        "not_root_human_right_review_comment": 7,
+        "noncanonical_pull_request_url": 0,
+        "invalid_candidate_identity": 0
+      },
+      "candidateCount": 2,
+      "candidateSetDigest": "a5aed71031803e72c77b78e5a454a913e4d50bd14b7c2de0d62476317a0a427e",
+      "pullDigest": "fb7032156fd6f71617de7b1edb98d6998e332ae6f7f6b6ca1c59e22308640c98"
+    },
+    {
+      "pullRequest": 40023,
+      "endpoint": "/repos/magento/magento2/pulls/40023/comments",
+      "pageCount": 1,
+      "terminationReason": "short_page",
+      "pageDigests": [
+        "e72e9a6203f8748b113f9aba8dbc46e713454735d431e882b06e8b3094cf593a"
+      ],
+      "rawCommentCount": 3,
+      "rawCommentPopulationDigest": "584d590357ad6b701da2b870bbcc9aeab1b777babf96fc45beacbb1ec4d9989d",
+      "rejectedCommentCount": 1,
+      "rejectionCounts": {
+        "not_root_human_right_review_comment": 1,
+        "noncanonical_pull_request_url": 0,
+        "invalid_candidate_identity": 0
+      },
+      "candidateCount": 2,
+      "candidateSetDigest": "292c8edc1fcd9b6934a083a133abc3a88c3e457a953de98c6180bae23a73a0b9",
+      "pullDigest": "e6720e8d3314a1116a27a4477ccde7fda74ae557832408d6ea86db84be3c59e2"
+    },
+    {
+      "pullRequest": 37362,
+      "endpoint": "/repos/magento/magento2/pulls/37362/comments",
+      "pageCount": 1,
+      "terminationReason": "short_page",
+      "pageDigests": [
+        "577a5f812c3c0b102abb5073f87f717fe294299b36bdde4b8e98e885b5a914d5"
+      ],
+      "rawCommentCount": 3,
+      "rawCommentPopulationDigest": "eefa755858991d9ec687ddc887d5a90a6aefc041ef42f192721260d9a07faad5",
+      "rejectedCommentCount": 2,
+      "rejectionCounts": {
+        "not_root_human_right_review_comment": 2,
+        "noncanonical_pull_request_url": 0,
+        "invalid_candidate_identity": 0
+      },
+      "candidateCount": 1,
+      "candidateSetDigest": "cc2e4d072f85b0708902691d390c4fe80ad88826253efdbd1b01113d739eb232",
+      "pullDigest": "4a169bffeb74403759a03453bb6f00ae58a52ec48db61eb36891fb1ef72e46ca"
+    },
+    {
+      "pullRequest": 38270,
+      "endpoint": "/repos/magento/magento2/pulls/38270/comments",
+      "pageCount": 1,
+      "terminationReason": "short_page",
+      "pageDigests": [
+        "639a21e7d2096e088300cbed83dcf2a9f5d26c0c749b1620ed1649f0614b1c87"
+      ],
+      "rawCommentCount": 4,
+      "rawCommentPopulationDigest": "1704cb7f9acaba25dc8d43000a221e2954d48494e8ebbd46f962a0bfc13eeba5",
+      "rejectedCommentCount": 0,
+      "rejectionCounts": {
+        "not_root_human_right_review_comment": 0,
+        "noncanonical_pull_request_url": 0,
+        "invalid_candidate_identity": 0
+      },
+      "candidateCount": 1,
+      "candidateSetDigest": "1dd72de1e4242ddaa18a8618917548f01657b854bfae17f658f01ccdf8d77cb4",
+      "pullDigest": "46168114fcf7ed45644cfbf5f94c72f730a6a1cd8ae8eb8e8dbe2f3ff979c747"
+    },
+    {
+      "pullRequest": 30699,
+      "endpoint": "/repos/magento/magento2/pulls/30699/comments",
+      "pageCount": 1,
+      "terminationReason": "short_page",
+      "pageDigests": [
+        "0cb276a77aa2da1b1d165b7aa6021cb324f2f5af44f1f79882e010cc1687a310"
+      ],
+      "rawCommentCount": 22,
+      "rawCommentPopulationDigest": "c9cbf7e60ed24ab83bf0545e6d3a49361f8581b802176ad525b62301d9568b4a",
+      "rejectedCommentCount": 13,
+      "rejectionCounts": {
+        "not_root_human_right_review_comment": 13,
+        "noncanonical_pull_request_url": 0,
+        "invalid_candidate_identity": 0
+      },
+      "candidateCount": 6,
+      "candidateSetDigest": "e52fb44723ebed90a0cb9690eed9e974821629f0a3a8b37d671f5020111d3ae0",
+      "pullDigest": "8e2f56dc162f51b1c80d1279df51303ec19601c99c36939e57d043e9811cf175"
+    }
+  ],
+  "pageCount": 5,
+  "rawPages": [
+    {
+      "pullRequest": 39099,
+      "pageIndex": 1,
+      "request": {
+        "method": "GET",
+        "path": "/repos/magento/magento2/pulls/39099/comments",
+        "query": {
+          "per_page": 100,
+          "page": 1
+        },
+        "url": "https://api.github.com/repos/magento/magento2/pulls/39099/comments?per_page=100&page=1",
+        "representationHeaders": {
+          "Accept": "application/vnd.github+json",
+          "User-Agent": "codecrow-magento2-benchmark",
+          "X-GitHub-Api-Version": "2022-11-28"
+        }
+      },
+      "status": 200,
+      "etag": "W/\"99a45cf62d87fcc860905fa172fe879743222bbaefc951c6470efabcbc50928b\"",
+      "lastModified": null,
+      "response": [
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1728997329",
+          "pull_request_review_id": 2257280360,
+          "id": 1728997329,
+          "node_id": "PRRC_kwDOACwCD85nDmfR",
+          "diff_hunk": "@@ -13,6 +13,23 @@\n  */\n class Identifier implements IdentifierInterface\n {\n+    /**\n+     * Pattern detect marketing parameters\n+     */\n+    public const PATTERN_MARKETING_PARAMETERS = [\n+        '/&?gclid\\=[^&]+/',\n+        '/&?cx\\=[^&]+/',\n+        '/&?ie\\=[^&]+/',\n+        '/&?cof\\=[^&]+/',\n+        '/&?siteurl\\=[^&]+/',\n+        '/&?zanpid\\=[^&]+/',\n+        '/&?origin\\=[^&]+/',\n+        '/&?fbclid\\=[^&]+/',\n+        '/&?mc_(.*?)\\=[^&]+/',\n+        '/&?utm_(.*?)\\=[^&]+/',\n+        '/&?_bta_(.*?)\\=[^&]+/',\n+    ];\n+",
+          "path": "lib/internal/Magento/Framework/App/PageCache/Identifier.php",
+          "commit_id": "ebcc80635c977a15c96ca99b731334f608dd7ef3",
+          "original_commit_id": "c9dd5e2ca9af99909e4df9ed45100a5241d6f0d7",
+          "user": {
+            "login": "Bashev",
+            "id": 1854269,
+            "node_id": "MDQ6VXNlcjE4NTQyNjk=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1854269?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/Bashev",
+            "html_url": "https://github.com/Bashev",
+            "followers_url": "https://api.github.com/users/Bashev/followers",
+            "following_url": "https://api.github.com/users/Bashev/following{/other_user}",
+            "gists_url": "https://api.github.com/users/Bashev/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/Bashev/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/Bashev/subscriptions",
+            "organizations_url": "https://api.github.com/users/Bashev/orgs",
+            "repos_url": "https://api.github.com/users/Bashev/repos",
+            "events_url": "https://api.github.com/users/Bashev/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/Bashev/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Probably will be good idea to use the same list as is in the varnish configuration: https://github.com/magento/magento2/blob/71432aebbc5211378cc3ebb4f90a6ad9ee08648e/app/code/Magento/PageCache/etc/varnish7.vcl#L84",
+          "created_at": "2024-08-23T13:39:30Z",
+          "updated_at": "2024-08-23T13:39:30Z",
+          "html_url": "https://github.com/magento/magento2/pull/39099#discussion_r1728997329",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1728997329"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/39099#discussion_r1728997329"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1728997329/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 32,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 20,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1729001766",
+          "pull_request_review_id": 2257287435,
+          "id": 1729001766,
+          "node_id": "PRRC_kwDOACwCD85nDnkm",
+          "diff_hunk": "@@ -13,6 +13,23 @@\n  */\n class Identifier implements IdentifierInterface\n {\n+    /**\n+     * Pattern detect marketing parameters\n+     */\n+    public const PATTERN_MARKETING_PARAMETERS = [\n+        '/&?gclid\\=[^&]+/',\n+        '/&?cx\\=[^&]+/',\n+        '/&?ie\\=[^&]+/',\n+        '/&?cof\\=[^&]+/',\n+        '/&?siteurl\\=[^&]+/',\n+        '/&?zanpid\\=[^&]+/',\n+        '/&?origin\\=[^&]+/',\n+        '/&?fbclid\\=[^&]+/',\n+        '/&?mc_(.*?)\\=[^&]+/',\n+        '/&?utm_(.*?)\\=[^&]+/',\n+        '/&?_bta_(.*?)\\=[^&]+/',\n+    ];\n+",
+          "path": "lib/internal/Magento/Framework/App/PageCache/Identifier.php",
+          "commit_id": "ebcc80635c977a15c96ca99b731334f608dd7ef3",
+          "original_commit_id": "c9dd5e2ca9af99909e4df9ed45100a5241d6f0d7",
+          "user": {
+            "login": "rogerdz",
+            "id": 78783748,
+            "node_id": "MDQ6VXNlcjc4NzgzNzQ4",
+            "avatar_url": "https://avatars.githubusercontent.com/u/78783748?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/rogerdz",
+            "html_url": "https://github.com/rogerdz",
+            "followers_url": "https://api.github.com/users/rogerdz/followers",
+            "following_url": "https://api.github.com/users/rogerdz/following{/other_user}",
+            "gists_url": "https://api.github.com/users/rogerdz/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/rogerdz/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/rogerdz/subscriptions",
+            "organizations_url": "https://api.github.com/users/rogerdz/orgs",
+            "repos_url": "https://api.github.com/users/rogerdz/repos",
+            "events_url": "https://api.github.com/users/rogerdz/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/rogerdz/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Yes, I used same list as varnish config",
+          "created_at": "2024-08-23T13:42:25Z",
+          "updated_at": "2024-08-23T13:42:25Z",
+          "html_url": "https://github.com/magento/magento2/pull/39099#discussion_r1729001766",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1729001766"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/39099#discussion_r1729001766"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1729001766/reactions",
+            "total_count": 1,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 1,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 32,
+          "side": "RIGHT",
+          "in_reply_to_id": 1728997329,
+          "author_association": "CONTRIBUTOR",
+          "original_position": 20,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819089463",
+          "pull_request_review_id": 2399130286,
+          "id": 1819089463,
+          "node_id": "PRRC_kwDOACwCD85sbRo3",
+          "diff_hunk": "@@ -13,6 +22,32 @@\n  */\n class Identifier implements IdentifierInterface\n {\n+    /**\n+     * Pattern detect marketing parameters\n+     */\n+    public const PATTERN_MARKETING_PARAMETERS = [\n+        '/&?gad_source\\=[^&]+/',",
+          "path": "lib/internal/Magento/Framework/App/PageCache/Identifier.php",
+          "commit_id": "ebcc80635c977a15c96ca99b731334f608dd7ef3",
+          "original_commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+          "user": {
+            "login": "ilnytskyi",
+            "id": 3192770,
+            "node_id": "MDQ6VXNlcjMxOTI3NzA=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/3192770?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/ilnytskyi",
+            "html_url": "https://github.com/ilnytskyi",
+            "followers_url": "https://api.github.com/users/ilnytskyi/followers",
+            "following_url": "https://api.github.com/users/ilnytskyi/following{/other_user}",
+            "gists_url": "https://api.github.com/users/ilnytskyi/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/ilnytskyi/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/ilnytskyi/subscriptions",
+            "organizations_url": "https://api.github.com/users/ilnytskyi/orgs",
+            "repos_url": "https://api.github.com/users/ilnytskyi/repos",
+            "events_url": "https://api.github.com/users/ilnytskyi/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/ilnytskyi/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "I would suggest to extract this list to method that can be later pluginized. Or use dedicated class where those patterns can be injected via DI. Or even better to allow editing this list via admin panel.\r\n\r\nIf merchant uses some local marketing tools that are not part of this list then - hardcoded `public const PATTERN_MARKETING_PARAMETERS` cannot be easily overridden to remove custom tracking params.\r\n\r\nAs someone in CR suggested this service can also be used to generate Varnish config.",
+          "created_at": "2024-10-28T13:47:09Z",
+          "updated_at": "2024-10-28T13:47:09Z",
+          "html_url": "https://github.com/magento/magento2/pull/39099#discussion_r1819089463",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1819089463"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/39099#discussion_r1819089463"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819089463/reactions",
+            "total_count": 1,
+            "+1": 1,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 29,
+          "side": "RIGHT",
+          "author_association": "MEMBER",
+          "original_position": 27,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819095028",
+          "pull_request_review_id": 2399139487,
+          "id": 1819095028,
+          "node_id": "PRRC_kwDOACwCD85sbS_0",
+          "diff_hunk": "@@ -38,9 +48,11 @@ public function __construct(\n      */\n     public function getValue()\n     {\n+        $pattern = Identifier::PATTERN_MARKETING_PARAMETERS;",
+          "path": "app/code/Magento/PageCache/Model/App/Request/Http/IdentifierForSave.php",
+          "commit_id": "ebcc80635c977a15c96ca99b731334f608dd7ef3",
+          "original_commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+          "user": {
+            "login": "ilnytskyi",
+            "id": 3192770,
+            "node_id": "MDQ6VXNlcjMxOTI3NzA=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/3192770?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/ilnytskyi",
+            "html_url": "https://github.com/ilnytskyi",
+            "followers_url": "https://api.github.com/users/ilnytskyi/followers",
+            "following_url": "https://api.github.com/users/ilnytskyi/following{/other_user}",
+            "gists_url": "https://api.github.com/users/ilnytskyi/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/ilnytskyi/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/ilnytskyi/subscriptions",
+            "organizations_url": "https://api.github.com/users/ilnytskyi/orgs",
+            "repos_url": "https://api.github.com/users/ilnytskyi/repos",
+            "events_url": "https://api.github.com/users/ilnytskyi/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/ilnytskyi/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "This line is not extendable to append custom patterns. Dedicated service or public method visible to plugins would work better.",
+          "created_at": "2024-10-28T13:50:26Z",
+          "updated_at": "2024-10-28T13:50:26Z",
+          "html_url": "https://github.com/magento/magento2/pull/39099#discussion_r1819095028",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1819095028"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/39099#discussion_r1819095028"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819095028/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 51,
+          "side": "RIGHT",
+          "author_association": "MEMBER",
+          "original_position": 34,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819305393",
+          "pull_request_review_id": 2399484952,
+          "id": 1819305393,
+          "node_id": "PRRC_kwDOACwCD85scGWx",
+          "diff_hunk": "@@ -1,16 +1,26 @@\n <?php\n /**\n- * Copyright © Magento, Inc. All rights reserved.\n- * See COPYING.txt for license details.\n+ * Copyright 2024 Adobe\n+ * All Rights Reserved.\n+ *\n+ * NOTICE: All information contained herein is, and remains\n+ * the property of Adobe and its suppliers, if any. The intellectual\n+ * and technical concepts contained herein are proprietary to Adobe\n+ * and its suppliers and are protected by all applicable intellectual\n+ * property laws, including trade secret and copyright laws.\n+ * Dissemination of this information or reproduction of this material\n+ * is strictly forbidden unless prior written permission is obtained from\n+ * Adobe.",
+          "path": "app/code/Magento/PageCache/Model/App/Request/Http/IdentifierForSave.php",
+          "commit_id": "ebcc80635c977a15c96ca99b731334f608dd7ef3",
+          "original_commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+          "user": {
+            "login": "hostep",
+            "id": 85479,
+            "node_id": "MDQ6VXNlcjg1NDc5",
+            "avatar_url": "https://avatars.githubusercontent.com/u/85479?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/hostep",
+            "html_url": "https://github.com/hostep",
+            "followers_url": "https://api.github.com/users/hostep/followers",
+            "following_url": "https://api.github.com/users/hostep/following{/other_user}",
+            "gists_url": "https://api.github.com/users/hostep/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/hostep/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/hostep/subscriptions",
+            "organizations_url": "https://api.github.com/users/hostep/orgs",
+            "repos_url": "https://api.github.com/users/hostep/repos",
+            "events_url": "https://api.github.com/users/hostep/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/hostep/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "This copyright header is too big.\r\nAlso the year should be the year the file was **created**, not when it was last updated.\r\n\r\nSo in this case the copyright header should be:\r\n```\r\n * Copyright 2023 Adobe\r\n * All Rights Reserved.\r\n```\r\n\r\nNothing else is needed. Not sure where you got that other paragraph from?\r\n\r\nSame remark goes for the other files.",
+          "created_at": "2024-10-28T15:44:34Z",
+          "updated_at": "2024-10-28T15:44:35Z",
+          "html_url": "https://github.com/magento/magento2/pull/39099#discussion_r1819305393",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1819305393"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/39099#discussion_r1819305393"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819305393/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 13,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 15,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819362053",
+          "pull_request_review_id": 2399574858,
+          "id": 1819362053,
+          "node_id": "PRRC_kwDOACwCD85scUMF",
+          "diff_hunk": "@@ -1,16 +1,26 @@\n <?php\n /**\n- * Copyright © Magento, Inc. All rights reserved.\n- * See COPYING.txt for license details.\n+ * Copyright 2024 Adobe\n+ * All Rights Reserved.\n+ *\n+ * NOTICE: All information contained herein is, and remains\n+ * the property of Adobe and its suppliers, if any. The intellectual\n+ * and technical concepts contained herein are proprietary to Adobe\n+ * and its suppliers and are protected by all applicable intellectual\n+ * property laws, including trade secret and copyright laws.\n+ * Dissemination of this information or reproduction of this material\n+ * is strictly forbidden unless prior written permission is obtained from\n+ * Adobe.",
+          "path": "app/code/Magento/PageCache/Model/App/Request/Http/IdentifierForSave.php",
+          "commit_id": "ebcc80635c977a15c96ca99b731334f608dd7ef3",
+          "original_commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+          "user": {
+            "login": "Bashev",
+            "id": 1854269,
+            "node_id": "MDQ6VXNlcjE4NTQyNjk=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1854269?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/Bashev",
+            "html_url": "https://github.com/Bashev",
+            "followers_url": "https://api.github.com/users/Bashev/followers",
+            "following_url": "https://api.github.com/users/Bashev/following{/other_user}",
+            "gists_url": "https://api.github.com/users/Bashev/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/Bashev/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/Bashev/subscriptions",
+            "organizations_url": "https://api.github.com/users/Bashev/orgs",
+            "repos_url": "https://api.github.com/users/Bashev/repos",
+            "events_url": "https://api.github.com/users/Bashev/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/Bashev/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "It's better to be moved to separate file  COPYING.txt or LICENSE.txt for better opportunity for update the policies. \r\n\r\nIt's takes years to remove @author tag (comments block) from files, what will happens if all files requires updated license ...",
+          "created_at": "2024-10-28T16:18:41Z",
+          "updated_at": "2024-10-28T16:18:42Z",
+          "html_url": "https://github.com/magento/magento2/pull/39099#discussion_r1819362053",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1819362053"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/39099#discussion_r1819362053"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819362053/reactions",
+            "total_count": 1,
+            "+1": 1,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 13,
+          "side": "RIGHT",
+          "in_reply_to_id": 1819305393,
+          "author_association": "CONTRIBUTOR",
+          "original_position": 15,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819369762",
+          "pull_request_review_id": 2399586795,
+          "id": 1819369762,
+          "node_id": "PRRC_kwDOACwCD85scWEi",
+          "diff_hunk": "@@ -1,16 +1,26 @@\n <?php\n /**\n- * Copyright © Magento, Inc. All rights reserved.\n- * See COPYING.txt for license details.\n+ * Copyright 2024 Adobe\n+ * All Rights Reserved.\n+ *\n+ * NOTICE: All information contained herein is, and remains\n+ * the property of Adobe and its suppliers, if any. The intellectual\n+ * and technical concepts contained herein are proprietary to Adobe\n+ * and its suppliers and are protected by all applicable intellectual\n+ * property laws, including trade secret and copyright laws.\n+ * Dissemination of this information or reproduction of this material\n+ * is strictly forbidden unless prior written permission is obtained from\n+ * Adobe.",
+          "path": "app/code/Magento/PageCache/Model/App/Request/Http/IdentifierForSave.php",
+          "commit_id": "ebcc80635c977a15c96ca99b731334f608dd7ef3",
+          "original_commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+          "user": {
+            "login": "rogerdz",
+            "id": 78783748,
+            "node_id": "MDQ6VXNlcjc4NzgzNzQ4",
+            "avatar_url": "https://avatars.githubusercontent.com/u/78783748?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/rogerdz",
+            "html_url": "https://github.com/rogerdz",
+            "followers_url": "https://api.github.com/users/rogerdz/followers",
+            "following_url": "https://api.github.com/users/rogerdz/following{/other_user}",
+            "gists_url": "https://api.github.com/users/rogerdz/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/rogerdz/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/rogerdz/subscriptions",
+            "organizations_url": "https://api.github.com/users/rogerdz/orgs",
+            "repos_url": "https://api.github.com/users/rogerdz/repos",
+            "events_url": "https://api.github.com/users/rogerdz/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/rogerdz/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "new rule from magento coding standard (https://github.com/magento/magento-coding-standard/blob/develop/Magento2Framework/Sniffs/Header/CopyrightValidation.php)\r\nI'm  copy from core\r\nHave 94 file same format \r\n![image](https://github.com/user-attachments/assets/2af2b4ec-e06f-428e-861b-694d9a582152)\r\n",
+          "created_at": "2024-10-28T16:23:28Z",
+          "updated_at": "2024-10-28T16:23:38Z",
+          "html_url": "https://github.com/magento/magento2/pull/39099#discussion_r1819369762",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1819369762"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/39099#discussion_r1819369762"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819369762/reactions",
+            "total_count": 2,
+            "+1": 1,
+            "-1": 0,
+            "laugh": 1,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 13,
+          "side": "RIGHT",
+          "in_reply_to_id": 1819305393,
+          "author_association": "CONTRIBUTOR",
+          "original_position": 15,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819385996",
+          "pull_request_review_id": 2399613073,
+          "id": 1819385996,
+          "node_id": "PRRC_kwDOACwCD85scaCM",
+          "diff_hunk": "@@ -1,16 +1,26 @@\n <?php\n /**\n- * Copyright © Magento, Inc. All rights reserved.\n- * See COPYING.txt for license details.\n+ * Copyright 2024 Adobe\n+ * All Rights Reserved.\n+ *\n+ * NOTICE: All information contained herein is, and remains\n+ * the property of Adobe and its suppliers, if any. The intellectual\n+ * and technical concepts contained herein are proprietary to Adobe\n+ * and its suppliers and are protected by all applicable intellectual\n+ * property laws, including trade secret and copyright laws.\n+ * Dissemination of this information or reproduction of this material\n+ * is strictly forbidden unless prior written permission is obtained from\n+ * Adobe.",
+          "path": "app/code/Magento/PageCache/Model/App/Request/Http/IdentifierForSave.php",
+          "commit_id": "ebcc80635c977a15c96ca99b731334f608dd7ef3",
+          "original_commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+          "user": {
+            "login": "in-session",
+            "id": 16542619,
+            "node_id": "MDQ6VXNlcjE2NTQyNjE5",
+            "avatar_url": "https://avatars.githubusercontent.com/u/16542619?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/in-session",
+            "html_url": "https://github.com/in-session",
+            "followers_url": "https://api.github.com/users/in-session/followers",
+            "following_url": "https://api.github.com/users/in-session/following{/other_user}",
+            "gists_url": "https://api.github.com/users/in-session/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/in-session/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/in-session/subscriptions",
+            "organizations_url": "https://api.github.com/users/in-session/orgs",
+            "repos_url": "https://api.github.com/users/in-session/repos",
+            "events_url": "https://api.github.com/users/in-session/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/in-session/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "It couldn't have been made any longer *lol* but thanks, I hadn't thought of that either",
+          "created_at": "2024-10-28T16:33:44Z",
+          "updated_at": "2024-10-28T16:33:45Z",
+          "html_url": "https://github.com/magento/magento2/pull/39099#discussion_r1819385996",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1819385996"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/39099#discussion_r1819385996"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819385996/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 13,
+          "side": "RIGHT",
+          "in_reply_to_id": 1819305393,
+          "author_association": "CONTRIBUTOR",
+          "original_position": 15,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1823318296",
+          "pull_request_review_id": 2406184149,
+          "id": 1823318296,
+          "node_id": "PRRC_kwDOACwCD85sraEY",
+          "diff_hunk": "@@ -1,16 +1,26 @@\n <?php\n /**\n- * Copyright © Magento, Inc. All rights reserved.\n- * See COPYING.txt for license details.\n+ * Copyright 2024 Adobe\n+ * All Rights Reserved.\n+ *\n+ * NOTICE: All information contained herein is, and remains\n+ * the property of Adobe and its suppliers, if any. The intellectual\n+ * and technical concepts contained herein are proprietary to Adobe\n+ * and its suppliers and are protected by all applicable intellectual\n+ * property laws, including trade secret and copyright laws.\n+ * Dissemination of this information or reproduction of this material\n+ * is strictly forbidden unless prior written permission is obtained from\n+ * Adobe.",
+          "path": "app/code/Magento/PageCache/Model/App/Request/Http/IdentifierForSave.php",
+          "commit_id": "ebcc80635c977a15c96ca99b731334f608dd7ef3",
+          "original_commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+          "user": {
+            "login": "hostep",
+            "id": 85479,
+            "node_id": "MDQ6VXNlcjg1NDc5",
+            "avatar_url": "https://avatars.githubusercontent.com/u/85479?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/hostep",
+            "html_url": "https://github.com/hostep",
+            "followers_url": "https://api.github.com/users/hostep/followers",
+            "following_url": "https://api.github.com/users/hostep/following{/other_user}",
+            "gists_url": "https://api.github.com/users/hostep/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/hostep/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/hostep/subscriptions",
+            "organizations_url": "https://api.github.com/users/hostep/orgs",
+            "repos_url": "https://api.github.com/users/hostep/repos",
+            "events_url": "https://api.github.com/users/hostep/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/hostep/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "So I discussed this with somebody from Adobe last week on Slack, he said to me that the new requirement from the Adobe legal team (which came after a lot of internal discussions), should be:\r\n\r\n```\r\nCopyright [year file created] Adobe\r\nAll Rights Reserved.\r\n```\r\n\r\nI totally agree that it's silly to change these copyright headers yet again, it has been changing way too often in the last 8 years or so. And I would love if we could just put it in an external file and reference to that and never have to change it again in the future, but the Adobe legal team disagrees with this approach for some unknown reason.\r\n\r\nI also argued on Slack that the check in coding standards is too lose, as it only checks for the first line and you can basically put whatever you like after the first line, they agreed and they will fix this in a new version of coding standards someday in the future so it's clearer what is required.\r\n\r\nSo for now, can you please update it to only those 2 lines and use git to figure out the year each file was created and use that year. Thanks :) ",
+          "created_at": "2024-10-30T20:03:44Z",
+          "updated_at": "2024-10-30T20:05:09Z",
+          "html_url": "https://github.com/magento/magento2/pull/39099#discussion_r1823318296",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1823318296"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/39099#discussion_r1823318296"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1823318296/reactions",
+            "total_count": 2,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 2
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 13,
+          "side": "RIGHT",
+          "in_reply_to_id": 1819305393,
+          "author_association": "CONTRIBUTOR",
+          "original_position": 15,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1848290520",
+          "pull_request_review_id": 2445359662,
+          "id": 1848290520,
+          "node_id": "PRRC_kwDOACwCD85uKqzY",
+          "diff_hunk": "@@ -38,9 +48,11 @@ public function __construct(\n      */\n     public function getValue()\n     {\n+        $pattern = Identifier::PATTERN_MARKETING_PARAMETERS;",
+          "path": "app/code/Magento/PageCache/Model/App/Request/Http/IdentifierForSave.php",
+          "commit_id": "ebcc80635c977a15c96ca99b731334f608dd7ef3",
+          "original_commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+          "user": {
+            "login": "engcom-Dash",
+            "id": 60198592,
+            "node_id": "MDQ6VXNlcjYwMTk4NTky",
+            "avatar_url": "https://avatars.githubusercontent.com/u/60198592?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/engcom-Dash",
+            "html_url": "https://github.com/engcom-Dash",
+            "followers_url": "https://api.github.com/users/engcom-Dash/followers",
+            "following_url": "https://api.github.com/users/engcom-Dash/following{/other_user}",
+            "gists_url": "https://api.github.com/users/engcom-Dash/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/engcom-Dash/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/engcom-Dash/subscriptions",
+            "organizations_url": "https://api.github.com/users/engcom-Dash/orgs",
+            "repos_url": "https://api.github.com/users/engcom-Dash/repos",
+            "events_url": "https://api.github.com/users/engcom-Dash/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/engcom-Dash/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "@ilnytskyi, I moved it to separate method. Could you please review it?",
+          "created_at": "2024-11-19T12:41:33Z",
+          "updated_at": "2024-11-19T12:41:33Z",
+          "html_url": "https://github.com/magento/magento2/pull/39099#discussion_r1848290520",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1848290520"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/39099#discussion_r1848290520"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1848290520/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 51,
+          "side": "RIGHT",
+          "in_reply_to_id": 1819095028,
+          "author_association": "CONTRIBUTOR",
+          "original_position": 34,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1848839812",
+          "pull_request_review_id": 2446260227,
+          "id": 1848839812,
+          "node_id": "PRRC_kwDOACwCD85uMw6E",
+          "diff_hunk": "@@ -38,9 +48,11 @@ public function __construct(\n      */\n     public function getValue()\n     {\n+        $pattern = Identifier::PATTERN_MARKETING_PARAMETERS;",
+          "path": "app/code/Magento/PageCache/Model/App/Request/Http/IdentifierForSave.php",
+          "commit_id": "ebcc80635c977a15c96ca99b731334f608dd7ef3",
+          "original_commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+          "user": {
+            "login": "ilnytskyi",
+            "id": 3192770,
+            "node_id": "MDQ6VXNlcjMxOTI3NzA=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/3192770?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/ilnytskyi",
+            "html_url": "https://github.com/ilnytskyi",
+            "followers_url": "https://api.github.com/users/ilnytskyi/followers",
+            "following_url": "https://api.github.com/users/ilnytskyi/following{/other_user}",
+            "gists_url": "https://api.github.com/users/ilnytskyi/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/ilnytskyi/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/ilnytskyi/subscriptions",
+            "organizations_url": "https://api.github.com/users/ilnytskyi/orgs",
+            "repos_url": "https://api.github.com/users/ilnytskyi/repos",
+            "events_url": "https://api.github.com/users/ilnytskyi/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/ilnytskyi/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "@engcom-Dash lgtm \r\n\r\n`getMarketingParameterPatterns` can be pluginized to add custom patterns, thanks",
+          "created_at": "2024-11-19T18:17:23Z",
+          "updated_at": "2024-11-19T18:17:24Z",
+          "html_url": "https://github.com/magento/magento2/pull/39099#discussion_r1848839812",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1848839812"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/39099#discussion_r1848839812"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1848839812/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 51,
+          "side": "RIGHT",
+          "in_reply_to_id": 1819095028,
+          "author_association": "MEMBER",
+          "original_position": 34,
+          "position": 1,
+          "subject_type": "line"
+        }
+      ],
+      "responseDigest": "7959a122778644cedb0d72ebcf11c36042b9099cf1cefd97b776627fca4c0fb8",
+      "previousPageDigest": null,
+      "pageDigest": "597b52e8f8a1c43ca6371b4bf8d3158b7af4a48f7196ee6bac507bef62d4312f"
+    },
+    {
+      "pullRequest": 40023,
+      "pageIndex": 1,
+      "request": {
+        "method": "GET",
+        "path": "/repos/magento/magento2/pulls/40023/comments",
+        "query": {
+          "per_page": 100,
+          "page": 1
+        },
+        "url": "https://api.github.com/repos/magento/magento2/pulls/40023/comments?per_page=100&page=1",
+        "representationHeaders": {
+          "Accept": "application/vnd.github+json",
+          "User-Agent": "codecrow-magento2-benchmark",
+          "X-GitHub-Api-Version": "2022-11-28"
+        }
+      },
+      "status": 200,
+      "etag": "W/\"3c6a2c5784362b7c1a17cb04b84cfce3ffa8f06043beb2d60afbb243c1798828\"",
+      "lastModified": null,
+      "response": [
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/2168595859",
+          "pull_request_review_id": 2961357916,
+          "id": 2168595859,
+          "node_id": "PRRC_kwDOACwCD86BQiWT",
+          "diff_hunk": "",
+          "path": "app/code/Magento/Catalog/view/frontend/web/js/view/compare-products.js",
+          "commit_id": "7b8032d661e59e25147c773d6cbeb0a4efa2505f",
+          "original_commit_id": "7b8032d661e59e25147c773d6cbeb0a4efa2505f",
+          "user": {
+            "login": "KrasnoshchokBohdan",
+            "id": 111579196,
+            "node_id": "U_kgDOBqaQPA",
+            "avatar_url": "https://avatars.githubusercontent.com/u/111579196?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/KrasnoshchokBohdan",
+            "html_url": "https://github.com/KrasnoshchokBohdan",
+            "followers_url": "https://api.github.com/users/KrasnoshchokBohdan/followers",
+            "following_url": "https://api.github.com/users/KrasnoshchokBohdan/following{/other_user}",
+            "gists_url": "https://api.github.com/users/KrasnoshchokBohdan/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/KrasnoshchokBohdan/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/KrasnoshchokBohdan/subscriptions",
+            "organizations_url": "https://api.github.com/users/KrasnoshchokBohdan/orgs",
+            "repos_url": "https://api.github.com/users/KrasnoshchokBohdan/repos",
+            "events_url": "https://api.github.com/users/KrasnoshchokBohdan/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/KrasnoshchokBohdan/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "@Den4ik Hi!\r\nSorry to bother you. I probably should have marked this as a draft immediately.\r\nCurrently, I'm struggling with a solution for reloading the compare-product customer section after changes made by a GraphQL mutation (",
+          "created_at": "2025-06-26T09:12:54Z",
+          "updated_at": "2025-06-26T09:14:16Z",
+          "html_url": "https://github.com/magento/magento2/pull/40023#discussion_r2168595859",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/40023",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/2168595859"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/40023#discussion_r2168595859"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/40023"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/2168595859/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": 1,
+          "original_line": 1,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 1,
+          "position": 1,
+          "subject_type": "file"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/2168710498",
+          "pull_request_review_id": 2961538935,
+          "id": 2168710498,
+          "node_id": "PRRC_kwDOACwCD86BQ-Vi",
+          "diff_hunk": "",
+          "path": "app/code/Magento/Catalog/view/frontend/web/js/view/compare-products.js",
+          "commit_id": "7b8032d661e59e25147c773d6cbeb0a4efa2505f",
+          "original_commit_id": "7b8032d661e59e25147c773d6cbeb0a4efa2505f",
+          "user": {
+            "login": "Den4ik",
+            "id": 1129623,
+            "node_id": "MDQ6VXNlcjExMjk2MjM=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1129623?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/Den4ik",
+            "html_url": "https://github.com/Den4ik",
+            "followers_url": "https://api.github.com/users/Den4ik/followers",
+            "following_url": "https://api.github.com/users/Den4ik/following{/other_user}",
+            "gists_url": "https://api.github.com/users/Den4ik/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/Den4ik/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/Den4ik/subscriptions",
+            "organizations_url": "https://api.github.com/users/Den4ik/orgs",
+            "repos_url": "https://api.github.com/users/Den4ik/repos",
+            "events_url": "https://api.github.com/users/Den4ik/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/Den4ik/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Hi @KrasnoshchokBohdan \r\nThanks for details",
+          "created_at": "2025-06-26T10:11:18Z",
+          "updated_at": "2025-06-26T10:11:18Z",
+          "html_url": "https://github.com/magento/magento2/pull/40023#discussion_r2168710498",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/40023",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/2168710498"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/40023#discussion_r2168710498"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/40023"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/2168710498/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": 1,
+          "original_line": 1,
+          "side": "RIGHT",
+          "in_reply_to_id": 2168595859,
+          "author_association": "CONTRIBUTOR",
+          "original_position": 1,
+          "position": 1,
+          "subject_type": "file"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/2348826803",
+          "pull_request_review_id": 3224353290,
+          "id": 2348826803,
+          "node_id": "PRRC_kwDOACwCD86MAECz",
+          "diff_hunk": "@@ -0,0 +1,106 @@\n+<?php\n+/**\n+ * Copyright 2025 Adobe\n+ * All Rights Reserved.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\CompareListGraphQl\\Model\\Service;\n+\n+use Magento\\Framework\\Stdlib\\CookieManagerInterface;\n+use Magento\\Framework\\Stdlib\\Cookie\\CookieMetadataFactory;\n+use Magento\\Framework\\Exception\\InputException;\n+use Magento\\Framework\\Stdlib\\Cookie\\FailureToSendException;\n+use Magento\\Framework\\Stdlib\\Cookie\\CookieSizeLimitReachedException;\n+use Psr\\Log\\LoggerInterface;\n+\n+/**\n+ * Service for managing compare list cookies\n+ *\n+ * @SuppressWarnings(PHPMD.CookieAndSessionMisuse)\n+ */\n+class CompareCookieManager\n+{\n+    /**\n+     * Name of cookie that holds compare products section data\n+     */\n+    public const COOKIE_COMPARE_PRODUCTS = 'section_data_ids';\n+\n+    /**\n+     * The path for which the cookie will be available\n+     */\n+    public const COOKIE_PATH = '/';\n+\n+    /**\n+     * Cookie lifetime value in seconds (86400 = 24 hours)\n+     */\n+    public const COOKIE_LIFETIME = 86400;\n+\n+    /**\n+     * @var CookieManagerInterface\n+     */\n+    private CookieManagerInterface $cookieManager;\n+\n+    /**\n+     * @var CookieMetadataFactory\n+     */\n+    private CookieMetadataFactory $cookieMetadataFactory;\n+\n+    /**\n+     * @var LoggerInterface\n+     */\n+    private LoggerInterface $logger;\n+\n+    /**\n+     * @param CookieManagerInterface $cookieManager\n+     * @param CookieMetadataFactory $cookieMetadataFactory\n+     * @param LoggerInterface $logger\n+     */\n+    public function __construct(",
+          "path": "app/code/Magento/CompareListGraphQl/Model/Service/CompareCookieManager.php",
+          "commit_id": "b0c0764e7efc2ae971201060324c27af7454b9c0",
+          "original_commit_id": "4582620cceb3c852e4691e30b7c025fcdc7ff4cf",
+          "user": {
+            "login": "engcom-Hotel",
+            "id": 51681618,
+            "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+            "avatar_url": "https://avatars.githubusercontent.com/u/51681618?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/engcom-Hotel",
+            "html_url": "https://github.com/engcom-Hotel",
+            "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+            "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+            "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+            "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+            "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+            "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Make readonly constructor parameters.",
+          "created_at": "2025-09-15T12:24:51Z",
+          "updated_at": "2025-09-15T12:33:47Z",
+          "html_url": "https://github.com/magento/magento2/pull/40023#discussion_r2348826803",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/40023",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/2348826803"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/40023#discussion_r2348826803"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/40023"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/2348826803/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": 45,
+          "original_line": 59,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 59,
+          "position": 45,
+          "subject_type": "line"
+        }
+      ],
+      "responseDigest": "584d590357ad6b701da2b870bbcc9aeab1b777babf96fc45beacbb1ec4d9989d",
+      "previousPageDigest": null,
+      "pageDigest": "e72e9a6203f8748b113f9aba8dbc46e713454735d431e882b06e8b3094cf593a"
+    },
+    {
+      "pullRequest": 37362,
+      "pageIndex": 1,
+      "request": {
+        "method": "GET",
+        "path": "/repos/magento/magento2/pulls/37362/comments",
+        "query": {
+          "per_page": 100,
+          "page": 1
+        },
+        "url": "https://api.github.com/repos/magento/magento2/pulls/37362/comments?per_page=100&page=1",
+        "representationHeaders": {
+          "Accept": "application/vnd.github+json",
+          "User-Agent": "codecrow-magento2-benchmark",
+          "X-GitHub-Api-Version": "2022-11-28"
+        }
+      },
+      "status": 200,
+      "etag": "W/\"25cd925ac3952010fcf7924f75276b2683a80421c235f750d129e314f096236a\"",
+      "lastModified": null,
+      "response": [
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1850098743",
+          "pull_request_review_id": 2448279103,
+          "id": 1850098743,
+          "node_id": "PRRC_kwDOACwCD85uRkQ3",
+          "diff_hunk": "@@ -558,6 +562,9 @@ protected function _adaptResizeValues($frameWidth, $frameHeight)\n             }\n         }\n \n+        $frameWidth = (float)$frameWidth;\n+        $frameHeight = (float)$frameHeight;",
+          "path": "lib/internal/Magento/Framework/Image/Adapter/AbstractAdapter.php",
+          "commit_id": "4ad115dea067fac89f059c677c4ed803f42aa4c5",
+          "original_commit_id": "58467b85045cef860a88c2e447cc2b338ce6f571",
+          "user": {
+            "login": "engcom-Hotel",
+            "id": 51681618,
+            "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+            "avatar_url": "https://avatars.githubusercontent.com/u/51681618?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/engcom-Hotel",
+            "html_url": "https://github.com/engcom-Hotel",
+            "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+            "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+            "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+            "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+            "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+            "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Please let us know the significance of this line because both the parameters have been passed to `_checkAspectRatio` in the next line which accepts parameters as `int`",
+          "created_at": "2024-11-20T10:58:01Z",
+          "updated_at": "2024-11-20T10:58:44Z",
+          "html_url": "https://github.com/magento/magento2/pull/37362#discussion_r1850098743",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/37362",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1850098743"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/37362#discussion_r1850098743"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/37362"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1850098743/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": 565,
+          "original_start_line": 565,
+          "start_side": "RIGHT",
+          "line": 566,
+          "original_line": 566,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 65,
+          "position": 65,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1850212580",
+          "pull_request_review_id": 2448452814,
+          "id": 1850212580,
+          "node_id": "PRRC_kwDOACwCD85uSADk",
+          "diff_hunk": "@@ -558,6 +562,9 @@ protected function _adaptResizeValues($frameWidth, $frameHeight)\n             }\n         }\n \n+        $frameWidth = (float)$frameWidth;\n+        $frameHeight = (float)$frameHeight;",
+          "path": "lib/internal/Magento/Framework/Image/Adapter/AbstractAdapter.php",
+          "commit_id": "4ad115dea067fac89f059c677c4ed803f42aa4c5",
+          "original_commit_id": "58467b85045cef860a88c2e447cc2b338ce6f571",
+          "user": {
+            "login": "Bashev",
+            "id": 1854269,
+            "node_id": "MDQ6VXNlcjE4NTQyNjk=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1854269?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/Bashev",
+            "html_url": "https://github.com/Bashev",
+            "followers_url": "https://api.github.com/users/Bashev/followers",
+            "following_url": "https://api.github.com/users/Bashev/following{/other_user}",
+            "gists_url": "https://api.github.com/users/Bashev/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/Bashev/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/Bashev/subscriptions",
+            "organizations_url": "https://api.github.com/users/Bashev/orgs",
+            "repos_url": "https://api.github.com/users/Bashev/repos",
+            "events_url": "https://api.github.com/users/Bashev/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/Bashev/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Yes, this is correct, but they are used below the checkAspectRatio (lines 573 and below) for calculation. For more precised calculation it's better to have original/not rounded values.\r\n",
+          "created_at": "2024-11-20T12:12:30Z",
+          "updated_at": "2024-11-20T12:12:30Z",
+          "html_url": "https://github.com/magento/magento2/pull/37362#discussion_r1850212580",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/37362",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1850212580"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/37362#discussion_r1850212580"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/37362"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1850212580/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": 565,
+          "original_start_line": 565,
+          "start_side": "RIGHT",
+          "line": 566,
+          "original_line": 566,
+          "side": "RIGHT",
+          "in_reply_to_id": 1850098743,
+          "author_association": "CONTRIBUTOR",
+          "original_position": 65,
+          "position": 65,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1851595915",
+          "pull_request_review_id": 2450630191,
+          "id": 1851595915,
+          "node_id": "PRRC_kwDOACwCD85uXRyL",
+          "diff_hunk": "@@ -558,6 +562,9 @@ protected function _adaptResizeValues($frameWidth, $frameHeight)\n             }\n         }\n \n+        $frameWidth = (float)$frameWidth;\n+        $frameHeight = (float)$frameHeight;",
+          "path": "lib/internal/Magento/Framework/Image/Adapter/AbstractAdapter.php",
+          "commit_id": "4ad115dea067fac89f059c677c4ed803f42aa4c5",
+          "original_commit_id": "58467b85045cef860a88c2e447cc2b338ce6f571",
+          "user": {
+            "login": "engcom-Hotel",
+            "id": 51681618,
+            "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+            "avatar_url": "https://avatars.githubusercontent.com/u/51681618?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/engcom-Hotel",
+            "html_url": "https://github.com/engcom-Hotel",
+            "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+            "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+            "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+            "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+            "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+            "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Yes, I agree with you @Bashev but passing the float value in `checkAspectRatio` may result in precision issues, type errors, or unexpected behaviors. So I suggest you to move the type casting below to line number 571 where `_checkAspectRatio` is calling.",
+          "created_at": "2024-11-21T08:44:02Z",
+          "updated_at": "2024-11-21T08:44:02Z",
+          "html_url": "https://github.com/magento/magento2/pull/37362#discussion_r1851595915",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/37362",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1851595915"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/37362#discussion_r1851595915"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/37362"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1851595915/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": 565,
+          "original_start_line": 565,
+          "start_side": "RIGHT",
+          "line": 566,
+          "original_line": 566,
+          "side": "RIGHT",
+          "in_reply_to_id": 1850098743,
+          "author_association": "CONTRIBUTOR",
+          "original_position": 65,
+          "position": 65,
+          "subject_type": "line"
+        }
+      ],
+      "responseDigest": "eefa755858991d9ec687ddc887d5a90a6aefc041ef42f192721260d9a07faad5",
+      "previousPageDigest": null,
+      "pageDigest": "577a5f812c3c0b102abb5073f87f717fe294299b36bdde4b8e98e885b5a914d5"
+    },
+    {
+      "pullRequest": 38270,
+      "pageIndex": 1,
+      "request": {
+        "method": "GET",
+        "path": "/repos/magento/magento2/pulls/38270/comments",
+        "query": {
+          "per_page": 100,
+          "page": 1
+        },
+        "url": "https://api.github.com/repos/magento/magento2/pulls/38270/comments?per_page=100&page=1",
+        "representationHeaders": {
+          "Accept": "application/vnd.github+json",
+          "User-Agent": "codecrow-magento2-benchmark",
+          "X-GitHub-Api-Version": "2022-11-28"
+        }
+      },
+      "status": 200,
+      "etag": "W/\"719ce3a8edbacd9ad83b38e1e8f9a111371182e2376a2db1680faa87e34ca24d\"",
+      "lastModified": null,
+      "response": [
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1751316514",
+          "pull_request_review_id": 2291449099,
+          "id": 1751316514,
+          "node_id": "PRRC_kwDOACwCD85oYvgi",
+          "diff_hunk": "@@ -38,14 +38,38 @@ public function __construct(\n      */\n     public function getValue()\n     {\n+        $url = $this->request->getUriString();\n+        list($baseUrl, $query) = $this->reconstructUrl($url);\n         $data = [\n             $this->request->isSecure(),\n-            $this->request->getUriString(),\n+            $baseUrl,\n+            $query,\n             $this->context->getVaryString()\n         ];\n \n         $data = $this->identifierStoreReader->getPageTagsWithStoreCacheTags($data);\n-\n         return sha1($this->serializer->serialize($data));\n     }\n+\n+    /**\n+     * Reconstruct url and sort query\n+     *\n+     * @param string $url\n+     * @return array\n+     */\n+    private function reconstructUrl($url)",
+          "path": "app/code/Magento/PageCache/Model/App/Request/Http/IdentifierForSave.php",
+          "commit_id": "1bfa69bf176bb0d2afe5af65445f86544eaf1134",
+          "original_commit_id": "5b77b2c64924993b4ad6530196918d84ea3aad41",
+          "user": {
+            "login": "engcom-Hotel",
+            "id": 51681618,
+            "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+            "avatar_url": "https://avatars.githubusercontent.com/u/51681618?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/engcom-Hotel",
+            "html_url": "https://github.com/engcom-Hotel",
+            "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+            "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+            "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+            "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+            "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+            "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "```suggestion\r\n    private function reconstructUrl(string $url): array\r\n```",
+          "created_at": "2024-09-10T06:13:07Z",
+          "updated_at": "2024-09-10T10:39:43Z",
+          "html_url": "https://github.com/magento/magento2/pull/38270#discussion_r1751316514",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/38270",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1751316514"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/38270#discussion_r1751316514"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/38270"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1751316514/reactions",
+            "total_count": 1,
+            "+1": 1,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 60,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 36,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1751317681",
+          "pull_request_review_id": 2291449099,
+          "id": 1751317681,
+          "node_id": "PRRC_kwDOACwCD85oYvyx",
+          "diff_hunk": "@@ -50,13 +50,37 @@ public function __construct(\n      */\n     public function getValue()\n     {\n+        $url = $this->request->getUriString();\n+        list($baseUrl, $query) = $this->reconstructUrl($url);\n         $data = [\n             $this->request->isSecure(),\n-            $this->request->getUriString(),\n+            $baseUrl,\n+            $query,\n             $this->request->get(\\Magento\\Framework\\App\\Response\\Http::COOKIE_VARY_STRING)\n                 ?: $this->context->getVaryString()\n         ];\n-\n         return sha1($this->serializer->serialize($data));\n     }\n+\n+    /**\n+     * Reconstruct url and sort query\n+     *\n+     * @param string $url\n+     * @return array\n+     */\n+    private function reconstructUrl($url)",
+          "path": "lib/internal/Magento/Framework/App/PageCache/Identifier.php",
+          "commit_id": "1bfa69bf176bb0d2afe5af65445f86544eaf1134",
+          "original_commit_id": "5b77b2c64924993b4ad6530196918d84ea3aad41",
+          "user": {
+            "login": "engcom-Hotel",
+            "id": 51681618,
+            "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+            "avatar_url": "https://avatars.githubusercontent.com/u/51681618?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/engcom-Hotel",
+            "html_url": "https://github.com/engcom-Hotel",
+            "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+            "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+            "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+            "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+            "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+            "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "```suggestion\r\n    private function reconstructUrl(string $url): array\r\n```",
+          "created_at": "2024-09-10T06:14:15Z",
+          "updated_at": "2024-09-10T10:39:43Z",
+          "html_url": "https://github.com/magento/magento2/pull/38270#discussion_r1751317681",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/38270",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1751317681"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/38270#discussion_r1751317681"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/38270"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1751317681/reactions",
+            "total_count": 1,
+            "+1": 1,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 71,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 24,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1751338954",
+          "pull_request_review_id": 2291449099,
+          "id": 1751338954,
+          "node_id": "PRRC_kwDOACwCD85oY0_K",
+          "diff_hunk": "@@ -98,10 +104,79 @@ public function testGetValue(): void\n             ->method('getUriString')\n             ->willReturn('http://example.com/path1/');\n \n+        $this->requestMock->expects($this->any())\n+            ->method('getQuery')\n+            ->willReturn($this->fileParams);\n+\n+        $this->fileParams->expects($this->any())\n+            ->method('toArray')\n+            ->willReturn([]);\n+\n         $this->contextMock->expects($this->any())\n             ->method('getVaryString')\n             ->willReturn(self::VARY);\n \n+        $uri = $this->createMock(HttpUri::class);\n+        $uri->expects($this->any())->method('getQueryAsArray')->willReturn('');\n+        $this->requestMock->expects($this->any())\n+            ->method('getUri')\n+            ->willReturn($uri);\n+\n+        $this->identifierStoreReader->method('getPageTagsWithStoreCacheTags')->willReturnCallback(\n+            function ($value) {\n+                return $value;\n+            }\n+        );\n+\n+        $this->assertEquals(\n+            sha1(\n+                json_encode(\n+                    [\n+                        true,\n+                        'http://example.com/path1/',\n+                        '',\n+                        self::VARY\n+                    ]\n+                )\n+            ),\n+            $this->model->getValue()\n+        );\n+    }\n+\n+    public function testGetValueWithQuery(): void",
+          "path": "app/code/Magento/PageCache/Test/Unit/Model/App/Request/Http/IdentifierForSaveTest.php",
+          "commit_id": "1bfa69bf176bb0d2afe5af65445f86544eaf1134",
+          "original_commit_id": "5b77b2c64924993b4ad6530196918d84ea3aad41",
+          "user": {
+            "login": "engcom-Hotel",
+            "id": 51681618,
+            "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+            "avatar_url": "https://avatars.githubusercontent.com/u/51681618?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/engcom-Hotel",
+            "html_url": "https://github.com/engcom-Hotel",
+            "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+            "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+            "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+            "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+            "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+            "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "```suggestion\r\n    /**\r\n * Test get identifier for save value with query parameters.\r\n *\r\n * @return void\r\n */\r\n    public function testGetValueWithQuery(): void\r\n```",
+          "created_at": "2024-09-10T06:33:33Z",
+          "updated_at": "2024-09-10T10:39:43Z",
+          "html_url": "https://github.com/magento/magento2/pull/38270#discussion_r1751338954",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/38270",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1751338954"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/38270#discussion_r1751338954"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/38270"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1751338954/reactions",
+            "total_count": 1,
+            "+1": 1,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": 173,
+          "original_line": 146,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 70,
+          "position": 70,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1751340624",
+          "pull_request_review_id": 2291449099,
+          "id": 1751340624,
+          "node_id": "PRRC_kwDOACwCD85oY1ZQ",
+          "diff_hunk": "@@ -173,12 +221,74 @@ public function testGetValue(): void\n             ->method('getVaryString')\n             ->willReturn(self::VARY);\n \n+        $this->requestMock->expects($this->any())\n+            ->method('getQuery')\n+            ->willReturn($this->fileParams);\n+        $this->fileParams->expects($this->any())\n+            ->method('toArray')\n+            ->willReturn([]);\n+\n+        $uri = $this->createMock(HttpUri::class);\n+        $uri->expects($this->any())->method('getQueryAsArray')->willReturn('');\n+        $this->requestMock->expects($this->any())\n+            ->method('getUri')\n+            ->willReturn($uri);\n+\n+        $this->assertEquals(\n+            sha1(\n+                json_encode(\n+                    [\n+                        true,\n+                        'http://example.com/path1/',\n+                        '',\n+                        self::VARY\n+                    ]\n+                )\n+            ),\n+            $this->model->getValue()\n+        );\n+    }\n+",
+          "path": "lib/internal/Magento/Framework/App/Test/Unit/PageCache/IdentifierTest.php",
+          "commit_id": "1bfa69bf176bb0d2afe5af65445f86544eaf1134",
+          "original_commit_id": "5b77b2c64924993b4ad6530196918d84ea3aad41",
+          "user": {
+            "login": "engcom-Hotel",
+            "id": 51681618,
+            "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+            "avatar_url": "https://avatars.githubusercontent.com/u/51681618?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/engcom-Hotel",
+            "html_url": "https://github.com/engcom-Hotel",
+            "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+            "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+            "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+            "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+            "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+            "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "```suggestion\r\n/**\r\n * Test get identifier for save value with query parameters.\r\n *\r\n * @return void\r\n */\r\n```",
+          "created_at": "2024-09-10T06:35:01Z",
+          "updated_at": "2024-09-10T10:39:43Z",
+          "html_url": "https://github.com/magento/magento2/pull/38270#discussion_r1751340624",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/38270",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1751340624"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/38270#discussion_r1751340624"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/38270"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1751340624/reactions",
+            "total_count": 1,
+            "+1": 1,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": 251,
+          "original_line": 251,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 137,
+          "position": 128,
+          "subject_type": "line"
+        }
+      ],
+      "responseDigest": "1704cb7f9acaba25dc8d43000a221e2954d48494e8ebbd46f962a0bfc13eeba5",
+      "previousPageDigest": null,
+      "pageDigest": "639a21e7d2096e088300cbed83dcf2a9f5d26c0c749b1620ed1649f0614b1c87"
+    },
+    {
+      "pullRequest": 30699,
+      "pageIndex": 1,
+      "request": {
+        "method": "GET",
+        "path": "/repos/magento/magento2/pulls/30699/comments",
+        "query": {
+          "per_page": 100,
+          "page": 1
+        },
+        "url": "https://api.github.com/repos/magento/magento2/pulls/30699/comments?per_page=100&page=1",
+        "representationHeaders": {
+          "Accept": "application/vnd.github+json",
+          "User-Agent": "codecrow-magento2-benchmark",
+          "X-GitHub-Api-Version": "2022-11-28"
+        }
+      },
+      "status": 200,
+      "etag": "W/\"b21a8772337fb4a28dd47f28be291d16af93e6d6d6bf34fb81fb269059ecb3a7\"",
+      "lastModified": null,
+      "response": [
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/514151596",
+          "pull_request_review_id": 519522056,
+          "id": 514151596,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUxNDE1MTU5Ng==",
+          "diff_hunk": "@@ -74,6 +74,7 @@\n         \"phpseclib/mcrypt_compat\": \"1.0.8\",\n         \"phpseclib/phpseclib\": \"2.0.*\",\n         \"ramsey/uuid\": \"~3.8.0\",\n+        \"s1lentium/iptools\": \"^1.1\",",
+          "path": "composer.json",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "e5a4cae430d5b5911acd7411ac434ad11f5271e7",
+          "user": {
+            "login": "ihor-sviziev",
+            "id": 1873745,
+            "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/ihor-sviziev",
+            "html_url": "https://github.com/ihor-sviziev",
+            "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+            "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+            "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+            "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+            "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+            "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Seems like should be also added to the framework and setup composer.json files",
+          "created_at": "2020-10-29T10:23:56Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r514151596",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/514151596"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r514151596"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/514151596/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 77,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 4,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/514634147",
+          "pull_request_review_id": 520176139,
+          "id": 514634147,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUxNDYzNDE0Nw==",
+          "diff_hunk": "@@ -92,10 +92,10 @@ public function testisOnWithIP()\n             [MaintenanceMode::FLAG_FILENAME, true],\n             [MaintenanceMode::IP_FILENAME, true],\n         ];\n-        $this->flagDir->expects($this->exactly(2))\n+        $this->flagDir->expects($this->once())\n             ->method('isExist')\n             ->willReturnMap($mapisExist);\n-        $this->assertFalse($this->model->isOn());\n+        $this->assertTrue($this->model->isOn());",
+          "path": "lib/internal/Magento/Framework/App/Test/Unit/MaintenanceModeTest.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "b5e8b86aa8de04fcfdfc22e54e3b83484522e5cc",
+          "user": {
+            "login": "fredden",
+            "id": 334786,
+            "node_id": "MDQ6VXNlcjMzNDc4Ng==",
+            "avatar_url": "https://avatars.githubusercontent.com/u/334786?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/fredden",
+            "html_url": "https://github.com/fredden",
+            "followers_url": "https://api.github.com/users/fredden/followers",
+            "following_url": "https://api.github.com/users/fredden/following{/other_user}",
+            "gists_url": "https://api.github.com/users/fredden/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/fredden/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/fredden/subscriptions",
+            "organizations_url": "https://api.github.com/users/fredden/orgs",
+            "repos_url": "https://api.github.com/users/fredden/repos",
+            "events_url": "https://api.github.com/users/fredden/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/fredden/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "I'm not sure if it's correct to change this, or if I should make the class behave like the old test expects.\r\n\r\nThe old test expects: when maintenance mode is enabled, and an allow-list file exists but is empty, then maintenance mode is off.\r\n\r\nThe new behaviour here feels like an improvement on this, but I might be missing something.",
+          "created_at": "2020-10-30T00:00:31Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r514634147",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/514634147"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r514634147"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/514634147/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": 108,
+          "original_line": 98,
+          "side": "RIGHT",
+          "author_association": "MEMBER",
+          "original_position": 18,
+          "position": 50,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/514634887",
+          "pull_request_review_id": 520179902,
+          "id": 514634887,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUxNDYzNDg4Nw==",
+          "diff_hunk": "@@ -74,6 +74,7 @@\n         \"phpseclib/mcrypt_compat\": \"1.0.8\",\n         \"phpseclib/phpseclib\": \"2.0.*\",\n         \"ramsey/uuid\": \"~3.8.0\",\n+        \"s1lentium/iptools\": \"^1.1\",",
+          "path": "composer.json",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "e5a4cae430d5b5911acd7411ac434ad11f5271e7",
+          "user": {
+            "login": "fredden",
+            "id": 334786,
+            "node_id": "MDQ6VXNlcjMzNDc4Ng==",
+            "avatar_url": "https://avatars.githubusercontent.com/u/334786?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/fredden",
+            "html_url": "https://github.com/fredden",
+            "followers_url": "https://api.github.com/users/fredden/followers",
+            "following_url": "https://api.github.com/users/fredden/following{/other_user}",
+            "gists_url": "https://api.github.com/users/fredden/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/fredden/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/fredden/subscriptions",
+            "organizations_url": "https://api.github.com/users/fredden/orgs",
+            "repos_url": "https://api.github.com/users/fredden/repos",
+            "events_url": "https://api.github.com/users/fredden/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/fredden/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "I've added this requirement to `lib/internal/Magento/Framework/composer.json`, but didn't see any `composer.json` files within `setup/`.",
+          "created_at": "2020-10-30T00:03:13Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r514634887",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/514634887"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r514634887"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/514634887/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 77,
+          "side": "RIGHT",
+          "in_reply_to_id": 514151596,
+          "author_association": "MEMBER",
+          "original_position": 4,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/515053726",
+          "pull_request_review_id": 520609183,
+          "id": 515053726,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUxNTA1MzcyNg==",
+          "diff_hunk": "@@ -92,10 +92,10 @@ public function testisOnWithIP()\n             [MaintenanceMode::FLAG_FILENAME, true],\n             [MaintenanceMode::IP_FILENAME, true],\n         ];\n-        $this->flagDir->expects($this->exactly(2))\n+        $this->flagDir->expects($this->once())\n             ->method('isExist')\n             ->willReturnMap($mapisExist);\n-        $this->assertFalse($this->model->isOn());\n+        $this->assertTrue($this->model->isOn());",
+          "path": "lib/internal/Magento/Framework/App/Test/Unit/MaintenanceModeTest.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "b5e8b86aa8de04fcfdfc22e54e3b83484522e5cc",
+          "user": {
+            "login": "ihor-sviziev",
+            "id": 1873745,
+            "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/ihor-sviziev",
+            "html_url": "https://github.com/ihor-sviziev",
+            "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+            "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+            "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+            "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+            "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+            "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Looks like now it's more correct. I would keep the new behavior",
+          "created_at": "2020-10-30T12:10:53Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r515053726",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/515053726"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r515053726"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/515053726/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": 108,
+          "original_line": 98,
+          "side": "RIGHT",
+          "in_reply_to_id": 514634147,
+          "author_association": "CONTRIBUTOR",
+          "original_position": 18,
+          "position": 50,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/515055512",
+          "pull_request_review_id": 520609183,
+          "id": 515055512,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUxNTA1NTUxMg==",
+          "diff_hunk": "@@ -202,18 +202,251 @@ public function testSetSingleAddresses()\n \n         $this->flagDir->method('readFile')\n             ->with(MaintenanceMode::IP_FILENAME)\n-            ->willReturn('address1');\n+            ->willReturn('198.51.100.1/32');",
+          "path": "lib/internal/Magento/Framework/App/Test/Unit/MaintenanceModeTest.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "b5e8b86aa8de04fcfdfc22e54e3b83484522e5cc",
+          "user": {
+            "login": "ihor-sviziev",
+            "id": 1873745,
+            "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/ihor-sviziev",
+            "html_url": "https://github.com/ihor-sviziev",
+            "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+            "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+            "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+            "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+            "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+            "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "I believe we still should support regular IP address, just 198.51.100.1.\r\n\r\nCould you add back such use case?",
+          "created_at": "2020-10-30T12:14:27Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r515055512",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/515055512"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r515055512"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/515055512/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": 242,
+          "original_line": 205,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 41,
+          "position": 106,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/515059962",
+          "pull_request_review_id": 520609183,
+          "id": 515059962,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUxNTA1OTk2Mg==",
+          "diff_hunk": "@@ -127,4 +139,62 @@ public function getAddressInfo()\n             return [];\n         }\n     }\n+\n+    /**\n+     * Normalise / canonicalise list of IP addresses / ranges\n+     *\n+     * Takes a string of IP addresses or ranges (comma separated) and returns a\n+     * string of IP ranges with no overlaps nor duplicates (comma separated).\n+     *\n+     * @param  string $addresses\n+     * @return string\n+     */\n+    private function normaliseIPAddresses(string $addresses): string\n+    {\n+        $addresses = explode(',', $addresses);\n+        $addresses = array_filter($addresses); // remove empty strings\n+        $networks = [];\n+        foreach ($addresses as $address) {\n+            $networks[] = Network::parse(trim($address));\n+        }\n+        $networks = array_unique($networks); // remove obvious duplicates\n+\n+        // Combine adjacent ranges where feasible\n+        if (count($networks) > 1) {\n+            // Sort the list so we can compare each item with the following to\n+            // determine if they are adjacent.\n+            sort($networks, SORT_NATURAL);\n+\n+            // Define end point here as we expect the array to grow within the loop\n+            $penultimate = count($networks) - 1;\n+            for ($i = 0; $i < $penultimate; $i++) {\n+                $a = $networks[$i];\n+                $b = $networks[$i + 1];\n+                if ($a->getLastIP()->next() == $b->getFirstIP()) {\n+                    $range = new Range($a->getFirstIP(), $b->getLastIP());\n+                    foreach ($range->getNetworks() as $network) {\n+                        $networks[] = $network;\n+                    }\n+                }\n+            }\n+        }\n+\n+        // Remove overlapping entries from the list\n+        if (count($networks) > 1) {\n+            // Sort the list so we can compare each item with the following to\n+            // determine if the former includes the latter.\n+            sort($networks, SORT_NATURAL);\n+\n+            $lastRange = null;\n+            $networks = array_filter($networks, function ($network) use (&$lastRange) {\n+                if ($lastRange && $lastRange->contains($network)) {\n+                    return false;\n+                }\n+                $lastRange = Range::parse($network);\n+                return true;\n+            });\n+        }\n+\n+        return implode(',', $networks);\n+    }",
+          "path": "lib/internal/Magento/Framework/App/MaintenanceMode.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "b5e8b86aa8de04fcfdfc22e54e3b83484522e5cc",
+          "user": {
+            "login": "ihor-sviziev",
+            "id": 1873745,
+            "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/ihor-sviziev",
+            "html_url": "https://github.com/ihor-sviziev",
+            "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+            "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+            "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+            "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+            "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+            "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "This is quite complex method. Could you extract it to separate class and cover this logic with unit tests?",
+          "created_at": "2020-10-30T12:22:46Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r515059962",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/515059962"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r515059962"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/515059962/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": 143,
+          "start_side": "RIGHT",
+          "line": null,
+          "original_line": 199,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 129,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/515398956",
+          "pull_request_review_id": 521056223,
+          "id": 515398956,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUxNTM5ODk1Ng==",
+          "diff_hunk": "@@ -202,18 +202,251 @@ public function testSetSingleAddresses()\n \n         $this->flagDir->method('readFile')\n             ->with(MaintenanceMode::IP_FILENAME)\n-            ->willReturn('address1');\n+            ->willReturn('198.51.100.1/32');",
+          "path": "lib/internal/Magento/Framework/App/Test/Unit/MaintenanceModeTest.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "b5e8b86aa8de04fcfdfc22e54e3b83484522e5cc",
+          "user": {
+            "login": "fredden",
+            "id": 334786,
+            "node_id": "MDQ6VXNlcjMzNDc4Ng==",
+            "avatar_url": "https://avatars.githubusercontent.com/u/334786?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/fredden",
+            "html_url": "https://github.com/fredden",
+            "followers_url": "https://api.github.com/users/fredden/followers",
+            "following_url": "https://api.github.com/users/fredden/following{/other_user}",
+            "gists_url": "https://api.github.com/users/fredden/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/fredden/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/fredden/subscriptions",
+            "organizations_url": "https://api.github.com/users/fredden/orgs",
+            "repos_url": "https://api.github.com/users/fredden/repos",
+            "events_url": "https://api.github.com/users/fredden/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/fredden/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "I've added a test to ensure that raw IP addresses (old/current file format) still work.",
+          "created_at": "2020-10-30T21:52:05Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r515398956",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/515398956"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r515398956"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/515398956/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": 242,
+          "original_line": 205,
+          "side": "RIGHT",
+          "in_reply_to_id": 515055512,
+          "author_association": "MEMBER",
+          "original_position": 41,
+          "position": 106,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/517856710",
+          "pull_request_review_id": 524005170,
+          "id": 517856710,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUxNzg1NjcxMA==",
+          "diff_hunk": "@@ -0,0 +1,98 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+namespace Magento\\Framework\\App\\Utility;\n+\n+use IPTools\\Network;\n+use IPTools\\Range;\n+\n+/**\n+ * Utility class to normalise list of IP addresses\n+ */\n+class IPAddressNormaliser\n+{\n+    /**\n+     * Normalise / canonicalise list of IP addresses / ranges\n+     *\n+     * @param  string[] $addresses\n+     * @return string[]\n+     */\n+    public function execute(array &$addresses): array",
+          "path": "lib/internal/Magento/Framework/App/Utility/IPAddressNormaliser.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "f7f4728bdbf0a06f56ca9be4db4169330c68da68",
+          "user": {
+            "login": "ihor-sviziev",
+            "id": 1873745,
+            "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/ihor-sviziev",
+            "html_url": "https://github.com/ihor-sviziev",
+            "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+            "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+            "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+            "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+            "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+            "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "I believe we shouldn't use reference here, it's not really logical to modify original array when you're still returning result array",
+          "created_at": "2020-11-05T08:05:49Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r517856710",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/517856710"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r517856710"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/517856710/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 22,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 22,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/519046764",
+          "pull_request_review_id": 525545611,
+          "id": 519046764,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUxOTA0Njc2NA==",
+          "diff_hunk": "@@ -0,0 +1,98 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+namespace Magento\\Framework\\App\\Utility;\n+\n+use IPTools\\Network;\n+use IPTools\\Range;\n+\n+/**\n+ * Utility class to normalise list of IP addresses\n+ */\n+class IPAddressNormaliser\n+{\n+    /**\n+     * Normalise / canonicalise list of IP addresses / ranges\n+     *\n+     * @param  string[] $addresses\n+     * @return string[]\n+     */\n+    public function execute(array &$addresses): array",
+          "path": "lib/internal/Magento/Framework/App/Utility/IPAddressNormaliser.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "f7f4728bdbf0a06f56ca9be4db4169330c68da68",
+          "user": {
+            "login": "fredden",
+            "id": 334786,
+            "node_id": "MDQ6VXNlcjMzNDc4Ng==",
+            "avatar_url": "https://avatars.githubusercontent.com/u/334786?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/fredden",
+            "html_url": "https://github.com/fredden",
+            "followers_url": "https://api.github.com/users/fredden/followers",
+            "following_url": "https://api.github.com/users/fredden/following{/other_user}",
+            "gists_url": "https://api.github.com/users/fredden/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/fredden/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/fredden/subscriptions",
+            "organizations_url": "https://api.github.com/users/fredden/orgs",
+            "repos_url": "https://api.github.com/users/fredden/repos",
+            "events_url": "https://api.github.com/users/fredden/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/fredden/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Good catch. This is left over from an architecture change I made. I'll fix this up now.",
+          "created_at": "2020-11-06T23:00:15Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r519046764",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/519046764"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r519046764"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/519046764/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 22,
+          "side": "RIGHT",
+          "in_reply_to_id": 517856710,
+          "author_association": "MEMBER",
+          "original_position": 22,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530432597",
+          "pull_request_review_id": 538579653,
+          "id": 530432597,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUzMDQzMjU5Nw==",
+          "diff_hunk": "@@ -0,0 +1,98 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+namespace Magento\\Framework\\App\\Utility;\n+\n+use IPTools\\Network;\n+use IPTools\\Range;\n+\n+/**\n+ * Utility class to normalise list of IP addresses\n+ */\n+class IPAddressNormaliser\n+{\n+    /**\n+     * Normalise / canonicalise list of IP addresses / ranges\n+     *\n+     * @param  string[] $addresses\n+     * @return string[]\n+     */\n+    public function execute(array $addresses): array\n+    {\n+        $addresses = array_filter($addresses); // remove empty strings\n+\n+        $networks = [];\n+        foreach ($addresses as $address) {\n+            $networks[] = Network::parse(trim($address));\n+        }\n+\n+        $networks = array_unique($networks); // remove obvious duplicates\n+\n+        do {\n+            $startCount = count($networks);\n+            $this->combineAdjacentNetworks($networks);\n+            $this->removeOverlappingNetworks($networks);\n+            $endCount = count($networks);\n+        } while ($startCount != $endCount);\n+\n+        $networks = array_map(function ($network) {\n+            return (string) $network;\n+        }, $networks);\n+\n+        return $networks;\n+    }\n+\n+    /**\n+     * Combine adjacent networks\n+     *\n+     * @param string[] $networks\n+     * @return void\n+     */\n+    private function combineAdjacentNetworks(array &$networks): void\n+    {\n+        if (count($networks) > 1) {\n+            // Sort the list so we can compare each item with the following to\n+            // determine if they are adjacent.\n+            sort($networks, SORT_NATURAL);\n+\n+            // Define end point here as we expect the array to grow within the loop\n+            $penultimate = count($networks) - 2;\n+            for ($i = 0; $i <= $penultimate; $i++) {\n+                $a = $networks[$i];\n+                $b = $networks[$i + 1];\n+                if ($a->getLastIP()->next() == $b->getFirstIP()) {",
+          "path": "lib/internal/Magento/Framework/App/Utility/IPAddressNormaliser.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "32f381c949413d938e25ac5b058537cc3b7fa8ac",
+          "user": {
+            "login": "ihor-sviziev",
+            "id": 1873745,
+            "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/ihor-sviziev",
+            "html_url": "https://github.com/ihor-sviziev",
+            "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+            "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+            "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+            "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+            "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+            "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "can we use === here?",
+          "created_at": "2020-11-25T14:54:08Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r530432597",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/530432597"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r530432597"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530432597/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 65,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 65,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530433317",
+          "pull_request_review_id": 538579653,
+          "id": 530433317,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUzMDQzMzMxNw==",
+          "diff_hunk": "@@ -5,6 +5,8 @@\n  */\n namespace Magento\\Backend\\Model\\Validator;\n \n+use IPTools\\Network;",
+          "path": "app/code/Magento/Backend/Model/Validator/IpValidator.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "32f381c949413d938e25ac5b058537cc3b7fa8ac",
+          "user": {
+            "login": "ihor-sviziev",
+            "id": 1873745,
+            "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/ihor-sviziev",
+            "html_url": "https://github.com/ihor-sviziev",
+            "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+            "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+            "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+            "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+            "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+            "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Seems like dependency should be added to module's composer.json file",
+          "created_at": "2020-11-25T14:55:01Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r530433317",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/530433317"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r530433317"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530433317/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 8,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 4,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530694319",
+          "pull_request_review_id": 538905727,
+          "id": 530694319,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUzMDY5NDMxOQ==",
+          "diff_hunk": "@@ -0,0 +1,98 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+namespace Magento\\Framework\\App\\Utility;\n+\n+use IPTools\\Network;\n+use IPTools\\Range;\n+\n+/**\n+ * Utility class to normalise list of IP addresses\n+ */\n+class IPAddressNormaliser\n+{\n+    /**\n+     * Normalise / canonicalise list of IP addresses / ranges\n+     *\n+     * @param  string[] $addresses\n+     * @return string[]\n+     */\n+    public function execute(array $addresses): array\n+    {\n+        $addresses = array_filter($addresses); // remove empty strings\n+\n+        $networks = [];\n+        foreach ($addresses as $address) {\n+            $networks[] = Network::parse(trim($address));\n+        }\n+\n+        $networks = array_unique($networks); // remove obvious duplicates\n+\n+        do {\n+            $startCount = count($networks);\n+            $this->combineAdjacentNetworks($networks);\n+            $this->removeOverlappingNetworks($networks);\n+            $endCount = count($networks);\n+        } while ($startCount != $endCount);\n+\n+        $networks = array_map(function ($network) {\n+            return (string) $network;\n+        }, $networks);\n+\n+        return $networks;\n+    }\n+\n+    /**\n+     * Combine adjacent networks\n+     *\n+     * @param string[] $networks\n+     * @return void\n+     */\n+    private function combineAdjacentNetworks(array &$networks): void\n+    {\n+        if (count($networks) > 1) {\n+            // Sort the list so we can compare each item with the following to\n+            // determine if they are adjacent.\n+            sort($networks, SORT_NATURAL);\n+\n+            // Define end point here as we expect the array to grow within the loop\n+            $penultimate = count($networks) - 2;\n+            for ($i = 0; $i <= $penultimate; $i++) {\n+                $a = $networks[$i];\n+                $b = $networks[$i + 1];\n+                if ($a->getLastIP()->next() == $b->getFirstIP()) {",
+          "path": "lib/internal/Magento/Framework/App/Utility/IPAddressNormaliser.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "32f381c949413d938e25ac5b058537cc3b7fa8ac",
+          "user": {
+            "login": "fredden",
+            "id": 334786,
+            "node_id": "MDQ6VXNlcjMzNDc4Ng==",
+            "avatar_url": "https://avatars.githubusercontent.com/u/334786?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/fredden",
+            "html_url": "https://github.com/fredden",
+            "followers_url": "https://api.github.com/users/fredden/followers",
+            "following_url": "https://api.github.com/users/fredden/following{/other_user}",
+            "gists_url": "https://api.github.com/users/fredden/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/fredden/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/fredden/subscriptions",
+            "organizations_url": "https://api.github.com/users/fredden/orgs",
+            "repos_url": "https://api.github.com/users/fredden/repos",
+            "events_url": "https://api.github.com/users/fredden/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/fredden/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "We can; should we?",
+          "created_at": "2020-11-25T23:36:40Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r530694319",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/530694319"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r530694319"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530694319/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 65,
+          "side": "RIGHT",
+          "in_reply_to_id": 530432597,
+          "author_association": "MEMBER",
+          "original_position": 65,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530694506",
+          "pull_request_review_id": 538905937,
+          "id": 530694506,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUzMDY5NDUwNg==",
+          "diff_hunk": "@@ -5,6 +5,8 @@\n  */\n namespace Magento\\Backend\\Model\\Validator;\n \n+use IPTools\\Network;",
+          "path": "app/code/Magento/Backend/Model/Validator/IpValidator.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "32f381c949413d938e25ac5b058537cc3b7fa8ac",
+          "user": {
+            "login": "fredden",
+            "id": 334786,
+            "node_id": "MDQ6VXNlcjMzNDc4Ng==",
+            "avatar_url": "https://avatars.githubusercontent.com/u/334786?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/fredden",
+            "html_url": "https://github.com/fredden",
+            "followers_url": "https://api.github.com/users/fredden/followers",
+            "following_url": "https://api.github.com/users/fredden/following{/other_user}",
+            "gists_url": "https://api.github.com/users/fredden/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/fredden/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/fredden/subscriptions",
+            "organizations_url": "https://api.github.com/users/fredden/orgs",
+            "repos_url": "https://api.github.com/users/fredden/repos",
+            "events_url": "https://api.github.com/users/fredden/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/fredden/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Sorry, I saw the files were moved in the most recent merge, but forgot to add the dependency here. I'll get that sorted.",
+          "created_at": "2020-11-25T23:37:22Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r530694506",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/530694506"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r530694506"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530694506/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 8,
+          "side": "RIGHT",
+          "in_reply_to_id": 530433317,
+          "author_association": "MEMBER",
+          "original_position": 4,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530855926",
+          "pull_request_review_id": 539094787,
+          "id": 530855926,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUzMDg1NTkyNg==",
+          "diff_hunk": "@@ -0,0 +1,98 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+namespace Magento\\Framework\\App\\Utility;\n+\n+use IPTools\\Network;\n+use IPTools\\Range;\n+\n+/**\n+ * Utility class to normalise list of IP addresses\n+ */\n+class IPAddressNormaliser\n+{\n+    /**\n+     * Normalise / canonicalise list of IP addresses / ranges\n+     *\n+     * @param  string[] $addresses\n+     * @return string[]\n+     */\n+    public function execute(array $addresses): array\n+    {\n+        $addresses = array_filter($addresses); // remove empty strings\n+\n+        $networks = [];\n+        foreach ($addresses as $address) {\n+            $networks[] = Network::parse(trim($address));\n+        }\n+\n+        $networks = array_unique($networks); // remove obvious duplicates\n+\n+        do {\n+            $startCount = count($networks);\n+            $this->combineAdjacentNetworks($networks);\n+            $this->removeOverlappingNetworks($networks);\n+            $endCount = count($networks);\n+        } while ($startCount != $endCount);\n+\n+        $networks = array_map(function ($network) {\n+            return (string) $network;\n+        }, $networks);\n+\n+        return $networks;\n+    }\n+\n+    /**\n+     * Combine adjacent networks\n+     *\n+     * @param string[] $networks\n+     * @return void\n+     */\n+    private function combineAdjacentNetworks(array &$networks): void\n+    {\n+        if (count($networks) > 1) {\n+            // Sort the list so we can compare each item with the following to\n+            // determine if they are adjacent.\n+            sort($networks, SORT_NATURAL);\n+\n+            // Define end point here as we expect the array to grow within the loop\n+            $penultimate = count($networks) - 2;\n+            for ($i = 0; $i <= $penultimate; $i++) {\n+                $a = $networks[$i];\n+                $b = $networks[$i + 1];\n+                if ($a->getLastIP()->next() == $b->getFirstIP()) {",
+          "path": "lib/internal/Magento/Framework/App/Utility/IPAddressNormaliser.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "32f381c949413d938e25ac5b058537cc3b7fa8ac",
+          "user": {
+            "login": "fredden",
+            "id": 334786,
+            "node_id": "MDQ6VXNlcjMzNDc4Ng==",
+            "avatar_url": "https://avatars.githubusercontent.com/u/334786?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/fredden",
+            "html_url": "https://github.com/fredden",
+            "followers_url": "https://api.github.com/users/fredden/followers",
+            "following_url": "https://api.github.com/users/fredden/following{/other_user}",
+            "gists_url": "https://api.github.com/users/fredden/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/fredden/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/fredden/subscriptions",
+            "organizations_url": "https://api.github.com/users/fredden/orgs",
+            "repos_url": "https://api.github.com/users/fredden/repos",
+            "events_url": "https://api.github.com/users/fredden/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/fredden/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Actually, no we can't. These functions both return an IP object. We could cast them to strings and strictly compare those, but I think the current implementation is more legible than that would be.",
+          "created_at": "2020-11-26T08:38:18Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r530855926",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/530855926"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r530855926"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530855926/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 65,
+          "side": "RIGHT",
+          "in_reply_to_id": 530432597,
+          "author_association": "MEMBER",
+          "original_position": 65,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530864384",
+          "pull_request_review_id": 539105801,
+          "id": 530864384,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUzMDg2NDM4NA==",
+          "diff_hunk": "@@ -0,0 +1,98 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+namespace Magento\\Framework\\App\\Utility;\n+\n+use IPTools\\Network;\n+use IPTools\\Range;\n+\n+/**\n+ * Utility class to normalise list of IP addresses\n+ */\n+class IPAddressNormaliser\n+{\n+    /**\n+     * Normalise / canonicalise list of IP addresses / ranges\n+     *\n+     * @param  string[] $addresses\n+     * @return string[]\n+     */\n+    public function execute(array $addresses): array\n+    {\n+        $addresses = array_filter($addresses); // remove empty strings\n+\n+        $networks = [];\n+        foreach ($addresses as $address) {\n+            $networks[] = Network::parse(trim($address));\n+        }\n+\n+        $networks = array_unique($networks); // remove obvious duplicates\n+\n+        do {\n+            $startCount = count($networks);\n+            $this->combineAdjacentNetworks($networks);\n+            $this->removeOverlappingNetworks($networks);\n+            $endCount = count($networks);\n+        } while ($startCount != $endCount);\n+\n+        $networks = array_map(function ($network) {\n+            return (string) $network;\n+        }, $networks);\n+\n+        return $networks;\n+    }\n+\n+    /**\n+     * Combine adjacent networks\n+     *\n+     * @param string[] $networks\n+     * @return void\n+     */\n+    private function combineAdjacentNetworks(array &$networks): void\n+    {\n+        if (count($networks) > 1) {\n+            // Sort the list so we can compare each item with the following to\n+            // determine if they are adjacent.\n+            sort($networks, SORT_NATURAL);\n+\n+            // Define end point here as we expect the array to grow within the loop\n+            $penultimate = count($networks) - 2;\n+            for ($i = 0; $i <= $penultimate; $i++) {\n+                $a = $networks[$i];\n+                $b = $networks[$i + 1];\n+                if ($a->getLastIP()->next() == $b->getFirstIP()) {",
+          "path": "lib/internal/Magento/Framework/App/Utility/IPAddressNormaliser.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "32f381c949413d938e25ac5b058537cc3b7fa8ac",
+          "user": {
+            "login": "ihor-sviziev",
+            "id": 1873745,
+            "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/ihor-sviziev",
+            "html_url": "https://github.com/ihor-sviziev",
+            "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+            "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+            "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+            "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+            "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+            "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Usually using == instead of === in some cases causing not obvious issues in not obvious cases. I really prefer to have strict comparison here, even if we'll add some string comparison",
+          "created_at": "2020-11-26T08:52:19Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r530864384",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/530864384"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r530864384"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530864384/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 65,
+          "side": "RIGHT",
+          "in_reply_to_id": 530432597,
+          "author_association": "CONTRIBUTOR",
+          "original_position": 65,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/531235941",
+          "pull_request_review_id": 539561505,
+          "id": 531235941,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUzMTIzNTk0MQ==",
+          "diff_hunk": "@@ -0,0 +1,98 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+namespace Magento\\Framework\\App\\Utility;\n+\n+use IPTools\\Network;\n+use IPTools\\Range;\n+\n+/**\n+ * Utility class to normalise list of IP addresses\n+ */\n+class IPAddressNormaliser\n+{\n+    /**\n+     * Normalise / canonicalise list of IP addresses / ranges\n+     *\n+     * @param  string[] $addresses\n+     * @return string[]\n+     */\n+    public function execute(array $addresses): array\n+    {\n+        $addresses = array_filter($addresses); // remove empty strings\n+\n+        $networks = [];\n+        foreach ($addresses as $address) {\n+            $networks[] = Network::parse(trim($address));\n+        }\n+\n+        $networks = array_unique($networks); // remove obvious duplicates\n+\n+        do {\n+            $startCount = count($networks);\n+            $this->combineAdjacentNetworks($networks);\n+            $this->removeOverlappingNetworks($networks);\n+            $endCount = count($networks);\n+        } while ($startCount != $endCount);\n+\n+        $networks = array_map(function ($network) {\n+            return (string) $network;\n+        }, $networks);\n+\n+        return $networks;\n+    }\n+\n+    /**\n+     * Combine adjacent networks\n+     *\n+     * @param string[] $networks\n+     * @return void\n+     */\n+    private function combineAdjacentNetworks(array &$networks): void\n+    {\n+        if (count($networks) > 1) {\n+            // Sort the list so we can compare each item with the following to\n+            // determine if they are adjacent.\n+            sort($networks, SORT_NATURAL);\n+\n+            // Define end point here as we expect the array to grow within the loop\n+            $penultimate = count($networks) - 2;\n+            for ($i = 0; $i <= $penultimate; $i++) {\n+                $a = $networks[$i];\n+                $b = $networks[$i + 1];\n+                if ($a->getLastIP()->next() == $b->getFirstIP()) {",
+          "path": "lib/internal/Magento/Framework/App/Utility/IPAddressNormaliser.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "32f381c949413d938e25ac5b058537cc3b7fa8ac",
+          "user": {
+            "login": "fredden",
+            "id": 334786,
+            "node_id": "MDQ6VXNlcjMzNDc4Ng==",
+            "avatar_url": "https://avatars.githubusercontent.com/u/334786?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/fredden",
+            "html_url": "https://github.com/fredden",
+            "followers_url": "https://api.github.com/users/fredden/followers",
+            "following_url": "https://api.github.com/users/fredden/following{/other_user}",
+            "gists_url": "https://api.github.com/users/fredden/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/fredden/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/fredden/subscriptions",
+            "organizations_url": "https://api.github.com/users/fredden/orgs",
+            "repos_url": "https://api.github.com/users/fredden/repos",
+            "events_url": "https://api.github.com/users/fredden/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/fredden/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Ihor, is this what you're looking for?\r\n![Screenshot_2020-11-26_21-59-20](https://user-images.githubusercontent.com/334786/100393773-b8b06c80-3032-11eb-80f0-91555168eda9.png)\r\n",
+          "created_at": "2020-11-26T22:00:44Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r531235941",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/531235941"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r531235941"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/531235941/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 65,
+          "side": "RIGHT",
+          "in_reply_to_id": 530432597,
+          "author_association": "MEMBER",
+          "original_position": 65,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/532114556",
+          "pull_request_review_id": 540421693,
+          "id": 532114556,
+          "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUzMjExNDU1Ng==",
+          "diff_hunk": "@@ -0,0 +1,98 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+namespace Magento\\Framework\\App\\Utility;\n+\n+use IPTools\\Network;\n+use IPTools\\Range;\n+\n+/**\n+ * Utility class to normalise list of IP addresses\n+ */\n+class IPAddressNormaliser\n+{\n+    /**\n+     * Normalise / canonicalise list of IP addresses / ranges\n+     *\n+     * @param  string[] $addresses\n+     * @return string[]\n+     */\n+    public function execute(array $addresses): array\n+    {\n+        $addresses = array_filter($addresses); // remove empty strings\n+\n+        $networks = [];\n+        foreach ($addresses as $address) {\n+            $networks[] = Network::parse(trim($address));\n+        }\n+\n+        $networks = array_unique($networks); // remove obvious duplicates\n+\n+        do {\n+            $startCount = count($networks);\n+            $this->combineAdjacentNetworks($networks);\n+            $this->removeOverlappingNetworks($networks);\n+            $endCount = count($networks);\n+        } while ($startCount != $endCount);\n+\n+        $networks = array_map(function ($network) {\n+            return (string) $network;\n+        }, $networks);\n+\n+        return $networks;\n+    }\n+\n+    /**\n+     * Combine adjacent networks\n+     *\n+     * @param string[] $networks\n+     * @return void\n+     */\n+    private function combineAdjacentNetworks(array &$networks): void\n+    {\n+        if (count($networks) > 1) {\n+            // Sort the list so we can compare each item with the following to\n+            // determine if they are adjacent.\n+            sort($networks, SORT_NATURAL);\n+\n+            // Define end point here as we expect the array to grow within the loop\n+            $penultimate = count($networks) - 2;\n+            for ($i = 0; $i <= $penultimate; $i++) {\n+                $a = $networks[$i];\n+                $b = $networks[$i + 1];\n+                if ($a->getLastIP()->next() == $b->getFirstIP()) {",
+          "path": "lib/internal/Magento/Framework/App/Utility/IPAddressNormaliser.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "32f381c949413d938e25ac5b058537cc3b7fa8ac",
+          "user": {
+            "login": "ihor-sviziev",
+            "id": 1873745,
+            "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/ihor-sviziev",
+            "html_url": "https://github.com/ihor-sviziev",
+            "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+            "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+            "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+            "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+            "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+            "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "yeah! something like that!",
+          "created_at": "2020-11-28T22:36:45Z",
+          "updated_at": "2021-03-03T20:26:15Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r532114556",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/532114556"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r532114556"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/532114556/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 65,
+          "side": "RIGHT",
+          "in_reply_to_id": 530432597,
+          "author_association": "CONTRIBUTOR",
+          "original_position": 65,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1495445100",
+          "pull_request_review_id": 1889806373,
+          "id": 1495445100,
+          "node_id": "PRRC_kwDOACwCD85ZIq5s",
+          "diff_hunk": "@@ -186,11 +192,146 @@ public function testSetAddresses()\n     }\n \n     /**\n-     * Set single address test\n+     * Set single IPv4 address test\n+     *\n+     * @return void\n+     */\n+    public function testSetSingleAddressV4Legacy()",
+          "path": "lib/internal/Magento/Framework/App/Test/Unit/MaintenanceModeTest.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "8aa0f015fef7326ce9afee9878e6b265224528ca",
+          "user": {
+            "login": "engcom-Hotel",
+            "id": 51681618,
+            "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+            "avatar_url": "https://avatars.githubusercontent.com/u/51681618?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/engcom-Hotel",
+            "html_url": "https://github.com/engcom-Hotel",
+            "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+            "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+            "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+            "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+            "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+            "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Please add the return type for the newly added and modified methods\r\n\r\n```suggestion\r\n    public function testSetSingleAddressV4Legacy(): void\r\n```",
+          "created_at": "2024-02-20T08:51:55Z",
+          "updated_at": "2024-02-20T09:07:27Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r1495445100",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1495445100"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r1495445100"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1495445100/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": null,
+          "original_line": 199,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 63,
+          "position": 1,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1500275925",
+          "pull_request_review_id": 1897477878,
+          "id": 1500275925,
+          "node_id": "PRRC_kwDOACwCD85ZbGTV",
+          "diff_hunk": "@@ -45,36 +47,59 @@ class MaintenanceMode\n     private $eventManager;\n \n     /**\n-     * @param \\Magento\\Framework\\Filesystem $filesystem\n+     * @param Filesystem $filesystem\n+     * @param Utility\\IPAddress $ipAddress\n      * @param Manager|null $eventManager\n      */\n-    public function __construct(Filesystem $filesystem, ?Manager $eventManager = null)\n-    {\n+    public function __construct(\n+        Filesystem $filesystem,\n+        private readonly Utility\\IPAddress $ipAddress,\n+        Manager $eventManager = null,",
+          "path": "lib/internal/Magento/Framework/App/MaintenanceMode.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "d098a1a1782ae19af2bb58d79f42770b4120832f",
+          "user": {
+            "login": "engcom-Hotel",
+            "id": 51681618,
+            "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+            "avatar_url": "https://avatars.githubusercontent.com/u/51681618?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/engcom-Hotel",
+            "html_url": "https://github.com/engcom-Hotel",
+            "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+            "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+            "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+            "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+            "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+            "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Have you removed the question mark(?) intentionally from the `Manager`?",
+          "created_at": "2024-02-23T07:11:50Z",
+          "updated_at": "2024-02-23T09:51:14Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r1500275925",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1500275925"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r1500275925"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1500275925/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": 57,
+          "original_line": 57,
+          "side": "RIGHT",
+          "author_association": "CONTRIBUTOR",
+          "original_position": 56,
+          "position": 56,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1500442015",
+          "pull_request_review_id": 1897757219,
+          "id": 1500442015,
+          "node_id": "PRRC_kwDOACwCD85Zbu2f",
+          "diff_hunk": "@@ -45,36 +47,59 @@ class MaintenanceMode\n     private $eventManager;\n \n     /**\n-     * @param \\Magento\\Framework\\Filesystem $filesystem\n+     * @param Filesystem $filesystem\n+     * @param Utility\\IPAddress $ipAddress\n      * @param Manager|null $eventManager\n      */\n-    public function __construct(Filesystem $filesystem, ?Manager $eventManager = null)\n-    {\n+    public function __construct(\n+        Filesystem $filesystem,\n+        private readonly Utility\\IPAddress $ipAddress,\n+        Manager $eventManager = null,",
+          "path": "lib/internal/Magento/Framework/App/MaintenanceMode.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "d098a1a1782ae19af2bb58d79f42770b4120832f",
+          "user": {
+            "login": "fredden",
+            "id": 334786,
+            "node_id": "MDQ6VXNlcjMzNDc4Ng==",
+            "avatar_url": "https://avatars.githubusercontent.com/u/334786?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/fredden",
+            "html_url": "https://github.com/fredden",
+            "followers_url": "https://api.github.com/users/fredden/followers",
+            "following_url": "https://api.github.com/users/fredden/following{/other_user}",
+            "gists_url": "https://api.github.com/users/fredden/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/fredden/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/fredden/subscriptions",
+            "organizations_url": "https://api.github.com/users/fredden/orgs",
+            "repos_url": "https://api.github.com/users/fredden/repos",
+            "events_url": "https://api.github.com/users/fredden/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/fredden/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Yes. The value should either be supplied with the correct type, or not supplied. By specifying a default value of `= null`, the type implicitly accepts a null value. This is a documentation improvement, and not a code/policy change.",
+          "created_at": "2024-02-23T10:00:23Z",
+          "updated_at": "2024-02-23T10:00:23Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r1500442015",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1500442015"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r1500442015"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1500442015/reactions",
+            "total_count": 2,
+            "+1": 1,
+            "-1": 1,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": 57,
+          "original_line": 57,
+          "side": "RIGHT",
+          "in_reply_to_id": 1500275925,
+          "author_association": "MEMBER",
+          "original_position": 56,
+          "position": 56,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1603958072",
+          "pull_request_review_id": 2061752318,
+          "id": 1603958072,
+          "node_id": "PRRC_kwDOACwCD85fmnU4",
+          "diff_hunk": "@@ -45,36 +47,59 @@ class MaintenanceMode\n     private $eventManager;\n \n     /**\n-     * @param \\Magento\\Framework\\Filesystem $filesystem\n+     * @param Filesystem $filesystem\n+     * @param Utility\\IPAddress $ipAddress\n      * @param Manager|null $eventManager\n      */\n-    public function __construct(Filesystem $filesystem, ?Manager $eventManager = null)\n-    {\n+    public function __construct(\n+        Filesystem $filesystem,\n+        private readonly Utility\\IPAddress $ipAddress,\n+        Manager $eventManager = null,",
+          "path": "lib/internal/Magento/Framework/App/MaintenanceMode.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "d098a1a1782ae19af2bb58d79f42770b4120832f",
+          "user": {
+            "login": "thomas-kl1",
+            "id": 20971693,
+            "node_id": "MDQ6VXNlcjIwOTcxNjkz",
+            "avatar_url": "https://avatars.githubusercontent.com/u/20971693?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/thomas-kl1",
+            "html_url": "https://github.com/thomas-kl1",
+            "followers_url": "https://api.github.com/users/thomas-kl1/followers",
+            "following_url": "https://api.github.com/users/thomas-kl1/following{/other_user}",
+            "gists_url": "https://api.github.com/users/thomas-kl1/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/thomas-kl1/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/thomas-kl1/subscriptions",
+            "organizations_url": "https://api.github.com/users/thomas-kl1/orgs",
+            "repos_url": "https://api.github.com/users/thomas-kl1/repos",
+            "events_url": "https://api.github.com/users/thomas-kl1/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/thomas-kl1/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "Implicit nullable is deprecated in php8.4, so this change should be reverted",
+          "created_at": "2024-05-16T19:54:33Z",
+          "updated_at": "2024-05-16T19:54:33Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r1603958072",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1603958072"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r1603958072"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1603958072/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": 57,
+          "original_line": 57,
+          "side": "RIGHT",
+          "in_reply_to_id": 1500275925,
+          "author_association": "MEMBER",
+          "original_position": 56,
+          "position": 56,
+          "subject_type": "line"
+        },
+        {
+          "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1603989448",
+          "pull_request_review_id": 2061808591,
+          "id": 1603989448,
+          "node_id": "PRRC_kwDOACwCD85fmu_I",
+          "diff_hunk": "@@ -45,36 +47,59 @@ class MaintenanceMode\n     private $eventManager;\n \n     /**\n-     * @param \\Magento\\Framework\\Filesystem $filesystem\n+     * @param Filesystem $filesystem\n+     * @param Utility\\IPAddress $ipAddress\n      * @param Manager|null $eventManager\n      */\n-    public function __construct(Filesystem $filesystem, ?Manager $eventManager = null)\n-    {\n+    public function __construct(\n+        Filesystem $filesystem,\n+        private readonly Utility\\IPAddress $ipAddress,\n+        Manager $eventManager = null,",
+          "path": "lib/internal/Magento/Framework/App/MaintenanceMode.php",
+          "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+          "original_commit_id": "d098a1a1782ae19af2bb58d79f42770b4120832f",
+          "user": {
+            "login": "fredden",
+            "id": 334786,
+            "node_id": "MDQ6VXNlcjMzNDc4Ng==",
+            "avatar_url": "https://avatars.githubusercontent.com/u/334786?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/fredden",
+            "html_url": "https://github.com/fredden",
+            "followers_url": "https://api.github.com/users/fredden/followers",
+            "following_url": "https://api.github.com/users/fredden/following{/other_user}",
+            "gists_url": "https://api.github.com/users/fredden/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/fredden/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/fredden/subscriptions",
+            "organizations_url": "https://api.github.com/users/fredden/orgs",
+            "repos_url": "https://api.github.com/users/fredden/repos",
+            "events_url": "https://api.github.com/users/fredden/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/fredden/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "body": "@thomas-kl1 Yes. That change to PHP happened after this code was authored. When Magento adds support for PHP v8.4+, this will be one of the (likely many) changes required.",
+          "created_at": "2024-05-16T20:25:35Z",
+          "updated_at": "2024-05-16T20:25:36Z",
+          "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r1603989448",
+          "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+          "_links": {
+            "self": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1603989448"
+            },
+            "html": {
+              "href": "https://github.com/magento/magento2/pull/30699#discussion_r1603989448"
+            },
+            "pull_request": {
+              "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+            }
+          },
+          "reactions": {
+            "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1603989448/reactions",
+            "total_count": 0,
+            "+1": 0,
+            "-1": 0,
+            "laugh": 0,
+            "hooray": 0,
+            "confused": 0,
+            "heart": 0,
+            "rocket": 0,
+            "eyes": 0
+          },
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
+          "line": 57,
+          "original_line": 57,
+          "side": "RIGHT",
+          "in_reply_to_id": 1500275925,
+          "author_association": "MEMBER",
+          "original_position": 56,
+          "position": 56,
+          "subject_type": "line"
+        }
+      ],
+      "responseDigest": "c9cbf7e60ed24ab83bf0545e6d3a49361f8581b802176ad525b62301d9568b4a",
+      "previousPageDigest": null,
+      "pageDigest": "0cb276a77aa2da1b1d165b7aa6021cb324f2f5af44f1f79882e010cc1687a310"
+    }
+  ],
+  "rawCommentCount": 43,
+  "rawCommentPopulationDigest": "0d398d0079aeb7600ca05704268f69e2e64ab71205c22ed5caee8858b8f1566c",
+  "rejectedCommentCount": 23,
+  "rejectionCounts": {
+    "not_root_human_right_review_comment": 23,
+    "noncanonical_pull_request_url": 0,
+    "invalid_candidate_identity": 0
+  },
+  "candidateCount": 12,
+  "candidates": [
+    {
+      "pullRequest": 39099,
+      "headSha": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+      "reviewCommentCount": 3,
+      "actionableHintCount": 2,
+      "commentIds": [
+        1819089463,
+        1819095028,
+        1819305393
+      ],
+      "reviewers": [
+        "hostep",
+        "ilnytskyi"
+      ],
+      "firstCommentAt": "2024-10-28T13:47:09Z",
+      "lastCommentAt": "2024-10-28T15:44:34Z"
+    },
+    {
+      "pullRequest": 39099,
+      "headSha": "c9dd5e2ca9af99909e4df9ed45100a5241d6f0d7",
+      "reviewCommentCount": 1,
+      "actionableHintCount": 0,
+      "commentIds": [
+        1728997329
+      ],
+      "reviewers": [
+        "Bashev"
+      ],
+      "firstCommentAt": "2024-08-23T13:39:30Z",
+      "lastCommentAt": "2024-08-23T13:39:30Z"
+    },
+    {
+      "pullRequest": 40023,
+      "headSha": "7b8032d661e59e25147c773d6cbeb0a4efa2505f",
+      "reviewCommentCount": 1,
+      "actionableHintCount": 1,
+      "commentIds": [
+        2168595859
+      ],
+      "reviewers": [
+        "KrasnoshchokBohdan"
+      ],
+      "firstCommentAt": "2025-06-26T09:12:54Z",
+      "lastCommentAt": "2025-06-26T09:12:54Z"
+    },
+    {
+      "pullRequest": 40023,
+      "headSha": "4582620cceb3c852e4691e30b7c025fcdc7ff4cf",
+      "reviewCommentCount": 1,
+      "actionableHintCount": 0,
+      "commentIds": [
+        2348826803
+      ],
+      "reviewers": [
+        "engcom-Hotel"
+      ],
+      "firstCommentAt": "2025-09-15T12:24:51Z",
+      "lastCommentAt": "2025-09-15T12:24:51Z"
+    },
+    {
+      "pullRequest": 37362,
+      "headSha": "58467b85045cef860a88c2e447cc2b338ce6f571",
+      "reviewCommentCount": 1,
+      "actionableHintCount": 1,
+      "commentIds": [
+        1850098743
+      ],
+      "reviewers": [
+        "engcom-Hotel"
+      ],
+      "firstCommentAt": "2024-11-20T10:58:01Z",
+      "lastCommentAt": "2024-11-20T10:58:01Z"
+    },
+    {
+      "pullRequest": 38270,
+      "headSha": "5b77b2c64924993b4ad6530196918d84ea3aad41",
+      "reviewCommentCount": 4,
+      "actionableHintCount": 0,
+      "commentIds": [
+        1751316514,
+        1751317681,
+        1751338954,
+        1751340624
+      ],
+      "reviewers": [
+        "engcom-Hotel"
+      ],
+      "firstCommentAt": "2024-09-10T06:13:07Z",
+      "lastCommentAt": "2024-09-10T06:35:01Z"
+    },
+    {
+      "pullRequest": 30699,
+      "headSha": "b5e8b86aa8de04fcfdfc22e54e3b83484522e5cc",
+      "reviewCommentCount": 3,
+      "actionableHintCount": 3,
+      "commentIds": [
+        514634147,
+        515055512,
+        515059962
+      ],
+      "reviewers": [
+        "fredden",
+        "ihor-sviziev"
+      ],
+      "firstCommentAt": "2020-10-30T00:00:31Z",
+      "lastCommentAt": "2020-10-30T12:22:46Z"
+    },
+    {
+      "pullRequest": 30699,
+      "headSha": "32f381c949413d938e25ac5b058537cc3b7fa8ac",
+      "reviewCommentCount": 2,
+      "actionableHintCount": 1,
+      "commentIds": [
+        530432597,
+        530433317
+      ],
+      "reviewers": [
+        "ihor-sviziev"
+      ],
+      "firstCommentAt": "2020-11-25T14:54:08Z",
+      "lastCommentAt": "2020-11-25T14:55:01Z"
+    },
+    {
+      "pullRequest": 30699,
+      "headSha": "8aa0f015fef7326ce9afee9878e6b265224528ca",
+      "reviewCommentCount": 1,
+      "actionableHintCount": 1,
+      "commentIds": [
+        1495445100
+      ],
+      "reviewers": [
+        "engcom-Hotel"
+      ],
+      "firstCommentAt": "2024-02-20T08:51:55Z",
+      "lastCommentAt": "2024-02-20T08:51:55Z"
+    },
+    {
+      "pullRequest": 30699,
+      "headSha": "e5a4cae430d5b5911acd7411ac434ad11f5271e7",
+      "reviewCommentCount": 1,
+      "actionableHintCount": 1,
+      "commentIds": [
+        514151596
+      ],
+      "reviewers": [
+        "ihor-sviziev"
+      ],
+      "firstCommentAt": "2020-10-29T10:23:56Z",
+      "lastCommentAt": "2020-10-29T10:23:56Z"
+    },
+    {
+      "pullRequest": 30699,
+      "headSha": "d098a1a1782ae19af2bb58d79f42770b4120832f",
+      "reviewCommentCount": 1,
+      "actionableHintCount": 0,
+      "commentIds": [
+        1500275925
+      ],
+      "reviewers": [
+        "engcom-Hotel"
+      ],
+      "firstCommentAt": "2024-02-23T07:11:50Z",
+      "lastCommentAt": "2024-02-23T07:11:50Z"
+    },
+    {
+      "pullRequest": 30699,
+      "headSha": "f7f4728bdbf0a06f56ca9be4db4169330c68da68",
+      "reviewCommentCount": 1,
+      "actionableHintCount": 0,
+      "commentIds": [
+        517856710
+      ],
+      "reviewers": [
+        "ihor-sviziev"
+      ],
+      "firstCommentAt": "2020-11-05T08:05:49Z",
+      "lastCommentAt": "2020-11-05T08:05:49Z"
+    }
+  ],
+  "candidateSetDigest": "c1e4be664141243fcbf4afe1da2eb00c06416ee39e847d392dc39a01d74b281a",
+  "evidenceDigest": "e1af2c28daf8cffc5be717b0055dc0d50fdb06b45685d36355372978dbc021a5",
+  "discoveryDigest": "f87bd5a438239504b158c8b8ef45db23ba92f2f640298be9dcb9c9f7a6968ae7"
+}

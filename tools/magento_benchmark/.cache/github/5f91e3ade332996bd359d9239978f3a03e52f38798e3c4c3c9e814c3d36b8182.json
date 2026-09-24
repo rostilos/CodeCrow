@@ -1,0 +1,1260 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/29207/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T14:47:24Z",
+  "etag": "W/\"1ae20b7d7aef6b229bb107184509e11d57b531e72e91520232392e71f6b3be48\"",
+  "headers": {
+    "ETag": "W/\"1ae20b7d7aef6b229bb107184509e11d57b531e72e91520232392e71f6b3be48\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "43",
+    "X-RateLimit-Reset": "1786980089"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457197073",
+      "pull_request_review_id": 451422121,
+      "id": 457197073,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1NzE5NzA3Mw==",
+      "diff_hunk": "@@ -28,25 +30,33 @@ class SaveAssetLinks\n      */\n     private $resourceConnection;\n \n+    /**\n+     * @var GetAssetsKeywordsInterface\n+     */\n+    private $getAssetsKeywordsInterface;",
+      "path": "app/code/Magento/MediaGallery/Model/ResourceModel/Keyword/SaveAssetLinks.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "d81d26224481bd25ac1522af41a4aed1065a2ecb",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I propose to use a shorter and more precise property naming\r\n```suggestion\r\n    private $getAssetsKeywords;\r\n```",
+      "created_at": "2020-07-20T09:00:27Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r457197073",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/457197073"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r457197073"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457197073/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 36,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 18,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457198524",
+      "pull_request_review_id": 451422121,
+      "id": 457198524,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1NzE5ODUyNA==",
+      "diff_hunk": "@@ -56,27 +66,123 @@ public function __construct(\n     public function execute(int $assetId, array $keywordIds): void\n     {\n         try {\n-            $values = [];\n-            foreach ($keywordIds as $keywordId) {\n-                $values[] = [$assetId, $keywordId];\n+            $this->deleteAssetKeywords($assetId, $keywordIds);\n+            $this->insertAssetKeywords($assetId, $keywordIds);\n+        } catch (\\Exception $exception) {\n+            $this->logger->critical($exception);\n+            throw new CouldNotSaveException(\n+                __('Could not process asset keyword links'),\n+                $exception\n+            );\n+        }\n+    }\n+\n+    /**\n+     * Save new asset keyword links\n+     *\n+     * @param int $assetId\n+     * @param array $keywordIds\n+     * @throws CouldNotSaveException\n+     */\n+    private function insertAssetKeywords(int $assetId, array $keywordIds): void\n+    {\n+        try {\n+            if (!empty($keywordIds)) {\n+                $values = [];\n+                $keywordsToInsert = array_diff($keywordIds, $this->getCurrentKeywords($assetId));\n+\n+                foreach ($keywordsToInsert as $keywordId) {\n+                    $values[] = [$assetId, $keywordId];\n+                }\n+\n+                if (!empty($values)) {\n+                    /** @var Mysql $connection */\n+                    $connection = $this->resourceConnection->getConnection();\n+                    $connection->insertArray(\n+                        $this->resourceConnection->getTableName(self::TABLE_ASSET_KEYWORD),\n+                        [self::FIELD_ASSET_ID, self::FIELD_KEYWORD_ID],\n+                        $values,\n+                        AdapterInterface::INSERT_IGNORE\n+                    );\n+                }\n             }\n+        } catch (\\Exception $exception) {\n+            $this->logger->critical($exception);\n+            throw new CouldNotSaveException(\n+                __('Could not save asset keyword links'),\n+                $exception\n+            );\n+        }\n+    }\n \n-            if (!empty($values)) {\n+    /**\n+     * Delete obsolete asset keyword links\n+     *\n+     * @param int $assetId\n+     * @param array $keywords\n+     * @throws CouldNotDeleteException\n+     */\n+    private function deleteAssetKeywords(int $assetId, array $keywords): void\n+    {\n+        try {\n+            $obsoleteKeywordIds = array_diff($this->getCurrentKeywords($assetId), $keywords);\n+\n+            if (!empty($obsoleteKeywordIds)) {\n                 /** @var Mysql $connection */\n                 $connection = $this->resourceConnection->getConnection();\n-                $connection->insertArray(\n-                    $this->resourceConnection->getTableName(self::TABLE_ASSET_KEYWORD),\n-                    [self::FIELD_ASSET_ID, self::FIELD_KEYWORD_ID],\n-                    $values,\n-                    AdapterInterface::INSERT_IGNORE\n+                $connection->delete(\n+                    $connection->getTableName(\n+                        self::TABLE_ASSET_KEYWORD\n+                    ),\n+                    [\n+                        self::FIELD_KEYWORD_ID . ' in (?)' => $obsoleteKeywordIds,\n+                        self::FIELD_ASSET_ID . ' = ?' => $assetId\n+                    ]\n                 );\n             }\n         } catch (\\Exception $exception) {\n             $this->logger->critical($exception);\n-            throw new CouldNotSaveException(\n-                __('Could not save asset keyword links'),\n+            throw new CouldNotDeleteException(\n+                __('Could not delete obsolete asset keyword links'),\n                 $exception\n             );\n         }\n     }\n+\n+    /**\n+     * Get current keyword data of an asset\n+     *\n+     * @param int $assetId\n+     * @return array\n+     */\n+    private function getCurrentKeywords(int $assetId): array\n+    {\n+        $currentKeywordsData = $this->getAssetsKeywordsInterface->execute([$assetId]);\n+\n+        if (!empty($currentKeywordsData)) {\n+            $currentKeywords = $this->getKeywordIdsFromKeywordData(\n+                $currentKeywordsData[$assetId]->getKeywords()\n+            );\n+\n+            return $currentKeywords;\n+        }\n+\n+        return [];",
+      "path": "app/code/Magento/MediaGallery/Model/ResourceModel/Keyword/SaveAssetLinks.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "d81d26224481bd25ac1522af41a4aed1065a2ecb",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n        if (empty($currentKeywordsData)) {\r\n            return [];\r\n        }\r\n\r\n        return $this->getKeywordIdsFromKeywordData(\r\n                $currentKeywordsData[$assetId]->getKeywords()\r\n            );\r\n```",
+      "created_at": "2020-07-20T09:02:25Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r457198524",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/457198524"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r457198524"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457198524/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": 162,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 170,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 162,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457200148",
+      "pull_request_review_id": 451422121,
+      "id": 457200148,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1NzIwMDE0OA==",
+      "diff_hunk": "@@ -56,27 +66,123 @@ public function __construct(\n     public function execute(int $assetId, array $keywordIds): void\n     {\n         try {\n-            $values = [];\n-            foreach ($keywordIds as $keywordId) {\n-                $values[] = [$assetId, $keywordId];\n+            $this->deleteAssetKeywords($assetId, $keywordIds);\n+            $this->insertAssetKeywords($assetId, $keywordIds);\n+        } catch (\\Exception $exception) {\n+            $this->logger->critical($exception);\n+            throw new CouldNotSaveException(\n+                __('Could not process asset keyword links'),\n+                $exception\n+            );\n+        }\n+    }\n+\n+    /**\n+     * Save new asset keyword links\n+     *\n+     * @param int $assetId\n+     * @param array $keywordIds\n+     * @throws CouldNotSaveException\n+     */\n+    private function insertAssetKeywords(int $assetId, array $keywordIds): void\n+    {\n+        try {\n+            if (!empty($keywordIds)) {\n+                $values = [];\n+                $keywordsToInsert = array_diff($keywordIds, $this->getCurrentKeywords($assetId));\n+\n+                foreach ($keywordsToInsert as $keywordId) {\n+                    $values[] = [$assetId, $keywordId];\n+                }\n+\n+                if (!empty($values)) {\n+                    /** @var Mysql $connection */\n+                    $connection = $this->resourceConnection->getConnection();\n+                    $connection->insertArray(\n+                        $this->resourceConnection->getTableName(self::TABLE_ASSET_KEYWORD),\n+                        [self::FIELD_ASSET_ID, self::FIELD_KEYWORD_ID],\n+                        $values,\n+                        AdapterInterface::INSERT_IGNORE\n+                    );\n+                }\n             }\n+        } catch (\\Exception $exception) {\n+            $this->logger->critical($exception);\n+            throw new CouldNotSaveException(\n+                __('Could not save asset keyword links'),\n+                $exception\n+            );\n+        }\n+    }\n \n-            if (!empty($values)) {\n+    /**\n+     * Delete obsolete asset keyword links\n+     *\n+     * @param int $assetId\n+     * @param array $keywords\n+     * @throws CouldNotDeleteException\n+     */\n+    private function deleteAssetKeywords(int $assetId, array $keywords): void\n+    {\n+        try {\n+            $obsoleteKeywordIds = array_diff($this->getCurrentKeywords($assetId), $keywords);\n+\n+            if (!empty($obsoleteKeywordIds)) {\n                 /** @var Mysql $connection */\n                 $connection = $this->resourceConnection->getConnection();\n-                $connection->insertArray(\n-                    $this->resourceConnection->getTableName(self::TABLE_ASSET_KEYWORD),\n-                    [self::FIELD_ASSET_ID, self::FIELD_KEYWORD_ID],\n-                    $values,\n-                    AdapterInterface::INSERT_IGNORE\n+                $connection->delete(\n+                    $connection->getTableName(\n+                        self::TABLE_ASSET_KEYWORD\n+                    ),\n+                    [\n+                        self::FIELD_KEYWORD_ID . ' in (?)' => $obsoleteKeywordIds,\n+                        self::FIELD_ASSET_ID . ' = ?' => $assetId\n+                    ]\n                 );\n             }\n         } catch (\\Exception $exception) {\n             $this->logger->critical($exception);\n-            throw new CouldNotSaveException(\n-                __('Could not save asset keyword links'),\n+            throw new CouldNotDeleteException(\n+                __('Could not delete obsolete asset keyword links'),\n                 $exception\n             );\n         }\n     }\n+\n+    /**\n+     * Get current keyword data of an asset\n+     *\n+     * @param int $assetId\n+     * @return array\n+     */\n+    private function getCurrentKeywords(int $assetId): array\n+    {\n+        $currentKeywordsData = $this->getAssetsKeywordsInterface->execute([$assetId]);\n+\n+        if (!empty($currentKeywordsData)) {\n+            $currentKeywords = $this->getKeywordIdsFromKeywordData(\n+                $currentKeywordsData[$assetId]->getKeywords()\n+            );\n+\n+            return $currentKeywords;\n+        }\n+\n+        return [];\n+    }\n+\n+    /**\n+     * Get keyword ids from keyword data\n+     *\n+     * @param array $keywordsData",
+      "path": "app/code/Magento/MediaGallery/Model/ResourceModel/Keyword/SaveAssetLinks.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "d81d26224481bd25ac1522af41a4aed1065a2ecb",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n     * @param KeywordInterface[] $keywordsData\r\n```",
+      "created_at": "2020-07-20T09:04:35Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r457200148",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/457200148"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r457200148"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457200148/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 176,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 168,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457200342",
+      "pull_request_review_id": 451422121,
+      "id": 457200342,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1NzIwMDM0Mg==",
+      "diff_hunk": "@@ -56,27 +66,123 @@ public function __construct(\n     public function execute(int $assetId, array $keywordIds): void\n     {\n         try {\n-            $values = [];\n-            foreach ($keywordIds as $keywordId) {\n-                $values[] = [$assetId, $keywordId];\n+            $this->deleteAssetKeywords($assetId, $keywordIds);\n+            $this->insertAssetKeywords($assetId, $keywordIds);\n+        } catch (\\Exception $exception) {\n+            $this->logger->critical($exception);\n+            throw new CouldNotSaveException(\n+                __('Could not process asset keyword links'),\n+                $exception\n+            );\n+        }\n+    }\n+\n+    /**\n+     * Save new asset keyword links\n+     *\n+     * @param int $assetId\n+     * @param array $keywordIds\n+     * @throws CouldNotSaveException\n+     */\n+    private function insertAssetKeywords(int $assetId, array $keywordIds): void\n+    {\n+        try {\n+            if (!empty($keywordIds)) {\n+                $values = [];\n+                $keywordsToInsert = array_diff($keywordIds, $this->getCurrentKeywords($assetId));\n+\n+                foreach ($keywordsToInsert as $keywordId) {\n+                    $values[] = [$assetId, $keywordId];\n+                }\n+\n+                if (!empty($values)) {\n+                    /** @var Mysql $connection */\n+                    $connection = $this->resourceConnection->getConnection();\n+                    $connection->insertArray(\n+                        $this->resourceConnection->getTableName(self::TABLE_ASSET_KEYWORD),\n+                        [self::FIELD_ASSET_ID, self::FIELD_KEYWORD_ID],\n+                        $values,\n+                        AdapterInterface::INSERT_IGNORE\n+                    );\n+                }\n             }\n+        } catch (\\Exception $exception) {\n+            $this->logger->critical($exception);\n+            throw new CouldNotSaveException(\n+                __('Could not save asset keyword links'),\n+                $exception\n+            );\n+        }\n+    }\n \n-            if (!empty($values)) {\n+    /**\n+     * Delete obsolete asset keyword links\n+     *\n+     * @param int $assetId\n+     * @param array $keywords\n+     * @throws CouldNotDeleteException\n+     */\n+    private function deleteAssetKeywords(int $assetId, array $keywords): void\n+    {\n+        try {\n+            $obsoleteKeywordIds = array_diff($this->getCurrentKeywords($assetId), $keywords);\n+\n+            if (!empty($obsoleteKeywordIds)) {\n                 /** @var Mysql $connection */\n                 $connection = $this->resourceConnection->getConnection();\n-                $connection->insertArray(\n-                    $this->resourceConnection->getTableName(self::TABLE_ASSET_KEYWORD),\n-                    [self::FIELD_ASSET_ID, self::FIELD_KEYWORD_ID],\n-                    $values,\n-                    AdapterInterface::INSERT_IGNORE\n+                $connection->delete(\n+                    $connection->getTableName(\n+                        self::TABLE_ASSET_KEYWORD\n+                    ),\n+                    [\n+                        self::FIELD_KEYWORD_ID . ' in (?)' => $obsoleteKeywordIds,\n+                        self::FIELD_ASSET_ID . ' = ?' => $assetId\n+                    ]\n                 );\n             }\n         } catch (\\Exception $exception) {\n             $this->logger->critical($exception);\n-            throw new CouldNotSaveException(\n-                __('Could not save asset keyword links'),\n+            throw new CouldNotDeleteException(\n+                __('Could not delete obsolete asset keyword links'),\n                 $exception\n             );\n         }\n     }\n+\n+    /**\n+     * Get current keyword data of an asset\n+     *\n+     * @param int $assetId\n+     * @return array",
+      "path": "app/code/Magento/MediaGallery/Model/ResourceModel/Keyword/SaveAssetLinks.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "d81d26224481bd25ac1522af41a4aed1065a2ecb",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n     * @return int[]\r\n```",
+      "created_at": "2020-07-20T09:04:51Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r457200342",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/457200342"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r457200342"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457200342/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 156,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 148,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457200498",
+      "pull_request_review_id": 451422121,
+      "id": 457200498,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1NzIwMDQ5OA==",
+      "diff_hunk": "@@ -56,27 +66,123 @@ public function __construct(\n     public function execute(int $assetId, array $keywordIds): void\n     {\n         try {\n-            $values = [];\n-            foreach ($keywordIds as $keywordId) {\n-                $values[] = [$assetId, $keywordId];\n+            $this->deleteAssetKeywords($assetId, $keywordIds);\n+            $this->insertAssetKeywords($assetId, $keywordIds);\n+        } catch (\\Exception $exception) {\n+            $this->logger->critical($exception);\n+            throw new CouldNotSaveException(\n+                __('Could not process asset keyword links'),\n+                $exception\n+            );\n+        }\n+    }\n+\n+    /**\n+     * Save new asset keyword links\n+     *\n+     * @param int $assetId\n+     * @param array $keywordIds\n+     * @throws CouldNotSaveException\n+     */\n+    private function insertAssetKeywords(int $assetId, array $keywordIds): void\n+    {\n+        try {\n+            if (!empty($keywordIds)) {\n+                $values = [];\n+                $keywordsToInsert = array_diff($keywordIds, $this->getCurrentKeywords($assetId));\n+\n+                foreach ($keywordsToInsert as $keywordId) {\n+                    $values[] = [$assetId, $keywordId];\n+                }\n+\n+                if (!empty($values)) {\n+                    /** @var Mysql $connection */\n+                    $connection = $this->resourceConnection->getConnection();\n+                    $connection->insertArray(\n+                        $this->resourceConnection->getTableName(self::TABLE_ASSET_KEYWORD),\n+                        [self::FIELD_ASSET_ID, self::FIELD_KEYWORD_ID],\n+                        $values,\n+                        AdapterInterface::INSERT_IGNORE\n+                    );\n+                }\n             }\n+        } catch (\\Exception $exception) {\n+            $this->logger->critical($exception);\n+            throw new CouldNotSaveException(\n+                __('Could not save asset keyword links'),\n+                $exception\n+            );\n+        }\n+    }\n \n-            if (!empty($values)) {\n+    /**\n+     * Delete obsolete asset keyword links\n+     *\n+     * @param int $assetId\n+     * @param array $keywords\n+     * @throws CouldNotDeleteException\n+     */\n+    private function deleteAssetKeywords(int $assetId, array $keywords): void\n+    {\n+        try {\n+            $obsoleteKeywordIds = array_diff($this->getCurrentKeywords($assetId), $keywords);\n+\n+            if (!empty($obsoleteKeywordIds)) {\n                 /** @var Mysql $connection */\n                 $connection = $this->resourceConnection->getConnection();\n-                $connection->insertArray(\n-                    $this->resourceConnection->getTableName(self::TABLE_ASSET_KEYWORD),\n-                    [self::FIELD_ASSET_ID, self::FIELD_KEYWORD_ID],\n-                    $values,\n-                    AdapterInterface::INSERT_IGNORE\n+                $connection->delete(\n+                    $connection->getTableName(\n+                        self::TABLE_ASSET_KEYWORD\n+                    ),\n+                    [\n+                        self::FIELD_KEYWORD_ID . ' in (?)' => $obsoleteKeywordIds,\n+                        self::FIELD_ASSET_ID . ' = ?' => $assetId\n+                    ]\n                 );\n             }\n         } catch (\\Exception $exception) {\n             $this->logger->critical($exception);\n-            throw new CouldNotSaveException(\n-                __('Could not save asset keyword links'),\n+            throw new CouldNotDeleteException(\n+                __('Could not delete obsolete asset keyword links'),\n                 $exception\n             );\n         }\n     }\n+\n+    /**\n+     * Get current keyword data of an asset\n+     *\n+     * @param int $assetId\n+     * @return array\n+     */\n+    private function getCurrentKeywords(int $assetId): array",
+      "path": "app/code/Magento/MediaGallery/Model/ResourceModel/Keyword/SaveAssetLinks.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "d81d26224481bd25ac1522af41a4aed1065a2ecb",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n    private function getCurrentKeywordIds(int $assetId): array\r\n```",
+      "created_at": "2020-07-20T09:05:01Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r457200498",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/457200498"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r457200498"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457200498/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 158,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 150,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457202508",
+      "pull_request_review_id": 451422121,
+      "id": 457202508,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1NzIwMjUwOA==",
+      "diff_hunk": "@@ -56,27 +66,123 @@ public function __construct(\n     public function execute(int $assetId, array $keywordIds): void\n     {\n         try {\n-            $values = [];\n-            foreach ($keywordIds as $keywordId) {\n-                $values[] = [$assetId, $keywordId];\n+            $this->deleteAssetKeywords($assetId, $keywordIds);\n+            $this->insertAssetKeywords($assetId, $keywordIds);\n+        } catch (\\Exception $exception) {\n+            $this->logger->critical($exception);\n+            throw new CouldNotSaveException(\n+                __('Could not process asset keyword links'),\n+                $exception\n+            );\n+        }\n+    }\n+\n+    /**\n+     * Save new asset keyword links\n+     *\n+     * @param int $assetId\n+     * @param array $keywordIds\n+     * @throws CouldNotSaveException\n+     */\n+    private function insertAssetKeywords(int $assetId, array $keywordIds): void\n+    {\n+        try {\n+            if (!empty($keywordIds)) {\n+                $values = [];\n+                $keywordsToInsert = array_diff($keywordIds, $this->getCurrentKeywords($assetId));",
+      "path": "app/code/Magento/MediaGallery/Model/ResourceModel/Keyword/SaveAssetLinks.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "d81d26224481bd25ac1522af41a4aed1065a2ecb",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "What do you think about moving current keywords retrieving to the `execute` method to retrieve them only once.\r\n`insertAssetKeywords` and `deleteAssetKeywords` methods can accept only the needed keywordIds (the result of `array_diff`)",
+      "created_at": "2020-07-20T09:07:33Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r457202508",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/457202508"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r457202508"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457202508/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 92,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 76,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457203180",
+      "pull_request_review_id": 451422121,
+      "id": 457203180,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1NzIwMzE4MA==",
+      "diff_hunk": "@@ -56,27 +66,123 @@ public function __construct(\n     public function execute(int $assetId, array $keywordIds): void\n     {\n         try {\n-            $values = [];\n-            foreach ($keywordIds as $keywordId) {\n-                $values[] = [$assetId, $keywordId];\n+            $this->deleteAssetKeywords($assetId, $keywordIds);\n+            $this->insertAssetKeywords($assetId, $keywordIds);\n+        } catch (\\Exception $exception) {\n+            $this->logger->critical($exception);\n+            throw new CouldNotSaveException(\n+                __('Could not process asset keyword links'),\n+                $exception\n+            );\n+        }\n+    }\n+\n+    /**\n+     * Save new asset keyword links\n+     *\n+     * @param int $assetId\n+     * @param array $keywordIds",
+      "path": "app/code/Magento/MediaGallery/Model/ResourceModel/Keyword/SaveAssetLinks.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "d81d26224481bd25ac1522af41a4aed1065a2ecb",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n     * @param int[] $keywordIds\r\n```",
+      "created_at": "2020-07-20T09:08:33Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r457203180",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/457203180"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r457203180"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457203180/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 84,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 68,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457426714",
+      "pull_request_review_id": 451648555,
+      "id": 457426714,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1NzQyNjcxNA==",
+      "diff_hunk": "@@ -105,6 +106,34 @@ public function testSaveAndGetKeywords(array $keywords): void\n         sort($keywords);\n \n         $this->assertEquals($keywords, $loadedKeywordStrings);\n+\n+        $updatedAssetKeywords = $this->assetsKeywordsFactory->create(\n+            [\n+                'assetId' => $loadedAsset->getId(),\n+                'keywords' => $this->getKeywords($updatedKeywords)\n+            ]\n+        );\n+        $this->saveAssetsKeywords->execute([$updatedAssetKeywords]);\n+        $updatedLoadedAssetKeywords = $this->getAssetsKeywords->execute([$loadedAsset->getId()]);\n+\n+        $this->assertCount(1, $updatedLoadedAssetKeywords);\n+\n+        /** @var AssetKeywordsInterface $updatedLoadedAssetKeywords */\n+        $updatedLoadedAssetKeywords = current($updatedLoadedAssetKeywords);\n+\n+        $updatedLoadedKeywords = $updatedLoadedAssetKeywords->getKeywords();\n+\n+        $this->assertEquals(count($updatedKeywords), count($updatedLoadedKeywords));\n+\n+        $updatedLoadedKeywordStrings = [];\n+        foreach ($updatedLoadedKeywords as $updatedLoadedKeywordObject) {",
+      "path": "dev/tests/integration/testsuite/Magento/MediaGallery/Model/ResourceModel/AssetKeywordsTest.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "fe0be1ddd881d6d645b01adb0280ffd6f3538e64",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please extract the reusable code to a private method",
+      "created_at": "2020-07-20T14:16:38Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r457426714",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/457426714"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r457426714"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457426714/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 129,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 32,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457427075",
+      "pull_request_review_id": 451648555,
+      "id": 457427075,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1NzQyNzA3NQ==",
+      "diff_hunk": "@@ -72,6 +72,7 @@ protected function setUp(): void\n     public function testSaveAndGetKeywords(array $keywords): void\n     {\n         $keywords = ['pear', 'plum'];",
+      "path": "dev/tests/integration/testsuite/Magento/MediaGallery/Model/ResourceModel/AssetKeywordsTest.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "fe0be1ddd881d6d645b01adb0280ffd6f3538e64",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please remove this variable for the dataprovider items to be used",
+      "created_at": "2020-07-20T14:17:04Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r457427075",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/457427075"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r457427075"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/457427075/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 74,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 3,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458090221",
+      "pull_request_review_id": 452446938,
+      "id": 458090221,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1ODA5MDIyMQ==",
+      "diff_hunk": "@@ -56,27 +66,124 @@ public function __construct(\n     public function execute(int $assetId, array $keywordIds): void\n     {\n         try {\n-            $values = [];\n-            foreach ($keywordIds as $keywordId) {\n-                $values[] = [$assetId, $keywordId];\n+            $currentKeywordIds = $this->getCurrentKeywordIds($assetId);\n+\n+            $obsoleteKeywordIds = array_diff($currentKeywordIds, $keywordIds);\n+            $newKeywordIds = array_diff($keywordIds, $currentKeywordIds);\n+\n+            $this->deleteAssetKeywords($assetId, $obsoleteKeywordIds);\n+            $this->insertAssetKeywords($assetId, $newKeywordIds);\n+\n+        } catch (\\Exception $exception) {\n+            $this->logger->critical($exception);\n+            throw new CouldNotSaveException(\n+                __('Could not process asset keyword links'),\n+                $exception\n+            );\n+        }\n+    }\n+\n+    /**\n+     * Save new asset keyword links\n+     *\n+     * @param int $assetId\n+     * @param int[] $keywordIds\n+     * @throws CouldNotSaveException\n+     */\n+    private function insertAssetKeywords(int $assetId, array $keywordIds): void\n+    {\n+        try {\n+            if (!empty($keywordIds)) {",
+      "path": "app/code/Magento/MediaGallery/Model/ResourceModel/Keyword/SaveAssetLinks.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "659071cd533f4d7a61256a899828c2dfc54ac171",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I'd revert the conditions to decrease the nesting level (this can be applied to other such conditions in this PR as well). Also this check can be moved out of try-catch block\r\n\r\nif (empty($keywordIds)) {\r\n    return;\r\n}",
+      "created_at": "2020-07-21T13:20:51Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r458090221",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/458090221"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r458090221"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458090221/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 96,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 80,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458090711",
+      "pull_request_review_id": 452446938,
+      "id": 458090711,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1ODA5MDcxMQ==",
+      "diff_hunk": "@@ -56,27 +66,124 @@ public function __construct(\n     public function execute(int $assetId, array $keywordIds): void\n     {\n         try {\n-            $values = [];\n-            foreach ($keywordIds as $keywordId) {\n-                $values[] = [$assetId, $keywordId];\n+            $currentKeywordIds = $this->getCurrentKeywordIds($assetId);\n+\n+            $obsoleteKeywordIds = array_diff($currentKeywordIds, $keywordIds);\n+            $newKeywordIds = array_diff($keywordIds, $currentKeywordIds);\n+\n+            $this->deleteAssetKeywords($assetId, $obsoleteKeywordIds);\n+            $this->insertAssetKeywords($assetId, $newKeywordIds);\n+\n+        } catch (\\Exception $exception) {\n+            $this->logger->critical($exception);\n+            throw new CouldNotSaveException(\n+                __('Could not process asset keyword links'),\n+                $exception\n+            );\n+        }\n+    }\n+\n+    /**\n+     * Save new asset keyword links\n+     *\n+     * @param int $assetId\n+     * @param int[] $keywordIds\n+     * @throws CouldNotSaveException\n+     */\n+    private function insertAssetKeywords(int $assetId, array $keywordIds): void\n+    {\n+        try {\n+            if (!empty($keywordIds)) {\n+                $values = [];\n+\n+                foreach ($keywordIds as $keywordId) {\n+                    $values[] = [$assetId, $keywordId];\n+                }\n+\n+                if (!empty($values)) {",
+      "path": "app/code/Magento/MediaGallery/Model/ResourceModel/Keyword/SaveAssetLinks.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "659071cd533f4d7a61256a899828c2dfc54ac171",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I think this is an unnecessary check. the previous check should be enough in my opinion",
+      "created_at": "2020-07-21T13:21:31Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r458090711",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/458090711"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r458090711"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458090711/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 103,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 87,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458091993",
+      "pull_request_review_id": 452446938,
+      "id": 458091993,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1ODA5MTk5Mw==",
+      "diff_hunk": "@@ -66,45 +66,57 @@ protected function setUp(): void\n      *\n      * @magentoDataFixture Magento/MediaGallery/_files/media_asset.php\n      * @dataProvider keywordsProvider\n-     * @param array $keywords\n+     * @param array|null $keywords\n+     * @param array|null $updatedKeywords",
+      "path": "dev/tests/integration/testsuite/Magento/MediaGallery/Model/ResourceModel/AssetKeywordsTest.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "659071cd533f4d7a61256a899828c2dfc54ac171",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "These parameters cannot be null, also detailed array type declaration is welcome)\r\n```suggestion\r\n     * @param string[] $updatedKeywords\r\n```",
+      "created_at": "2020-07-21T13:23:23Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r458091993",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/458091993"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r458091993"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458091993/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 70,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 6,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458095489",
+      "pull_request_review_id": 452446938,
+      "id": 458095489,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1ODA5NTQ4OQ==",
+      "diff_hunk": "@@ -66,45 +66,57 @@ protected function setUp(): void\n      *\n      * @magentoDataFixture Magento/MediaGallery/_files/media_asset.php\n      * @dataProvider keywordsProvider\n-     * @param array $keywords\n+     * @param array|null $keywords\n+     * @param array|null $updatedKeywords\n      * @throws \\Magento\\Framework\\Exception\\LocalizedException\n      */\n-    public function testSaveAndGetKeywords(array $keywords): void\n+    public function testSaveAndGetKeywords(array $keywords = [], array $updatedKeywords = []): void\n     {\n-        $keywords = ['pear', 'plum'];\n-\n         $loadedAssets = $this->getAssetsByPath->execute([self::FIXTURE_ASSET_PATH]);\n         $this->assertCount(1, $loadedAssets);\n         $loadedAsset = current($loadedAssets);\n \n+        $this->updateAssetKeywords($loadedAsset->getId(), $keywords);\n+        $this->updateAssetKeywords($loadedAsset->getId(), $updatedKeywords);\n+    }\n+\n+    /**\n+     * Update Asset keywords\n+     *\n+     * @param int $assetId\n+     * @param array|null $keywords\n+     */\n+    private function updateAssetKeywords(int $assetId, array $keywords = []): void\n+    {\n         $assetKeywords = $this->assetsKeywordsFactory->create(\n             [\n-                'assetId' => $loadedAsset->getId(),\n+                'assetId' => $assetId,\n                 'keywords' => $this->getKeywords($keywords)\n             ]\n         );\n \n         $this->saveAssetsKeywords->execute([$assetKeywords]);\n-        $loadedAssetKeywords = $this->getAssetsKeywords->execute([$loadedAsset->getId()]);\n+        $loadedAssetKeywords = $this->getAssetsKeywords->execute([$assetId]);\n \n-        $this->assertCount(1, $loadedAssetKeywords);\n+        if (!empty($keywords)) {",
+      "path": "dev/tests/integration/testsuite/Magento/MediaGallery/Model/ResourceModel/AssetKeywordsTest.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "659071cd533f4d7a61256a899828c2dfc54ac171",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I'd still perform a verification of empty keywords, can we remove this condition?",
+      "created_at": "2020-07-21T13:27:40Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r458095489",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/458095489"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r458095489"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458095489/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 101,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 43,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458717510",
+      "pull_request_review_id": 453220585,
+      "id": 458717510,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1ODcxNzUxMA==",
+      "diff_hunk": "@@ -66,45 +66,61 @@ protected function setUp(): void\n      *\n      * @magentoDataFixture Magento/MediaGallery/_files/media_asset.php\n      * @dataProvider keywordsProvider\n-     * @param array $keywords\n+     * @param string[] $keywords\n+     * @param string[] $updatedKeywords\n      * @throws \\Magento\\Framework\\Exception\\LocalizedException\n      */\n-    public function testSaveAndGetKeywords(array $keywords): void\n+    public function testSaveAndGetKeywords(array $keywords = [], array $updatedKeywords = []): void\n     {\n-        $keywords = ['pear', 'plum'];\n-\n         $loadedAssets = $this->getAssetsByPath->execute([self::FIXTURE_ASSET_PATH]);\n         $this->assertCount(1, $loadedAssets);\n         $loadedAsset = current($loadedAssets);\n \n+        $this->updateAssetKeywords($loadedAsset->getId(), $keywords);\n+        $this->updateAssetKeywords($loadedAsset->getId(), $updatedKeywords, $keywords);\n+    }\n+\n+    /**\n+     * Update Asset keywords\n+     *\n+     * @param int $assetId\n+     * @param string[] $keywords\n+     * @param string[] $currentKeywords\n+     */\n+    private function updateAssetKeywords(int $assetId, array $keywords = [], array $currentKeywords = []): void\n+    {\n         $assetKeywords = $this->assetsKeywordsFactory->create(\n             [\n-                'assetId' => $loadedAsset->getId(),\n+                'assetId' => $assetId,\n                 'keywords' => $this->getKeywords($keywords)\n             ]\n         );\n \n         $this->saveAssetsKeywords->execute([$assetKeywords]);\n-        $loadedAssetKeywords = $this->getAssetsKeywords->execute([$loadedAsset->getId()]);\n+        $loadedAssetKeywords = $this->getAssetsKeywords->execute([$assetId]);\n \n-        $this->assertCount(1, $loadedAssetKeywords);\n+        $currentKeywords = empty($keywords) ? $currentKeywords : $keywords;\n+        $expectedCount = !empty($currentKeywords) ? 1 : 0;\n \n+        $this->assertCount($expectedCount, $loadedAssetKeywords);\n         /** @var AssetKeywordsInterface $loadedAssetKeyword */\n         $loadedAssetKeyword = current($loadedAssetKeywords);\n \n-        $loadedKeywords = $loadedAssetKeyword->getKeywords();\n+        $loadedKeywords = !empty($loadedAssetKeyword) ? $loadedAssetKeyword->getKeywords() : [];\n \n-        $this->assertEquals(count($keywords), count($loadedKeywords));\n+        $this->assertEquals(count($currentKeywords), count($loadedKeywords));\n \n         $loadedKeywordStrings = [];\n-        foreach ($loadedKeywords as $loadedKeywordObject) {\n-            $loadedKeywordStrings[] = $loadedKeywordObject->getKeyword();\n+        if (!empty($loadedKeywords)) {",
+      "path": "dev/tests/integration/testsuite/Magento/MediaGallery/Model/ResourceModel/AssetKeywordsTest.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "cc4c5d0f217874044ffd63fb0941213b54730d19",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "foreach loop will not be executed if `$loadedKeywords` is an empty array, the condition is not  necessary",
+      "created_at": "2020-07-22T11:15:34Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r458717510",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/458717510"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r458717510"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458717510/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 114,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 72,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458717546",
+      "pull_request_review_id": 453220585,
+      "id": 458717546,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1ODcxNzU0Ng==",
+      "diff_hunk": "@@ -66,45 +66,61 @@ protected function setUp(): void\n      *\n      * @magentoDataFixture Magento/MediaGallery/_files/media_asset.php\n      * @dataProvider keywordsProvider\n-     * @param array $keywords\n+     * @param string[] $keywords\n+     * @param string[] $updatedKeywords\n      * @throws \\Magento\\Framework\\Exception\\LocalizedException\n      */\n-    public function testSaveAndGetKeywords(array $keywords): void\n+    public function testSaveAndGetKeywords(array $keywords = [], array $updatedKeywords = []): void",
+      "path": "dev/tests/integration/testsuite/Magento/MediaGallery/Model/ResourceModel/AssetKeywordsTest.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "cc4c5d0f217874044ffd63fb0941213b54730d19",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I don't think these arguments should be optional",
+      "created_at": "2020-07-22T11:15:39Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r458717546",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/458717546"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r458717546"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458717546/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 73,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 22,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458725388",
+      "pull_request_review_id": 453220585,
+      "id": 458725388,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1ODcyNTM4OA==",
+      "diff_hunk": "@@ -66,45 +66,61 @@ protected function setUp(): void\n      *\n      * @magentoDataFixture Magento/MediaGallery/_files/media_asset.php\n      * @dataProvider keywordsProvider\n-     * @param array $keywords\n+     * @param string[] $keywords\n+     * @param string[] $updatedKeywords\n      * @throws \\Magento\\Framework\\Exception\\LocalizedException\n      */\n-    public function testSaveAndGetKeywords(array $keywords): void\n+    public function testSaveAndGetKeywords(array $keywords = [], array $updatedKeywords = []): void\n     {\n-        $keywords = ['pear', 'plum'];\n-\n         $loadedAssets = $this->getAssetsByPath->execute([self::FIXTURE_ASSET_PATH]);\n         $this->assertCount(1, $loadedAssets);\n         $loadedAsset = current($loadedAssets);\n \n+        $this->updateAssetKeywords($loadedAsset->getId(), $keywords);\n+        $this->updateAssetKeywords($loadedAsset->getId(), $updatedKeywords, $keywords);\n+    }\n+\n+    /**\n+     * Update Asset keywords\n+     *\n+     * @param int $assetId\n+     * @param string[] $keywords\n+     * @param string[] $currentKeywords\n+     */\n+    private function updateAssetKeywords(int $assetId, array $keywords = [], array $currentKeywords = []): void\n+    {\n         $assetKeywords = $this->assetsKeywordsFactory->create(\n             [\n-                'assetId' => $loadedAsset->getId(),\n+                'assetId' => $assetId,\n                 'keywords' => $this->getKeywords($keywords)\n             ]\n         );\n \n         $this->saveAssetsKeywords->execute([$assetKeywords]);\n-        $loadedAssetKeywords = $this->getAssetsKeywords->execute([$loadedAsset->getId()]);\n+        $loadedAssetKeywords = $this->getAssetsKeywords->execute([$assetId]);",
+      "path": "dev/tests/integration/testsuite/Magento/MediaGallery/Model/ResourceModel/AssetKeywordsTest.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "cc4c5d0f217874044ffd63fb0941213b54730d19",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "For empty keywords - let's ensure empty result is returned and quit. To avoid the following code complication\r\n\r\n        if (empty($keywords)) {\r\n            $this->assertEmpty($loadedAssetKeywords);\r\n            return;\r\n        }",
+      "created_at": "2020-07-22T11:32:30Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r458725388",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/458725388"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r458725388"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458725388/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 99,
+      "original_line": 100,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 53,
+      "position": 52,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458725805",
+      "pull_request_review_id": 453220585,
+      "id": 458725805,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1ODcyNTgwNQ==",
+      "diff_hunk": "@@ -66,45 +66,61 @@ protected function setUp(): void\n      *\n      * @magentoDataFixture Magento/MediaGallery/_files/media_asset.php\n      * @dataProvider keywordsProvider\n-     * @param array $keywords\n+     * @param string[] $keywords\n+     * @param string[] $updatedKeywords\n      * @throws \\Magento\\Framework\\Exception\\LocalizedException\n      */\n-    public function testSaveAndGetKeywords(array $keywords): void\n+    public function testSaveAndGetKeywords(array $keywords = [], array $updatedKeywords = []): void\n     {\n-        $keywords = ['pear', 'plum'];\n-\n         $loadedAssets = $this->getAssetsByPath->execute([self::FIXTURE_ASSET_PATH]);\n         $this->assertCount(1, $loadedAssets);\n         $loadedAsset = current($loadedAssets);\n \n+        $this->updateAssetKeywords($loadedAsset->getId(), $keywords);\n+        $this->updateAssetKeywords($loadedAsset->getId(), $updatedKeywords, $keywords);\n+    }\n+\n+    /**\n+     * Update Asset keywords\n+     *\n+     * @param int $assetId\n+     * @param string[] $keywords\n+     * @param string[] $currentKeywords\n+     */\n+    private function updateAssetKeywords(int $assetId, array $keywords = [], array $currentKeywords = []): void\n+    {\n         $assetKeywords = $this->assetsKeywordsFactory->create(\n             [\n-                'assetId' => $loadedAsset->getId(),\n+                'assetId' => $assetId,\n                 'keywords' => $this->getKeywords($keywords)\n             ]\n         );\n \n         $this->saveAssetsKeywords->execute([$assetKeywords]);\n-        $loadedAssetKeywords = $this->getAssetsKeywords->execute([$loadedAsset->getId()]);\n+        $loadedAssetKeywords = $this->getAssetsKeywords->execute([$assetId]);\n \n-        $this->assertCount(1, $loadedAssetKeywords);\n+        $currentKeywords = empty($keywords) ? $currentKeywords : $keywords;\n+        $expectedCount = !empty($currentKeywords) ? 1 : 0;\n \n+        $this->assertCount($expectedCount, $loadedAssetKeywords);",
+      "path": "dev/tests/integration/testsuite/Magento/MediaGallery/Model/ResourceModel/AssetKeywordsTest.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "cc4c5d0f217874044ffd63fb0941213b54730d19",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n        $this->assertCount(1, $loadedAssetKeywords);\r\n```",
+      "created_at": "2020-07-22T11:33:19Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r458725805",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/458725805"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r458725805"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458725805/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 105,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 59,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458726831",
+      "pull_request_review_id": 453220585,
+      "id": 458726831,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1ODcyNjgzMQ==",
+      "diff_hunk": "@@ -66,45 +66,61 @@ protected function setUp(): void\n      *\n      * @magentoDataFixture Magento/MediaGallery/_files/media_asset.php\n      * @dataProvider keywordsProvider\n-     * @param array $keywords\n+     * @param string[] $keywords\n+     * @param string[] $updatedKeywords\n      * @throws \\Magento\\Framework\\Exception\\LocalizedException\n      */\n-    public function testSaveAndGetKeywords(array $keywords): void\n+    public function testSaveAndGetKeywords(array $keywords = [], array $updatedKeywords = []): void\n     {\n-        $keywords = ['pear', 'plum'];\n-\n         $loadedAssets = $this->getAssetsByPath->execute([self::FIXTURE_ASSET_PATH]);\n         $this->assertCount(1, $loadedAssets);\n         $loadedAsset = current($loadedAssets);\n \n+        $this->updateAssetKeywords($loadedAsset->getId(), $keywords);\n+        $this->updateAssetKeywords($loadedAsset->getId(), $updatedKeywords, $keywords);\n+    }\n+\n+    /**\n+     * Update Asset keywords\n+     *\n+     * @param int $assetId\n+     * @param string[] $keywords\n+     * @param string[] $currentKeywords\n+     */\n+    private function updateAssetKeywords(int $assetId, array $keywords = [], array $currentKeywords = []): void",
+      "path": "dev/tests/integration/testsuite/Magento/MediaGallery/Model/ResourceModel/AssetKeywordsTest.php",
+      "commit_id": "958fee38d7aa17b58131b01b4f4e6f77e7afd60f",
+      "original_commit_id": "cc4c5d0f217874044ffd63fb0941213b54730d19",
+      "user": {
+        "login": "sivaschenko",
+        "id": 2028541,
+        "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/sivaschenko",
+        "html_url": "https://github.com/sivaschenko",
+        "followers_url": "https://api.github.com/users/sivaschenko/followers",
+        "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+        "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+        "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+        "repos_url": "https://api.github.com/users/sivaschenko/repos",
+        "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I don't think we need the `$currentKeywords` parameter for this function at all, only the actual (new) keywords should be used for update and verification",
+      "created_at": "2020-07-22T11:35:21Z",
+      "updated_at": "2020-07-22T14:28:40Z",
+      "html_url": "https://github.com/magento/magento2/pull/29207#discussion_r458726831",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29207",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/458726831"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29207#discussion_r458726831"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29207"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/458726831/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 90,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 41,
+      "position": 1,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "e9837fb5920f64801662830296ab06a1c2e577d79a9d982889204e2aa78ec7dc",
+  "cacheDigest": "29149acc910301315318d4be43cbef23f8cda2936957a0e2eba2726aeaf968ad"
+}

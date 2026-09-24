@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/429635204",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:33Z",
+  "etag": "W/\"8bddc6e70dcd3cb82e990a72b011871b4be06e967b219af25077eb807c07d283\"",
+  "headers": {
+    "ETag": "W/\"8bddc6e70dcd3cb82e990a72b011871b4be06e967b219af25077eb807c07d283\"",
+    "Last-Modified": "Thu, 25 Jun 2026 16:47:03 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "36",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/429635204",
+    "pull_request_review_id": 417357468,
+    "id": 429635204,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQyOTYzNTIwNA==",
+    "diff_hunk": "@@ -0,0 +1,162 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\Wishlist\\Model\\Wishlist;\n+\n+use Magento\\Catalog\\Api\\ProductRepositoryInterface;\n+use Magento\\Framework\\Exception\\AlreadyExistsException;\n+use Magento\\Framework\\Exception\\LocalizedException;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Wishlist\\Model\\ResourceModel\\Wishlist as WishlistResourceModel;\n+use Magento\\Wishlist\\Model\\Wishlist;\n+use Magento\\Wishlist\\Model\\Wishlist\\BuyRequest\\BuyRequestBuilder;\n+use Magento\\Wishlist\\Model\\Wishlist\\Data\\WishlistItem;\n+use Magento\\Wishlist\\Model\\Wishlist\\Data\\WishlistOutput;\n+\n+/**\n+ * Adding products to wishlist\n+ */\n+class AddProductsToWishlist\n+{\n+    /**#@+\n+     * Error message codes\n+     */\n+    private const ERROR_PRODUCT_NOT_FOUND = 'PRODUCT_NOT_FOUND';\n+    private const ERROR_UNDEFINED = 'UNDEFINED';\n+    /**#@-*/\n+\n+    /**\n+     * @var array\n+     */\n+    private $errors = [];\n+\n+    /**\n+     * @var BuyRequestBuilder\n+     */\n+    private $buyRequestBuilder;\n+\n+    /**\n+     * @var ProductRepositoryInterface\n+     */\n+    private $productRepository;\n+\n+    /**\n+     * @var WishlistResourceModel\n+     */\n+    private $wishlistResource;\n+\n+    /**\n+     * @param ProductRepositoryInterface $productRepository\n+     * @param BuyRequestBuilder $buyRequestBuilder\n+     * @param WishlistResourceModel $wishlistResource\n+     */\n+    public function __construct(\n+        ProductRepositoryInterface $productRepository,\n+        BuyRequestBuilder $buyRequestBuilder,\n+        WishlistResourceModel $wishlistResource\n+    ) {\n+        $this->productRepository = $productRepository;\n+        $this->buyRequestBuilder = $buyRequestBuilder;\n+        $this->wishlistResource = $wishlistResource;\n+    }\n+\n+    /**\n+     * Adding products to wishlist\n+     *\n+     * @param Wishlist $wishlist\n+     * @param array $wishlistItems\n+     *\n+     * @return WishlistOutput\n+     *\n+     * @throws AlreadyExistsException\n+     */\n+    public function execute(Wishlist $wishlist, array $wishlistItems): WishlistOutput\n+    {\n+        foreach ($wishlistItems as $wishlistItem) {\n+            $this->addItemToWishlist($wishlist, $wishlistItem);\n+        }\n+\n+        $wishlistOutput = $this->prepareOutput($wishlist);\n+\n+        if ($wishlist->isObjectNew() || count($wishlistOutput->getErrors()) !== count($wishlistItems)) {\n+            $this->wishlistResource->save($wishlist);\n+        }\n+\n+        return $wishlistOutput;\n+    }\n+\n+    /**\n+     * Add product item to wishlist\n+     *\n+     * @param Wishlist $wishlist\n+     * @param WishlistItem $wishlistItem\n+     */\n+    private function addItemToWishlist(Wishlist $wishlist, WishlistItem $wishlistItem)",
+    "path": "app/code/Magento/Wishlist/Model/Wishlist/AddProductsToWishlist.php",
+    "commit_id": "487b29ed56b00ea783a631479fa4948dec0066f1",
+    "original_commit_id": "3346f33df01d98decea3e3d8257fef0ecf637d68",
+    "user": {
+      "login": "rogyar",
+      "id": 2148959,
+      "node_id": "MDQ6VXNlcjIxNDg5NTk=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2148959?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/rogyar",
+      "html_url": "https://github.com/rogyar",
+      "followers_url": "https://api.github.com/users/rogyar/followers",
+      "following_url": "https://api.github.com/users/rogyar/following{/other_user}",
+      "gists_url": "https://api.github.com/users/rogyar/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/rogyar/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/rogyar/subscriptions",
+      "organizations_url": "https://api.github.com/users/rogyar/orgs",
+      "repos_url": "https://api.github.com/users/rogyar/repos",
+      "events_url": "https://api.github.com/users/rogyar/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/rogyar/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Please, specify the return type",
+    "created_at": "2020-05-24T13:11:25Z",
+    "updated_at": "2020-06-23T08:59:59Z",
+    "html_url": "https://github.com/magento/magento2/pull/28205#discussion_r429635204",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/28205",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/429635204"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/28205#discussion_r429635204"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/28205"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/429635204/reactions",
+      "total_count": 1,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 98,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 98,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "9eaf03abdeec7e6a5962e31a857e0b16583a5e92c65e689aed67b228f61b4735",
+  "envelopeSha256": "bdb303ff195cb4a6b7063ae98dcf0102bd46759edd20c8e3fee56c1199fe5712"
+}

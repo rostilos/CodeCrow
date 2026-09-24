@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/429635352",
+  "status": 200,
+  "etag": "W/\"777bddb66de2891468d63fe030c02251e0ce6a6094d715eb3fe481cca683e697\"",
+  "headers": {
+    "ETag": "W/\"777bddb66de2891468d63fe030c02251e0ce6a6094d715eb3fe481cca683e697\"",
+    "Last-Modified": "Thu, 25 Jun 2026 16:47:03 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "34",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/429635352",
+    "pull_request_review_id": 417357594,
+    "id": 429635352,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQyOTYzNTM1Mg==",
+    "diff_hunk": "@@ -42,6 +43,7 @@ public function resolve(\n         array $value = null,\n         array $args = null\n     ) {\n+        // Todo: Check if wishlist is enabled",
+    "path": "app/code/Magento/WishlistGraphQl/Model/Resolver/CustomerWishlistResolver.php",
+    "commit_id": "487b29ed56b00ea783a631479fa4948dec0066f1",
+    "original_commit_id": "3346f33df01d98decea3e3d8257fef0ecf637d68",
+    "user": {
+      "login": "rogyar",
+      "id": 2148959,
+      "node_id": "MDQ6VXNlcjIxNDg5NTk=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2148959?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/rogyar",
+      "html_url": "https://github.com/rogyar",
+      "followers_url": "https://api.github.com/users/rogyar/followers",
+      "following_url": "https://api.github.com/users/rogyar/following{/other_user}",
+      "gists_url": "https://api.github.com/users/rogyar/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/rogyar/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/rogyar/subscriptions",
+      "organizations_url": "https://api.github.com/users/rogyar/orgs",
+      "repos_url": "https://api.github.com/users/rogyar/repos",
+      "events_url": "https://api.github.com/users/rogyar/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/rogyar/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Please, do not forget about this todo",
+    "created_at": "2020-05-24T13:12:59Z",
+    "updated_at": "2020-06-23T08:59:59Z",
+    "html_url": "https://github.com/magento/magento2/pull/28205#discussion_r429635352",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/28205",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/429635352"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/28205#discussion_r429635352"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/28205"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/429635352/reactions",
+      "total_count": 1,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 46,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 16,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

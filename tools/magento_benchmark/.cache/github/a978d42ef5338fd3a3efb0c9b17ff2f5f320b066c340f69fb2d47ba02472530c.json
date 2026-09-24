@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551180279",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:41Z",
+  "etag": "W/\"a08443dc65f651bcd72484a6f0c3d14ecb1a978191dbd69260127ece9b4136d0\"",
+  "headers": {
+    "ETag": "W/\"a08443dc65f651bcd72484a6f0c3d14ecb1a978191dbd69260127ece9b4136d0\"",
+    "Last-Modified": "Sun, 04 Jan 2026 09:43:32 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "19",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551180279",
+    "pull_request_review_id": 560854503,
+    "id": 551180279,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MTE4MDI3OQ==",
+    "diff_hunk": "@@ -28,7 +28,7 @@\n \n         <!-- Search the tax rate on tax grid page -->\n         <actionGroup ref=\"AdminTaxRateGridOpenPageActionGroup\" stepKey=\"goToTaxRateIndex1\"/>\n-        <click selector=\"{{AdminDataGridHeaderSection.clearFilters}}\" stepKey=\"clickClearFilters1\"/>\n+        <actionGroup ref=\"AdminClearFiltersOnGridActionGroup\" stepKey=\"clickClearFilters1\"/>",
+    "path": "app/code/Magento/Tax/Test/Mftf/Test/Update01TaxRateEntityTest.xml",
+    "commit_id": "2af6793227406b4c66a4a829fbd468489149a977",
+    "original_commit_id": "200831eb418d984c00180260576b2ab5a4165290",
+    "user": {
+      "login": "eduard13",
+      "id": 15868188,
+      "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/eduard13",
+      "html_url": "https://github.com/eduard13",
+      "followers_url": "https://api.github.com/users/eduard13/followers",
+      "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+      "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+      "organizations_url": "https://api.github.com/users/eduard13/orgs",
+      "repos_url": "https://api.github.com/users/eduard13/repos",
+      "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/eduard13/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "```suggestion\r\n        <actionGroup ref=\"AdminClearGridFiltersActionGroup\" stepKey=\"clickClearFilters1\"/>\r\n```",
+    "created_at": "2021-01-04T08:44:29Z",
+    "updated_at": "2021-01-04T10:48:18Z",
+    "html_url": "https://github.com/magento/magento2/pull/31452#discussion_r551180279",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31452",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/551180279"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/31452#discussion_r551180279"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/31452"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551180279/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 31,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 5,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "63f84536ad70470615a4b873b280e64e7d1dfbe91a2cd4e2afdbdeaed32ecd8b",
+  "envelopeSha256": "e164da81c0b87eb7c4356f35e2812d5cc4764d5d860515b93798d88893afb380"
+}

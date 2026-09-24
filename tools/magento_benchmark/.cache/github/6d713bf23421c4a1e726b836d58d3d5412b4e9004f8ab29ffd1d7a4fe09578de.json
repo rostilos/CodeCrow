@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/478554566",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:36Z",
+  "etag": "W/\"43c6d3fbf50076534c66cfe0be6af4a2170af13901188644ea924b76d3a2869e\"",
+  "headers": {
+    "ETag": "W/\"43c6d3fbf50076534c66cfe0be6af4a2170af13901188644ea924b76d3a2869e\"",
+    "Last-Modified": "Tue, 25 Aug 2026 14:01:18 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "29",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/478554566",
+    "pull_request_review_id": 476899632,
+    "id": 478554566,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ3ODU1NDU2Ng==",
+    "diff_hunk": "@@ -8,67 +8,77 @@\n \n namespace Magento\\Catalog\\Controller\\Adminhtml\\Product;\n \n-use Magento\\Catalog\\Api\\Data\\ProductInterface;\n+use Magento\\Framework\\Controller\\ResultInterface;\n+use Magento\\Backend\\App\\Action\\Context;\n+use Magento\\Catalog\\Api\\ProductRepositoryInterface;\n+use Magento\\Framework\\Controller\\Result\\JsonFactory;\n+use Magento\\Framework\\App\\Action\\HttpGetActionInterface;\n+use Magento\\Backend\\App\\Action;\n \n-/** Returns information about selected product by product id. Returns empty array if product don't exist */\n-class GetSelected extends \\Magento\\Backend\\App\\Action\n+/**\n+ * Returns  selected product by product id. for ui-select filter\n+ */\n+class GetSelected extends Action implements HttpGetActionInterface\n {\n     /**\n-     * Authorization level of a basic admin session\n-     *\n      * @see _isAllowed()\n      */\n     const ADMIN_RESOURCE = 'Magento_Catalog::products';\n \n     /**\n-     * @var \\Magento\\Framework\\Controller\\Result\\JsonFactory\n+     * @var JsonFactory\n      */\n     private $resultJsonFactory;\n \n     /**\n-     * @var \\Magento\\Catalog\\Model\\ResourceModel\\Product\\CollectionFactory\n+     * @var ProductRepositoryInterface\n      */\n-    private $productCollectionFactory;\n+    private $productRepository;\n \n     /**\n-     * Search constructor.\n-     * @param \\Magento\\Framework\\Controller\\Result\\JsonFactory $jsonFactory\n-     * @param \\Magento\\Catalog\\Model\\ResourceModel\\Product\\CollectionFactory $productCollectionFactory\n-     * @param \\Magento\\Backend\\App\\Action\\Context $context\n+     *  GetSelected constructor.\n+     *\n+     * @param JsonFactory $jsonFactory\n+     * @param ProductRepositoryInterface $productRepository\n+     * @param Context $context\n      */\n     public function __construct(\n-        \\Magento\\Framework\\Controller\\Result\\JsonFactory $jsonFactory,\n-        \\Magento\\Catalog\\Model\\ResourceModel\\Product\\CollectionFactory $productCollectionFactory,\n-        \\Magento\\Backend\\App\\Action\\Context $context\n+        JsonFactory $jsonFactory,\n+        ProductRepositoryInterface $productRepository,\n+        Context $context\n     ) {\n         $this->resultJsonFactory = $jsonFactory;\n-        $this->productCollectionFactory = $productCollectionFactory;\n+        $this->productRepository = $productRepository;\n         parent::__construct($context);\n     }\n \n     /**\n-     * @return \\Magento\\Framework\\Controller\\ResultInterface\n+     *\n+     * @return ResultInterface\n      */\n-    public function execute() : \\Magento\\Framework\\Controller\\ResultInterface\n+    public function execute() : ResultInterface\n     {\n-        $productId = $this->getRequest()->getParam('productId');\n-        /** @var \\Magento\\Catalog\\Model\\ResourceModel\\Product\\Collection $productCollection */\n-        $productCollection = $this->productCollectionFactory->create();\n-        $productCollection->addAttributeToSelect(ProductInterface::NAME);\n-        $productCollection->addIdFilter($productId);\n-        $option = [];\n-        /** @var ProductInterface $product */\n-        if (!empty($productCollection->getFirstItem()->getData())) {\n-            $product = $productCollection->getFirstItem();\n-            $option = [\n-                'value' => $productId,\n-                'label' => $product->getName(),\n-                'is_active' => $product->getStatus(),\n-                'path' => $product->getSku(),\n-            ];\n+        $productIds = $this->getRequest()->getParam('ids');",
+    "path": "app/code/Magento/Catalog/Controller/Adminhtml/Product/GetSelected.php",
+    "commit_id": "322f917ec5c7a4acad9358cb62a217e2950eedf4",
+    "original_commit_id": "2f23b48a2d36b2cceec499758362f58069a1b30d",
+    "user": {
+      "login": "sivaschenko",
+      "id": 2028541,
+      "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/sivaschenko",
+      "html_url": "https://github.com/sivaschenko",
+      "followers_url": "https://api.github.com/users/sivaschenko/followers",
+      "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+      "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+      "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+      "repos_url": "https://api.github.com/users/sivaschenko/repos",
+      "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "This is backward incompatible change. Please keep this controller as it is and introduce a new controller to MediaGalleryCatalogUi module",
+    "created_at": "2020-08-27T16:42:34Z",
+    "updated_at": "2020-08-27T20:16:23Z",
+    "html_url": "https://github.com/magento/magento2/pull/29783#discussion_r478554566",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29783",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/478554566"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/29783#discussion_r478554566"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/29783"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/478554566/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 61,
+    "side": "RIGHT",
+    "author_association": "MEMBER",
+    "original_position": 87,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "8ee4e96d232f7858b4e59d39aaaf50ac7767a7fbe1ac44e96ba29f36cc31f600",
+  "envelopeSha256": "78cebb9c2cc89550635e9092bb40b35f8599b8e1e5b2dafa1d07b982daa72417"
+}

@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/380069685",
+  "status": 200,
+  "etag": "W/\"6bfafdfcf9d2441a56513c45a4e77e85a0c0f998fee117f6faae8201fa64d9e0\"",
+  "headers": {
+    "ETag": "W/\"6bfafdfcf9d2441a56513c45a4e77e85a0c0f998fee117f6faae8201fa64d9e0\"",
+    "Last-Modified": "Thu, 13 Aug 2026 10:56:31 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "42",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/380069685",
+    "pull_request_review_id": 359593671,
+    "id": 380069685,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM4MDA2OTY4NQ==",
+    "diff_hunk": "@@ -1,40 +1,46 @@\n <?php\n /**\n- *\n  * Copyright © Magento, Inc. All rights reserved.\n  * See COPYING.txt for license details.\n  */\n+\n namespace Magento\\Store\\App\\Action\\Plugin;\n \n+use Magento\\Framework\\App\\ActionInterface;\n+use Magento\\Framework\\Exception\\State\\InitException;\n+use Magento\\Store\\Model\\StoreManagerInterface;\n+\n+/**\n+ * Plugin verify Store on before Execute on ActionInterface\n+ */\n class StoreCheck\n {\n     /**\n-     * @var \\Magento\\Store\\Model\\StoreManagerInterface\n+     * @var StoreManagerInterface\n      */\n     protected $_storeManager;\n \n     /**\n-     * @param \\Magento\\Store\\Model\\StoreManagerInterface $storeManager\n+     * @param StoreManagerInterface $storeManager\n      */\n     public function __construct(\n-        \\Magento\\Store\\Model\\StoreManagerInterface $storeManager\n+        StoreManagerInterface $storeManager\n     ) {\n         $this->_storeManager = $storeManager;\n     }\n \n     /**\n-     * @param \\Magento\\Framework\\App\\Action\\AbstractAction $subject\n-     * @param \\Magento\\Framework\\App\\RequestInterface $request\n+     * Verify before execute\n+     *\n+     * @param ActionInterface $subject\n      * @return void\n      * @SuppressWarnings(PHPMD.UnusedFormalParameter)\n-     * @throws \\Magento\\Framework\\Exception\\State\\InitException\n+     * @throws \\Magento\\Framework\\Exception\\State\\InitExceptionn",
+    "path": "app/code/Magento/Store/App/Action/Plugin/StoreCheck.php",
+    "commit_id": "2658fba6af471e4b1343b4b6819590625b5e6547",
+    "original_commit_id": "663e1a7b1c7bcb631a5b051b4cb0a4e070f7e33d",
+    "user": {
+      "login": "ihor-sviziev",
+      "id": 1873745,
+      "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/ihor-sviziev",
+      "html_url": "https://github.com/ihor-sviziev",
+      "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+      "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+      "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+      "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+      "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+      "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "```suggestion\r\n     * @throws \\Magento\\Framework\\Exception\\State\\InitException\r\n```",
+    "created_at": "2020-02-17T09:32:29Z",
+    "updated_at": "2020-02-26T20:00:23Z",
+    "html_url": "https://github.com/magento/magento2/pull/26778#discussion_r380069685",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/26778",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/380069685"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/26778#discussion_r380069685"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/26778"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/380069685/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 38,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 45,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

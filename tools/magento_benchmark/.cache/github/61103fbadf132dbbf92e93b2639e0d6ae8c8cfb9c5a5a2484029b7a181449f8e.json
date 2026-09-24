@@ -1,0 +1,87 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/31322/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T15:48:04Z",
+  "etag": "W/\"79292587a63da150adf980b51fe8953235fb373e36a116882605733f508c4b99\"",
+  "headers": {
+    "ETag": "W/\"79292587a63da150adf980b51fe8953235fb373e36a116882605733f508c4b99\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "55",
+    "X-RateLimit-Reset": "1786985277"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/620656854",
+      "pull_request_review_id": 645125256,
+      "id": 620656854,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDYyMDY1Njg1NA==",
+      "diff_hunk": "@@ -263,6 +263,8 @@ type SelectedShippingMethod {\n     method_title: String!\n     amount: Money!\n     base_amount: Money @deprecated(reason: \"The field should not be used on the storefront\")\n+    price_excl_tax: Money!",
+      "path": "app/code/Magento/QuoteGraphQl/etc/schema.graphqls",
+      "commit_id": "9b49cee837a278c1f877b72afd9053cc2b3f30f1",
+      "original_commit_id": "41ba02dad66d5b5c279fb16fd9f4a643bc22a9fe",
+      "user": {
+        "login": "cpartica",
+        "id": 11950741,
+        "node_id": "MDQ6VXNlcjExOTUwNzQx",
+        "avatar_url": "https://avatars.githubusercontent.com/u/11950741?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/cpartica",
+        "html_url": "https://github.com/cpartica",
+        "followers_url": "https://api.github.com/users/cpartica/followers",
+        "following_url": "https://api.github.com/users/cpartica/following{/other_user}",
+        "gists_url": "https://api.github.com/users/cpartica/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/cpartica/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/cpartica/subscriptions",
+        "organizations_url": "https://api.github.com/users/cpartica/orgs",
+        "repos_url": "https://api.github.com/users/cpartica/repos",
+        "events_url": "https://api.github.com/users/cpartica/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/cpartica/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "**First option:**\r\n'price' word should be change to 'amount' resulting in\r\namount_excl_tax: Money!\r\namount__incl_tax: Money!\r\n\r\n**Second option:**\r\namount and prices can't be used interchangeably\r\namount should either be removed or renamed to display_price or removed",
+      "created_at": "2021-04-26T21:18:36Z",
+      "updated_at": "2021-04-26T21:20:08Z",
+      "html_url": "https://github.com/magento/magento2/pull/31322#discussion_r620656854",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31322",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/620656854"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31322#discussion_r620656854"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31322"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/620656854/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 266,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 4,
+      "position": 1,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "42530449af9a0b4d2bd89a67119347257b67a2df51cc03de7de76e44b0942e67",
+  "cacheDigest": "eeec19b84a35e8317b73e8b4c7f64b12663ca20fcafa7ddcfa0920b834b64148"
+}

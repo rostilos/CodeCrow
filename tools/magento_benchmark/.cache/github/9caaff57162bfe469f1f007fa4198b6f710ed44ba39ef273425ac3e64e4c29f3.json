@@ -1,0 +1,157 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/32620/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T14:47:30Z",
+  "etag": "W/\"926dbd93d6ab8e5d36a6509815ac325e20158fc4bbc856dc6ca0eae2d77ca3c4\"",
+  "headers": {
+    "ETag": "W/\"926dbd93d6ab8e5d36a6509815ac325e20158fc4bbc856dc6ca0eae2d77ca3c4\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "41",
+    "X-RateLimit-Reset": "1786980089"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/620918414",
+      "pull_request_review_id": 645499512,
+      "id": 620918414,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDYyMDkxODQxNA==",
+      "diff_hunk": "@@ -159,4 +159,16 @@ public function testReadLists()\n         }\n         $this->assertSame($expected, $actual);\n     }\n+\n+    /**\n+     * Tests if underscores are allowed in extended static files in theme.\n+     *\n+     * @magentoComponentsDir Magento/Framework/App/Utility/_files/design\n+     * @magentoAppIsolation enabled\n+     * @magentoDbIsolation enabled\n+     */\n+    public function testAllowUnderscoreInExtendedFiles()\n+    {\n+        $this->model->getStaticPreProcessingFiles('*.less');",
+      "path": "dev/tests/integration/testsuite/Magento/Framework/App/Utility/FilesTest.php",
+      "commit_id": "87c4a75b98d3e7e6d98885f231fef3d035b76587",
+      "original_commit_id": "df94b8aef4a8c59a04dc432d286cec172e99500b",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "@engcom-Foxtrot, I think we should make sure that we got the correct list of files and it contains file names with underscores. What do you think?",
+      "created_at": "2021-04-27T06:57:43Z",
+      "updated_at": "2021-04-30T11:37:44Z",
+      "html_url": "https://github.com/magento/magento2/pull/32620#discussion_r620918414",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/32620",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/620918414"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/32620#discussion_r620918414"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/32620"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/620918414/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 172,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 14,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/623811590",
+      "pull_request_review_id": 649129457,
+      "id": 623811590,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDYyMzgxMTU5MA==",
+      "diff_hunk": "@@ -159,4 +159,16 @@ public function testReadLists()\n         }\n         $this->assertSame($expected, $actual);\n     }\n+\n+    /**\n+     * Tests if underscores are allowed in extended static files in theme.\n+     *\n+     * @magentoComponentsDir Magento/Framework/App/Utility/_files/design\n+     * @magentoAppIsolation enabled\n+     * @magentoDbIsolation enabled\n+     */\n+    public function testAllowUnderscoreInExtendedFiles()\n+    {\n+        $this->model->getStaticPreProcessingFiles('*.less');",
+      "path": "dev/tests/integration/testsuite/Magento/Framework/App/Utility/FilesTest.php",
+      "commit_id": "87c4a75b98d3e7e6d98885f231fef3d035b76587",
+      "original_commit_id": "df94b8aef4a8c59a04dc432d286cec172e99500b",
+      "user": {
+        "login": "engcom-Foxtrot",
+        "id": 51681487,
+        "node_id": "MDQ6VXNlcjUxNjgxNDg3",
+        "avatar_url": "https://avatars.githubusercontent.com/u/51681487?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/engcom-Foxtrot",
+        "html_url": "https://github.com/engcom-Foxtrot",
+        "followers_url": "https://api.github.com/users/engcom-Foxtrot/followers",
+        "following_url": "https://api.github.com/users/engcom-Foxtrot/following{/other_user}",
+        "gists_url": "https://api.github.com/users/engcom-Foxtrot/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/engcom-Foxtrot/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/engcom-Foxtrot/subscriptions",
+        "organizations_url": "https://api.github.com/users/engcom-Foxtrot/orgs",
+        "repos_url": "https://api.github.com/users/engcom-Foxtrot/repos",
+        "events_url": "https://api.github.com/users/engcom-Foxtrot/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/engcom-Foxtrot/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "@ihor-sviziev updated.",
+      "created_at": "2021-04-30T11:38:13Z",
+      "updated_at": "2021-04-30T11:38:13Z",
+      "html_url": "https://github.com/magento/magento2/pull/32620#discussion_r623811590",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/32620",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/623811590"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/32620#discussion_r623811590"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/32620"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/623811590/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 172,
+      "side": "RIGHT",
+      "in_reply_to_id": 620918414,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 14,
+      "position": 1,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "935321266539e82cce2089b5f659c67e60dd663840e19333e8dfd6b045583041",
+  "cacheDigest": "58781eb7d79f9473f845e3d9f971345a51fd1a82da51b8a09944787539c7fe7b"
+}

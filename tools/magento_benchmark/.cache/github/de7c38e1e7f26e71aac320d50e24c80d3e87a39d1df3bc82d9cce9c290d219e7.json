@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/395969902",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:30Z",
+  "etag": "W/\"a88421a9423539e9c1359c7b561b770315b71d3cb67865ccd9dcd23de91394da\"",
+  "headers": {
+    "ETag": "W/\"a88421a9423539e9c1359c7b561b770315b71d3cb67865ccd9dcd23de91394da\"",
+    "Last-Modified": "Thu, 13 Aug 2026 10:56:31 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "42",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/395969902",
+    "pull_request_review_id": 378899227,
+    "id": 395969902,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM5NTk2OTkwMg==",
+    "diff_hunk": "@@ -8,14 +8,12 @@\n \n <actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n               xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n-    <actionGroup name=\"GoToProductPageViaIDActionGroup\">\n-        <annotations>\n-            <description>Goes to the Product edit page for the provided Product ID.</description>\n-        </annotations>\n+    <actionGroup name=\"AdminProductPageOpenByIdActionGroup\">\n         <arguments>\n             <argument name=\"productId\" type=\"string\"/>\n         </arguments>\n \n         <amOnPage url=\"{{AdminProductEditPage.url(productId)}}\" stepKey=\"goToProduct\"/>\n+        <waitForPageLoad stepKey=\"waitForProductPage\"/>",
+    "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AdminProductPageOpenByIdActionGroup.xml",
+    "commit_id": "14ea469a3b30592ead4fe619c780cda1c21aad6e",
+    "original_commit_id": "1d3cfbb0e20c1ffb32ed6365f12e58c038934360",
+    "user": {
+      "login": "ihor-sviziev",
+      "id": 1873745,
+      "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/ihor-sviziev",
+      "html_url": "https://github.com/ihor-sviziev",
+      "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+      "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+      "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+      "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+      "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+      "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "I just checked - in mftf inside amOnPage we already have waitForPageLoad. Maybe it’s better to increase timeout for it inside MFTF instead and not execute this method twice ?\r\nhttps://github.com/magento/magento2-functional-testing-framework/blob/daae38c8959dd6bdb364dfa4c6095a5872573741/src/Magento/FunctionalTestingFramework/Module/MagentoWebDriver.php\r\n\r\nIt should fix the issues not just in this case but also in others",
+    "created_at": "2020-03-21T07:21:54Z",
+    "updated_at": "2020-03-21T11:42:41Z",
+    "html_url": "https://github.com/magento/magento2/pull/27378#discussion_r395969902",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27378",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/395969902"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/27378#discussion_r395969902"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/27378"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/395969902/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 17,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 14,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "2822fcdd38a6c1ac4b3a5b8b43d0451e9abf01e001884734ba4ba912af4b64c0",
+  "envelopeSha256": "4e92f24bbc53bb5b91137536d41aacae4b2013d976ad04559e49fbaad1fa13ca"
+}

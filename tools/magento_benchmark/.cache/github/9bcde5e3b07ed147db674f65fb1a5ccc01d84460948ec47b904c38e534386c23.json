@@ -1,0 +1,87 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/33904/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T15:36:20Z",
+  "etag": "W/\"139bf79702aac7e6a69b363ad0fc89297c83bda52e3624c2648b95ac9f496e33\"",
+  "headers": {
+    "ETag": "W/\"139bf79702aac7e6a69b363ad0fc89297c83bda52e3624c2648b95ac9f496e33\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "15",
+    "X-RateLimit-Reset": "1786981658"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/696263725",
+      "pull_request_review_id": 739004396,
+      "id": 696263725,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY5NjI2MzcyNQ==",
+      "diff_hunk": "@@ -5,7 +5,6 @@\n  */\n namespace Magento\\Setup\\Module\\Di\\App\\Task\\Operation;\n \n-use Magento\\Framework\\App\\Bootstrap;",
+      "path": "setup/src/Magento/Setup/Module/Di/App/Task/Operation/ApplicationCodeGenerator.php",
+      "commit_id": "71c7f79b7d2d5859697ff540d6f41e2daac8560c",
+      "original_commit_id": "71c7f79b7d2d5859697ff540d6f41e2daac8560c",
+      "user": {
+        "login": "tanghongtanghong",
+        "id": 50584758,
+        "node_id": "MDQ6VXNlcjUwNTg0NzU4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/50584758?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/tanghongtanghong",
+        "html_url": "https://github.com/tanghongtanghong",
+        "followers_url": "https://api.github.com/users/tanghongtanghong/followers",
+        "following_url": "https://api.github.com/users/tanghongtanghong/following{/other_user}",
+        "gists_url": "https://api.github.com/users/tanghongtanghong/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/tanghongtanghong/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/tanghongtanghong/subscriptions",
+        "organizations_url": "https://api.github.com/users/tanghongtanghong/orgs",
+        "repos_url": "https://api.github.com/users/tanghongtanghong/repos",
+        "events_url": "https://api.github.com/users/tanghongtanghong/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/tanghongtanghong/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "test",
+      "created_at": "2021-08-26T03:36:55Z",
+      "updated_at": "2021-08-26T03:36:55Z",
+      "html_url": "https://github.com/magento/magento2/pull/33904#discussion_r696263725",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33904",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/696263725"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33904#discussion_r696263725"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33904"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/696263725/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 8,
+      "original_line": 8,
+      "side": "LEFT",
+      "author_association": "NONE",
+      "original_position": 4,
+      "position": 4,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "71e514fb7919e5791eb4867f04f95393c20fb4f276a0bdfa14303fc3f33efdc6",
+  "cacheDigest": "f9d9bed85ed148ec4c9d4ab44dfc997b59405983ae7770e3b283b4838f8d953a"
+}

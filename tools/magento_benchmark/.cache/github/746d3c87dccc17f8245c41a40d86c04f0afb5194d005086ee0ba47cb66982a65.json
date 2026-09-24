@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/464088580",
+  "status": 200,
+  "etag": "W/\"3b133e25852469f3cb8ca78fe5e47e7ba4ba5dd09ebb0d56ce0e4c182bdd6282\"",
+  "headers": {
+    "ETag": "W/\"3b133e25852469f3cb8ca78fe5e47e7ba4ba5dd09ebb0d56ce0e4c182bdd6282\"",
+    "Last-Modified": "Tue, 18 Aug 2026 10:03:37 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "29",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/464088580",
+    "pull_request_review_id": 459655800,
+    "id": 464088580,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ2NDA4ODU4MA==",
+    "diff_hunk": "@@ -0,0 +1,66 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+\n+namespace Magento\\Framework\\Console\\CommandLoader;\n+\n+use Symfony\\Component\\Console\\CommandLoader\\CommandLoaderInterface;\n+use Symfony\\Component\\Console\\Exception\\CommandNotFoundException;\n+\n+/**\n+ * Class Aggregate has a list of command loaders, which can be extended via DI configuration.\n+ */\n+class Aggregate implements CommandLoaderInterface\n+{\n+    /** @var CommandLoaderInterface[] */\n+    private $commandLoaders;\n+\n+    public function __construct($commandLoaders = [])\n+    {\n+        $this->commandLoaders = $commandLoaders;\n+    }\n+\n+    /**\n+     * @param string $name\n+     * @return \\Symfony\\Component\\Console\\Command\\Command\n+     */\n+    public function get($name)",
+    "path": "lib/internal/Magento/Framework/Console/CommandLoader/Aggregate.php",
+    "commit_id": "7d4d66985ab4bbdb22b246398ea80b83019fa53c",
+    "original_commit_id": "7fadb5c6a5908420150cb4576763fbc71c196f8c",
+    "user": {
+      "login": "lbajsarowicz",
+      "id": 1639941,
+      "node_id": "MDQ6VXNlcjE2Mzk5NDE=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1639941?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/lbajsarowicz",
+      "html_url": "https://github.com/lbajsarowicz",
+      "followers_url": "https://api.github.com/users/lbajsarowicz/followers",
+      "following_url": "https://api.github.com/users/lbajsarowicz/following{/other_user}",
+      "gists_url": "https://api.github.com/users/lbajsarowicz/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/lbajsarowicz/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/lbajsarowicz/subscriptions",
+      "organizations_url": "https://api.github.com/users/lbajsarowicz/orgs",
+      "repos_url": "https://api.github.com/users/lbajsarowicz/repos",
+      "events_url": "https://api.github.com/users/lbajsarowicz/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/lbajsarowicz/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Introduce strict type\r\n```suggestion\r\n    public function get(string $name)\r\n```",
+    "created_at": "2020-08-02T15:07:03Z",
+    "updated_at": "2021-02-08T18:51:25Z",
+    "html_url": "https://github.com/magento/magento2/pull/29355#discussion_r464088580",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29355",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/464088580"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/29355#discussion_r464088580"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/29355"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/464088580/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 31,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 31,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

@@ -1,0 +1,639 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/33547/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T15:47:58Z",
+  "etag": "W/\"37d0beb34b2fadbfbea054c8a44a56607c37ef8d0ee4d349206b9b240a33987e\"",
+  "headers": {
+    "ETag": "W/\"37d0beb34b2fadbfbea054c8a44a56607c37ef8d0ee4d349206b9b240a33987e\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "59",
+    "X-RateLimit-Reset": "1786985277"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673736620",
+      "pull_request_review_id": 711350264,
+      "id": 673736620,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3MzczNjYyMA==",
+      "diff_hunk": "@@ -0,0 +1,167 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\CatalogGraphQl\\Model\\Resolver\\Products\\Query;\n+\n+use Magento\\Catalog\\Model\\CategoryRepository;\n+use Magento\\Framework\\Api\\Search\\AggregationValueInterface;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Search\\Response\\Aggregation;\n+use Magento\\Framework\\Search\\Response\\AggregationFactory;\n+use Magento\\Framework\\Search\\Response\\Bucket;\n+use Magento\\Framework\\Search\\Response\\BucketFactory;\n+use Magento\\Store\\Model\\StoreManagerInterface;\n+\n+/**\n+ * Resolve category aggregation.\n+ */\n+class ResolveCategoryAggregation\n+{\n+    /**\n+     * @var string\n+     */\n+    public const CATEGORY_BUCKET = 'category_bucket';\n+\n+    /**\n+     * @var string\n+     */\n+    private const BUCKETS = 'buckets';\n+\n+    /**\n+     * @var AggregationFactory\n+     */\n+    private $aggregationFactory;\n+\n+    /**\n+     * @var BucketFactory\n+     */\n+    private $bucketFactory;\n+\n+    /**\n+     * @var StoreManagerInterface\n+     */\n+    private $storeManager;\n+\n+    /**\n+     * @var CategoryRepository\n+     */\n+    private $categoryRepository;\n+\n+    /**\n+     * @var array\n+     */\n+    private $resolvedChildrenIds = [];\n+\n+    /**\n+     * @param AggregationFactory $aggregationFactory\n+     * @param BucketFactory $bucketFactory\n+     * @param StoreManagerInterface $storeManager\n+     * @param CategoryRepository $categoryRepository\n+     */\n+    public function __construct(\n+        AggregationFactory $aggregationFactory,\n+        BucketFactory $bucketFactory,\n+        StoreManagerInterface $storeManager,\n+        CategoryRepository $categoryRepository\n+    ) {\n+        $this->aggregationFactory = $aggregationFactory;\n+        $this->bucketFactory = $bucketFactory;\n+        $this->storeManager = $storeManager;\n+        $this->categoryRepository = $categoryRepository;\n+    }\n+\n+    /**\n+     * Get resolved category aggregation.\n+     *\n+     * @param array $categoryFilter\n+     * @param Bucket[] $bucketList\n+     *\n+     * @return Aggregation",
+      "path": "app/code/Magento/CatalogGraphQl/Model/Resolver/Products/Query/ResolveCategoryAggregation.php",
+      "commit_id": "9dae57e378d41728d03624139b3ebf07401a4a19",
+      "original_commit_id": "c7fdfd379f13221e23d29a5f64efcf4267a46d29",
+      "user": {
+        "login": "andrewbess",
+        "id": 10788564,
+        "node_id": "MDQ6VXNlcjEwNzg4NTY0",
+        "avatar_url": "https://avatars.githubusercontent.com/u/10788564?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/andrewbess",
+        "html_url": "https://github.com/andrewbess",
+        "followers_url": "https://api.github.com/users/andrewbess/followers",
+        "following_url": "https://api.github.com/users/andrewbess/following{/other_user}",
+        "gists_url": "https://api.github.com/users/andrewbess/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/andrewbess/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/andrewbess/subscriptions",
+        "organizations_url": "https://api.github.com/users/andrewbess/orgs",
+        "repos_url": "https://api.github.com/users/andrewbess/repos",
+        "events_url": "https://api.github.com/users/andrewbess/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/andrewbess/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hello @korovitskyi \r\nCould you please merge tags to the common block?\r\nRemove redundant line.\r\n\r\n```suggestion\r\n     * @param array $categoryFilter\r\n     * @param Bucket[] $bucketList\r\n     * @return Aggregation\r\n```",
+      "created_at": "2021-07-21T07:42:40Z",
+      "updated_at": "2021-07-21T08:07:10Z",
+      "html_url": "https://github.com/magento/magento2/pull/33547#discussion_r673736620",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33547",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/673736620"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33547#discussion_r673736620"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33547"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673736620/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 80,
+      "original_start_line": 80,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 83,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 83,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673737030",
+      "pull_request_review_id": 711350264,
+      "id": 673737030,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3MzczNzAzMA==",
+      "diff_hunk": "@@ -0,0 +1,167 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\CatalogGraphQl\\Model\\Resolver\\Products\\Query;\n+\n+use Magento\\Catalog\\Model\\CategoryRepository;\n+use Magento\\Framework\\Api\\Search\\AggregationValueInterface;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Search\\Response\\Aggregation;\n+use Magento\\Framework\\Search\\Response\\AggregationFactory;\n+use Magento\\Framework\\Search\\Response\\Bucket;\n+use Magento\\Framework\\Search\\Response\\BucketFactory;\n+use Magento\\Store\\Model\\StoreManagerInterface;\n+\n+/**\n+ * Resolve category aggregation.\n+ */\n+class ResolveCategoryAggregation\n+{\n+    /**\n+     * @var string\n+     */\n+    public const CATEGORY_BUCKET = 'category_bucket';\n+\n+    /**\n+     * @var string\n+     */\n+    private const BUCKETS = 'buckets';\n+\n+    /**\n+     * @var AggregationFactory\n+     */\n+    private $aggregationFactory;\n+\n+    /**\n+     * @var BucketFactory\n+     */\n+    private $bucketFactory;\n+\n+    /**\n+     * @var StoreManagerInterface\n+     */\n+    private $storeManager;\n+\n+    /**\n+     * @var CategoryRepository\n+     */\n+    private $categoryRepository;\n+\n+    /**\n+     * @var array\n+     */\n+    private $resolvedChildrenIds = [];\n+\n+    /**\n+     * @param AggregationFactory $aggregationFactory\n+     * @param BucketFactory $bucketFactory\n+     * @param StoreManagerInterface $storeManager\n+     * @param CategoryRepository $categoryRepository\n+     */\n+    public function __construct(\n+        AggregationFactory $aggregationFactory,\n+        BucketFactory $bucketFactory,\n+        StoreManagerInterface $storeManager,\n+        CategoryRepository $categoryRepository\n+    ) {\n+        $this->aggregationFactory = $aggregationFactory;\n+        $this->bucketFactory = $bucketFactory;\n+        $this->storeManager = $storeManager;\n+        $this->categoryRepository = $categoryRepository;\n+    }\n+\n+    /**\n+     * Get resolved category aggregation.\n+     *\n+     * @param array $categoryFilter\n+     * @param Bucket[] $bucketList\n+     *\n+     * @return Aggregation\n+     */\n+    public function getResolvedCategoryAggregation(array $categoryFilter, array $bucketList): Aggregation\n+    {\n+        $categoryBucket = $bucketList[self::CATEGORY_BUCKET] ?? [];\n+        $values = $categoryBucket->getValues();\n+        $condition = array_key_first($categoryFilter);\n+        $searchableCategoryValue = $categoryFilter[$condition] ?? 0;\n+\n+        if (!$searchableCategoryValue || empty($values)) {\n+            return $this->aggregationFactory->create([self::BUCKETS => $bucketList]);\n+        }\n+",
+      "path": "app/code/Magento/CatalogGraphQl/Model/Resolver/Products/Query/ResolveCategoryAggregation.php",
+      "commit_id": "9dae57e378d41728d03624139b3ebf07401a4a19",
+      "original_commit_id": "c7fdfd379f13221e23d29a5f64efcf4267a46d29",
+      "user": {
+        "login": "andrewbess",
+        "id": 10788564,
+        "node_id": "MDQ6VXNlcjEwNzg4NTY0",
+        "avatar_url": "https://avatars.githubusercontent.com/u/10788564?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/andrewbess",
+        "html_url": "https://github.com/andrewbess",
+        "followers_url": "https://api.github.com/users/andrewbess/followers",
+        "following_url": "https://api.github.com/users/andrewbess/following{/other_user}",
+        "gists_url": "https://api.github.com/users/andrewbess/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/andrewbess/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/andrewbess/subscriptions",
+        "organizations_url": "https://api.github.com/users/andrewbess/orgs",
+        "repos_url": "https://api.github.com/users/andrewbess/repos",
+        "events_url": "https://api.github.com/users/andrewbess/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/andrewbess/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please remove redundant line",
+      "created_at": "2021-07-21T07:43:17Z",
+      "updated_at": "2021-07-21T08:07:10Z",
+      "html_url": "https://github.com/magento/magento2/pull/33547#discussion_r673737030",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33547",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/673737030"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33547#discussion_r673737030"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33547"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673737030/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 95,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 95,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673737509",
+      "pull_request_review_id": 711350264,
+      "id": 673737509,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3MzczNzUwOQ==",
+      "diff_hunk": "@@ -0,0 +1,167 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\CatalogGraphQl\\Model\\Resolver\\Products\\Query;\n+\n+use Magento\\Catalog\\Model\\CategoryRepository;\n+use Magento\\Framework\\Api\\Search\\AggregationValueInterface;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Search\\Response\\Aggregation;\n+use Magento\\Framework\\Search\\Response\\AggregationFactory;\n+use Magento\\Framework\\Search\\Response\\Bucket;\n+use Magento\\Framework\\Search\\Response\\BucketFactory;\n+use Magento\\Store\\Model\\StoreManagerInterface;\n+\n+/**\n+ * Resolve category aggregation.\n+ */\n+class ResolveCategoryAggregation\n+{\n+    /**\n+     * @var string\n+     */\n+    public const CATEGORY_BUCKET = 'category_bucket';\n+\n+    /**\n+     * @var string\n+     */\n+    private const BUCKETS = 'buckets';\n+\n+    /**\n+     * @var AggregationFactory\n+     */\n+    private $aggregationFactory;\n+\n+    /**\n+     * @var BucketFactory\n+     */\n+    private $bucketFactory;\n+\n+    /**\n+     * @var StoreManagerInterface\n+     */\n+    private $storeManager;\n+\n+    /**\n+     * @var CategoryRepository\n+     */\n+    private $categoryRepository;\n+\n+    /**\n+     * @var array\n+     */\n+    private $resolvedChildrenIds = [];\n+\n+    /**\n+     * @param AggregationFactory $aggregationFactory\n+     * @param BucketFactory $bucketFactory\n+     * @param StoreManagerInterface $storeManager\n+     * @param CategoryRepository $categoryRepository\n+     */\n+    public function __construct(\n+        AggregationFactory $aggregationFactory,\n+        BucketFactory $bucketFactory,\n+        StoreManagerInterface $storeManager,\n+        CategoryRepository $categoryRepository\n+    ) {\n+        $this->aggregationFactory = $aggregationFactory;\n+        $this->bucketFactory = $bucketFactory;\n+        $this->storeManager = $storeManager;\n+        $this->categoryRepository = $categoryRepository;\n+    }\n+\n+    /**\n+     * Get resolved category aggregation.\n+     *\n+     * @param array $categoryFilter\n+     * @param Bucket[] $bucketList\n+     *\n+     * @return Aggregation\n+     */\n+    public function getResolvedCategoryAggregation(array $categoryFilter, array $bucketList): Aggregation\n+    {\n+        $categoryBucket = $bucketList[self::CATEGORY_BUCKET] ?? [];\n+        $values = $categoryBucket->getValues();\n+        $condition = array_key_first($categoryFilter);\n+        $searchableCategoryValue = $categoryFilter[$condition] ?? 0;\n+\n+        if (!$searchableCategoryValue || empty($values)) {\n+            return $this->aggregationFactory->create([self::BUCKETS => $bucketList]);\n+        }\n+\n+        $resolvedBucketList = $bucketList;\n+\n+        try {\n+            if (!is_array($searchableCategoryValue)) {\n+                $resolvedValues = $this->getValidCategories((int) $searchableCategoryValue, $values);\n+            } else {\n+                $categoryResolvedValues = [];\n+\n+                foreach ($searchableCategoryValue as $categoryId) {\n+                    $categoryResolvedValues[] = $this->getValidCategories((int) $categoryId, $values);\n+                }\n+\n+                $resolvedValues = call_user_func_array('array_merge', $categoryResolvedValues);;\n+            }\n+        } catch (NoSuchEntityException $e) {\n+            return $this->aggregationFactory->create([self::BUCKETS => $bucketList]);\n+        }\n+\n+        $resolvedCategoryBucket = $this->bucketFactory->create(\n+            [\n+                'name' => self::CATEGORY_BUCKET,\n+                'values' => $resolvedValues\n+            ]\n+        );\n+",
+      "path": "app/code/Magento/CatalogGraphQl/Model/Resolver/Products/Query/ResolveCategoryAggregation.php",
+      "commit_id": "9dae57e378d41728d03624139b3ebf07401a4a19",
+      "original_commit_id": "c7fdfd379f13221e23d29a5f64efcf4267a46d29",
+      "user": {
+        "login": "andrewbess",
+        "id": 10788564,
+        "node_id": "MDQ6VXNlcjEwNzg4NTY0",
+        "avatar_url": "https://avatars.githubusercontent.com/u/10788564?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/andrewbess",
+        "html_url": "https://github.com/andrewbess",
+        "followers_url": "https://api.github.com/users/andrewbess/followers",
+        "following_url": "https://api.github.com/users/andrewbess/following{/other_user}",
+        "gists_url": "https://api.github.com/users/andrewbess/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/andrewbess/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/andrewbess/subscriptions",
+        "organizations_url": "https://api.github.com/users/andrewbess/orgs",
+        "repos_url": "https://api.github.com/users/andrewbess/repos",
+        "events_url": "https://api.github.com/users/andrewbess/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/andrewbess/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please remove redundant lines\r\n\r\n```suggestion\r\n        $resolvedCategoryBucket = $this->bucketFactory->create(\r\n            [\r\n                'name' => self::CATEGORY_BUCKET,\r\n                'values' => $resolvedValues\r\n            ]\r\n        );\r\n```",
+      "created_at": "2021-07-21T07:44:03Z",
+      "updated_at": "2021-07-21T08:07:10Z",
+      "html_url": "https://github.com/magento/magento2/pull/33547#discussion_r673737509",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33547",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/673737509"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33547#discussion_r673737509"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33547"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673737509/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": 113,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 120,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 120,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673738015",
+      "pull_request_review_id": 711350264,
+      "id": 673738015,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3MzczODAxNQ==",
+      "diff_hunk": "@@ -0,0 +1,167 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\CatalogGraphQl\\Model\\Resolver\\Products\\Query;\n+\n+use Magento\\Catalog\\Model\\CategoryRepository;\n+use Magento\\Framework\\Api\\Search\\AggregationValueInterface;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Search\\Response\\Aggregation;\n+use Magento\\Framework\\Search\\Response\\AggregationFactory;\n+use Magento\\Framework\\Search\\Response\\Bucket;\n+use Magento\\Framework\\Search\\Response\\BucketFactory;\n+use Magento\\Store\\Model\\StoreManagerInterface;\n+\n+/**\n+ * Resolve category aggregation.\n+ */\n+class ResolveCategoryAggregation\n+{\n+    /**\n+     * @var string\n+     */\n+    public const CATEGORY_BUCKET = 'category_bucket';\n+\n+    /**\n+     * @var string\n+     */\n+    private const BUCKETS = 'buckets';\n+\n+    /**\n+     * @var AggregationFactory\n+     */\n+    private $aggregationFactory;\n+\n+    /**\n+     * @var BucketFactory\n+     */\n+    private $bucketFactory;\n+\n+    /**\n+     * @var StoreManagerInterface\n+     */\n+    private $storeManager;\n+\n+    /**\n+     * @var CategoryRepository\n+     */\n+    private $categoryRepository;\n+\n+    /**\n+     * @var array\n+     */\n+    private $resolvedChildrenIds = [];\n+\n+    /**\n+     * @param AggregationFactory $aggregationFactory\n+     * @param BucketFactory $bucketFactory\n+     * @param StoreManagerInterface $storeManager\n+     * @param CategoryRepository $categoryRepository\n+     */\n+    public function __construct(\n+        AggregationFactory $aggregationFactory,\n+        BucketFactory $bucketFactory,\n+        StoreManagerInterface $storeManager,\n+        CategoryRepository $categoryRepository\n+    ) {\n+        $this->aggregationFactory = $aggregationFactory;\n+        $this->bucketFactory = $bucketFactory;\n+        $this->storeManager = $storeManager;\n+        $this->categoryRepository = $categoryRepository;\n+    }\n+\n+    /**\n+     * Get resolved category aggregation.\n+     *\n+     * @param array $categoryFilter\n+     * @param Bucket[] $bucketList\n+     *\n+     * @return Aggregation\n+     */\n+    public function getResolvedCategoryAggregation(array $categoryFilter, array $bucketList): Aggregation\n+    {\n+        $categoryBucket = $bucketList[self::CATEGORY_BUCKET] ?? [];\n+        $values = $categoryBucket->getValues();\n+        $condition = array_key_first($categoryFilter);\n+        $searchableCategoryValue = $categoryFilter[$condition] ?? 0;\n+\n+        if (!$searchableCategoryValue || empty($values)) {\n+            return $this->aggregationFactory->create([self::BUCKETS => $bucketList]);\n+        }\n+\n+        $resolvedBucketList = $bucketList;\n+\n+        try {\n+            if (!is_array($searchableCategoryValue)) {\n+                $resolvedValues = $this->getValidCategories((int) $searchableCategoryValue, $values);\n+            } else {\n+                $categoryResolvedValues = [];\n+\n+                foreach ($searchableCategoryValue as $categoryId) {\n+                    $categoryResolvedValues[] = $this->getValidCategories((int) $categoryId, $values);\n+                }\n+\n+                $resolvedValues = call_user_func_array('array_merge', $categoryResolvedValues);;\n+            }\n+        } catch (NoSuchEntityException $e) {\n+            return $this->aggregationFactory->create([self::BUCKETS => $bucketList]);\n+        }\n+\n+        $resolvedCategoryBucket = $this->bucketFactory->create(\n+            [\n+                'name' => self::CATEGORY_BUCKET,\n+                'values' => $resolvedValues\n+            ]\n+        );\n+\n+        $resolvedBucketList[self::CATEGORY_BUCKET] = $resolvedCategoryBucket;\n+\n+        return $this->aggregationFactory->create([self::BUCKETS => $resolvedBucketList]);\n+    }\n+\n+    /**\n+     * Check is valid searchable category children.\n+     *\n+     * @param int $searchableCategoryId\n+     * @param AggregationValueInterface[] $aggregationValues\n+     *\n+     * @return AggregationValueInterface[]\n+     *\n+     * @throws NoSuchEntityException",
+      "path": "app/code/Magento/CatalogGraphQl/Model/Resolver/Products/Query/ResolveCategoryAggregation.php",
+      "commit_id": "9dae57e378d41728d03624139b3ebf07401a4a19",
+      "original_commit_id": "c7fdfd379f13221e23d29a5f64efcf4267a46d29",
+      "user": {
+        "login": "andrewbess",
+        "id": 10788564,
+        "node_id": "MDQ6VXNlcjEwNzg4NTY0",
+        "avatar_url": "https://avatars.githubusercontent.com/u/10788564?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/andrewbess",
+        "html_url": "https://github.com/andrewbess",
+        "followers_url": "https://api.github.com/users/andrewbess/followers",
+        "following_url": "https://api.github.com/users/andrewbess/following{/other_user}",
+        "gists_url": "https://api.github.com/users/andrewbess/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/andrewbess/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/andrewbess/subscriptions",
+        "organizations_url": "https://api.github.com/users/andrewbess/orgs",
+        "repos_url": "https://api.github.com/users/andrewbess/repos",
+        "events_url": "https://api.github.com/users/andrewbess/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/andrewbess/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hello @korovitskyi \r\nCould you please merge tags to the common block?\r\nRemove redundant lines.\r\n\r\n```suggestion\r\n     * @param int $searchableCategoryId\r\n     * @param AggregationValueInterface[] $aggregationValues\r\n     * @return AggregationValueInterface[]\r\n     * @throws NoSuchEntityException\r\n```",
+      "created_at": "2021-07-21T07:44:50Z",
+      "updated_at": "2021-07-21T08:07:10Z",
+      "html_url": "https://github.com/magento/magento2/pull/33547#discussion_r673738015",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33547",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/673738015"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33547#discussion_r673738015"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33547"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673738015/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 129,
+      "original_start_line": 129,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 134,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 134,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673739015",
+      "pull_request_review_id": 711350264,
+      "id": 673739015,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3MzczOTAxNQ==",
+      "diff_hunk": "@@ -0,0 +1,167 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\CatalogGraphQl\\Model\\Resolver\\Products\\Query;\n+\n+use Magento\\Catalog\\Model\\CategoryRepository;\n+use Magento\\Framework\\Api\\Search\\AggregationValueInterface;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Search\\Response\\Aggregation;\n+use Magento\\Framework\\Search\\Response\\AggregationFactory;\n+use Magento\\Framework\\Search\\Response\\Bucket;\n+use Magento\\Framework\\Search\\Response\\BucketFactory;\n+use Magento\\Store\\Model\\StoreManagerInterface;\n+\n+/**\n+ * Resolve category aggregation.\n+ */\n+class ResolveCategoryAggregation\n+{\n+    /**\n+     * @var string\n+     */\n+    public const CATEGORY_BUCKET = 'category_bucket';\n+\n+    /**\n+     * @var string\n+     */\n+    private const BUCKETS = 'buckets';\n+\n+    /**\n+     * @var AggregationFactory\n+     */\n+    private $aggregationFactory;\n+\n+    /**\n+     * @var BucketFactory\n+     */\n+    private $bucketFactory;\n+\n+    /**\n+     * @var StoreManagerInterface\n+     */\n+    private $storeManager;\n+\n+    /**\n+     * @var CategoryRepository\n+     */\n+    private $categoryRepository;\n+\n+    /**\n+     * @var array\n+     */\n+    private $resolvedChildrenIds = [];\n+\n+    /**\n+     * @param AggregationFactory $aggregationFactory\n+     * @param BucketFactory $bucketFactory\n+     * @param StoreManagerInterface $storeManager\n+     * @param CategoryRepository $categoryRepository\n+     */\n+    public function __construct(\n+        AggregationFactory $aggregationFactory,\n+        BucketFactory $bucketFactory,\n+        StoreManagerInterface $storeManager,\n+        CategoryRepository $categoryRepository\n+    ) {\n+        $this->aggregationFactory = $aggregationFactory;\n+        $this->bucketFactory = $bucketFactory;\n+        $this->storeManager = $storeManager;\n+        $this->categoryRepository = $categoryRepository;\n+    }\n+\n+    /**\n+     * Get resolved category aggregation.\n+     *\n+     * @param array $categoryFilter\n+     * @param Bucket[] $bucketList\n+     *\n+     * @return Aggregation\n+     */\n+    public function getResolvedCategoryAggregation(array $categoryFilter, array $bucketList): Aggregation\n+    {\n+        $categoryBucket = $bucketList[self::CATEGORY_BUCKET] ?? [];\n+        $values = $categoryBucket->getValues();\n+        $condition = array_key_first($categoryFilter);\n+        $searchableCategoryValue = $categoryFilter[$condition] ?? 0;\n+\n+        if (!$searchableCategoryValue || empty($values)) {\n+            return $this->aggregationFactory->create([self::BUCKETS => $bucketList]);\n+        }\n+\n+        $resolvedBucketList = $bucketList;\n+\n+        try {\n+            if (!is_array($searchableCategoryValue)) {\n+                $resolvedValues = $this->getValidCategories((int) $searchableCategoryValue, $values);\n+            } else {\n+                $categoryResolvedValues = [];\n+\n+                foreach ($searchableCategoryValue as $categoryId) {\n+                    $categoryResolvedValues[] = $this->getValidCategories((int) $categoryId, $values);\n+                }\n+\n+                $resolvedValues = call_user_func_array('array_merge', $categoryResolvedValues);;\n+            }\n+        } catch (NoSuchEntityException $e) {\n+            return $this->aggregationFactory->create([self::BUCKETS => $bucketList]);\n+        }\n+\n+        $resolvedCategoryBucket = $this->bucketFactory->create(\n+            [\n+                'name' => self::CATEGORY_BUCKET,\n+                'values' => $resolvedValues\n+            ]\n+        );\n+\n+        $resolvedBucketList[self::CATEGORY_BUCKET] = $resolvedCategoryBucket;\n+\n+        return $this->aggregationFactory->create([self::BUCKETS => $resolvedBucketList]);\n+    }\n+\n+    /**\n+     * Check is valid searchable category children.\n+     *\n+     * @param int $searchableCategoryId\n+     * @param AggregationValueInterface[] $aggregationValues\n+     *\n+     * @return AggregationValueInterface[]\n+     *\n+     * @throws NoSuchEntityException\n+     */\n+    private function getValidCategories(int $searchableCategoryId, array $aggregationValues): array\n+    {\n+        $stareId = (int) $this->storeManager->getStore()->getId();",
+      "path": "app/code/Magento/CatalogGraphQl/Model/Resolver/Products/Query/ResolveCategoryAggregation.php",
+      "commit_id": "9dae57e378d41728d03624139b3ebf07401a4a19",
+      "original_commit_id": "c7fdfd379f13221e23d29a5f64efcf4267a46d29",
+      "user": {
+        "login": "andrewbess",
+        "id": 10788564,
+        "node_id": "MDQ6VXNlcjEwNzg4NTY0",
+        "avatar_url": "https://avatars.githubusercontent.com/u/10788564?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/andrewbess",
+        "html_url": "https://github.com/andrewbess",
+        "followers_url": "https://api.github.com/users/andrewbess/followers",
+        "following_url": "https://api.github.com/users/andrewbess/following{/other_user}",
+        "gists_url": "https://api.github.com/users/andrewbess/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/andrewbess/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/andrewbess/subscriptions",
+        "organizations_url": "https://api.github.com/users/andrewbess/orgs",
+        "repos_url": "https://api.github.com/users/andrewbess/repos",
+        "events_url": "https://api.github.com/users/andrewbess/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/andrewbess/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hello @korovitskyi \r\nPerhaps this is typo ($stareId should be named $storeId)",
+      "created_at": "2021-07-21T07:46:24Z",
+      "updated_at": "2021-07-21T08:07:10Z",
+      "html_url": "https://github.com/magento/magento2/pull/33547#discussion_r673739015",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33547",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/673739015"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33547#discussion_r673739015"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33547"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673739015/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 138,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 138,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673742845",
+      "pull_request_review_id": 711350264,
+      "id": 673742845,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3Mzc0Mjg0NQ==",
+      "diff_hunk": "@@ -0,0 +1,167 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\CatalogGraphQl\\Model\\Resolver\\Products\\Query;\n+\n+use Magento\\Catalog\\Model\\CategoryRepository;\n+use Magento\\Framework\\Api\\Search\\AggregationValueInterface;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Search\\Response\\Aggregation;\n+use Magento\\Framework\\Search\\Response\\AggregationFactory;\n+use Magento\\Framework\\Search\\Response\\Bucket;\n+use Magento\\Framework\\Search\\Response\\BucketFactory;\n+use Magento\\Store\\Model\\StoreManagerInterface;\n+\n+/**\n+ * Resolve category aggregation.\n+ */\n+class ResolveCategoryAggregation\n+{\n+    /**\n+     * @var string\n+     */\n+    public const CATEGORY_BUCKET = 'category_bucket';\n+\n+    /**\n+     * @var string\n+     */\n+    private const BUCKETS = 'buckets';\n+\n+    /**\n+     * @var AggregationFactory\n+     */\n+    private $aggregationFactory;\n+\n+    /**\n+     * @var BucketFactory\n+     */\n+    private $bucketFactory;\n+\n+    /**\n+     * @var StoreManagerInterface\n+     */\n+    private $storeManager;\n+\n+    /**\n+     * @var CategoryRepository\n+     */\n+    private $categoryRepository;\n+\n+    /**\n+     * @var array\n+     */\n+    private $resolvedChildrenIds = [];\n+\n+    /**\n+     * @param AggregationFactory $aggregationFactory\n+     * @param BucketFactory $bucketFactory\n+     * @param StoreManagerInterface $storeManager\n+     * @param CategoryRepository $categoryRepository\n+     */\n+    public function __construct(\n+        AggregationFactory $aggregationFactory,\n+        BucketFactory $bucketFactory,\n+        StoreManagerInterface $storeManager,\n+        CategoryRepository $categoryRepository\n+    ) {\n+        $this->aggregationFactory = $aggregationFactory;\n+        $this->bucketFactory = $bucketFactory;\n+        $this->storeManager = $storeManager;\n+        $this->categoryRepository = $categoryRepository;\n+    }\n+\n+    /**\n+     * Get resolved category aggregation.\n+     *\n+     * @param array $categoryFilter\n+     * @param Bucket[] $bucketList\n+     *\n+     * @return Aggregation\n+     */\n+    public function getResolvedCategoryAggregation(array $categoryFilter, array $bucketList): Aggregation\n+    {\n+        $categoryBucket = $bucketList[self::CATEGORY_BUCKET] ?? [];\n+        $values = $categoryBucket->getValues();\n+        $condition = array_key_first($categoryFilter);\n+        $searchableCategoryValue = $categoryFilter[$condition] ?? 0;\n+\n+        if (!$searchableCategoryValue || empty($values)) {\n+            return $this->aggregationFactory->create([self::BUCKETS => $bucketList]);\n+        }\n+\n+        $resolvedBucketList = $bucketList;\n+\n+        try {\n+            if (!is_array($searchableCategoryValue)) {\n+                $resolvedValues = $this->getValidCategories((int) $searchableCategoryValue, $values);\n+            } else {\n+                $categoryResolvedValues = [];\n+\n+                foreach ($searchableCategoryValue as $categoryId) {\n+                    $categoryResolvedValues[] = $this->getValidCategories((int) $categoryId, $values);\n+                }\n+\n+                $resolvedValues = call_user_func_array('array_merge', $categoryResolvedValues);;\n+            }\n+        } catch (NoSuchEntityException $e) {\n+            return $this->aggregationFactory->create([self::BUCKETS => $bucketList]);\n+        }\n+\n+        $resolvedCategoryBucket = $this->bucketFactory->create(\n+            [\n+                'name' => self::CATEGORY_BUCKET,\n+                'values' => $resolvedValues\n+            ]\n+        );\n+\n+        $resolvedBucketList[self::CATEGORY_BUCKET] = $resolvedCategoryBucket;\n+\n+        return $this->aggregationFactory->create([self::BUCKETS => $resolvedBucketList]);\n+    }\n+\n+    /**\n+     * Check is valid searchable category children.\n+     *\n+     * @param int $searchableCategoryId\n+     * @param AggregationValueInterface[] $aggregationValues\n+     *\n+     * @return AggregationValueInterface[]\n+     *\n+     * @throws NoSuchEntityException\n+     */\n+    private function getValidCategories(int $searchableCategoryId, array $aggregationValues): array\n+    {\n+        $stareId = (int) $this->storeManager->getStore()->getId();\n+        $searchableCategory = $this->categoryRepository->get($searchableCategoryId, $stareId);\n+        $childrenList = $searchableCategory->getChildrenCategories();\n+        $resolvedList = [];\n+        $validChildIdList = [];\n+\n+        foreach ($childrenList as $child) {\n+            if (!$child->getIsActive()) {\n+                continue;\n+            }\n+\n+            $validChildIdList[] = $child->getId();\n+        }\n+\n+        foreach ($aggregationValues as $bucketValue) {\n+            $childCategoryId = (int) $bucketValue->getValue();\n+\n+            if (!in_array($childCategoryId, $validChildIdList) ||\n+                in_array($childCategoryId, $this->resolvedChildrenIds)\n+            ) {\n+                continue;\n+            }",
+      "path": "app/code/Magento/CatalogGraphQl/Model/Resolver/Products/Query/ResolveCategoryAggregation.php",
+      "commit_id": "9dae57e378d41728d03624139b3ebf07401a4a19",
+      "original_commit_id": "c7fdfd379f13221e23d29a5f64efcf4267a46d29",
+      "user": {
+        "login": "andrewbess",
+        "id": 10788564,
+        "node_id": "MDQ6VXNlcjEwNzg4NTY0",
+        "avatar_url": "https://avatars.githubusercontent.com/u/10788564?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/andrewbess",
+        "html_url": "https://github.com/andrewbess",
+        "followers_url": "https://api.github.com/users/andrewbess/followers",
+        "following_url": "https://api.github.com/users/andrewbess/following{/other_user}",
+        "gists_url": "https://api.github.com/users/andrewbess/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/andrewbess/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/andrewbess/subscriptions",
+        "organizations_url": "https://api.github.com/users/andrewbess/orgs",
+        "repos_url": "https://api.github.com/users/andrewbess/repos",
+        "events_url": "https://api.github.com/users/andrewbess/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/andrewbess/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hello @korovitskyi \r\nCould you please fix it according to PSR-12 requirements and examples https://www.php-fig.org/psr/psr-12/ (see p.5.1)\r\n\r\n```suggestion\r\n            if (\r\n                !in_array($childCategoryId, $validChildIdList)\r\n                ||. in_array($childCategoryId, $this->resolvedChildrenIds)\r\n            ) {\r\n                continue;\r\n            }\r\n```",
+      "created_at": "2021-07-21T07:52:15Z",
+      "updated_at": "2021-07-21T08:07:10Z",
+      "html_url": "https://github.com/magento/magento2/pull/33547#discussion_r673742845",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33547",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/673742845"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33547#discussion_r673742845"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33547"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673742845/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": 155,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 159,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 159,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673746780",
+      "pull_request_review_id": 711350264,
+      "id": 673746780,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3Mzc0Njc4MA==",
+      "diff_hunk": "@@ -0,0 +1,167 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\CatalogGraphQl\\Model\\Resolver\\Products\\Query;\n+\n+use Magento\\Catalog\\Model\\CategoryRepository;\n+use Magento\\Framework\\Api\\Search\\AggregationValueInterface;\n+use Magento\\Framework\\Exception\\NoSuchEntityException;\n+use Magento\\Framework\\Search\\Response\\Aggregation;\n+use Magento\\Framework\\Search\\Response\\AggregationFactory;\n+use Magento\\Framework\\Search\\Response\\Bucket;\n+use Magento\\Framework\\Search\\Response\\BucketFactory;\n+use Magento\\Store\\Model\\StoreManagerInterface;\n+\n+/**\n+ * Resolve category aggregation.\n+ */\n+class ResolveCategoryAggregation\n+{\n+    /**\n+     * @var string\n+     */\n+    public const CATEGORY_BUCKET = 'category_bucket';\n+\n+    /**\n+     * @var string\n+     */\n+    private const BUCKETS = 'buckets';\n+\n+    /**\n+     * @var AggregationFactory\n+     */\n+    private $aggregationFactory;\n+\n+    /**\n+     * @var BucketFactory\n+     */\n+    private $bucketFactory;\n+\n+    /**\n+     * @var StoreManagerInterface\n+     */\n+    private $storeManager;\n+\n+    /**\n+     * @var CategoryRepository\n+     */\n+    private $categoryRepository;\n+\n+    /**\n+     * @var array\n+     */\n+    private $resolvedChildrenIds = [];\n+\n+    /**\n+     * @param AggregationFactory $aggregationFactory\n+     * @param BucketFactory $bucketFactory\n+     * @param StoreManagerInterface $storeManager\n+     * @param CategoryRepository $categoryRepository\n+     */\n+    public function __construct(\n+        AggregationFactory $aggregationFactory,\n+        BucketFactory $bucketFactory,\n+        StoreManagerInterface $storeManager,\n+        CategoryRepository $categoryRepository\n+    ) {\n+        $this->aggregationFactory = $aggregationFactory;\n+        $this->bucketFactory = $bucketFactory;\n+        $this->storeManager = $storeManager;\n+        $this->categoryRepository = $categoryRepository;\n+    }\n+\n+    /**\n+     * Get resolved category aggregation.\n+     *\n+     * @param array $categoryFilter\n+     * @param Bucket[] $bucketList\n+     *\n+     * @return Aggregation\n+     */\n+    public function getResolvedCategoryAggregation(array $categoryFilter, array $bucketList): Aggregation\n+    {\n+        $categoryBucket = $bucketList[self::CATEGORY_BUCKET] ?? [];\n+        $values = $categoryBucket->getValues();\n+        $condition = array_key_first($categoryFilter);\n+        $searchableCategoryValue = $categoryFilter[$condition] ?? 0;\n+\n+        if (!$searchableCategoryValue || empty($values)) {\n+            return $this->aggregationFactory->create([self::BUCKETS => $bucketList]);\n+        }\n+\n+        $resolvedBucketList = $bucketList;\n+\n+        try {\n+            if (!is_array($searchableCategoryValue)) {\n+                $resolvedValues = $this->getValidCategories((int) $searchableCategoryValue, $values);\n+            } else {\n+                $categoryResolvedValues = [];\n+\n+                foreach ($searchableCategoryValue as $categoryId) {\n+                    $categoryResolvedValues[] = $this->getValidCategories((int) $categoryId, $values);\n+                }\n+\n+                $resolvedValues = call_user_func_array('array_merge', $categoryResolvedValues);;\n+            }\n+        } catch (NoSuchEntityException $e) {\n+            return $this->aggregationFactory->create([self::BUCKETS => $bucketList]);\n+        }\n+\n+        $resolvedCategoryBucket = $this->bucketFactory->create(\n+            [\n+                'name' => self::CATEGORY_BUCKET,\n+                'values' => $resolvedValues\n+            ]\n+        );\n+\n+        $resolvedBucketList[self::CATEGORY_BUCKET] = $resolvedCategoryBucket;\n+\n+        return $this->aggregationFactory->create([self::BUCKETS => $resolvedBucketList]);\n+    }\n+\n+    /**\n+     * Check is valid searchable category children.",
+      "path": "app/code/Magento/CatalogGraphQl/Model/Resolver/Products/Query/ResolveCategoryAggregation.php",
+      "commit_id": "9dae57e378d41728d03624139b3ebf07401a4a19",
+      "original_commit_id": "c7fdfd379f13221e23d29a5f64efcf4267a46d29",
+      "user": {
+        "login": "andrewbess",
+        "id": 10788564,
+        "node_id": "MDQ6VXNlcjEwNzg4NTY0",
+        "avatar_url": "https://avatars.githubusercontent.com/u/10788564?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/andrewbess",
+        "html_url": "https://github.com/andrewbess",
+        "followers_url": "https://api.github.com/users/andrewbess/followers",
+        "following_url": "https://api.github.com/users/andrewbess/following{/other_user}",
+        "gists_url": "https://api.github.com/users/andrewbess/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/andrewbess/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/andrewbess/subscriptions",
+        "organizations_url": "https://api.github.com/users/andrewbess/orgs",
+        "repos_url": "https://api.github.com/users/andrewbess/repos",
+        "events_url": "https://api.github.com/users/andrewbess/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/andrewbess/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hello @korovitskyi\r\nThis method not only checks, but returns list of categories, right?\r\nThis summary can confuse.\r\nCould you please fix it?",
+      "created_at": "2021-07-21T07:58:03Z",
+      "updated_at": "2021-07-21T08:07:10Z",
+      "html_url": "https://github.com/magento/magento2/pull/33547#discussion_r673746780",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33547",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/673746780"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33547#discussion_r673746780"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33547"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673746780/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 127,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 127,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673751549",
+      "pull_request_review_id": 711350264,
+      "id": 673751549,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3Mzc1MTU0OQ==",
+      "diff_hunk": "@@ -84,6 +91,7 @@ public function __construct(\n         $this->fieldSelection = $fieldSelection;\n         $this->productsProvider = $productsProvider;\n         $this->searchCriteriaBuilder = $searchCriteriaBuilder;\n+        $this->resolveCategoryAggregation = $resolveCategoryAggregation;",
+      "path": "app/code/Magento/CatalogGraphQl/Model/Resolver/Products/Query/Search.php",
+      "commit_id": "9dae57e378d41728d03624139b3ebf07401a4a19",
+      "original_commit_id": "c7fdfd379f13221e23d29a5f64efcf4267a46d29",
+      "user": {
+        "login": "andrewbess",
+        "id": 10788564,
+        "node_id": "MDQ6VXNlcjEwNzg4NTY0",
+        "avatar_url": "https://avatars.githubusercontent.com/u/10788564?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/andrewbess",
+        "html_url": "https://github.com/andrewbess",
+        "followers_url": "https://api.github.com/users/andrewbess/followers",
+        "following_url": "https://api.github.com/users/andrewbess/following{/other_user}",
+        "gists_url": "https://api.github.com/users/andrewbess/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/andrewbess/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/andrewbess/subscriptions",
+        "organizations_url": "https://api.github.com/users/andrewbess/orgs",
+        "repos_url": "https://api.github.com/users/andrewbess/repos",
+        "events_url": "https://api.github.com/users/andrewbess/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/andrewbess/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hello @korovitskyi \r\nThese changes are backward incompatible.\r\nCould you please fix it.",
+      "created_at": "2021-07-21T08:04:57Z",
+      "updated_at": "2021-07-21T08:07:10Z",
+      "html_url": "https://github.com/magento/magento2/pull/33547#discussion_r673751549",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33547",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/673751549"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33547#discussion_r673751549"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33547"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673751549/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 94,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 32,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673751824",
+      "pull_request_review_id": 711350264,
+      "id": 673751824,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY3Mzc1MTgyNA==",
+      "diff_hunk": "@@ -94,7 +102,9 @@ public function __construct(\n      * @param array $args\n      * @param ResolveInfo $info\n      * @param ContextInterface $context\n+     *\n      * @return SearchResult\n+     *\n      * @throws GraphQlInputException\n      */",
+      "path": "app/code/Magento/CatalogGraphQl/Model/Resolver/Products/Query/Search.php",
+      "commit_id": "9dae57e378d41728d03624139b3ebf07401a4a19",
+      "original_commit_id": "c7fdfd379f13221e23d29a5f64efcf4267a46d29",
+      "user": {
+        "login": "andrewbess",
+        "id": 10788564,
+        "node_id": "MDQ6VXNlcjEwNzg4NTY0",
+        "avatar_url": "https://avatars.githubusercontent.com/u/10788564?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/andrewbess",
+        "html_url": "https://github.com/andrewbess",
+        "followers_url": "https://api.github.com/users/andrewbess/followers",
+        "following_url": "https://api.github.com/users/andrewbess/following{/other_user}",
+        "gists_url": "https://api.github.com/users/andrewbess/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/andrewbess/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/andrewbess/subscriptions",
+        "organizations_url": "https://api.github.com/users/andrewbess/orgs",
+        "repos_url": "https://api.github.com/users/andrewbess/repos",
+        "events_url": "https://api.github.com/users/andrewbess/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/andrewbess/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n     * @param array $args\r\n     * @param ResolveInfo $info\r\n     * @param ContextInterface $context\r\n     * @return SearchResult\r\n     * @throws GraphQlInputException\r\n     */\r\n```",
+      "created_at": "2021-07-21T08:05:21Z",
+      "updated_at": "2021-07-21T08:07:10Z",
+      "html_url": "https://github.com/magento/magento2/pull/33547#discussion_r673751824",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33547",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/673751824"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33547#discussion_r673751824"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33547"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/673751824/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 102,
+      "original_start_line": 102,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 109,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 44,
+      "position": 1,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "a90d6917d78ae56a8c20fa93d3669927281192f5126fbfadb0364b86521ebb60",
+  "cacheDigest": "04a5d78650bbbbc5fbaba2c105271418eac3f1176fa60c28bedfabd04bd65095"
+}

@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/342173460",
+  "status": 200,
+  "etag": "W/\"ed63987a327f15735c53ea5d85c8403a39f6ae30f18674e3b9e639f2cd9af369\"",
+  "headers": {
+    "ETag": "W/\"ed63987a327f15735c53ea5d85c8403a39f6ae30f18674e3b9e639f2cd9af369\"",
+    "Last-Modified": "Sun, 16 Aug 2026 01:33:10 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "20",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/342173460",
+    "pull_request_review_id": 311233011,
+    "id": 342173460,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM0MjE3MzQ2MA==",
+    "diff_hunk": "@@ -0,0 +1,61 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+\n+declare(strict_types=1);\n+\n+namespace Magento\\MediaGallery\\Model;\n+\n+use Magento\\MediaGalleryApi\\Api\\Data\\KeywordExtensionInterface;\n+use Magento\\MediaGalleryApi\\Api\\Data\\KeywordInterface;\n+use Magento\\Framework\\Model\\AbstractExtensibleModel;\n+\n+/**\n+ * Asset's Keyword\n+ */\n+class Keyword extends AbstractExtensibleModel implements KeywordInterface\n+{\n+    private const ID = 'id';\n+\n+    private const KEYWORD = 'keyword';\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function getId(): ?int\n+    {\n+        $id = $this->getData(self::ID);\n+\n+        if (!$id) {\n+            return null;\n+        }\n+\n+        return (int) $id;\n+    }\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function getKeyword() : string",
+    "path": "app/code/Magento/MediaGallery/Model/Keyword.php",
+    "commit_id": "4103f8b26c638d1f91798fda2efab774446b7b7a",
+    "original_commit_id": "33481d0cb9d3cea0227846d58c74133db52a71fc",
+    "user": {
+      "login": "YevSent",
+      "id": 2736528,
+      "node_id": "MDQ6VXNlcjI3MzY1Mjg=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2736528?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/YevSent",
+      "html_url": "https://github.com/YevSent",
+      "followers_url": "https://api.github.com/users/YevSent/followers",
+      "following_url": "https://api.github.com/users/YevSent/following{/other_user}",
+      "gists_url": "https://api.github.com/users/YevSent/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/YevSent/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/YevSent/subscriptions",
+      "organizations_url": "https://api.github.com/users/YevSent/orgs",
+      "repos_url": "https://api.github.com/users/YevSent/repos",
+      "events_url": "https://api.github.com/users/YevSent/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/YevSent/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Please, remove empty space between `)` and `:`.",
+    "created_at": "2019-11-04T17:26:53Z",
+    "updated_at": "2019-11-06T22:05:55Z",
+    "html_url": "https://github.com/magento/magento2/pull/25459#discussion_r342173460",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/25459",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/342173460"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/25459#discussion_r342173460"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/25459"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/342173460/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 41,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 41,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

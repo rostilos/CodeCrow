@@ -1,0 +1,82 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/162014180",
+  "status": 200,
+  "etag": "W/\"ab797733006819d00617419dcb03a9aa132b47f4d0ff000202c279af21fa867c\"",
+  "headers": {
+    "ETag": "W/\"ab797733006819d00617419dcb03a9aa132b47f4d0ff000202c279af21fa867c\"",
+    "Last-Modified": "Thu, 20 Aug 2026 11:50:46 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "59",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/162014180",
+    "pull_request_review_id": 89396409,
+    "id": 162014180,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDE2MjAxNDE4MA==",
+    "diff_hunk": "@@ -150,4 +185,44 @@ public function testBeforeSavePaymentInformation()\n             $this->addressMock\n         );\n     }\n+\n+    /**\n+     * Build mock object for search criteria\n+     *\n+     * @return \\PHPUnit_Framework_MockObject_MockObject\n+     */\n+    private function buildSearchCriteria() : \\PHPUnit_Framework_MockObject_MockObject\n+    {\n+        $storeId = 1;\n+        $storeMock = $this->createMock(\\Magento\\Store\\Model\\Store::class);\n+        $storeMock->expects($this->any())->method('getId')->will($this->returnValue($storeId));\n+        $this->storeManagerMock->expects($this->any())->method('getStore')->will($this->returnValue($storeMock));\n+\n+        $storeFilterMock = $this->createMock(\\Magento\\Framework\\Api\\Filter::class);\n+        $activeFilterMock = $this->createMock(\\Magento\\Framework\\Api\\Filter::class);\n+\n+        $this->filterBuilderMock->expects($this->at(0))->method('setField')->with('store_id')->willReturnSelf();",
+    "path": "app/code/Magento/CheckoutAgreements/Test/Unit/Model/Checkout/Plugin/GuestValidationTest.php",
+    "commit_id": "fc1d8f035b9f86fc41da3fd0e9d1a956852f879d",
+    "original_commit_id": "44e7090bfdf04e3c9f42cb7faeb8d28b4b1d2d9a",
+    "user": {
+      "login": "ishakhsuvarov",
+      "id": 5747062,
+      "node_id": "MDQ6VXNlcjU3NDcwNjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/5747062?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/ishakhsuvarov",
+      "html_url": "https://github.com/ishakhsuvarov",
+      "followers_url": "https://api.github.com/users/ishakhsuvarov/followers",
+      "following_url": "https://api.github.com/users/ishakhsuvarov/following{/other_user}",
+      "gists_url": "https://api.github.com/users/ishakhsuvarov/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/ishakhsuvarov/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/ishakhsuvarov/subscriptions",
+      "organizations_url": "https://api.github.com/users/ishakhsuvarov/orgs",
+      "repos_url": "https://api.github.com/users/ishakhsuvarov/repos",
+      "events_url": "https://api.github.com/users/ishakhsuvarov/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/ishakhsuvarov/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "This unit test may be redundant in this case. You may remove it or leave as is.",
+    "created_at": "2018-01-17T10:47:32Z",
+    "updated_at": "2018-01-19T12:02:13Z",
+    "html_url": "https://github.com/magento/magento2/pull/13221#discussion_r162014180",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/13221",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/162014180"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/13221#discussion_r162014180"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/13221"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/162014180/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 204,
+    "side": "RIGHT",
+    "in_reply_to_id": 162010194,
+    "author_association": "CONTRIBUTOR",
+    "original_position": 114,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

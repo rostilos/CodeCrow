@@ -1,0 +1,2160 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/31501/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T15:48:08Z",
+  "etag": "W/\"fe30f2ea62d929b2a4c40392c7414a85041ad44bb0586422a582488b3c917b58\"",
+  "headers": {
+    "ETag": "W/\"fe30f2ea62d929b2a4c40392c7414a85041ad44bb0586422a582488b3c917b58\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "53",
+    "X-RateLimit-Reset": "1786985277"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551810185",
+      "pull_request_review_id": 561630564,
+      "id": 551810185,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MTgxMDE4NQ==",
+      "diff_hunk": "@@ -0,0 +1,26 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AssertAdminErrorMessageDisappearDisabledFieldActionGroup\">",
+      "path": "app/code/Magento/Ui/Test/Mftf/ActionGroup/AssertAdminErrorMessageDisappearDisabledFieldActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "91812ce4183342c5af32831c10d1f0e6d05890c4",
+      "user": {
+        "login": "eduard13",
+        "id": 15868188,
+        "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/eduard13",
+        "html_url": "https://github.com/eduard13",
+        "followers_url": "https://api.github.com/users/eduard13/followers",
+        "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+        "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+        "organizations_url": "https://api.github.com/users/eduard13/orgs",
+        "repos_url": "https://api.github.com/users/eduard13/repos",
+        "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/eduard13/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "The ActionGroup does too many things and I don't think it's a reusable one. I would split it in at least into the following ones:\r\n- AdminTogglePriceSwitcherActionGroup\r\n- AdminFocusAndFillElementActionGroup\r\n- AdminAssertErrorIsVisibleActionGroup / AdminAssertErrorIsNotVisibleActionGroup\r\n\r\nWhat do you think about a such refactoring?\r\nThank you.",
+      "created_at": "2021-01-05T09:23:46Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r551810185",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/551810185"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r551810185"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551810185/reactions",
+        "total_count": 1,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 1
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 11,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 11,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551811837",
+      "pull_request_review_id": 561630564,
+      "id": 551811837,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MTgxMTgzNw==",
+      "diff_hunk": "@@ -0,0 +1,39 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+<!-- Test XML Example -->\n+<tests xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/testSchema.xsd\">\n+    <test name=\"AdminDisappearErrorValidateMessageFieldTest\">",
+      "path": "app/code/Magento/Ui/Test/Mftf/Test/AdminDisappearErrorValidateMessageFieldTest.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "91812ce4183342c5af32831c10d1f0e6d05890c4",
+      "user": {
+        "login": "eduard13",
+        "id": 15868188,
+        "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/eduard13",
+        "html_url": "https://github.com/eduard13",
+        "followers_url": "https://api.github.com/users/eduard13/followers",
+        "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+        "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+        "organizations_url": "https://api.github.com/users/eduard13/orgs",
+        "repos_url": "https://api.github.com/users/eduard13/repos",
+        "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/eduard13/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I would rather move this test under Magento_Bundle module, as the test is more related to Bundle product. What do you think?",
+      "created_at": "2021-01-05T09:26:44Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r551811837",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/551811837"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r551811837"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551811837/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 10,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 10,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551817235",
+      "pull_request_review_id": 561630564,
+      "id": 551817235,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MTgxNzIzNQ==",
+      "diff_hunk": "@@ -0,0 +1,39 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+<!-- Test XML Example -->\n+<tests xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/testSchema.xsd\">\n+    <test name=\"AdminDisappearErrorValidateMessageFieldTest\">\n+        <annotations>\n+            <features value=\"Ui component\"/>\n+            <stories value=\"Error message\"/>\n+            <title value=\"Assert disappear error message.\"/>\n+            <description value=\"Verify disappear error message when disabled field.\"/>",
+      "path": "app/code/Magento/Ui/Test/Mftf/Test/AdminDisappearErrorValidateMessageFieldTest.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "91812ce4183342c5af32831c10d1f0e6d05890c4",
+      "user": {
+        "login": "eduard13",
+        "id": 15868188,
+        "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/eduard13",
+        "html_url": "https://github.com/eduard13",
+        "followers_url": "https://api.github.com/users/eduard13/followers",
+        "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+        "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+        "organizations_url": "https://api.github.com/users/eduard13/orgs",
+        "repos_url": "https://api.github.com/users/eduard13/repos",
+        "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/eduard13/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "If moving it to Bundle module, these tags should also reflect what actually the test does.",
+      "created_at": "2021-01-05T09:36:37Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r551817235",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/551817235"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r551817235"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551817235/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": 12,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 15,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 15,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551949808",
+      "pull_request_review_id": 561810672,
+      "id": 551949808,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MTk0OTgwOA==",
+      "diff_hunk": "@@ -0,0 +1,26 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AssertAdminErrorMessageDisappearDisabledFieldActionGroup\">",
+      "path": "app/code/Magento/Ui/Test/Mftf/ActionGroup/AssertAdminErrorMessageDisappearDisabledFieldActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "91812ce4183342c5af32831c10d1f0e6d05890c4",
+      "user": {
+        "login": "engcom-Echo",
+        "id": 51681435,
+        "node_id": "MDQ6VXNlcjUxNjgxNDM1",
+        "avatar_url": "https://avatars.githubusercontent.com/u/51681435?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/engcom-Echo",
+        "html_url": "https://github.com/engcom-Echo",
+        "followers_url": "https://api.github.com/users/engcom-Echo/followers",
+        "following_url": "https://api.github.com/users/engcom-Echo/following{/other_user}",
+        "gists_url": "https://api.github.com/users/engcom-Echo/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/engcom-Echo/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/engcom-Echo/subscriptions",
+        "organizations_url": "https://api.github.com/users/engcom-Echo/orgs",
+        "repos_url": "https://api.github.com/users/engcom-Echo/repos",
+        "events_url": "https://api.github.com/users/engcom-Echo/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/engcom-Echo/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Thanks. Good idea.",
+      "created_at": "2021-01-05T14:02:23Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r551949808",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/551949808"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r551949808"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551949808/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 11,
+      "side": "RIGHT",
+      "in_reply_to_id": 551810185,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 11,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551953541",
+      "pull_request_review_id": 561815854,
+      "id": 551953541,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MTk1MzU0MQ==",
+      "diff_hunk": "@@ -0,0 +1,39 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+<!-- Test XML Example -->\n+<tests xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/testSchema.xsd\">\n+    <test name=\"AdminDisappearErrorValidateMessageFieldTest\">",
+      "path": "app/code/Magento/Ui/Test/Mftf/Test/AdminDisappearErrorValidateMessageFieldTest.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "91812ce4183342c5af32831c10d1f0e6d05890c4",
+      "user": {
+        "login": "engcom-Echo",
+        "id": 51681435,
+        "node_id": "MDQ6VXNlcjUxNjgxNDM1",
+        "avatar_url": "https://avatars.githubusercontent.com/u/51681435?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/engcom-Echo",
+        "html_url": "https://github.com/engcom-Echo",
+        "followers_url": "https://api.github.com/users/engcom-Echo/followers",
+        "following_url": "https://api.github.com/users/engcom-Echo/following{/other_user}",
+        "gists_url": "https://api.github.com/users/engcom-Echo/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/engcom-Echo/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/engcom-Echo/subscriptions",
+        "organizations_url": "https://api.github.com/users/engcom-Echo/orgs",
+        "repos_url": "https://api.github.com/users/engcom-Echo/repos",
+        "events_url": "https://api.github.com/users/engcom-Echo/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/engcom-Echo/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Hi, @eduard13 \r\nWe change UI component and I think a test must be in module Ui. The test scenario is related to an issue. Maybe there are other places where the issue is reproduced but I didn't find them.",
+      "created_at": "2021-01-05T14:08:51Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r551953541",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/551953541"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r551953541"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/551953541/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 10,
+      "side": "RIGHT",
+      "in_reply_to_id": 551811837,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 10,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552450822",
+      "pull_request_review_id": 562425127,
+      "id": 552450822,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjQ1MDgyMg==",
+      "diff_hunk": "@@ -0,0 +1,39 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+<!-- Test XML Example -->\n+<tests xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/testSchema.xsd\">\n+    <test name=\"AdminDisappearErrorValidateMessageFieldTest\">",
+      "path": "app/code/Magento/Ui/Test/Mftf/Test/AdminDisappearErrorValidateMessageFieldTest.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "91812ce4183342c5af32831c10d1f0e6d05890c4",
+      "user": {
+        "login": "eduard13",
+        "id": 15868188,
+        "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/eduard13",
+        "html_url": "https://github.com/eduard13",
+        "followers_url": "https://api.github.com/users/eduard13/followers",
+        "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+        "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+        "organizations_url": "https://api.github.com/users/eduard13/orgs",
+        "repos_url": "https://api.github.com/users/eduard13/repos",
+        "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/eduard13/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Generally, a non written rule says that we shouldn't be using ActionGroups/Entities, etc. for modules that we don't have in dependencies. But seeing that Ui > Sales > Bundle, most likely we should be fine here.",
+      "created_at": "2021-01-06T09:07:59Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r552450822",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552450822"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r552450822"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552450822/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 10,
+      "side": "RIGHT",
+      "in_reply_to_id": 551811837,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 10,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552454228",
+      "pull_request_review_id": 562429457,
+      "id": 552454228,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjQ1NDIyOA==",
+      "diff_hunk": "@@ -0,0 +1,18 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AssertAdminErrorIsNotVisibleActionGroup\">",
+      "path": "app/code/Magento/Bundle/Test/Mftf/ActionGroup/AssertAdminErrorIsNotVisibleActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "f2b32dc20b9c09758c605c0825ecc7c539f3c2e5",
+      "user": {
+        "login": "eduard13",
+        "id": 15868188,
+        "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/eduard13",
+        "html_url": "https://github.com/eduard13",
+        "followers_url": "https://api.github.com/users/eduard13/followers",
+        "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+        "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+        "organizations_url": "https://api.github.com/users/eduard13/orgs",
+        "repos_url": "https://api.github.com/users/eduard13/repos",
+        "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/eduard13/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Lets also add a better name: `AssertAdminErrorIsNotVisibleForProductFieldActionGroup`.\r\n```suggestion\r\n    <actionGroup name=\"AssertAdminErrorIsNotVisibleForProductFieldActionGroup\">\r\n```",
+      "created_at": "2021-01-06T09:14:56Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r552454228",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552454228"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r552454228"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552454228/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 11,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 11,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552454476",
+      "pull_request_review_id": 562429457,
+      "id": 552454476,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjQ1NDQ3Ng==",
+      "diff_hunk": "@@ -0,0 +1,18 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AssertAdminErrorIsVisibleActionGroup\">",
+      "path": "app/code/Magento/Bundle/Test/Mftf/ActionGroup/AssertAdminErrorIsVisibleActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "f2b32dc20b9c09758c605c0825ecc7c539f3c2e5",
+      "user": {
+        "login": "eduard13",
+        "id": 15868188,
+        "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/eduard13",
+        "html_url": "https://github.com/eduard13",
+        "followers_url": "https://api.github.com/users/eduard13/followers",
+        "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+        "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+        "organizations_url": "https://api.github.com/users/eduard13/orgs",
+        "repos_url": "https://api.github.com/users/eduard13/repos",
+        "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/eduard13/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n    <actionGroup name=\"AssertAdminErrorIsVisibleForProductFieldActionGroup\">\r\n```",
+      "created_at": "2021-01-06T09:15:22Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r552454476",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552454476"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r552454476"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552454476/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 11,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 11,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552456023",
+      "pull_request_review_id": 562429457,
+      "id": 552456023,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjQ1NjAyMw==",
+      "diff_hunk": "@@ -69,6 +69,7 @@\n         <element name=\"priceField\" type=\"input\" selector=\"//div[@data-index='price']//input\"/>\n         <element name=\"listedBundleItem\" type=\"text\" selector=\"//tr[@data-repeat-index='0']//div\"/>\n         <element name=\"listedBundleItem2\" type=\"text\" selector=\"//tr[@data-repeat-index='2']//div\"/>\n+        <element name=\"fieldError\" type=\"text\" selector=\"//div[@data-index='{{fieldIndex}}']//following-sibling::label[@class='admin__field-error']\" parameterized=\"true\"/>",
+      "path": "app/code/Magento/Bundle/Test/Mftf/Section/AdminProductFormBundleSection.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "f2b32dc20b9c09758c605c0825ecc7c539f3c2e5",
+      "user": {
+        "login": "eduard13",
+        "id": 15868188,
+        "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/eduard13",
+        "html_url": "https://github.com/eduard13",
+        "followers_url": "https://api.github.com/users/eduard13/followers",
+        "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+        "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+        "organizations_url": "https://api.github.com/users/eduard13/orgs",
+        "repos_url": "https://api.github.com/users/eduard13/repos",
+        "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/eduard13/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Is this selector also applicable for all the product types? If yes, let's move it to `AdminProductFormSection`.",
+      "created_at": "2021-01-06T09:18:27Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r552456023",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552456023"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r552456023"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552456023/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 72,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 4,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552457265",
+      "pull_request_review_id": 562429457,
+      "id": 552457265,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjQ1NzI2NQ==",
+      "diff_hunk": "@@ -0,0 +1,18 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AssertAdminErrorIsVisibleActionGroup\">\n+        <arguments>\n+            <argument name=\"fieldIndex\" type=\"string\"/>\n+        </arguments>\n+\n+        <seeElement selector=\"{{AdminProductFormBundleSection.fieldError(fieldIndex)}}\" stepKey=\"seeError\"/>",
+      "path": "app/code/Magento/Bundle/Test/Mftf/ActionGroup/AssertAdminErrorIsVisibleActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "f2b32dc20b9c09758c605c0825ecc7c539f3c2e5",
+      "user": {
+        "login": "eduard13",
+        "id": 15868188,
+        "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/eduard13",
+        "html_url": "https://github.com/eduard13",
+        "followers_url": "https://api.github.com/users/eduard13/followers",
+        "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+        "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+        "organizations_url": "https://api.github.com/users/eduard13/orgs",
+        "repos_url": "https://api.github.com/users/eduard13/repos",
+        "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/eduard13/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "In case the selector applies to all products.\r\n\r\n```suggestion\r\n        <seeElement selector=\"{{AdminProductFormSection.fieldError(fieldIndex)}}\" stepKey=\"seeError\"/>\r\n```",
+      "created_at": "2021-01-06T09:20:44Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r552457265",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552457265"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r552457265"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552457265/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 16,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 16,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552457550",
+      "pull_request_review_id": 562429457,
+      "id": 552457550,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjQ1NzU1MA==",
+      "diff_hunk": "@@ -0,0 +1,18 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AssertAdminErrorIsNotVisibleActionGroup\">\n+        <arguments>\n+            <argument name=\"fieldIndex\" type=\"string\"/>\n+        </arguments>\n+\n+        <dontSeeElement selector=\"{{AdminProductFormBundleSection.fieldError(fieldIndex)}}\" stepKey=\"seeError\"/>",
+      "path": "app/code/Magento/Bundle/Test/Mftf/ActionGroup/AssertAdminErrorIsNotVisibleActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "f2b32dc20b9c09758c605c0825ecc7c539f3c2e5",
+      "user": {
+        "login": "eduard13",
+        "id": 15868188,
+        "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/eduard13",
+        "html_url": "https://github.com/eduard13",
+        "followers_url": "https://api.github.com/users/eduard13/followers",
+        "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+        "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+        "organizations_url": "https://api.github.com/users/eduard13/orgs",
+        "repos_url": "https://api.github.com/users/eduard13/repos",
+        "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/eduard13/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "In case the selector applies to all products.\r\n```suggestion\r\n        <dontSeeElement selector=\"{{AdminProductFormSection.fieldError(fieldIndex)}}\" stepKey=\"seeError\"/>\r\n```",
+      "created_at": "2021-01-06T09:21:19Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r552457550",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552457550"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r552457550"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552457550/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 16,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 16,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555637547",
+      "pull_request_review_id": 566094935,
+      "id": 555637547,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTYzNzU0Nw==",
+      "diff_hunk": "@@ -0,0 +1,16 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminToggleSwitchDynamicPriceActionGroup\">\n+",
+      "path": "app/code/Magento/Bundle/Test/Mftf/ActionGroup/AdminToggleSwitchDynamicPriceActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please remove redundant empty line",
+      "created_at": "2021-01-12T09:44:27Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555637547",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555637547"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555637547"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555637547/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 12,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 12,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555638143",
+      "pull_request_review_id": 566094935,
+      "id": 555638143,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTYzODE0Mw==",
+      "diff_hunk": "@@ -0,0 +1,16 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminToggleSwitchDynamicPriceActionGroup\">",
+      "path": "app/code/Magento/Bundle/Test/Mftf/ActionGroup/AdminToggleSwitchDynamicPriceActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please provide more descriptive AG name. Like\r\nAdminToggleSwitchDynamicPriceOnProductEditPageActionGroup\r\nDont forget rename also file",
+      "created_at": "2021-01-12T09:45:21Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555638143",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555638143"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555638143"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555638143/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 11,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 11,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555639024",
+      "pull_request_review_id": 566094935,
+      "id": 555639024,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTYzOTAyNA==",
+      "diff_hunk": "@@ -0,0 +1,16 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminToggleSwitchDynamicPriceActionGroup\">\n+\n+        <seeElement selector=\"{{AdminProductFormBundleSection.dynamicPriceToggle}}\" stepKey=\"seeToggleDynamicPrice\"/>",
+      "path": "app/code/Magento/Bundle/Test/Mftf/ActionGroup/AdminToggleSwitchDynamicPriceActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please replace seeElement with waiter\r\n```\r\n<waitForElementVisible selector=\"{{AdminProductFormBundleSection.dynamicPriceToggle}}\" stepKey=\"waitForToggleDynamicPrice\"/>\r\n```",
+      "created_at": "2021-01-12T09:46:33Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555639024",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555639024"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555639024"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555639024/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 13,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 13,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555639721",
+      "pull_request_review_id": 566094935,
+      "id": 555639721,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTYzOTcyMQ==",
+      "diff_hunk": "@@ -0,0 +1,16 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminToggleSwitchDynamicPriceActionGroup\">\n+\n+        <seeElement selector=\"{{AdminProductFormBundleSection.dynamicPriceToggle}}\" stepKey=\"seeToggleDynamicPrice\"/>\n+        <checkOption selector=\"{{AdminProductFormBundleSection.dynamicPriceToggle}}\" stepKey=\"toggleSwitch\"/>",
+      "path": "app/code/Magento/Bundle/Test/Mftf/ActionGroup/AdminToggleSwitchDynamicPriceActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please rename stepKey to switchDynamicPriceToggle",
+      "created_at": "2021-01-12T09:47:27Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555639721",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555639721"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555639721"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555639721/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 14,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 14,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555641963",
+      "pull_request_review_id": 566094935,
+      "id": 555641963,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY0MTk2Mw==",
+      "diff_hunk": "@@ -0,0 +1,20 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminFillProductPriceFieldAndFocusActionGroup\">",
+      "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AdminFillProductPriceFieldAndFocusActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please provide more descriptive AG name. Like\r\nAdminFillProductPriceFieldAndPressEnterOnProductEditPageActionGroup\r\nDont forget rename also file",
+      "created_at": "2021-01-12T09:50:38Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555641963",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555641963"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555641963"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555641963/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 11,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 11,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555642312",
+      "pull_request_review_id": 566094935,
+      "id": 555642312,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY0MjMxMg==",
+      "diff_hunk": "@@ -0,0 +1,20 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminFillProductPriceFieldAndFocusActionGroup\">\n+        <arguments>\n+            <argument name=\"input\" type=\"string\"/>",
+      "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AdminFillProductPriceFieldAndFocusActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please name argument more descriptive: **price**",
+      "created_at": "2021-01-12T09:51:07Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555642312",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555642312"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555642312"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555642312/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 13,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 13,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555652037",
+      "pull_request_review_id": 566094935,
+      "id": 555652037,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY1MjAzNw==",
+      "diff_hunk": "@@ -0,0 +1,20 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminFillProductPriceFieldAndFocusActionGroup\">\n+        <arguments>\n+            <argument name=\"input\" type=\"string\"/>\n+        </arguments>\n+\n+        <seeElement selector=\"{{AdminProductFormSection.productPrice}}\" stepKey=\"seePriceField\"/>",
+      "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AdminFillProductPriceFieldAndFocusActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please replace seeElement with waiter\r\n```\r\n<waitForElementVisible selector=\"{{AdminProductFormSection.productPrice}}\" stepKey=\"waitForPriceField\"/>\r\n```",
+      "created_at": "2021-01-12T10:05:22Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555652037",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555652037"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555652037"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555652037/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 16,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 16,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555652224",
+      "pull_request_review_id": 566094935,
+      "id": 555652224,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY1MjIyNA==",
+      "diff_hunk": "@@ -0,0 +1,20 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminFillProductPriceFieldAndFocusActionGroup\">\n+        <arguments>\n+            <argument name=\"input\" type=\"string\"/>\n+        </arguments>\n+\n+        <seeElement selector=\"{{AdminProductFormSection.productPrice}}\" stepKey=\"seePriceField\"/>\n+        <fillField selector=\"{{AdminProductFormSection.productPrice}}\" userInput=\"{{input}}\" stepKey=\"fillElement\"/>",
+      "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AdminFillProductPriceFieldAndFocusActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "stepKey=\"fillPriceField\"",
+      "created_at": "2021-01-12T10:05:42Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555652224",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555652224"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555652224"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555652224/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 17,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 17,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555658539",
+      "pull_request_review_id": 566094935,
+      "id": 555658539,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY1ODUzOQ==",
+      "diff_hunk": "@@ -0,0 +1,20 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminFillProductPriceFieldAndFocusActionGroup\">\n+        <arguments>\n+            <argument name=\"input\" type=\"string\"/>\n+        </arguments>\n+\n+        <seeElement selector=\"{{AdminProductFormSection.productPrice}}\" stepKey=\"seePriceField\"/>\n+        <fillField selector=\"{{AdminProductFormSection.productPrice}}\" userInput=\"{{input}}\" stepKey=\"fillElement\"/>\n+        <pressKey selector=\"{{AdminProductFormSection.productPrice}}\" parameterArray=\"[\\Facebook\\WebDriver\\WebDriverKeys::ENTER]\" stepKey=\"accept\"/>",
+      "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AdminFillProductPriceFieldAndFocusActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "stepKey=\"pressEnterButton\"",
+      "created_at": "2021-01-12T10:15:45Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555658539",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555658539"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555658539"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555658539/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 18,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 18,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555659398",
+      "pull_request_review_id": 566094935,
+      "id": 555659398,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY1OTM5OA==",
+      "diff_hunk": "@@ -0,0 +1,15 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AssertAdminErrorIsNotVisibleForProductPriceFieldActionGroup\">",
+      "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AssertAdminErrorIsNotVisibleForProductPriceFieldActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please name AG more descriptive. Like\r\nAssertAdminNoValidationErrorForPriceFieldOnProductEditPageActionGroup\r\nDont forget rename also file",
+      "created_at": "2021-01-12T10:17:03Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555659398",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555659398"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555659398"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555659398/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 11,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 11,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555659541",
+      "pull_request_review_id": 566094935,
+      "id": 555659541,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY1OTU0MQ==",
+      "diff_hunk": "@@ -0,0 +1,15 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AssertAdminErrorIsNotVisibleForProductPriceFieldActionGroup\">\n+",
+      "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AssertAdminErrorIsNotVisibleForProductPriceFieldActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "remove redundant empty line",
+      "created_at": "2021-01-12T10:17:16Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555659541",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555659541"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555659541"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555659541/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 12,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 12,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555660090",
+      "pull_request_review_id": 566094935,
+      "id": 555660090,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY2MDA5MA==",
+      "diff_hunk": "@@ -0,0 +1,15 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AssertAdminErrorIsNotVisibleForProductPriceFieldActionGroup\">\n+\n+        <dontSeeElement selector=\"{{AdminProductFormSection.priceFieldError}}\" stepKey=\"seeError\"/>",
+      "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AssertAdminErrorIsNotVisibleForProductPriceFieldActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "stepKey=\"dontSeeValidationError\"",
+      "created_at": "2021-01-12T10:18:09Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555660090",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555660090"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555660090"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555660090/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 13,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 13,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555661579",
+      "pull_request_review_id": 566094935,
+      "id": 555661579,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY2MTU3OQ==",
+      "diff_hunk": "@@ -0,0 +1,15 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AssertAdminErrorIsVisibleForProductPriceFieldActionGroup\">",
+      "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AssertAdminErrorIsVisibleForProductPriceFieldActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please name AG more descriptive. Like\r\nAssertAdminValidationErrorAppearedForPriceFieldOnProductEditPageActionGroup\r\nDont forget rename also file",
+      "created_at": "2021-01-12T10:20:30Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555661579",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555661579"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555661579"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555661579/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 11,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 11,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555661738",
+      "pull_request_review_id": 566094935,
+      "id": 555661738,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY2MTczOA==",
+      "diff_hunk": "@@ -0,0 +1,15 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AssertAdminErrorIsVisibleForProductPriceFieldActionGroup\">\n+",
+      "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AssertAdminErrorIsVisibleForProductPriceFieldActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "remove redundant empty line",
+      "created_at": "2021-01-12T10:20:45Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555661738",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555661738"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555661738"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555661738/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 12,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 12,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555662766",
+      "pull_request_review_id": 566094935,
+      "id": 555662766,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY2Mjc2Ng==",
+      "diff_hunk": "@@ -0,0 +1,15 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AssertAdminErrorIsVisibleForProductPriceFieldActionGroup\">\n+\n+        <seeElement selector=\"{{AdminProductFormSection.priceFieldError}}\" stepKey=\"seeError\"/>",
+      "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AssertAdminErrorIsVisibleForProductPriceFieldActionGroup.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please replace seeElement with waiter\r\n```\r\n<waitForElementVisible selector=\"{{AdminProductFormSection.priceFieldError}}\" stepKey=\"waitForValidationError\"/>\r\n```\r\nAlso add validation error text check. Pass error text as a AG parameter",
+      "created_at": "2021-01-12T10:22:21Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555662766",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555662766"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555662766"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555662766/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 13,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 13,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555665724",
+      "pull_request_review_id": 566094935,
+      "id": 555665724,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY2NTcyNA==",
+      "diff_hunk": "@@ -0,0 +1,40 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+<!-- Test XML Example -->\n+<tests xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/testSchema.xsd\">\n+    <test name=\"AdminDisappearErrorValidateMessageFieldTest\">",
+      "path": "app/code/Magento/Bundle/Test/Mftf/Test/AdminDisappearErrorValidateMessageFieldTest.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please name test  more descriptiive\r\n```\r\nAdminBundleProductPriceValidationErrorDisappearedAfterSwitchToDynamicPriceTest\r\n```\r\nDont forget rename file and change Test Path for corresponding zephyr test MC-40309",
+      "created_at": "2021-01-12T10:26:45Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555665724",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555665724"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555665724"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555665724/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 10,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 10,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555666320",
+      "pull_request_review_id": 566094935,
+      "id": 555666320,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY2NjMyMA==",
+      "diff_hunk": "@@ -0,0 +1,40 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+<!-- Test XML Example -->\n+<tests xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/testSchema.xsd\">\n+    <test name=\"AdminDisappearErrorValidateMessageFieldTest\">\n+        <annotations>\n+            <features value=\"Bundle\"/>\n+            <stories value=\"Create/Edit bundle product in Admin\"/>\n+            <title value=\"Assert error message for price field\"/>\n+            <description value=\"Verify error message for price field is not visible when toggle Dynamic Price is disabled\"/>\n+            <severity value=\"MAJOR\"/>\n+            <testCaseId value=\"MC-40309\"/>\n+            <useCaseId value=\"MC-30152\"/>\n+            <group value=\"bundle\"/>\n+        </annotations>\n+\n+        <before>\n+            <actionGroup ref=\"AdminLoginActionGroup\" stepKey=\"loginAsAdmin\"/>\n+        </before>\n+        <after>\n+            <actionGroup ref=\"AdminLogoutActionGroup\" stepKey=\"logout\"/>",
+      "path": "app/code/Magento/Bundle/Test/Mftf/Test/AdminDisappearErrorValidateMessageFieldTest.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "stepKey=\"logoutFromAdmin\"",
+      "created_at": "2021-01-12T10:27:37Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555666320",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555666320"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555666320"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555666320/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 26,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 26,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555667530",
+      "pull_request_review_id": 566094935,
+      "id": 555667530,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY2NzUzMA==",
+      "diff_hunk": "@@ -0,0 +1,40 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+<!-- Test XML Example -->\n+<tests xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/testSchema.xsd\">\n+    <test name=\"AdminDisappearErrorValidateMessageFieldTest\">\n+        <annotations>\n+            <features value=\"Bundle\"/>\n+            <stories value=\"Create/Edit bundle product in Admin\"/>\n+            <title value=\"Assert error message for price field\"/>\n+            <description value=\"Verify error message for price field is not visible when toggle Dynamic Price is disabled\"/>\n+            <severity value=\"MAJOR\"/>\n+            <testCaseId value=\"MC-40309\"/>\n+            <useCaseId value=\"MC-30152\"/>\n+            <group value=\"bundle\"/>\n+        </annotations>\n+\n+        <before>\n+            <actionGroup ref=\"AdminLoginActionGroup\" stepKey=\"loginAsAdmin\"/>\n+        </before>\n+        <after>\n+            <actionGroup ref=\"AdminLogoutActionGroup\" stepKey=\"logout\"/>\n+        </after>\n+\n+        <actionGroup ref=\"GoToSpecifiedCreateProductPageActionGroup\" stepKey=\"createBundleProduct\">",
+      "path": "app/code/Magento/Bundle/Test/Mftf/Test/AdminDisappearErrorValidateMessageFieldTest.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please use AdminOpenNewProductFormPageActionGroup instead as more stable and fast",
+      "created_at": "2021-01-12T10:29:31Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555667530",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555667530"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555667530"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555667530/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 29,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 29,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555668139",
+      "pull_request_review_id": 566094935,
+      "id": 555668139,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY2ODEzOQ==",
+      "diff_hunk": "@@ -0,0 +1,40 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+<!-- Test XML Example -->\n+<tests xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/testSchema.xsd\">\n+    <test name=\"AdminDisappearErrorValidateMessageFieldTest\">\n+        <annotations>\n+            <features value=\"Bundle\"/>\n+            <stories value=\"Create/Edit bundle product in Admin\"/>\n+            <title value=\"Assert error message for price field\"/>\n+            <description value=\"Verify error message for price field is not visible when toggle Dynamic Price is disabled\"/>\n+            <severity value=\"MAJOR\"/>\n+            <testCaseId value=\"MC-40309\"/>\n+            <useCaseId value=\"MC-30152\"/>\n+            <group value=\"bundle\"/>\n+        </annotations>\n+\n+        <before>\n+            <actionGroup ref=\"AdminLoginActionGroup\" stepKey=\"loginAsAdmin\"/>\n+        </before>\n+        <after>\n+            <actionGroup ref=\"AdminLogoutActionGroup\" stepKey=\"logout\"/>\n+        </after>\n+\n+        <actionGroup ref=\"GoToSpecifiedCreateProductPageActionGroup\" stepKey=\"createBundleProduct\">\n+            <argument name=\"productType\" value=\"bundle\"/>\n+        </actionGroup>\n+        <actionGroup ref=\"AdminToggleSwitchDynamicPriceActionGroup\" stepKey=\"disableSwitch\"/>",
+      "path": "app/code/Magento/Bundle/Test/Mftf/Test/AdminDisappearErrorValidateMessageFieldTest.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "stepKey=\"disableDynamicPrice\"",
+      "created_at": "2021-01-12T10:30:30Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555668139",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555668139"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555668139"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555668139/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 32,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 32,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555668262",
+      "pull_request_review_id": 566094935,
+      "id": 555668262,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTY2ODI2Mg==",
+      "diff_hunk": "@@ -0,0 +1,40 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+<!-- Test XML Example -->\n+<tests xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/testSchema.xsd\">\n+    <test name=\"AdminDisappearErrorValidateMessageFieldTest\">\n+        <annotations>\n+            <features value=\"Bundle\"/>\n+            <stories value=\"Create/Edit bundle product in Admin\"/>\n+            <title value=\"Assert error message for price field\"/>\n+            <description value=\"Verify error message for price field is not visible when toggle Dynamic Price is disabled\"/>\n+            <severity value=\"MAJOR\"/>\n+            <testCaseId value=\"MC-40309\"/>\n+            <useCaseId value=\"MC-30152\"/>\n+            <group value=\"bundle\"/>\n+        </annotations>\n+\n+        <before>\n+            <actionGroup ref=\"AdminLoginActionGroup\" stepKey=\"loginAsAdmin\"/>\n+        </before>\n+        <after>\n+            <actionGroup ref=\"AdminLogoutActionGroup\" stepKey=\"logout\"/>\n+        </after>\n+\n+        <actionGroup ref=\"GoToSpecifiedCreateProductPageActionGroup\" stepKey=\"createBundleProduct\">\n+            <argument name=\"productType\" value=\"bundle\"/>\n+        </actionGroup>\n+        <actionGroup ref=\"AdminToggleSwitchDynamicPriceActionGroup\" stepKey=\"disableSwitch\"/>\n+        <actionGroup ref=\"AdminFillProductPriceFieldAndFocusActionGroup\" stepKey=\"fillField\">\n+            <argument name=\"input\" value=\"test\"/>\n+        </actionGroup>\n+        <actionGroup ref=\"AssertAdminErrorIsVisibleForProductPriceFieldActionGroup\" stepKey=\"assertVisibleError\"/>\n+        <actionGroup ref=\"AdminToggleSwitchDynamicPriceActionGroup\" stepKey=\"enableSwitch\"/>",
+      "path": "app/code/Magento/Bundle/Test/Mftf/Test/AdminDisappearErrorValidateMessageFieldTest.xml",
+      "commit_id": "4c62af0e7d8bb9cc103725c62710d86e34849064",
+      "original_commit_id": "4e1dd46fb61b20c0a1f001c10c89c61d545ed090",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "stepKey=\"enableDynamicPrice\"",
+      "created_at": "2021-01-12T10:30:43Z",
+      "updated_at": "2021-01-12T14:34:14Z",
+      "html_url": "https://github.com/magento/magento2/pull/31501#discussion_r555668262",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31501",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555668262"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31501#discussion_r555668262"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31501"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555668262/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 37,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 37,
+      "position": 1,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "0c1315399c40a2c1c96db65c42e72c1463a02d686664368112b62c2218e51412",
+  "cacheDigest": "97b806fd706e9ed92ff51d22ada02d39445e1147ca92f4d21a7d34912c1ad72a"
+}

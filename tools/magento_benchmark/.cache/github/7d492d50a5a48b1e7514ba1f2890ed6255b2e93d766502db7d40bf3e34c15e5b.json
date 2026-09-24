@@ -1,0 +1,82 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530864384",
+  "status": 200,
+  "etag": "W/\"769ece8db00007b3892c937234701c713c729cc4433013e7223d45618d46396b\"",
+  "headers": {
+    "ETag": "W/\"769ece8db00007b3892c937234701c713c729cc4433013e7223d45618d46396b\"",
+    "Last-Modified": "Thu, 13 Aug 2026 10:56:31 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "23",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530864384",
+    "pull_request_review_id": 539105801,
+    "id": 530864384,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUzMDg2NDM4NA==",
+    "diff_hunk": "@@ -0,0 +1,98 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+namespace Magento\\Framework\\App\\Utility;\n+\n+use IPTools\\Network;\n+use IPTools\\Range;\n+\n+/**\n+ * Utility class to normalise list of IP addresses\n+ */\n+class IPAddressNormaliser\n+{\n+    /**\n+     * Normalise / canonicalise list of IP addresses / ranges\n+     *\n+     * @param  string[] $addresses\n+     * @return string[]\n+     */\n+    public function execute(array $addresses): array\n+    {\n+        $addresses = array_filter($addresses); // remove empty strings\n+\n+        $networks = [];\n+        foreach ($addresses as $address) {\n+            $networks[] = Network::parse(trim($address));\n+        }\n+\n+        $networks = array_unique($networks); // remove obvious duplicates\n+\n+        do {\n+            $startCount = count($networks);\n+            $this->combineAdjacentNetworks($networks);\n+            $this->removeOverlappingNetworks($networks);\n+            $endCount = count($networks);\n+        } while ($startCount != $endCount);\n+\n+        $networks = array_map(function ($network) {\n+            return (string) $network;\n+        }, $networks);\n+\n+        return $networks;\n+    }\n+\n+    /**\n+     * Combine adjacent networks\n+     *\n+     * @param string[] $networks\n+     * @return void\n+     */\n+    private function combineAdjacentNetworks(array &$networks): void\n+    {\n+        if (count($networks) > 1) {\n+            // Sort the list so we can compare each item with the following to\n+            // determine if they are adjacent.\n+            sort($networks, SORT_NATURAL);\n+\n+            // Define end point here as we expect the array to grow within the loop\n+            $penultimate = count($networks) - 2;\n+            for ($i = 0; $i <= $penultimate; $i++) {\n+                $a = $networks[$i];\n+                $b = $networks[$i + 1];\n+                if ($a->getLastIP()->next() == $b->getFirstIP()) {",
+    "path": "lib/internal/Magento/Framework/App/Utility/IPAddressNormaliser.php",
+    "commit_id": "7b7080847ca860994af3e413909bf15b50fdf99c",
+    "original_commit_id": "32f381c949413d938e25ac5b058537cc3b7fa8ac",
+    "user": {
+      "login": "ihor-sviziev",
+      "id": 1873745,
+      "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/ihor-sviziev",
+      "html_url": "https://github.com/ihor-sviziev",
+      "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+      "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+      "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+      "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+      "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+      "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Usually using == instead of === in some cases causing not obvious issues in not obvious cases. I really prefer to have strict comparison here, even if we'll add some string comparison",
+    "created_at": "2020-11-26T08:52:19Z",
+    "updated_at": "2021-03-03T20:26:15Z",
+    "html_url": "https://github.com/magento/magento2/pull/30699#discussion_r530864384",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30699",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/530864384"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/30699#discussion_r530864384"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/30699"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/530864384/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 65,
+    "side": "RIGHT",
+    "in_reply_to_id": 530432597,
+    "author_association": "CONTRIBUTOR",
+    "original_position": 65,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

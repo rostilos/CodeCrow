@@ -1,0 +1,156 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/33256/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T15:47:59Z",
+  "etag": "W/\"1249ff685c59dd4465b13b1c1d8f497a994cc61b862e03225394154e9f402533\"",
+  "headers": {
+    "ETag": "W/\"1249ff685c59dd4465b13b1c1d8f497a994cc61b862e03225394154e9f402533\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "58",
+    "X-RateLimit-Reset": "1786985277"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/658661138",
+      "pull_request_review_id": 692679636,
+      "id": 658661138,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY1ODY2MTEzOA==",
+      "diff_hunk": "@@ -0,0 +1,50 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+use Magento\\Catalog\\Api\\Data\\ProductCustomOptionInterface;\n+use Magento\\Catalog\\Api\\ProductRepositoryInterface;\n+use Magento\\Catalog\\Model\\Product\\Option;\n+use Magento\\Checkout\\Model\\Session;\n+use Magento\\Framework\\DataObject;\n+use Magento\\Quote\\Model\\Quote;\n+use Magento\\TestFramework\\Helper\\Bootstrap;\n+use Magento\\TestFramework\\Workaround\\Override\\Fixture\\Resolver;\n+\n+Resolver::getInstance()->requireDataFixture('Magento/Catalog/_files/product_simple_with_custom_option_text_area.php');\n+\n+/** @var ProductRepositoryInterface $productRepository */\n+$productRepository = Bootstrap::getObjectManager()\n+    ->create(ProductRepositoryInterface::class);\n+$product = $productRepository->get('simple_with_custom_option_text_area');\n+\n+$options = [];\n+/** @var $option Option */\n+foreach ($product->getOptions() as $option) {\n+    switch ($option->getGroupByType()) {\n+        case ProductCustomOptionInterface::OPTION_GROUP_SELECT:\n+            $value = key($option->getValues());\n+            break;\n+        default:\n+            $value = 'Test product simple with",
+      "path": "dev/tests/integration/testsuite/Magento/Checkout/_files/cart_with_simple_product_and_custom_option_text_area.php",
+      "commit_id": "b506bb4a357b53c35176ca9e175de53144110623",
+      "original_commit_id": "a3bf2977c53b96de2a5ab271624b90a7ec4dcac1",
+      "user": {
+        "login": "Den4ik",
+        "id": 1129623,
+        "node_id": "MDQ6VXNlcjExMjk2MjM=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1129623?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/Den4ik",
+        "html_url": "https://github.com/Den4ik",
+        "followers_url": "https://api.github.com/users/Den4ik/followers",
+        "following_url": "https://api.github.com/users/Den4ik/following{/other_user}",
+        "gists_url": "https://api.github.com/users/Den4ik/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/Den4ik/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/Den4ik/subscriptions",
+        "organizations_url": "https://api.github.com/users/Den4ik/orgs",
+        "repos_url": "https://api.github.com/users/Den4ik/repos",
+        "events_url": "https://api.github.com/users/Den4ik/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/Den4ik/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I believe that heredoc syntax looks more clear",
+      "created_at": "2021-06-25T10:24:14Z",
+      "updated_at": "2021-06-25T10:25:29Z",
+      "html_url": "https://github.com/magento/magento2/pull/33256#discussion_r658661138",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33256",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/658661138"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33256#discussion_r658661138"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33256"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/658661138/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 32,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 32,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/658661325",
+      "pull_request_review_id": 692679636,
+      "id": 658661325,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY1ODY2MTMyNQ==",
+      "diff_hunk": "@@ -0,0 +1,120 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\Checkout\\Block\\Cart\\Item;\n+\n+use Magento\\Catalog\\Api\\ProductRepositoryInterface;\n+use Magento\\Catalog\\Model\\Product;\n+use Magento\\Framework\\Api\\SearchCriteriaBuilder;\n+use Magento\\Framework\\ObjectManagerInterface;\n+use Magento\\Quote\\Api\\CartRepositoryInterface;\n+use Magento\\Quote\\Model\\Quote;\n+use Magento\\Quote\\Model\\Quote\\Item;\n+use PHPUnit\\Framework\\TestCase;\n+use Magento\\TestFramework\\Helper\\Bootstrap;\n+\n+/**\n+ * Class RendererTest\n+ * @package Magento\\Checkout\\Block\\Cart\\Item\n+ * @magentoAppArea frontend\n+ */\n+class RendererTest extends TestCase\n+{\n+    /**\n+     * @var ObjectManagerInterface\n+     */\n+    private $objectManager;\n+\n+    /**\n+     * @var mixed\n+     */\n+    private $renderer;\n+\n+    /**\n+     * @var mixed\n+     */\n+    public $productRepository;\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    protected function setUp(): void\n+    {\n+        $this->objectManager = Bootstrap::getObjectManager();\n+        $this->renderer = $this->objectManager->get(Renderer::class);\n+        $this->productRepository = $this->objectManager->get(ProductRepositoryInterface::class);\n+    }\n+\n+    /**\n+     * Gets quote by reserved order id.\n+     *\n+     * @param string $reservedOrderId\n+     * @return Quote\n+     */\n+    private function getQuote($reservedOrderId)\n+    {\n+        /** @var SearchCriteriaBuilder $searchCriteriaBuilder */\n+        $searchCriteriaBuilder = $this->objectManager->get(SearchCriteriaBuilder::class);\n+        $searchCriteria = $searchCriteriaBuilder->addFilter('reserved_order_id', $reservedOrderId)\n+            ->create();\n+\n+        /** @var CartRepositoryInterface $quoteRepository */\n+        $quoteRepository = $this->objectManager->get(CartRepositoryInterface::class);\n+\n+        /** @var Quote[] $items */\n+        $items = $quoteRepository->getList($searchCriteria)->getItems();\n+\n+        return $items[0];\n+    }\n+\n+    /**\n+     * Gets \\Magento\\Quote\\Model\\Quote\\Item from \\Magento\\Quote\\Model\\Quote by product id\n+     *\n+     * @param Quote $quote\n+     * @param string|int $productId\n+     *\n+     * @return Item|null\n+     */\n+    private function _getQuoteItemIdByProductId($quote, $productId)\n+    {\n+        /** @var $quoteItems Item[] */\n+        $quoteItems = $quote->getAllItems();\n+        foreach ($quoteItems as $quoteItem) {\n+            if ($productId == $quoteItem->getProductId()) {\n+                return $quoteItem;\n+            }\n+        }\n+        return null;\n+    }\n+\n+    /**\n+     * @magentoDataFixture Magento/Checkout/_files/cart_with_simple_product_and_custom_option_text_area.php\n+     */\n+    public function testTextAreaCustomOption()\n+    {\n+        $quote = $this->getQuote('test_order_item_with_custom_option_text_area');\n+\n+        /** @var $product Product */\n+        $product = $this->productRepository->get('simple_with_custom_option_text_area');\n+\n+        $quoteItem = $this->_getQuoteItemIdByProductId($quote, $product->getId());\n+        $this->assertNotNull($quoteItem, 'Cannot get quote item for simple product with custom option text area');\n+\n+        $template = 'Magento_Checkout::cart/item/default.phtml';\n+        $this->renderer->setTemplate($template);\n+        $this->renderer->setItem($quoteItem);\n+\n+        $priceBlock = $this->objectManager->create(\\Magento\\Checkout\\Block\\Item\\Price\\Renderer::class);\n+        $this->renderer->getLayout()->setBlock('checkout.item.price.unit', $priceBlock);\n+        $this->renderer->getLayout()->setBlock('checkout.item.price.row', $priceBlock);\n+        $html = $this->renderer->toHtml();\n+\n+        $this->assertMatchesRegularExpression('/Test product simple with",
+      "path": "dev/tests/integration/testsuite/Magento/Checkout/Block/Cart/Item/RendererTest.php",
+      "commit_id": "b506bb4a357b53c35176ca9e175de53144110623",
+      "original_commit_id": "a3bf2977c53b96de2a5ab271624b90a7ec4dcac1",
+      "user": {
+        "login": "Den4ik",
+        "id": 1129623,
+        "node_id": "MDQ6VXNlcjExMjk2MjM=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1129623?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/Den4ik",
+        "html_url": "https://github.com/Den4ik",
+        "followers_url": "https://api.github.com/users/Den4ik/followers",
+        "following_url": "https://api.github.com/users/Den4ik/following{/other_user}",
+        "gists_url": "https://api.github.com/users/Den4ik/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/Den4ik/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/Den4ik/subscriptions",
+        "organizations_url": "https://api.github.com/users/Den4ik/orgs",
+        "repos_url": "https://api.github.com/users/Den4ik/repos",
+        "events_url": "https://api.github.com/users/Den4ik/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/Den4ik/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I believe that heredoc syntax looks more clear",
+      "created_at": "2021-06-25T10:24:35Z",
+      "updated_at": "2021-06-25T10:25:29Z",
+      "html_url": "https://github.com/magento/magento2/pull/33256#discussion_r658661325",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33256",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/658661325"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/33256#discussion_r658661325"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/33256"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/658661325/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 116,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 116,
+      "position": 1,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "d64f571a8974012aa73946ae9786f94497d0df6a6b3524dec217f093181460b1",
+  "cacheDigest": "044113f191d742b58ef9f147820c87ba942a4b16431043e00de7b13de13e6e21"
+}

@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1850098743",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:47Z",
+  "etag": "W/\"ed723bb0c4e6fc985c5b153216f6d5f26b8d614f7a42f6054b887f720b1a1686\"",
+  "headers": {
+    "ETag": "W/\"ed723bb0c4e6fc985c5b153216f6d5f26b8d614f7a42f6054b887f720b1a1686\"",
+    "Last-Modified": "Thu, 02 Jul 2026 09:30:38 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "9",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1850098743",
+    "pull_request_review_id": 2448279103,
+    "id": 1850098743,
+    "node_id": "PRRC_kwDOACwCD85uRkQ3",
+    "diff_hunk": "@@ -558,6 +562,9 @@ protected function _adaptResizeValues($frameWidth, $frameHeight)\n             }\n         }\n \n+        $frameWidth = (float)$frameWidth;\n+        $frameHeight = (float)$frameHeight;",
+    "path": "lib/internal/Magento/Framework/Image/Adapter/AbstractAdapter.php",
+    "commit_id": "4ad115dea067fac89f059c677c4ed803f42aa4c5",
+    "original_commit_id": "58467b85045cef860a88c2e447cc2b338ce6f571",
+    "user": {
+      "login": "engcom-Hotel",
+      "id": 51681618,
+      "node_id": "MDQ6VXNlcjUxNjgxNjE4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/51681618?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/engcom-Hotel",
+      "html_url": "https://github.com/engcom-Hotel",
+      "followers_url": "https://api.github.com/users/engcom-Hotel/followers",
+      "following_url": "https://api.github.com/users/engcom-Hotel/following{/other_user}",
+      "gists_url": "https://api.github.com/users/engcom-Hotel/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/engcom-Hotel/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/engcom-Hotel/subscriptions",
+      "organizations_url": "https://api.github.com/users/engcom-Hotel/orgs",
+      "repos_url": "https://api.github.com/users/engcom-Hotel/repos",
+      "events_url": "https://api.github.com/users/engcom-Hotel/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/engcom-Hotel/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Please let us know the significance of this line because both the parameters have been passed to `_checkAspectRatio` in the next line which accepts parameters as `int`",
+    "created_at": "2024-11-20T10:58:01Z",
+    "updated_at": "2024-11-20T10:58:44Z",
+    "html_url": "https://github.com/magento/magento2/pull/37362#discussion_r1850098743",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/37362",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1850098743"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/37362#discussion_r1850098743"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/37362"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1850098743/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": 565,
+    "original_start_line": 565,
+    "start_side": "RIGHT",
+    "line": 566,
+    "original_line": 566,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 65,
+    "position": 65,
+    "subject_type": "line"
+  },
+  "responseSha256": "c4e570df461557b057cefd03dea92f1e06179ce0112303b9901c6ee12f797a74",
+  "envelopeSha256": "2b5778e12203f04de62a00ab908201e90dcf206402624731d5e1afa608dfc28f"
+}

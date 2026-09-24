@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/766124987",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:45Z",
+  "etag": "W/\"9a72142d46074ef9874000fed7a81545f4b3d4e5eaa2007e793a487e722573fe\"",
+  "headers": {
+    "ETag": "W/\"9a72142d46074ef9874000fed7a81545f4b3d4e5eaa2007e793a487e722573fe\"",
+    "Last-Modified": "Fri, 21 Aug 2026 17:54:52 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "13",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/766124987",
+    "pull_request_review_id": 828155311,
+    "id": 766124987,
+    "node_id": "PRRC_kwDOACwCD84tqiO7",
+    "diff_hunk": "@@ -488,7 +488,7 @@ private function setOptions(array $options): void\n             $this->numberFormatter->setSymbol(\\NumberFormatter::CURRENCY_SYMBOL, '');\n         }\n         if (array_key_exists('precision', $options)) {\n-            $this->numberFormatter->setAttribute(\\NumberFormatter::FRACTION_DIGITS, $options['precision']);\n+            $this->numberFormatter->setAttribute(\\NumberFormatter::FRACTION_DIGITS, $options['precision'] ?? 0);",
+    "path": "app/code/Magento/Directory/Model/Currency.php",
+    "commit_id": "143c00b7f63d3f48e4d2580c14cfb4ebcf4be48a",
+    "original_commit_id": "54e70fb01028928afd671a831bd0c2b79583f513",
+    "user": {
+      "login": "xmav",
+      "id": 2598101,
+      "node_id": "MDQ6VXNlcjI1OTgxMDE=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2598101?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/xmav",
+      "html_url": "https://github.com/xmav",
+      "followers_url": "https://api.github.com/users/xmav/followers",
+      "following_url": "https://api.github.com/users/xmav/following{/other_user}",
+      "gists_url": "https://api.github.com/users/xmav/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/xmav/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/xmav/subscriptions",
+      "organizations_url": "https://api.github.com/users/xmav/orgs",
+      "repos_url": "https://api.github.com/users/xmav/repos",
+      "events_url": "https://api.github.com/users/xmav/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/xmav/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "I don't think thats right place for fix. There are few places that use `null` as a value for precision while default is 2 \\Magento\\Framework\\Pricing\\PriceCurrencyInterface::DEFAULT_PRECISION\r\nhttps://github.com/magento/magento2/blob/548ac72cab788d7ad09393cb838cce39d399061d/lib/internal/Magento/Framework/Pricing/PriceCurrencyInterface.php#L50-L56\r\n\r\nI would ask you to test and see if we really expect\\want `0` as precision in \r\nhttps://github.com/magento/partners-magento2b2b/blob/32b75f9bc94fb4ddf9aa3a07393179554406eab8/app/code/Magento/PurchaseOrder/Ui/Component/Listing/Column/Price.php#L81-L86\r\n\r\nhttps://github.com/magento/partners-magento2b2b/blob/32b75f9bc94fb4ddf9aa3a07393179554406eab8/app/code/Magento/CompanyCredit/Controller/Adminhtml/Index/Reimburse.php#L146-L152\r\n\r\nIf `0` is desired value please replace `null` with `0` ",
+    "created_at": "2021-12-09T20:18:57Z",
+    "updated_at": "2021-12-09T20:40:09Z",
+    "html_url": "https://github.com/magento/magento2/pull/34781#discussion_r766124987",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/34781",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/766124987"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/34781#discussion_r766124987"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/34781"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/766124987/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 491,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 20,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "5949b6e26d380799b4dd0de6272c2d6f349a539bd6d23bbeac151ada8d511de4",
+  "envelopeSha256": "00362e977f51283dfb453e74e3dbcd917a00d6de0c4a0cc20c2b41fa72f35a7f"
+}

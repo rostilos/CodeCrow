@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/865095350",
+  "status": 200,
+  "etag": "W/\"21053156f6e6db9cadbfa4cee9c9cfbd847d45506bb79c230aa9c9f60ffb71b4\"",
+  "headers": {
+    "ETag": "W/\"21053156f6e6db9cadbfa4cee9c9cfbd847d45506bb79c230aa9c9f60ffb71b4\"",
+    "Last-Modified": "Thu, 20 Aug 2026 11:50:46 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "11",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/865095350",
+    "pull_request_review_id": 960536837,
+    "id": 865095350,
+    "node_id": "PRRC_kwDOACwCD84zkE62",
+    "diff_hunk": "@@ -0,0 +1,198 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\GoogleGtag\\Block;\n+\n+use Magento\\Cookie\\Helper\\Cookie;\n+use Magento\\Framework\\View\\Element\\Template;\n+use Magento\\Framework\\View\\Element\\Template\\Context;\n+use Magento\\GoogleGtag\\Helper\\GtagConfiguration;\n+use Magento\\Sales\\Model\\ResourceModel\\Order\\CollectionFactory;\n+use Magento\\Store\\Model\\ScopeInterface;\n+\n+/**\n+ * GoogleAnalytics Page Block\n+ *\n+ * @api\n+ */\n+class Ga extends Template\n+{\n+    /**\n+     * @var GtagConfiguration\n+     */\n+    private $googleGtagConfig;\n+\n+    /**\n+     * @var CollectionFactory\n+     */\n+    private $salesOrderCollection;\n+\n+    /**\n+     * @var Cookie\n+     */\n+    private $cookieHelper;\n+\n+    /**\n+     * @param Context $context\n+     * @param CollectionFactory $salesOrderCollection\n+     * @param GtagConfiguration $googleGtagConfig\n+     * @param array $data\n+     * @param Cookie $cookieHelper\n+     */\n+    public function __construct(\n+        Context $context,\n+        CollectionFactory $salesOrderCollection,\n+        GtagConfiguration $googleGtagConfig,\n+        Cookie $cookieHelper,\n+        array $data = []\n+    ) {\n+        $this->googleGtagConfig = $googleGtagConfig;\n+        $this->salesOrderCollection = $salesOrderCollection;\n+        $this->cookieHelper = $cookieHelper;\n+        parent::__construct($context, $data);\n+    }\n+\n+    /**\n+     * Get config\n+     *\n+     * @param string $path\n+     * @return mixed\n+     */\n+    public function getConfig($path): string\n+    {\n+        return $this->_scopeConfig->getValue($path, ScopeInterface::SCOPE_STORE);\n+    }\n+\n+    /**\n+     * Get helper\n+     *\n+     * @return GtagConfiguration\n+     */\n+    public function getHelper(): GtagConfiguration",
+    "path": "app/code/Magento/GoogleGtag/Block/Ga.php",
+    "commit_id": "4c56a3cc0dfe63e32b2557a9b21387815680d6ab",
+    "original_commit_id": "7b411288a37adda78e4547994835527bae26c112",
+    "user": {
+      "login": "ishakhsuvarov",
+      "id": 5747062,
+      "node_id": "MDQ6VXNlcjU3NDcwNjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/5747062?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/ishakhsuvarov",
+      "html_url": "https://github.com/ishakhsuvarov",
+      "followers_url": "https://api.github.com/users/ishakhsuvarov/followers",
+      "following_url": "https://api.github.com/users/ishakhsuvarov/following{/other_user}",
+      "gists_url": "https://api.github.com/users/ishakhsuvarov/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/ishakhsuvarov/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/ishakhsuvarov/subscriptions",
+      "organizations_url": "https://api.github.com/users/ishakhsuvarov/orgs",
+      "repos_url": "https://api.github.com/users/ishakhsuvarov/repos",
+      "events_url": "https://api.github.com/users/ishakhsuvarov/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/ishakhsuvarov/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "I would advice against using the whole configuration object in the template. Ideally only specific values should be fetched in the templates.",
+    "created_at": "2022-05-04T17:29:02Z",
+    "updated_at": "2022-05-04T17:39:47Z",
+    "html_url": "https://github.com/magento/magento2/pull/35376#discussion_r865095350",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/35376",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/865095350"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/35376#discussion_r865095350"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/35376"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/865095350/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 75,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 75,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

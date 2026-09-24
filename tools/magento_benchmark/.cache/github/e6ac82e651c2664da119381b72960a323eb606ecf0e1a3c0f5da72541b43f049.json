@@ -1,0 +1,88 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/343354136",
+  "status": 200,
+  "fetchedAt": "2026-08-26T01:52:51Z",
+  "etag": "W/\"bea9565defc7183cc4a1ff827d42a584dd9465b9f6a59b78a378fae6b89bf2bf\"",
+  "headers": {
+    "ETag": "W/\"bea9565defc7183cc4a1ff827d42a584dd9465b9f6a59b78a378fae6b89bf2bf\"",
+    "Last-Modified": "Tue, 25 Aug 2026 14:01:18 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "58",
+    "X-RateLimit-Reset": "1787712770"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/343354136",
+    "pull_request_review_id": 312777751,
+    "id": 343354136,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM0MzM1NDEzNg==",
+    "diff_hunk": "@@ -0,0 +1,96 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+\n+declare(strict_types=1);\n+\n+namespace Magento\\MediaGallery\\Plugin\\Wysiwyg\\Images;\n+\n+use Magento\\MediaGalleryApi\\Model\\Asset\\Command\\GetByPathInterface;\n+use Magento\\MediaGalleryApi\\Model\\Asset\\Command\\DeleteByPathInterface;\n+use Magento\\Cms\\Model\\Wysiwyg\\Images\\Storage as StorageSubject;\n+use Magento\\Framework\\App\\Filesystem\\DirectoryList;\n+use Magento\\Framework\\Filesystem;\n+use Magento\\Framework\\Exception\\ValidatorException;\n+use Psr\\Log\\LoggerInterface;\n+\n+/**\n+ * Ensures that metadata is removed from the database when a file is deleted and it is an image\n+ */\n+class Storage\n+{\n+    /**\n+     * @var GetByPathInterface\n+     */\n+    private $getMediaAssetByPath;\n+\n+    /**\n+     * @var DeleteByPathInterface\n+     */\n+    private $deleteMediaAssetByPath;\n+\n+    /**\n+     * @var Filesystem\n+     */\n+    private $filesystem;\n+\n+    /**\n+     * @var LoggerInterface\n+     */\n+    private $logger;\n+\n+    /**\n+     * Storage constructor.\n+     *\n+     * @param GetByPathInterface $getMediaAssetByPath\n+     * @param DeleteByPathInterface $deleteMediaAssetByPath\n+     * @param Filesystem $filesystem\n+     * @param LoggerInterface $logger\n+     */\n+    public function __construct(\n+        GetByPathInterface $getMediaAssetByPath,\n+        DeleteByPathInterface $deleteMediaAssetByPath,\n+        Filesystem $filesystem,\n+        LoggerInterface $logger\n+    ) {\n+        $this->getMediaAssetByPath = $getMediaAssetByPath;\n+        $this->deleteMediaAssetByPath = $deleteMediaAssetByPath;\n+        $this->filesystem = $filesystem;\n+        $this->logger = $logger;\n+    }\n+\n+    /**\n+     * Delete media data after the image delete action from Wysiwyg\n+     *\n+     * @param StorageSubject $subject\n+     * @param StorageSubject $result\n+     * @param string $target\n+     *\n+     * @return StorageSubject\n+     * @throws ValidatorException\n+     *\n+     * @SuppressWarnings(PHPMD.UnusedFormalParameter)\n+     */\n+    public function afterDeleteFile(StorageSubject $subject, StorageSubject $result, $target): StorageSubject\n+    {\n+        if (!is_string($target)) {\n+            return $result;\n+        }\n+\n+        $relativePath = $this->filesystem->getDirectoryRead(DirectoryList::MEDIA)->getRelativePath($target);\n+        if (!$relativePath) {\n+            return $result;\n+        }\n+\n+        try {\n+            $this->deleteMediaAssetByPath->execute($relativePath);\n+        } catch (\\Exception $exception) {\n+            $message = __('An error occurred during media asset delete at wysiwyg: %1', $exception->getMessage());\n+            $this->logger->critical($message->render());",
+    "path": "app/code/Magento/MediaGallery/Plugin/Wysiwyg/Images/Storage.php",
+    "commit_id": "4103f8b26c638d1f91798fda2efab774446b7b7a",
+    "original_commit_id": "33481d0cb9d3cea0227846d58c74133db52a71fc",
+    "user": {
+      "login": "sivaschenko",
+      "id": 2028541,
+      "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/sivaschenko",
+      "html_url": "https://github.com/sivaschenko",
+      "followers_url": "https://api.github.com/users/sivaschenko/followers",
+      "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+      "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+      "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+      "repos_url": "https://api.github.com/users/sivaschenko/repos",
+      "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "@coderimus Considering that there can be a different implementation of the logger, an exception can be logged in different ways, but I think it's better to pass to the logger as much information as we can. Fixed.",
+    "created_at": "2019-11-06T22:08:08Z",
+    "updated_at": "2019-11-06T22:08:08Z",
+    "html_url": "https://github.com/magento/magento2/pull/25459#discussion_r343354136",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/25459",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/343354136"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/25459#discussion_r343354136"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/25459"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/343354136/reactions",
+      "total_count": 1,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 91,
+    "side": "RIGHT",
+    "in_reply_to_id": 342174968,
+    "author_association": "MEMBER",
+    "original_position": 91,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "061a521cc97b15ccd0357657bb855c9e3798f487100ed833bdd0c14b7eb008b4",
+  "envelopeSha256": "50fb008a2fb964f469fd19ee9fd3cca99b09b97bf704a5d7a0c874abf33186f5"
+}

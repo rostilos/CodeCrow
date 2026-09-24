@@ -1,0 +1,1691 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/29081/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T14:47:21Z",
+  "etag": "W/\"63a35236b7781a1c263372ade0d7ca1d135cf0312f1bc3940ca749fbbb15a83a\"",
+  "headers": {
+    "ETag": "W/\"63a35236b7781a1c263372ade0d7ca1d135cf0312f1bc3940ca749fbbb15a83a\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "44",
+    "X-RateLimit-Reset": "1786980089"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/454127571",
+      "pull_request_review_id": 447817417,
+      "id": 454127571,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1NDEyNzU3MQ==",
+      "diff_hunk": "@@ -86,7 +86,7 @@ define([\n             var parameters;\n \n             sectionNames = sectionConfig.filterClientSideSections(sectionNames);\n-            parameters = _.isArray(sectionNames) ? {\n+            parameters = _.isArray(sectionNames) && sectionNames.indexOf('*').length < 0 ? {",
+      "path": "app/code/Magento/Customer/view/frontend/web/js/customer-data.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "5da0a04fa05c9eff528d290451936b28e3245c1f",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Seems like it will not work:\r\n![image](https://user-images.githubusercontent.com/1873745/87391205-f85e4680-c5b2-11ea-8665-b3de5bb9858b.png)\r\n```suggestion\r\n            parameters = _.isArray(sectionNames) && sectionNames.indexOf('*') < 0 ? {\r\n```",
+      "created_at": "2020-07-14T06:19:27Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r454127571",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/454127571"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r454127571"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/454127571/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 89,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 5,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/454311550",
+      "pull_request_review_id": 448049138,
+      "id": 454311550,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ1NDMxMTU1MA==",
+      "diff_hunk": "@@ -86,7 +86,7 @@ define([\n             var parameters;\n \n             sectionNames = sectionConfig.filterClientSideSections(sectionNames);\n-            parameters = _.isArray(sectionNames) ? {\n+            parameters = _.isArray(sectionNames) && sectionNames.indexOf('*').length < 0 ? {",
+      "path": "app/code/Magento/Customer/view/frontend/web/js/customer-data.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "5da0a04fa05c9eff528d290451936b28e3245c1f",
+      "user": {
+        "login": "complexthings",
+        "id": 1484134,
+        "node_id": "MDQ6VXNlcjE0ODQxMzQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1484134?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/complexthings",
+        "html_url": "https://github.com/complexthings",
+        "followers_url": "https://api.github.com/users/complexthings/followers",
+        "following_url": "https://api.github.com/users/complexthings/following{/other_user}",
+        "gists_url": "https://api.github.com/users/complexthings/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/complexthings/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/complexthings/subscriptions",
+        "organizations_url": "https://api.github.com/users/complexthings/orgs",
+        "repos_url": "https://api.github.com/users/complexthings/repos",
+        "events_url": "https://api.github.com/users/complexthings/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/complexthings/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Typo fixed. Force of habit.",
+      "created_at": "2020-07-14T12:14:50Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r454311550",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/454311550"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r454311550"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/454311550/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 89,
+      "side": "RIGHT",
+      "in_reply_to_id": 454127571,
+      "author_association": "NONE",
+      "original_position": 5,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/460477351",
+      "pull_request_review_id": 455331142,
+      "id": 460477351,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ2MDQ3NzM1MQ==",
+      "diff_hunk": "@@ -1,2 +1,2 @@\n /* jQuery Storage API Plugin 1.7.3 https://github.com/julien-maurel/jQuery-Storage-API */\n-!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});\n\\ No newline at end of file\n+!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a&&a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});",
+      "path": "lib/web/jquery/jquery.storageapi.min.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "8047497701d5a332ad692844f12af11f344d9854",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please revert changes in this file, it’s not related to this PR",
+      "created_at": "2020-07-26T04:38:31Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r460477351",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/460477351"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r460477351"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/460477351/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 2,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 4,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/460531009",
+      "pull_request_review_id": 455366639,
+      "id": 460531009,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ2MDUzMTAwOQ==",
+      "diff_hunk": "@@ -1,2 +1,2 @@\n /* jQuery Storage API Plugin 1.7.3 https://github.com/julien-maurel/jQuery-Storage-API */\n-!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});\n\\ No newline at end of file\n+!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a&&a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});",
+      "path": "lib/web/jquery/jquery.storageapi.min.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "8047497701d5a332ad692844f12af11f344d9854",
+      "user": {
+        "login": "complexthings",
+        "id": 1484134,
+        "node_id": "MDQ6VXNlcjE0ODQxMzQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1484134?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/complexthings",
+        "html_url": "https://github.com/complexthings",
+        "followers_url": "https://api.github.com/users/complexthings/followers",
+        "following_url": "https://api.github.com/users/complexthings/following{/other_user}",
+        "gists_url": "https://api.github.com/users/complexthings/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/complexthings/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/complexthings/subscriptions",
+        "organizations_url": "https://api.github.com/users/complexthings/orgs",
+        "repos_url": "https://api.github.com/users/complexthings/repos",
+        "events_url": "https://api.github.com/users/complexthings/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/complexthings/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "It is though, this library is extremely out of date and had a fix issued in version 1.7.5 (Magento has 1.7.3) that fixes an issue that prevents unit tests from being executable and has a rare chance to throw in error in general.\r\n\r\nIt was fixed in 2015, I placed it in the file as a means of correcting the issue: https://github.com/julien-maurel/jQuery-Storage-API/commit/abef0586cf92e29297a283ee6299bac741ae125e#diff-50c51a23ea1ca042039829fb4ddeeb7c\r\n\r\nThis library had it's final release in May of 2016 (1.9.1) I think it's kind of ridiculous that this library is on a 2014 version, I'm also fine upgrading this library to 1.7.5 or even 1.9.1 (not sure how much divergence there is between 1.7.5 & 1.9.1)\r\n\r\nPlease advise how you want me to proceed.",
+      "created_at": "2020-07-26T13:57:23Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r460531009",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/460531009"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r460531009"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/460531009/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 2,
+      "side": "RIGHT",
+      "in_reply_to_id": 460477351,
+      "author_association": "NONE",
+      "original_position": 4,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/460764803",
+      "pull_request_review_id": 455622410,
+      "id": 460764803,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ2MDc2NDgwMw==",
+      "diff_hunk": "@@ -1,2 +1,2 @@\n /* jQuery Storage API Plugin 1.7.3 https://github.com/julien-maurel/jQuery-Storage-API */\n-!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});\n\\ No newline at end of file\n+!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a&&a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});",
+      "path": "lib/web/jquery/jquery.storageapi.min.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "8047497701d5a332ad692844f12af11f344d9854",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "@complexthings \r\n> issue that prevents unit tests from being executable and has a rare chance to throw in error in general.\r\n\r\nI think fixing or even updating some library just to fix the test is not good thing. Could you explain what the issue you had in the test? Maybe we'll find some workaround for that?",
+      "created_at": "2020-07-27T09:31:06Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r460764803",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/460764803"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r460764803"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/460764803/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 2,
+      "side": "RIGHT",
+      "in_reply_to_id": 460477351,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 4,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/461557425",
+      "pull_request_review_id": 456601917,
+      "id": 461557425,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ2MTU1NzQyNQ==",
+      "diff_hunk": "@@ -1,2 +1,2 @@\n /* jQuery Storage API Plugin 1.7.3 https://github.com/julien-maurel/jQuery-Storage-API */\n-!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});\n\\ No newline at end of file\n+!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a&&a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});",
+      "path": "lib/web/jquery/jquery.storageapi.min.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "8047497701d5a332ad692844f12af11f344d9854",
+      "user": {
+        "login": "complexthings",
+        "id": 1484134,
+        "node_id": "MDQ6VXNlcjE0ODQxMzQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1484134?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/complexthings",
+        "html_url": "https://github.com/complexthings",
+        "followers_url": "https://api.github.com/users/complexthings/followers",
+        "following_url": "https://api.github.com/users/complexthings/following{/other_user}",
+        "gists_url": "https://api.github.com/users/complexthings/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/complexthings/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/complexthings/subscriptions",
+        "organizations_url": "https://api.github.com/users/complexthings/orgs",
+        "repos_url": "https://api.github.com/users/complexthings/repos",
+        "events_url": "https://api.github.com/users/complexthings/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/complexthings/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I removed it in a commit, you'll be able to see below the results of Magento's Unit Tests running.  But essentially here's what happens:\r\n\r\n![image](https://user-images.githubusercontent.com/1484134/88667583-9243ea00-d0af-11ea-96f1-944e9618029d.png)",
+      "created_at": "2020-07-28T12:56:35Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r461557425",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/461557425"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r461557425"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/461557425/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 2,
+      "side": "RIGHT",
+      "in_reply_to_id": 460477351,
+      "author_association": "NONE",
+      "original_position": 4,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/461575989",
+      "pull_request_review_id": 456626061,
+      "id": 461575989,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ2MTU3NTk4OQ==",
+      "diff_hunk": "@@ -1,2 +1,2 @@\n /* jQuery Storage API Plugin 1.7.3 https://github.com/julien-maurel/jQuery-Storage-API */\n-!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});\n\\ No newline at end of file\n+!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a&&a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});",
+      "path": "lib/web/jquery/jquery.storageapi.min.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "8047497701d5a332ad692844f12af11f344d9854",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I just tried to investigate.\r\nIn original code we have\r\nhttps://github.com/dariusz-goc/jQuery-Storage-API/blob/abef0586cf92e29297a283ee6299bac741ae125e/jquery.storageapi.js#L428 that runs `_createNamespace` method.\r\n\r\nThis method sets https://github.com/dariusz-goc/jQuery-Storage-API/blob/abef0586cf92e29297a283ee6299bac741ae125e/jquery.storageapi.js#L278\r\n\r\nsomething like this should work:\r\n```\r\n    var ns={\r\n      localStorage: {cookie: false},\r\n      sessionStorage: {cookie: false}\r\n    };\r\n    $.namespaceStorages[name]=ns;\r\n```\r\n\r\nLooks like we need to put some mock `$.namespaceStorages[name]` and issue should be solved. What do you thing?",
+      "created_at": "2020-07-28T13:24:23Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r461575989",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/461575989"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r461575989"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/461575989/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 2,
+      "side": "RIGHT",
+      "in_reply_to_id": 460477351,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 4,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/462135786",
+      "pull_request_review_id": 457312749,
+      "id": 462135786,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ2MjEzNTc4Ng==",
+      "diff_hunk": "@@ -1,2 +1,2 @@\n /* jQuery Storage API Plugin 1.7.3 https://github.com/julien-maurel/jQuery-Storage-API */\n-!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});\n\\ No newline at end of file\n+!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a&&a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});",
+      "path": "lib/web/jquery/jquery.storageapi.min.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "8047497701d5a332ad692844f12af11f344d9854",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "In general this plugin is buggy for instance it causes issues like https://github.com/magento/magento2/issues/27355  https://github.com/magento/magento2/issues/17195 and https://github.com/magento/magento2/pull/17033#issuecomment-411026073, would be good to get rid of it at some point, but not in scope of this task.",
+      "created_at": "2020-07-29T08:39:43Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r462135786",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/462135786"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r462135786"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/462135786/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 2,
+      "side": "RIGHT",
+      "in_reply_to_id": 460477351,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 4,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/464974453",
+      "pull_request_review_id": 460715874,
+      "id": 464974453,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ2NDk3NDQ1Mw==",
+      "diff_hunk": "@@ -1,2 +1,2 @@\n /* jQuery Storage API Plugin 1.7.3 https://github.com/julien-maurel/jQuery-Storage-API */\n-!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});\n\\ No newline at end of file\n+!function(e){\"function\"==typeof define&&define.amd?define([\"jquery\", \"jquery/jquery.cookie\"],e):e(\"object\"==typeof exports?require(\"jquery\"):jQuery)}(function(e){function t(t){var r,i,n,o=arguments.length,s=window[t],a=arguments,u=a[1];if(2>o)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(u)){i={};for(var f in u){r=u[f];try{i[r]=JSON.parse(s.getItem(r))}catch(c){i[r]=s.getItem(r)}}return i}if(2!=o){try{i=JSON.parse(s.getItem(u))}catch(c){throw new ReferenceError(u+\" is not defined in this storage\")}for(var f=2;o-1>f;f++)if(i=i[a[f]],void 0===i)throw new ReferenceError([].slice.call(a,1,f+1).join(\".\")+\" is not defined in this storage\");if(e.isArray(a[f])){n=i,i={};for(var m in a[f])i[a[f][m]]=n[a[f][m]];return i}return i[a[f]]}try{return JSON.parse(s.getItem(u))}catch(c){return s.getItem(u)}}function r(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1],u=s[2],f={};if(2>n||!e.isPlainObject(a)&&3>n)throw Error(\"Minimum 3 arguments must be given or second parameter must be an object\");if(e.isPlainObject(a)){for(var c in a)r=a[c],e.isPlainObject(r)?o.setItem(c,JSON.stringify(r)):o.setItem(c,r);return a}if(3==n)return\"object\"==typeof u?o.setItem(a,JSON.stringify(u)):o.setItem(a,u),u;try{i=o.getItem(a),null!=i&&(f=JSON.parse(i))}catch(m){}i=f;for(var c=2;n-2>c;c++)r=s[c],i[r]&&e.isPlainObject(i[r])||(i[r]={}),i=i[r];return i[s[c]]=s[c+1],o.setItem(a,JSON.stringify(f)),f}function i(t){var r,i,n=arguments.length,o=window[t],s=arguments,a=s[1];if(2>n)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(a)){for(var u in a)o.removeItem(a[u]);return!0}if(2==n)return o.removeItem(a),!0;try{r=i=JSON.parse(o.getItem(a))}catch(f){throw new ReferenceError(a+\" is not defined in this storage\")}for(var u=2;n-1>u;u++)if(i=i[s[u]],void 0===i)throw new ReferenceError([].slice.call(s,1,u).join(\".\")+\" is not defined in this storage\");if(e.isArray(s[u]))for(var c in s[u])delete i[s[u][c]];else delete i[s[u]];return o.setItem(a,JSON.stringify(r)),!0}function n(t,r){var n=a(t);for(var o in n)i(t,n[o]);if(r)for(var o in e.namespaceStorages)u(o)}function o(r){var i=arguments.length,n=arguments,s=(window[r],n[1]);if(1==i)return 0==a(r).length;if(e.isArray(s)){for(var u=0;u<s.length;u++)if(!o(r,s[u]))return!1;return!0}try{var f=t.apply(this,arguments);e.isArray(n[i-1])||(f={totest:f});for(var u in f)if(!(e.isPlainObject(f[u])&&e.isEmptyObject(f[u])||e.isArray(f[u])&&!f[u].length)&&f[u])return!1;return!0}catch(c){return!0}}function s(r){var i=arguments.length,n=arguments,o=(window[r],n[1]);if(2>i)throw Error(\"Minimum 2 arguments must be given\");if(e.isArray(o)){for(var a=0;a<o.length;a++)if(!s(r,o[a]))return!1;return!0}try{var u=t.apply(this,arguments);e.isArray(n[i-1])||(u={totest:u});for(var a in u)if(void 0===u[a]||null===u[a])return!1;return!0}catch(f){return!1}}function a(r){var i=arguments.length,n=window[r],o=arguments,s=(o[1],[]),a={};if(a=i>1?t.apply(this,o):n,a&&a._cookie)for(var u in e.cookie())\"\"!=u&&s.push(u.replace(a._prefix,\"\"));else for(var f in a)s.push(f);return s}function u(t){if(!t||\"string\"!=typeof t)throw Error(\"First parameter must be a string\");g?(window.localStorage.getItem(t)||window.localStorage.setItem(t,\"{}\"),window.sessionStorage.getItem(t)||window.sessionStorage.setItem(t,\"{}\")):(window.localCookieStorage.getItem(t)||window.localCookieStorage.setItem(t,\"{}\"),window.sessionCookieStorage.getItem(t)||window.sessionCookieStorage.setItem(t,\"{}\"));var r={localStorage:e.extend({},e.localStorage,{_ns:t}),sessionStorage:e.extend({},e.sessionStorage,{_ns:t})};return e.cookie&&(window.cookieStorage.getItem(t)||window.cookieStorage.setItem(t,\"{}\"),r.cookieStorage=e.extend({},e.cookieStorage,{_ns:t})),e.namespaceStorages[t]=r,r}function f(e){if(!window[e])return!1;var t=\"jsapi\";try{return window[e].setItem(t,t),window[e].removeItem(t),!0}catch(r){return!1}}var c=\"ls_\",m=\"ss_\",g=f(\"localStorage\"),h={_type:\"\",_ns:\"\",_callMethod:function(e,t){var r=[this._type],t=Array.prototype.slice.call(t),i=t[0];return this._ns&&r.push(this._ns),\"string\"==typeof i&&-1!==i.indexOf(\".\")&&(t.shift(),[].unshift.apply(t,i.split(\".\"))),[].push.apply(r,t),e.apply(this,r)},get:function(){return this._callMethod(t,arguments)},set:function(){var t=arguments.length,i=arguments,n=i[0];if(1>t||!e.isPlainObject(n)&&2>t)throw Error(\"Minimum 2 arguments must be given or first parameter must be an object\");if(e.isPlainObject(n)&&this._ns){for(var o in n)r(this._type,this._ns,o,n[o]);return n}var s=this._callMethod(r,i);return this._ns?s[n.split(\".\")[0]]:s},remove:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(i,arguments)},removeAll:function(e){return this._ns?(r(this._type,this._ns,{}),!0):n(this._type,e)},isEmpty:function(){return this._callMethod(o,arguments)},isSet:function(){if(arguments.length<1)throw Error(\"Minimum 1 argument must be given\");return this._callMethod(s,arguments)},keys:function(){return this._callMethod(a,arguments)}};if(e.cookie){window.name||(window.name=Math.floor(1e8*Math.random()));var l={_cookie:!0,_prefix:\"\",_expires:null,_path:null,_domain:null,setItem:function(t,r){e.cookie(this._prefix+t,r,{expires:this._expires,path:this._path,domain:this._domain})},getItem:function(t){return e.cookie(this._prefix+t)},removeItem:function(t){return e.removeCookie(this._prefix+t)},clear:function(){for(var t in e.cookie())\"\"!=t&&(!this._prefix&&-1===t.indexOf(c)&&-1===t.indexOf(m)||this._prefix&&0===t.indexOf(this._prefix))&&e.removeCookie(t)},setExpires:function(e){return this._expires=e,this},setPath:function(e){return this._path=e,this},setDomain:function(e){return this._domain=e,this},setConf:function(e){return e.path&&(this._path=e.path),e.domain&&(this._domain=e.domain),e.expires&&(this._expires=e.expires),this},setDefaultConf:function(){this._path=this._domain=this._expires=null}};g||(window.localCookieStorage=e.extend({},l,{_prefix:c,_expires:3650}),window.sessionCookieStorage=e.extend({},l,{_prefix:m+window.name+\"_\"})),window.cookieStorage=e.extend({},l),e.cookieStorage=e.extend({},h,{_type:\"cookieStorage\",setExpires:function(e){return window.cookieStorage.setExpires(e),this},setPath:function(e){return window.cookieStorage.setPath(e),this},setDomain:function(e){return window.cookieStorage.setDomain(e),this},setConf:function(e){return window.cookieStorage.setConf(e),this},setDefaultConf:function(){return window.cookieStorage.setDefaultConf(),this}})}e.initNamespaceStorage=function(e){return u(e)},g?(e.localStorage=e.extend({},h,{_type:\"localStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionStorage\"})):(e.localStorage=e.extend({},h,{_type:\"localCookieStorage\"}),e.sessionStorage=e.extend({},h,{_type:\"sessionCookieStorage\"})),e.namespaceStorages={},e.removeAllStorages=function(t){e.localStorage.removeAll(t),e.sessionStorage.removeAll(t),e.cookieStorage&&e.cookieStorage.removeAll(t),t||(e.namespaceStorages={})}});",
+      "path": "lib/web/jquery/jquery.storageapi.min.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "8047497701d5a332ad692844f12af11f344d9854",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "@complexthings please check my comments above, hope it will fix the issue you had",
+      "created_at": "2020-08-04T11:11:32Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r464974453",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/464974453"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r464974453"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/464974453/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 2,
+      "side": "RIGHT",
+      "in_reply_to_id": 460477351,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 4,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485371038",
+      "pull_request_review_id": 484699994,
+      "id": 485371038,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTM3MTAzOA==",
+      "diff_hunk": "@@ -95,84 +97,100 @@ define([\n     }\n \n     describe('Magento_Customer/js/customer-data', function () {\n+\n         beforeAll(function () {\n             clearLocalStorage();\n         });\n \n-        beforeEach(function () {\n-            jQueryGetJSON = $.getJSON;\n+        beforeEach(function (done) {\n+            originalGetJSON = jQuery.getJSON;",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Seems like we have `$` in the top, so probably we should use it instead\r\n```suggestion\r\n            originalGetJSON = $.getJSON;\r\n```",
+      "created_at": "2020-09-09T06:36:57Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485371038",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485371038"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485371038"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485371038/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 106,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 70,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485371535",
+      "pull_request_review_id": 484699994,
+      "id": 485371535,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTM3MTUzNQ==",
+      "diff_hunk": "@@ -95,84 +97,100 @@ define([\n     }\n \n     describe('Magento_Customer/js/customer-data', function () {\n+\n         beforeAll(function () {\n             clearLocalStorage();\n         });\n \n-        beforeEach(function () {\n-            jQueryGetJSON = $.getJSON;\n+        beforeEach(function (done) {\n+            originalGetJSON = jQuery.getJSON;\n             sectionConfig['Magento_Customer/js/section-config'](sectionConfigSettings);\n+\n+            injector.require([\n+                'Magento_Customer/js/customer-data'\n+            ], function (Constr) {\n+                obj = Constr;\n+                done();\n+            });\n         });\n \n         afterEach(function () {\n-            $.getJSON = jQueryGetJSON;\n-            clearLocalStorage();\n+            try {\n+                jQuery.getJSON = originalGetJSON;",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n                $.getJSON = originalGetJSON;\r\n```",
+      "created_at": "2020-09-09T06:38:06Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485371535",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485371535"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485371535"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485371535/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 119,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 85,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485375068",
+      "pull_request_review_id": 484699994,
+      "id": 485375068,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTM3NTA2OA==",
+      "diff_hunk": "@@ -95,84 +97,100 @@ define([\n     }\n \n     describe('Magento_Customer/js/customer-data', function () {\n+\n         beforeAll(function () {\n             clearLocalStorage();\n         });\n \n-        beforeEach(function () {\n-            jQueryGetJSON = $.getJSON;\n+        beforeEach(function (done) {\n+            originalGetJSON = jQuery.getJSON;\n             sectionConfig['Magento_Customer/js/section-config'](sectionConfigSettings);\n+\n+            injector.require([\n+                'Magento_Customer/js/customer-data'\n+            ], function (Constr) {\n+                obj = Constr;\n+                done();\n+            });",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Seems like we don't really need to mock any dependencies, so looks like we can just use customerData object that already imported above. What do you thing?",
+      "created_at": "2020-09-09T06:45:37Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485375068",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485375068"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485375068"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485375068/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 109,
+      "original_start_line": 109,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 114,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 78,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485375641",
+      "pull_request_review_id": 484699994,
+      "id": 485375641,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTM3NTY0MQ==",
+      "diff_hunk": "@@ -95,84 +97,100 @@ define([\n     }\n \n     describe('Magento_Customer/js/customer-data', function () {\n+\n         beforeAll(function () {\n             clearLocalStorage();\n         });\n \n-        beforeEach(function () {\n-            jQueryGetJSON = $.getJSON;\n+        beforeEach(function (done) {\n+            originalGetJSON = jQuery.getJSON;\n             sectionConfig['Magento_Customer/js/section-config'](sectionConfigSettings);\n+\n+            injector.require([\n+                'Magento_Customer/js/customer-data'\n+            ], function (Constr) {\n+                obj = Constr;\n+                done();\n+            });\n         });\n \n         afterEach(function () {\n-            $.getJSON = jQueryGetJSON;\n-            clearLocalStorage();\n+            try {\n+                jQuery.getJSON = originalGetJSON;\n+                clearLocalStorage();\n+                injector.clean();\n+                injector.remove();\n+            } catch (e) {\n+            }",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Are we expecring to have any exceptions here? I don't think it's good to have empty catch, it will just mask any issues inside",
+      "created_at": "2020-09-09T06:46:41Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485375641",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485375641"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485375641"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485375641/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 128,
+      "original_start_line": 123,
+      "start_side": "RIGHT",
+      "line": 129,
+      "original_line": 124,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 90,
+      "position": 95,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485375807",
+      "pull_request_review_id": 484699994,
+      "id": 485375807,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTM3NTgwNw==",
+      "diff_hunk": "@@ -3,30 +3,34 @@\n  * See COPYING.txt for license details.\n  */\n \n-/*eslint-disable max-nested-callbacks*/\n-/*jscs:disable jsDoc*/\n+/* global _ */\n+/* eslint max-nested-callbacks: 0 */\n+/* jscs:disable jsDoc*/\n \n define([\n+    'squire',\n     'jquery',\n-    'underscore',",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Seems like we should add it back as it's used in the code below",
+      "created_at": "2020-09-09T06:47:05Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485375807",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485375807"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485375807"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485375807/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 11,
+      "original_line": 11,
+      "side": "LEFT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 13,
+      "position": 13,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485594103",
+      "pull_request_review_id": 484985375,
+      "id": 485594103,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTU5NDEwMw==",
+      "diff_hunk": "@@ -95,84 +97,100 @@ define([\n     }\n \n     describe('Magento_Customer/js/customer-data', function () {\n+\n         beforeAll(function () {\n             clearLocalStorage();\n         });\n \n-        beforeEach(function () {\n-            jQueryGetJSON = $.getJSON;\n+        beforeEach(function (done) {\n+            originalGetJSON = jQuery.getJSON;\n             sectionConfig['Magento_Customer/js/section-config'](sectionConfigSettings);\n+\n+            injector.require([\n+                'Magento_Customer/js/customer-data'\n+            ], function (Constr) {\n+                obj = Constr;\n+                done();\n+            });\n         });\n \n         afterEach(function () {\n-            $.getJSON = jQueryGetJSON;\n-            clearLocalStorage();\n+            try {\n+                jQuery.getJSON = originalGetJSON;\n+                clearLocalStorage();\n+                injector.clean();\n+                injector.remove();\n+            } catch (e) {\n+            }",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "complexthings",
+        "id": 1484134,
+        "node_id": "MDQ6VXNlcjE0ODQxMzQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1484134?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/complexthings",
+        "html_url": "https://github.com/complexthings",
+        "followers_url": "https://api.github.com/users/complexthings/followers",
+        "following_url": "https://api.github.com/users/complexthings/following{/other_user}",
+        "gists_url": "https://api.github.com/users/complexthings/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/complexthings/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/complexthings/subscriptions",
+        "organizations_url": "https://api.github.com/users/complexthings/orgs",
+        "repos_url": "https://api.github.com/users/complexthings/repos",
+        "events_url": "https://api.github.com/users/complexthings/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/complexthings/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Squire throws errors itself, this happens with anything that's using Squire same as in section-config.test.js\r\n\r\n`TypeError: undefined is not an object (evaluating 'getContext(this.id).defined')`",
+      "created_at": "2020-09-09T13:04:28Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485594103",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485594103"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485594103"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485594103/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 128,
+      "original_start_line": 123,
+      "start_side": "RIGHT",
+      "line": 129,
+      "original_line": 124,
+      "side": "RIGHT",
+      "in_reply_to_id": 485375641,
+      "author_association": "NONE",
+      "original_position": 90,
+      "position": 95,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485598285",
+      "pull_request_review_id": 484990739,
+      "id": 485598285,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTU5ODI4NQ==",
+      "diff_hunk": "@@ -95,84 +97,100 @@ define([\n     }\n \n     describe('Magento_Customer/js/customer-data', function () {\n+\n         beforeAll(function () {\n             clearLocalStorage();\n         });\n \n-        beforeEach(function () {\n-            jQueryGetJSON = $.getJSON;\n+        beforeEach(function (done) {\n+            originalGetJSON = jQuery.getJSON;\n             sectionConfig['Magento_Customer/js/section-config'](sectionConfigSettings);\n+\n+            injector.require([\n+                'Magento_Customer/js/customer-data'\n+            ], function (Constr) {\n+                obj = Constr;\n+                done();\n+            });",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "complexthings",
+        "id": 1484134,
+        "node_id": "MDQ6VXNlcjE0ODQxMzQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1484134?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/complexthings",
+        "html_url": "https://github.com/complexthings",
+        "followers_url": "https://api.github.com/users/complexthings/followers",
+        "following_url": "https://api.github.com/users/complexthings/following{/other_user}",
+        "gists_url": "https://api.github.com/users/complexthings/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/complexthings/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/complexthings/subscriptions",
+        "organizations_url": "https://api.github.com/users/complexthings/orgs",
+        "repos_url": "https://api.github.com/users/complexthings/repos",
+        "events_url": "https://api.github.com/users/complexthings/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/complexthings/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Removing the mocking breaks the following:\r\n\r\n`Check it requests sections from the server if there are expired sections` with error:\r\n```\r\nExpected spy $.getJSON to have been called with [ 'http://localhost/customer/section/load/', <jasmine.objectContaining(Object({ sections: 'cart,customer' }))> ] but it was never called. (1)\r\n```\r\n\r\n`\"getExpiredSectionNames method` -> `Does not throw before component is initialized` with error:\r\n```\r\nExpected function not to throw, but it threw TypeError: null is not an object (evaluating 'i[a[f]]'). (1)\r\n```\r\n\r\n`\"set\" method` -> `Does not throw before component is initialized...`\r\n```\r\n>> Error: [object Object] at\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/Magento_Customer/js/customer-data.js:87\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3238 fire\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3368 fireWith\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:9848 done\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:10317 callback\r\n>> Error: [object Object] at\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/Magento_Customer/js/customer-data.js:87\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3238 fire\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3368 fireWith\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:9848 done\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:10317 callback\r\n```",
+      "created_at": "2020-09-09T13:10:26Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485598285",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485598285"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485598285"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485598285/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 109,
+      "original_start_line": 109,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 114,
+      "side": "RIGHT",
+      "in_reply_to_id": 485375068,
+      "author_association": "NONE",
+      "original_position": 78,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485615695",
+      "pull_request_review_id": 485014142,
+      "id": 485615695,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTYxNTY5NQ==",
+      "diff_hunk": "@@ -95,84 +97,100 @@ define([\n     }\n \n     describe('Magento_Customer/js/customer-data', function () {\n+\n         beforeAll(function () {\n             clearLocalStorage();\n         });\n \n-        beforeEach(function () {\n-            jQueryGetJSON = $.getJSON;\n+        beforeEach(function (done) {\n+            originalGetJSON = jQuery.getJSON;",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "complexthings",
+        "id": 1484134,
+        "node_id": "MDQ6VXNlcjE0ODQxMzQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1484134?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/complexthings",
+        "html_url": "https://github.com/complexthings",
+        "followers_url": "https://api.github.com/users/complexthings/followers",
+        "following_url": "https://api.github.com/users/complexthings/following{/other_user}",
+        "gists_url": "https://api.github.com/users/complexthings/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/complexthings/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/complexthings/subscriptions",
+        "organizations_url": "https://api.github.com/users/complexthings/orgs",
+        "repos_url": "https://api.github.com/users/complexthings/repos",
+        "events_url": "https://api.github.com/users/complexthings/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/complexthings/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Breaks the following tests:\r\n\r\n`\"getExpiredSectionNames method` -> `Check that result does not contain unexpired section names...` with error:\r\n```\r\nlog: JQMIGRATE: jQuery.parseJSON requires a valid JSON string\r\n\r\nlog:\r\n>> Error: [object Object] at\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/Magento_Customer/js/customer-data.js:87\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3238 fire\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3368 fireWith\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:9848 done\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:10317 callback\r\n```\r\n\r\n`\"getExpiredSectionNames method` -> `Check that result does not contain unsupported section names...` with error:\r\n```\r\n>> Error: [object Object] at\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/Magento_Customer/js/customer-data.js:87\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3238 fire\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3368 fireWith\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:9848 done\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:10317 callback\r\n```\r\n\r\n`\"reload\" method` -> `Check it returns proper sections object when passed array with a single section name...` with error:\r\n```\r\n>> Error: [object Object] at\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/Magento_Customer/js/customer-data.js:87\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3238 fire\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3368 fireWith\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:9848 done\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:10317 callback\r\n```\r\n\r\n`\"reload\" method` -> `Check it returns proper sections object when passed array with a single section name...` with error:\r\n```\r\nExpected Object({ readyState: 1, getResponseHeader: Function, getAllResponseHeaders: Function, setRequestHeader: Function, overrideMimeType: Function, statusCode: Function, abort: Function, state: Function, always: Function, then: Function, promise: Function, pipe: Function, done: Function, fail: Function, progress: Function, complete: Function, success: Function, error: Function }) to equal <jasmine.objectContaining(Object({ responseJSON: Object({ section: Object({  }) }) }))>. (1)\r\n```\r\n\r\n`\"reload\" method` -> `Check it returns proper sections object when passed array with multiple section names...`\r\n```\r\nExpected Object({ readyState: 1, getResponseHeader: Function, getAllResponseHeaders: Function, setRequestHeader: Function, overrideMimeType: Function, statusCode: Function, abort: Function, state: Function, always: Function, then: Function, promise: Function, pipe: Function, done: Function, fail: Function, progress: Function, complete: Function, success: Function, error: Function }) to equal <jasmine.objectContaining(Object({ responseJSON: Object({ cart: Object({  }), customer: Object({  }), messages: Object({  }) }) }))>. (1)\r\n```\r\n\r\n`\"reload\" method` -> `Check it returns all sections when passed wildcard string...`\r\n```\r\nError: [object Object] at\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/Magento_Customer/js/customer-data.js:87\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3238 fire\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3368 fireWith\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:9848 done\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:10317 callback\r\n```\r\n\r\n`\"reload\" method` -> `Check it returns all sections when passed wildcard string`\r\n```\r\nExpected spy unknown to have been called. (1)\r\n       Expected Object({ readyState: 1, getResponseHeader: Function, getAllResponseHeaders: Function, setRequestHeader: Function, overrideMimeType: Function, statusCode: Function, abort: Function, state: Function, always: Function, then: Function, promise: Function, pipe: Function, done: Function, fail: Function, progress: Function, complete: Function, success: Function, error: Function }) to equal <jasmine.objectContaining(Object({ responseJSON: Object({ cart: Object({  }), customer: Object({  }), messages: Object({  }) }) }))>. (2)\r\n```\r\n\r\n`\"invalidate\" method` -> `Should be defined`\r\n```\r\nError: [object Object] at\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/Magento_Customer/js/customer-data.js:87\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3238 fire\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:3368 fireWith\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:9848 done\r\n>> http:/localhost:8000/pub/static/frontend/Magento/luma/en_US/jquery.js:10317 callback\r\n```",
+      "created_at": "2020-09-09T13:35:08Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485615695",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485615695"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485615695"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485615695/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 106,
+      "side": "RIGHT",
+      "in_reply_to_id": 485371038,
+      "author_association": "NONE",
+      "original_position": 70,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485616002",
+      "pull_request_review_id": 485014538,
+      "id": 485616002,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTYxNjAwMg==",
+      "diff_hunk": "@@ -95,84 +97,100 @@ define([\n     }\n \n     describe('Magento_Customer/js/customer-data', function () {\n+\n         beforeAll(function () {\n             clearLocalStorage();\n         });\n \n-        beforeEach(function () {\n-            jQueryGetJSON = $.getJSON;\n+        beforeEach(function (done) {\n+            originalGetJSON = jQuery.getJSON;\n             sectionConfig['Magento_Customer/js/section-config'](sectionConfigSettings);\n+\n+            injector.require([\n+                'Magento_Customer/js/customer-data'\n+            ], function (Constr) {\n+                obj = Constr;\n+                done();\n+            });\n         });\n \n         afterEach(function () {\n-            $.getJSON = jQueryGetJSON;\n-            clearLocalStorage();\n+            try {\n+                jQuery.getJSON = originalGetJSON;",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "complexthings",
+        "id": 1484134,
+        "node_id": "MDQ6VXNlcjE0ODQxMzQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1484134?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/complexthings",
+        "html_url": "https://github.com/complexthings",
+        "followers_url": "https://api.github.com/users/complexthings/followers",
+        "following_url": "https://api.github.com/users/complexthings/following{/other_user}",
+        "gists_url": "https://api.github.com/users/complexthings/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/complexthings/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/complexthings/subscriptions",
+        "organizations_url": "https://api.github.com/users/complexthings/orgs",
+        "repos_url": "https://api.github.com/users/complexthings/repos",
+        "events_url": "https://api.github.com/users/complexthings/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/complexthings/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "See above comment.",
+      "created_at": "2020-09-09T13:35:32Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485616002",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485616002"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485616002"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485616002/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 119,
+      "side": "RIGHT",
+      "in_reply_to_id": 485371535,
+      "author_association": "NONE",
+      "original_position": 85,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485619288",
+      "pull_request_review_id": 485018811,
+      "id": 485619288,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTYxOTI4OA==",
+      "diff_hunk": "@@ -3,30 +3,34 @@\n  * See COPYING.txt for license details.\n  */\n \n-/*eslint-disable max-nested-callbacks*/\n-/*jscs:disable jsDoc*/\n+/* global _ */\n+/* eslint max-nested-callbacks: 0 */\n+/* jscs:disable jsDoc*/\n \n define([\n+    'squire',\n     'jquery',\n-    'underscore',",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "complexthings",
+        "id": 1484134,
+        "node_id": "MDQ6VXNlcjE0ODQxMzQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1484134?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/complexthings",
+        "html_url": "https://github.com/complexthings",
+        "followers_url": "https://api.github.com/users/complexthings/followers",
+        "following_url": "https://api.github.com/users/complexthings/following{/other_user}",
+        "gists_url": "https://api.github.com/users/complexthings/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/complexthings/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/complexthings/subscriptions",
+        "organizations_url": "https://api.github.com/users/complexthings/orgs",
+        "repos_url": "https://api.github.com/users/complexthings/repos",
+        "events_url": "https://api.github.com/users/complexthings/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/complexthings/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Breaks following tests:\r\n\r\n`\"init\" method` -> `Calls \"reload\" method when expired sections do not exist`\r\n```\r\nExpected spy reload to have been called. (1)\r\n```\r\n\r\n`\"set\" method` -> `Does not throw before component is initialized`\r\n```\r\nExpected function not to throw, but it threw TypeError: undefined is not an object (evaluating 'sectionData['data_id']'). (1)\r\n```",
+      "created_at": "2020-09-09T13:39:57Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485619288",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485619288"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485619288"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485619288/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 11,
+      "original_line": 11,
+      "side": "LEFT",
+      "in_reply_to_id": 485375807,
+      "author_association": "NONE",
+      "original_position": 13,
+      "position": 13,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485745342",
+      "pull_request_review_id": 485189548,
+      "id": 485745342,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTc0NTM0Mg==",
+      "diff_hunk": "@@ -95,84 +97,100 @@ define([\n     }\n \n     describe('Magento_Customer/js/customer-data', function () {\n+\n         beforeAll(function () {\n             clearLocalStorage();\n         });\n \n-        beforeEach(function () {\n-            jQueryGetJSON = $.getJSON;\n+        beforeEach(function (done) {\n+            originalGetJSON = jQuery.getJSON;",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "complexthings",
+        "id": 1484134,
+        "node_id": "MDQ6VXNlcjE0ODQxMzQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1484134?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/complexthings",
+        "html_url": "https://github.com/complexthings",
+        "followers_url": "https://api.github.com/users/complexthings/followers",
+        "following_url": "https://api.github.com/users/complexthings/following{/other_user}",
+        "gists_url": "https://api.github.com/users/complexthings/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/complexthings/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/complexthings/subscriptions",
+        "organizations_url": "https://api.github.com/users/complexthings/orgs",
+        "repos_url": "https://api.github.com/users/complexthings/repos",
+        "events_url": "https://api.github.com/users/complexthings/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/complexthings/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Figured out a way around this, and updated below.",
+      "created_at": "2020-09-09T16:21:36Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485745342",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485745342"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485745342"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485745342/reactions",
+        "total_count": 1,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 106,
+      "side": "RIGHT",
+      "in_reply_to_id": 485371038,
+      "author_association": "NONE",
+      "original_position": 70,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485746314",
+      "pull_request_review_id": 485190371,
+      "id": 485746314,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTc0NjMxNA==",
+      "diff_hunk": "@@ -95,84 +97,100 @@ define([\n     }\n \n     describe('Magento_Customer/js/customer-data', function () {\n+\n         beforeAll(function () {\n             clearLocalStorage();\n         });\n \n-        beforeEach(function () {\n-            jQueryGetJSON = $.getJSON;\n+        beforeEach(function (done) {\n+            originalGetJSON = jQuery.getJSON;\n             sectionConfig['Magento_Customer/js/section-config'](sectionConfigSettings);\n+\n+            injector.require([\n+                'Magento_Customer/js/customer-data'\n+            ], function (Constr) {\n+                obj = Constr;\n+                done();\n+            });",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "complexthings",
+        "id": 1484134,
+        "node_id": "MDQ6VXNlcjE0ODQxMzQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1484134?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/complexthings",
+        "html_url": "https://github.com/complexthings",
+        "followers_url": "https://api.github.com/users/complexthings/followers",
+        "following_url": "https://api.github.com/users/complexthings/following{/other_user}",
+        "gists_url": "https://api.github.com/users/complexthings/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/complexthings/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/complexthings/subscriptions",
+        "organizations_url": "https://api.github.com/users/complexthings/orgs",
+        "repos_url": "https://api.github.com/users/complexthings/repos",
+        "events_url": "https://api.github.com/users/complexthings/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/complexthings/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Nope it was needed, using just customerData didn't end up working, I also ended up needing to inject underscore here to resolve another one of your suggestions below.",
+      "created_at": "2020-09-09T16:22:36Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485746314",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485746314"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485746314"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485746314/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 109,
+      "original_start_line": 109,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 114,
+      "side": "RIGHT",
+      "in_reply_to_id": 485375068,
+      "author_association": "NONE",
+      "original_position": 78,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485746547",
+      "pull_request_review_id": 485190644,
+      "id": 485746547,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTc0NjU0Nw==",
+      "diff_hunk": "@@ -95,84 +97,100 @@ define([\n     }\n \n     describe('Magento_Customer/js/customer-data', function () {\n+\n         beforeAll(function () {\n             clearLocalStorage();\n         });\n \n-        beforeEach(function () {\n-            jQueryGetJSON = $.getJSON;\n+        beforeEach(function (done) {\n+            originalGetJSON = jQuery.getJSON;\n             sectionConfig['Magento_Customer/js/section-config'](sectionConfigSettings);\n+\n+            injector.require([\n+                'Magento_Customer/js/customer-data'\n+            ], function (Constr) {\n+                obj = Constr;\n+                done();\n+            });\n         });\n \n         afterEach(function () {\n-            $.getJSON = jQueryGetJSON;\n-            clearLocalStorage();\n+            try {\n+                jQuery.getJSON = originalGetJSON;\n+                clearLocalStorage();\n+                injector.clean();\n+                injector.remove();\n+            } catch (e) {\n+            }",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "complexthings",
+        "id": 1484134,
+        "node_id": "MDQ6VXNlcjE0ODQxMzQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1484134?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/complexthings",
+        "html_url": "https://github.com/complexthings",
+        "followers_url": "https://api.github.com/users/complexthings/followers",
+        "following_url": "https://api.github.com/users/complexthings/following{/other_user}",
+        "gists_url": "https://api.github.com/users/complexthings/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/complexthings/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/complexthings/subscriptions",
+        "organizations_url": "https://api.github.com/users/complexthings/orgs",
+        "repos_url": "https://api.github.com/users/complexthings/repos",
+        "events_url": "https://api.github.com/users/complexthings/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/complexthings/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "At most I can remove the try catch, thoughts?",
+      "created_at": "2020-09-09T16:22:57Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485746547",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485746547"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485746547"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485746547/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 128,
+      "original_start_line": 123,
+      "start_side": "RIGHT",
+      "line": 129,
+      "original_line": 124,
+      "side": "RIGHT",
+      "in_reply_to_id": 485375641,
+      "author_association": "NONE",
+      "original_position": 90,
+      "position": 95,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485746912",
+      "pull_request_review_id": 485190988,
+      "id": 485746912,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NTc0NjkxMg==",
+      "diff_hunk": "@@ -3,30 +3,34 @@\n  * See COPYING.txt for license details.\n  */\n \n-/*eslint-disable max-nested-callbacks*/\n-/*jscs:disable jsDoc*/\n+/* global _ */\n+/* eslint max-nested-callbacks: 0 */\n+/* jscs:disable jsDoc*/\n \n define([\n+    'squire',\n     'jquery',\n-    'underscore',",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "complexthings",
+        "id": 1484134,
+        "node_id": "MDQ6VXNlcjE0ODQxMzQ=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1484134?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/complexthings",
+        "html_url": "https://github.com/complexthings",
+        "followers_url": "https://api.github.com/users/complexthings/followers",
+        "following_url": "https://api.github.com/users/complexthings/following{/other_user}",
+        "gists_url": "https://api.github.com/users/complexthings/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/complexthings/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/complexthings/subscriptions",
+        "organizations_url": "https://api.github.com/users/complexthings/orgs",
+        "repos_url": "https://api.github.com/users/complexthings/repos",
+        "events_url": "https://api.github.com/users/complexthings/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/complexthings/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Was able to figure out how to load underscore via Squire and that resolves the issues.",
+      "created_at": "2020-09-09T16:23:22Z",
+      "updated_at": "2020-09-10T12:30:37Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r485746912",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/485746912"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r485746912"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/485746912/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 11,
+      "original_line": 11,
+      "side": "LEFT",
+      "in_reply_to_id": 485375807,
+      "author_association": "NONE",
+      "original_position": 13,
+      "position": 13,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/486393027",
+      "pull_request_review_id": 486000467,
+      "id": 486393027,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4NjM5MzAyNw==",
+      "diff_hunk": "@@ -95,84 +97,100 @@ define([\n     }\n \n     describe('Magento_Customer/js/customer-data', function () {\n+\n         beforeAll(function () {\n             clearLocalStorage();\n         });\n \n-        beforeEach(function () {\n-            jQueryGetJSON = $.getJSON;\n+        beforeEach(function (done) {\n+            originalGetJSON = jQuery.getJSON;\n             sectionConfig['Magento_Customer/js/section-config'](sectionConfigSettings);\n+\n+            injector.require([\n+                'Magento_Customer/js/customer-data'\n+            ], function (Constr) {\n+                obj = Constr;\n+                done();\n+            });\n         });\n \n         afterEach(function () {\n-            $.getJSON = jQueryGetJSON;\n-            clearLocalStorage();\n+            try {\n+                jQuery.getJSON = originalGetJSON;\n+                clearLocalStorage();\n+                injector.clean();\n+                injector.remove();\n+            } catch (e) {\n+            }",
+      "path": "dev/tests/js/jasmine/tests/app/code/Magento/Customer/frontend/js/customer-data.test.js",
+      "commit_id": "fae1c5c48b59d2f6b46ab47deb9e1548ec248453",
+      "original_commit_id": "6f9a2743df524fe5cd60c71eaf7db58ca828bc54",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Let's keep it as is for now",
+      "created_at": "2020-09-10T14:33:13Z",
+      "updated_at": "2020-09-10T14:33:13Z",
+      "html_url": "https://github.com/magento/magento2/pull/29081#discussion_r486393027",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29081",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/486393027"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/29081#discussion_r486393027"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/29081"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/486393027/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": 128,
+      "original_start_line": 123,
+      "start_side": "RIGHT",
+      "line": 129,
+      "original_line": 124,
+      "side": "RIGHT",
+      "in_reply_to_id": 485375641,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 90,
+      "position": 95,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "46dce2f3df8826328925e82cb6886c013c8c825d0bce60c680d23b3a7bbc36da",
+  "cacheDigest": "cd62bfaa7e198c75fd8f5109d990bd9616f25955dd25944b1677814364c920ce"
+}

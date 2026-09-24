@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/373821868",
+  "status": 200,
+  "etag": "W/\"f71236f5b4e50de0bdff169ecc04cc068b961f99a48bb1cb66eee920911e4854\"",
+  "headers": {
+    "ETag": "W/\"f71236f5b4e50de0bdff169ecc04cc068b961f99a48bb1cb66eee920911e4854\"",
+    "Last-Modified": "Thu, 13 Aug 2026 10:56:31 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "44",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/373821868",
+    "pull_request_review_id": 351920733,
+    "id": 373821868,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM3MzgyMTg2OA==",
+    "diff_hunk": "@@ -22,6 +22,9 @@\n             <actionGroup ref=\"LoginAsAdmin\" stepKey=\"login\"/>\n             <createData entity=\"SimpleProduct2\" stepKey=\"simpleProduct1\"/>\n             <createData entity=\"SimpleProduct2\" stepKey=\"simpleProduct2\"/>\n+\n+            <wait stepKey=\"waitBeforeIndexer\" time=\"60\"/>",
+    "path": "app/code/Magento/Bundle/Test/Mftf/Test/StorefrontCustomerSelectAndSetBundleOptionsTest.xml",
+    "commit_id": "3588ab3ce389eed7377b505ff7ce30a465a28e39",
+    "original_commit_id": "548da895caa3393ce951ce0675fea398c5a1910b",
+    "user": {
+      "login": "ihor-sviziev",
+      "id": 1873745,
+      "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/ihor-sviziev",
+      "html_url": "https://github.com/ihor-sviziev",
+      "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+      "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+      "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+      "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+      "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+      "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Why we need to add wait for 1 minute in a lot of tests? Tests run will just became longer, can’t we prevent it? ",
+    "created_at": "2020-02-02T06:07:49Z",
+    "updated_at": "2020-02-21T20:41:14Z",
+    "html_url": "https://github.com/magento/magento2/pull/26608#discussion_r373821868",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/26608",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/373821868"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/26608#discussion_r373821868"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/26608"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/373821868/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 26,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 5,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

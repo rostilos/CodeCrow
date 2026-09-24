@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/667958548",
+  "status": 200,
+  "etag": "W/\"ff832ec443cc2e98afd6849577c6889f28a92987771c21549f4f28c6e6d60542\"",
+  "headers": {
+    "ETag": "W/\"ff832ec443cc2e98afd6849577c6889f28a92987771c21549f4f28c6e6d60542\"",
+    "Last-Modified": "Sun, 04 Jan 2026 09:43:32 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "1",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/667958548",
+    "pull_request_review_id": 704145600,
+    "id": 667958548,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY2Nzk1ODU0OA==",
+    "diff_hunk": "@@ -0,0 +1,81 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\CustomerGraphQl\\Model\\Resolver;\n+\n+use Magento\\CustomerGraphQl\\Model\\Customer\\DeleteCustomer as DeleteCustomerModel;\n+use Magento\\CustomerGraphQl\\Model\\Customer\\GetCustomer;\n+use Magento\\Framework\\GraphQl\\Exception\\GraphQlAuthorizationException;\n+use Magento\\Framework\\GraphQl\\Schema\\Type\\ResolveInfo;\n+use Magento\\Framework\\GraphQl\\Config\\Element\\Field;\n+use Magento\\Framework\\GraphQl\\Query\\ResolverInterface;\n+use Magento\\Framework\\Registry;\n+use Magento\\GraphQl\\Model\\Query\\ContextInterface;\n+\n+/**\n+ * Delete customer, used for GraphQL request processing.\n+ */\n+class DeleteCustomer implements ResolverInterface\n+{\n+    /**\n+     * @var GetCustomer\n+     */\n+    private $getCustomer;\n+\n+    /**\n+     * @var DeleteCustomerModel\n+     */\n+    private $deleteCustomer;\n+\n+    /**\n+     * @var Registry\n+     */\n+    private $registry;\n+\n+    /**\n+     * @param GetCustomer $getCustomer\n+     * @param DeleteCustomerModel $deleteCustomer\n+     * @param Registry $registry\n+     */\n+    public function __construct(\n+        GetCustomer $getCustomer,\n+        DeleteCustomerModel $deleteCustomer,\n+        Registry $registry\n+    ) {\n+        $this->getCustomer = $getCustomer;\n+        $this->deleteCustomer = $deleteCustomer;\n+        $this->registry =$registry;",
+    "path": "app/code/Magento/CustomerGraphQl/Model/Resolver/DeleteCustomer.php",
+    "commit_id": "29e8a495a512c38ac34ac28c0e6d48b64bd8ecf0",
+    "original_commit_id": "aba7e20fbe6f46be59bfd33ee27d0ffaf84d223b",
+    "user": {
+      "login": "eduard13",
+      "id": 15868188,
+      "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/eduard13",
+      "html_url": "https://github.com/eduard13",
+      "followers_url": "https://api.github.com/users/eduard13/followers",
+      "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+      "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+      "organizations_url": "https://api.github.com/users/eduard13/orgs",
+      "repos_url": "https://api.github.com/users/eduard13/repos",
+      "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/eduard13/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "```suggestion\r\n        $this->registry = $registry;\r\n```",
+    "created_at": "2021-07-12T14:02:11Z",
+    "updated_at": "2021-07-12T14:03:36Z",
+    "html_url": "https://github.com/magento/magento2/pull/33411#discussion_r667958548",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33411",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/667958548"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/33411#discussion_r667958548"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/33411"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/667958548/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 51,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 51,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

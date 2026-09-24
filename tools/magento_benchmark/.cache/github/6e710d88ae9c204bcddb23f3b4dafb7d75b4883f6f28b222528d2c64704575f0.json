@@ -1,0 +1,88 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/377080633",
+  "status": 200,
+  "fetchedAt": "2026-08-26T01:52:52Z",
+  "etag": "W/\"2c47ea0ae475c91d775b64aaf8c9b41ee90346a46f5a5bbd9be784acdb4b9955\"",
+  "headers": {
+    "ETag": "W/\"2c47ea0ae475c91d775b64aaf8c9b41ee90346a46f5a5bbd9be784acdb4b9955\"",
+    "Last-Modified": "Sat, 01 Aug 2026 12:00:10 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "57",
+    "X-RateLimit-Reset": "1787712770"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/377080633",
+    "pull_request_review_id": 355959075,
+    "id": 377080633,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM3NzA4MDYzMw==",
+    "diff_hunk": "@@ -38,6 +38,6 @@ public function getAllowedSelectionTypes()\n     {\n         $configData = $this->config->getType(\\Magento\\Catalog\\Model\\Product\\Type::TYPE_BUNDLE);\n \n-        return isset($configData['allowed_selection_types']) ? $configData['allowed_selection_types'] : [];\n+        return $configData['allowed_selection_types'] ?? : [];",
+    "path": "app/code/Magento/Bundle/Helper/Data.php",
+    "commit_id": "dfdb396d3ead59c40e05a555e59c58d7cd8919d0",
+    "original_commit_id": "5cba788f4bab739c51f47823b133e159e615b517",
+    "user": {
+      "login": "GraysonChiang",
+      "id": 9804759,
+      "node_id": "MDQ6VXNlcjk4MDQ3NTk=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/9804759?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/GraysonChiang",
+      "html_url": "https://github.com/GraysonChiang",
+      "followers_url": "https://api.github.com/users/GraysonChiang/followers",
+      "following_url": "https://api.github.com/users/GraysonChiang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/GraysonChiang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/GraysonChiang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/GraysonChiang/subscriptions",
+      "organizations_url": "https://api.github.com/users/GraysonChiang/orgs",
+      "repos_url": "https://api.github.com/users/GraysonChiang/repos",
+      "events_url": "https://api.github.com/users/GraysonChiang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/GraysonChiang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "I fixed.",
+    "created_at": "2020-02-10T14:04:00Z",
+    "updated_at": "2020-02-17T08:35:09Z",
+    "html_url": "https://github.com/magento/magento2/pull/26772#discussion_r377080633",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/26772",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/377080633"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/26772#discussion_r377080633"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/26772"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/377080633/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 41,
+    "side": "RIGHT",
+    "in_reply_to_id": 377064539,
+    "author_association": "CONTRIBUTOR",
+    "original_position": 5,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "277b9c7489883cea11c417f63f72f73c6a5f8018781644087f6a9f902a9de0d2",
+  "envelopeSha256": "36064d91d58954ad4975778cbfde6c3d0288cc882037d5d61de1b29c09d4a5bd"
+}

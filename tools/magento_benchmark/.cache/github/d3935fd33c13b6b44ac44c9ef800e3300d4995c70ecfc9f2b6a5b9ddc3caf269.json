@@ -1,0 +1,82 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/526129741",
+  "status": 200,
+  "etag": "W/\"fdf3deb4fe805b6b25d94d9882db1063f98882236718b58d21c5f3b006fd444e\"",
+  "headers": {
+    "ETag": "W/\"fdf3deb4fe805b6b25d94d9882db1063f98882236718b58d21c5f3b006fd444e\"",
+    "Last-Modified": "Tue, 18 Aug 2026 10:03:37 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "22",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/526129741",
+    "pull_request_review_id": 533500727,
+    "id": 526129741,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUyNjEyOTc0MQ==",
+    "diff_hunk": "@@ -0,0 +1,26 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminSetCustomerActiveViaGridActionGroup\">\n+        <annotations>\n+            <description>Sets a Customer to the Active status from the admin All Customers grid</description>\n+        </annotations>\n+        <arguments>\n+            <argument name=\"customerEmail\" type=\"string\" defaultValue=\"{{Simple_US_CA_Customer.email}}\"/>\n+        </arguments>\n+        <waitForElementVisible selector=\"{{AdminCustomerGridMainActionsSection.customerCheckbox(customerEmail)}}\" stepKey=\"waitForCustomerRow\"/>\n+        <click selector=\"{{AdminCustomerGridMainActionsSection.customerCheckbox(customerEmail)}}\" stepKey=\"selectCustomer\"/>\n+        <click selector=\"{{AdminCustomerGridMainActionsSection.actions}}\" stepKey=\"clickActions\"/>\n+        <waitForElementVisible selector=\"{{AdminCustomerGridMainActionsSection.setActive}}\" stepKey=\"waitForDropDownOpen\"/>\n+        <click selector=\"{{AdminCustomerGridMainActionsSection.setActive}}\" stepKey=\"clickSetActive\"/>\n+        <waitForPageLoad stepKey=\"waitForLoad\"/>\n+        <waitForText selector=\"{{AdminMessagesSection.success}}\" userInput=\"A total of 1 record(s) were updated.\" stepKey=\"seeSuccessMessage\"/>",
+    "path": "app/code/Magento/Customer/Test/Mftf/ActionGroup/AdminSetCustomerActiveViaGridActionGroup.xml",
+    "commit_id": "27671075be2de2c37e2cf9ba2af5541a366b5235",
+    "original_commit_id": "e6df759a4a535b0172e3e652e36c9d98fd8416b9",
+    "user": {
+      "login": "lbajsarowicz",
+      "id": 1639941,
+      "node_id": "MDQ6VXNlcjE2Mzk5NDE=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1639941?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/lbajsarowicz",
+      "html_url": "https://github.com/lbajsarowicz",
+      "followers_url": "https://api.github.com/users/lbajsarowicz/followers",
+      "following_url": "https://api.github.com/users/lbajsarowicz/following{/other_user}",
+      "gists_url": "https://api.github.com/users/lbajsarowicz/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/lbajsarowicz/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/lbajsarowicz/subscriptions",
+      "organizations_url": "https://api.github.com/users/lbajsarowicz/orgs",
+      "repos_url": "https://api.github.com/users/lbajsarowicz/repos",
+      "events_url": "https://api.github.com/users/lbajsarowicz/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/lbajsarowicz/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "You can rename the Action Group then to include state assertion `Successfully`.",
+    "created_at": "2020-11-18T14:28:58Z",
+    "updated_at": "2020-11-29T02:54:48Z",
+    "html_url": "https://github.com/magento/magento2/pull/30957#discussion_r526129741",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30957",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/526129741"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/30957#discussion_r526129741"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/30957"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/526129741/reactions",
+      "total_count": 1,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": 23,
+    "original_start_line": 23,
+    "start_side": "RIGHT",
+    "line": 24,
+    "original_line": 24,
+    "side": "RIGHT",
+    "in_reply_to_id": 526112753,
+    "author_association": "CONTRIBUTOR",
+    "original_position": 24,
+    "position": 24,
+    "subject_type": "line"
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/448128195",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:34Z",
+  "etag": "W/\"a77638290938167ba72ee049e0f09d07ef54fb03140b6547661cb71951d078e3\"",
+  "headers": {
+    "ETag": "W/\"a77638290938167ba72ee049e0f09d07ef54fb03140b6547661cb71951d078e3\"",
+    "Last-Modified": "Sun, 04 Jan 2026 09:43:32 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "33",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/448128195",
+    "pull_request_review_id": 440561112,
+    "id": 448128195,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ0ODEyODE5NQ==",
+    "diff_hunk": "@@ -0,0 +1,19 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminProductCatalogPageOpenActionGroup\">\n+        <annotations>\n+            <description>Goes to the Admin Product Catalog Page grid page.</description>\n+        </annotations>\n+\n+        <amOnPage url=\"{{ProductCatalogPage.url}}\" stepKey=\"OpenProductCatalogPage\"/>",
+    "path": "app/code/Magento/Catalog/Test/Mftf/ActionGroup/AdminProductCatalogPageOpenActionGroup.xml",
+    "commit_id": "ddc5f20b87f7f50b36f357c39ed10097a3bdce8f",
+    "original_commit_id": "ca5c26dd977e8f43af5873058531eaf985595231",
+    "user": {
+      "login": "eduard13",
+      "id": 15868188,
+      "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/eduard13",
+      "html_url": "https://github.com/eduard13",
+      "followers_url": "https://api.github.com/users/eduard13/followers",
+      "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+      "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+      "organizations_url": "https://api.github.com/users/eduard13/orgs",
+      "repos_url": "https://api.github.com/users/eduard13/repos",
+      "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/eduard13/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "```suggestion\r\n        <amOnPage url=\"{{ProductCatalogPage.url}}\" stepKey=\"openProductCatalogPage\"/>\r\n```",
+    "created_at": "2020-07-01T05:46:02Z",
+    "updated_at": "2020-07-01T08:26:34Z",
+    "html_url": "https://github.com/magento/magento2/pull/28941#discussion_r448128195",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/28941",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/448128195"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/28941#discussion_r448128195"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/28941"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/448128195/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 16,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 16,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "ef60ba71fb33a9696491381a7468a29b0d2c9266b440f874b687022671b83820",
+  "envelopeSha256": "21435704a6cbcf967c8a6163ed9b63dec537c1da72e036a8179532e81570ab05"
+}

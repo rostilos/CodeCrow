@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/472318982",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:30Z",
+  "etag": "W/\"53c088095718aee78afade3ad7918ca66bae78ac80bc7191f7851446e5222649\"",
+  "headers": {
+    "ETag": "W/\"53c088095718aee78afade3ad7918ca66bae78ac80bc7191f7851446e5222649\"",
+    "Last-Modified": "Mon, 18 May 2026 14:15:52 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "43",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/472318982",
+    "pull_request_review_id": 469616900,
+    "id": 472318982,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ3MjMxODk4Mg==",
+    "diff_hunk": "@@ -206,13 +214,13 @@ private function getAttributeId()\n      */\n     private function retrieveAffectedIds(array $skus)\n     {\n-        $affectedIds = [];\n+        $affectedIds = [[]];",
+    "path": "app/code/Magento/Catalog/Model/Product/Price/PricePersistence.php",
+    "commit_id": "d7fdd075819e175a7cdd19c6ed82e1ed730db7d8",
+    "original_commit_id": "12d3ebfbe01e6b6b13bf568a85939d7412ae4691",
+    "user": {
+      "login": "gabrieldagama",
+      "id": 3008360,
+      "node_id": "MDQ6VXNlcjMwMDgzNjA=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/3008360?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/gabrieldagama",
+      "html_url": "https://github.com/gabrieldagama",
+      "followers_url": "https://api.github.com/users/gabrieldagama/followers",
+      "following_url": "https://api.github.com/users/gabrieldagama/following{/other_user}",
+      "gists_url": "https://api.github.com/users/gabrieldagama/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/gabrieldagama/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/gabrieldagama/subscriptions",
+      "organizations_url": "https://api.github.com/users/gabrieldagama/orgs",
+      "repos_url": "https://api.github.com/users/gabrieldagama/repos",
+      "events_url": "https://api.github.com/users/gabrieldagama/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/gabrieldagama/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Do we need a multi-dimensional array here?",
+    "created_at": "2020-08-18T16:18:37Z",
+    "updated_at": "2020-09-03T10:54:48Z",
+    "html_url": "https://github.com/magento/magento2/pull/27129#discussion_r472318982",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27129",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/472318982"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/27129#discussion_r472318982"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/27129"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/472318982/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 217,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 123,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "303656b59214a401dc22cfc424945499d868686a74b53d3b3bc24ac9622800bc",
+  "envelopeSha256": "2a462e5e624eea5a3c636df3d82a28eec784aae47ad130a2a0e429da6621142e"
+}

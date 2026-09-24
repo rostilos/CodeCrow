@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/628920929",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:43Z",
+  "etag": "W/\"f0f103a7cfbe19ae62200a78b0cfcd5992209ecd00d766033f851c24c59c22f7\"",
+  "headers": {
+    "ETag": "W/\"f0f103a7cfbe19ae62200a78b0cfcd5992209ecd00d766033f851c24c59c22f7\"",
+    "Last-Modified": "Fri, 21 Aug 2026 19:21:05 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "16",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/628920929",
+    "pull_request_review_id": 655098990,
+    "id": 628920929,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDYyODkyMDkyOQ==",
+    "diff_hunk": "@@ -683,9 +683,16 @@ public function validateSource(AbstractSource $source)\n         $this->addLogComment($messages);\n \n         $result = !$errorAggregator->isErrorLimitExceeded();\n+\n+        if ($this->getProcessedRowsCount() <= $errorAggregator->getInvalidRowsCount()) {\n+            $result = false;\n+            $this->addLogComment(__('There are no valid rows to import.'));",
+    "path": "app/code/Magento/ImportExport/Model/Import.php",
+    "commit_id": "9825ce348074e13c842c0694dbf77e55708bb83a",
+    "original_commit_id": "9d72e568b0cba71c7fa344ee4923f58281e22557",
+    "user": {
+      "login": "Den4ik",
+      "id": 1129623,
+      "node_id": "MDQ6VXNlcjExMjk2MjM=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1129623?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/Den4ik",
+      "html_url": "https://github.com/Den4ik",
+      "followers_url": "https://api.github.com/users/Den4ik/followers",
+      "following_url": "https://api.github.com/users/Den4ik/following{/other_user}",
+      "gists_url": "https://api.github.com/users/Den4ik/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/Den4ik/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/Den4ik/subscriptions",
+      "organizations_url": "https://api.github.com/users/Den4ik/orgs",
+      "repos_url": "https://api.github.com/users/Den4ik/repos",
+      "events_url": "https://api.github.com/users/Den4ik/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/Den4ik/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "```suggestion\r\n            $this->addLogComment(__('There are no valid rows to import.'));\r\n            return false;\r\n```",
+    "created_at": "2021-05-09T17:39:29Z",
+    "updated_at": "2021-05-10T20:53:30Z",
+    "html_url": "https://github.com/magento/magento2/pull/32904#discussion_r628920929",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/32904",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/628920929"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/32904#discussion_r628920929"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/32904"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/628920929/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 688,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 689,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 7,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "dc055326310437267d36224dbcf21ec397241e5b1721c5e54ca2a8c83b3f30f5",
+  "envelopeSha256": "ef705736493061f093b8281dc5cd33b78785b41fe7d51460e55397bf1d81d3f6"
+}

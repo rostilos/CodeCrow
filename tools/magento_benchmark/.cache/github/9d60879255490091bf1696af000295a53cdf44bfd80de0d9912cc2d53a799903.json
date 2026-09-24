@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/704232866",
+  "status": 200,
+  "etag": "W/\"35d0b8c7424cdb2b5a4d62159a150723f7ff6e0e42af69ef548cb6434f02df0d\"",
+  "headers": {
+    "ETag": "W/\"35d0b8c7424cdb2b5a4d62159a150723f7ff6e0e42af69ef548cb6434f02df0d\"",
+    "Last-Modified": "Sun, 04 Jan 2026 09:43:32 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "11",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/704232866",
+    "pull_request_review_id": 748910150,
+    "id": 704232866,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDcwNDIzMjg2Ng==",
+    "diff_hunk": "@@ -0,0 +1,27 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+    <actionGroup name=\"AdminAssertCustomerDefaultShippingAddressAgainstEntityActionGroup\">\n+        <annotations>\n+            <description>Asserts that Customer's Default Billing Address matches the specified Address entity</description>",
+    "path": "app/code/Magento/Customer/Test/Mftf/ActionGroup/AdminAssertCustomerDefaultShippingAddressAgainstEntityActionGroup.xml",
+    "commit_id": "f87fb386d7ad737c7204ecc27ed55294814fa988",
+    "original_commit_id": "fdaf2ad2c38d87998cbbc725745a2d8b16bae0d1",
+    "user": {
+      "login": "eduard13",
+      "id": 15868188,
+      "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/eduard13",
+      "html_url": "https://github.com/eduard13",
+      "followers_url": "https://api.github.com/users/eduard13/followers",
+      "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+      "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+      "organizations_url": "https://api.github.com/users/eduard13/orgs",
+      "repos_url": "https://api.github.com/users/eduard13/repos",
+      "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/eduard13/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "```suggestion\r\n            <description>Asserts that Customer's Default Shipping Address matches the specified Address entity</description>\r\n```",
+    "created_at": "2021-09-08T09:26:02Z",
+    "updated_at": "2021-09-08T09:26:02Z",
+    "html_url": "https://github.com/magento/magento2/pull/33999#discussion_r704232866",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33999",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/704232866"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/33999#discussion_r704232866"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/33999"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/704232866/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 13,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 13,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

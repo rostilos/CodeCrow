@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819305393",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:47Z",
+  "etag": "W/\"f2c639c862941596d6a853127f0a22017a87038b9dc0dbca6149a50ded5069b5\"",
+  "headers": {
+    "ETag": "W/\"f2c639c862941596d6a853127f0a22017a87038b9dc0dbca6149a50ded5069b5\"",
+    "Last-Modified": "Thu, 12 Mar 2026 13:58:58 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "8",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819305393",
+    "pull_request_review_id": 2399484952,
+    "id": 1819305393,
+    "node_id": "PRRC_kwDOACwCD85scGWx",
+    "diff_hunk": "@@ -1,16 +1,26 @@\n <?php\n /**\n- * Copyright © Magento, Inc. All rights reserved.\n- * See COPYING.txt for license details.\n+ * Copyright 2024 Adobe\n+ * All Rights Reserved.\n+ *\n+ * NOTICE: All information contained herein is, and remains\n+ * the property of Adobe and its suppliers, if any. The intellectual\n+ * and technical concepts contained herein are proprietary to Adobe\n+ * and its suppliers and are protected by all applicable intellectual\n+ * property laws, including trade secret and copyright laws.\n+ * Dissemination of this information or reproduction of this material\n+ * is strictly forbidden unless prior written permission is obtained from\n+ * Adobe.",
+    "path": "app/code/Magento/PageCache/Model/App/Request/Http/IdentifierForSave.php",
+    "commit_id": "ebcc80635c977a15c96ca99b731334f608dd7ef3",
+    "original_commit_id": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+    "user": {
+      "login": "hostep",
+      "id": 85479,
+      "node_id": "MDQ6VXNlcjg1NDc5",
+      "avatar_url": "https://avatars.githubusercontent.com/u/85479?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/hostep",
+      "html_url": "https://github.com/hostep",
+      "followers_url": "https://api.github.com/users/hostep/followers",
+      "following_url": "https://api.github.com/users/hostep/following{/other_user}",
+      "gists_url": "https://api.github.com/users/hostep/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/hostep/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/hostep/subscriptions",
+      "organizations_url": "https://api.github.com/users/hostep/orgs",
+      "repos_url": "https://api.github.com/users/hostep/repos",
+      "events_url": "https://api.github.com/users/hostep/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/hostep/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "This copyright header is too big.\r\nAlso the year should be the year the file was **created**, not when it was last updated.\r\n\r\nSo in this case the copyright header should be:\r\n```\r\n * Copyright 2023 Adobe\r\n * All Rights Reserved.\r\n```\r\n\r\nNothing else is needed. Not sure where you got that other paragraph from?\r\n\r\nSame remark goes for the other files.",
+    "created_at": "2024-10-28T15:44:34Z",
+    "updated_at": "2024-10-28T15:44:35Z",
+    "html_url": "https://github.com/magento/magento2/pull/39099#discussion_r1819305393",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/39099",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/1819305393"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/39099#discussion_r1819305393"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/39099"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/1819305393/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 13,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 15,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "c9cbbd9c549497d78c3536aa362c73caa64c2439ba812a1cbfeff71dbbc6d511",
+  "envelopeSha256": "19b10a2afa60a51c4633c6b322e267ad1dbf5559bac81336313d199363646386"
+}

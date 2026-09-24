@@ -1,0 +1,88 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/442151046",
+  "status": 200,
+  "fetchedAt": "2026-08-26T01:52:53Z",
+  "etag": "W/\"3cc2a02e317315dfbbac844a04212666d3172736f032b1cbc7fff3d95110ada1\"",
+  "headers": {
+    "ETag": "W/\"3cc2a02e317315dfbbac844a04212666d3172736f032b1cbc7fff3d95110ada1\"",
+    "Last-Modified": "Tue, 18 Aug 2026 14:12:25 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "56",
+    "X-RateLimit-Reset": "1787712770"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/442151046",
+    "pull_request_review_id": 433181179,
+    "id": 442151046,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ0MjE1MTA0Ng==",
+    "diff_hunk": "@@ -37,39 +35,32 @@\n             <argument name=\"categoryEntity\" value=\"NewRootCategory\"/>\n         </actionGroup>\n         <!--Create subcategory-->\n-        <scrollToTopOfPage stepKey=\"scrollToTopOfPage\"/>\n-        <click selector=\"{{AdminCategorySidebarTreeSection.categoryInTree(NewRootCategory.name)}}\" stepKey=\"clickOnCreatedNewRootCategory\"/>\n-        <scrollToTopOfPage stepKey=\"scrollToTopOfPage1\"/>\n+        <actionGroup ref=\"NavigateToCreatedCategoryActionGroup\" stepKey=\"openCreatedCategory\">\n+            <argument name=\"Category\" value=\"NewRootCategory\"/>\n+        </actionGroup>\n+\n         <actionGroup ref=\"CreateCategoryActionGroup\" stepKey=\"createSubcategory\">\n             <argument name=\"categoryEntity\" value=\"SimpleSubCategory\"/>\n         </actionGroup>\n         <!--Create a Store-->\n-        <amOnPage url=\"{{AdminSystemStorePage.url}}\" stepKey=\"amOnAdminSystemStorePage\"/>\n-        <waitForPageLoad stepKey=\"waitForSystemStorePage\"/>\n-        <click selector=\"{{AdminStoresMainActionsSection.createStoreButton}}\" stepKey=\"selectCreateStore\"/>\n-        <fillField userInput=\"{{customStore.name}}\" selector=\"{{AdminNewStoreGroupSection.storeGrpNameTextField}}\" stepKey=\"fillStoreName\"/>\n-        <fillField userInput=\"{{customStore.code}}\" selector=\"{{AdminNewStoreGroupSection.storeGrpCodeTextField}}\" stepKey=\"fillStoreCode\"/>\n-        <selectOption userInput=\"{{NewRootCategory.name}}\" selector=\"{{AdminNewStoreGroupSection.storeRootCategoryDropdown}}\" stepKey=\"selectStoreStatus\"/>\n-        <click selector=\"{{AdminStoresMainActionsSection.saveButton}}\" stepKey=\"clickSaveStoreButton\"/>\n+        <actionGroup ref=\"CreateCustomStoreActionGroup\" stepKey=\"createCustomStore\">\n+            <argument name=\"website\" value=\"{{_defaultWebsite.name}}\"/>\n+            <argument name=\"store\" value=\"{{customStore.name}}\"/>\n+            <argument name=\"rootCategory\" value=\"{{NewRootCategory.name}}\"/>\n+        </actionGroup>\n         <!--Create a Store View-->\n-        <click selector=\"{{AdminStoresMainActionsSection.createStoreViewButton}}\" stepKey=\"selectCreateStoreView\"/>\n-        <click selector=\"{{AdminNewStoreSection.storeGrpDropdown}}\" stepKey=\"clickDropDown\"/>\n-        <selectOption userInput=\"{{customStore.name}}\" selector=\"{{AdminNewStoreSection.storeGrpDropdown}}\" stepKey=\"selectStoreViewStatus\"/>\n-        <fillField userInput=\"{{customStore.name}}\" selector=\"{{AdminNewStoreSection.storeNameTextField}}\" stepKey=\"fillStoreViewName\"/>\n-        <fillField userInput=\"{{customStore.code}}\" selector=\"{{AdminNewStoreSection.storeCodeTextField}}\" stepKey=\"fillStoreViewCode\"/>\n-        <selectOption selector=\"{{AdminNewStoreSection.statusDropdown}}\" userInput=\"Enabled\" stepKey=\"enableStatus\"/>\n-        <click selector=\"{{AdminStoresMainActionsSection.saveButton}}\" stepKey=\"clickSaveStoreViewButton\"/>\n-        <waitForElementVisible selector=\"{{AdminConfirmationModalSection.ok}}\" stepKey=\"waitForModal\" />\n-        <see selector=\"{{AdminConfirmationModalSection.title}}\" userInput=\"Warning message\" stepKey=\"seeWarning\" />\n-        <click selector=\"{{AdminConfirmationModalSection.ok}}\" stepKey=\"dismissModal\" />\n-        <waitForElementNotVisible selector=\"{{AdminNewStoreViewActionsSection.loadingMask}}\" stepKey=\"waitForElementVisible\"/>\n+        <actionGroup ref=\"AdminCreateStoreViewActionGroup\" stepKey=\"createStoreView\">\n+            <argument name=\"StoreGroup\" value=\"customStore\"/>",
+    "path": "app/code/Magento/Catalog/Test/Mftf/Test/AdminCreateCategoryWithCustomRootCategoryTest.xml",
+    "commit_id": "dc6342ea881cfa32699cf07ee62c44e6eee011be",
+    "original_commit_id": "c503af964a85aa5d57f2fe7cf26cf06074f7362c",
+    "user": {
+      "login": "kate-kyzyma",
+      "id": 32304009,
+      "node_id": "MDQ6VXNlcjMyMzA0MDA5",
+      "avatar_url": "https://avatars.githubusercontent.com/u/32304009?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/kate-kyzyma",
+      "html_url": "https://github.com/kate-kyzyma",
+      "followers_url": "https://api.github.com/users/kate-kyzyma/followers",
+      "following_url": "https://api.github.com/users/kate-kyzyma/following{/other_user}",
+      "gists_url": "https://api.github.com/users/kate-kyzyma/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/kate-kyzyma/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/kate-kyzyma/subscriptions",
+      "organizations_url": "https://api.github.com/users/kate-kyzyma/orgs",
+      "repos_url": "https://api.github.com/users/kate-kyzyma/repos",
+      "events_url": "https://api.github.com/users/kate-kyzyma/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/kate-kyzyma/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Hi @dmytro-ch \r\nI have fixed the described issue.\r\nPlease, check.\r\n\r\nThanks.",
+    "created_at": "2020-06-18T11:15:17Z",
+    "updated_at": "2020-06-24T01:09:53Z",
+    "html_url": "https://github.com/magento/magento2/pull/28679#discussion_r442151046",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/28679",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/442151046"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/28679#discussion_r442151046"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/28679"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/442151046/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 53,
+    "side": "RIGHT",
+    "in_reply_to_id": 441386084,
+    "author_association": "CONTRIBUTOR",
+    "original_position": 49,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "04cd49d3a8c15e82614160fa82178a6504ebe486684dd850b5fc0abdc71cd1ac",
+  "envelopeSha256": "db08f9560f68200877f9bb6daa14ada08012d99f8600156ca4f606f40081f2c2"
+}

@@ -1,0 +1,1054 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/31553/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T15:48:11Z",
+  "etag": "W/\"2f714815e87f2c3b9f72798ee68136393fcdf58c17317da357a0158b6117a3b9\"",
+  "headers": {
+    "ETag": "W/\"2f714815e87f2c3b9f72798ee68136393fcdf58c17317da357a0158b6117a3b9\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "52",
+    "X-RateLimit-Reset": "1786985277"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552425684",
+      "pull_request_review_id": 562392886,
+      "id": 552425684,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjQyNTY4NA==",
+      "diff_hunk": "@@ -28,6 +29,11 @@ class PurchasedPrice extends Column\n      */\n     private $currency;\n \n+    /**\n+     * @var OrderRepositoryInterface\n+     */\n+    private $order;",
+      "path": "app/code/Magento/Sales/Ui/Component/Listing/Column/PurchasedPrice.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "af8443c1638b14a2dc09fedc0297c10801f265fb",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n    private $orderRepository;\r\n```",
+      "created_at": "2021-01-06T08:09:07Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r552425684",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552425684"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r552425684"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552425684/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 35,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 15,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552426130",
+      "pull_request_review_id": 562392886,
+      "id": 552426130,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjQyNjEzMA==",
+      "diff_hunk": "@@ -62,7 +72,9 @@ public function prepareDataSource(array $dataSource)\n     {\n         if (isset($dataSource['data']['items'])) {\n             foreach ($dataSource['data']['items'] as & $item) {\n-                $currencyCode = isset($item['order_currency_code']) ? $item['order_currency_code'] : null;\n+                $currencyCode = isset($item['order_currency_code'])\n+                    ? $item['order_currency_code']\n+                    : $this->order->get($item['order_id'])->getOrderCurrencyCode();",
+      "path": "app/code/Magento/Sales/Ui/Component/Listing/Column/PurchasedPrice.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "af8443c1638b14a2dc09fedc0297c10801f265fb",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "1. Looks like here we can use `??` here\r\n\r\n```suggestion\r\n                $currencyCode = $item['order_currency_code'] ?? $this->order->get($item['order_id'])->getOrderCurrencyCode();\r\n```\r\n\r\n2. Loading objects in the loop is a really heavy operation and not recommended. Can we load all needed orders at once? Or maybe we can do that when preparing dataSource?",
+      "created_at": "2021-01-06T08:10:14Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r552426130",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552426130"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r552426130"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552426130/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": 75,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 77,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 51,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552426428",
+      "pull_request_review_id": 562392886,
+      "id": 552426428,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjQyNjQyOA==",
+      "diff_hunk": "@@ -37,18 +43,22 @@ class PurchasedPrice extends Column\n      * @param array $components\n      * @param array $data\n      * @param Currency $currency\n+     * @param OrderRepositoryInterface $order\n      */\n     public function __construct(\n         ContextInterface $context,\n         UiComponentFactory $uiComponentFactory,\n         PriceCurrencyInterface $priceFormatter,\n         array $components = [],\n         array $data = [],\n-        Currency $currency = null\n+        Currency $currency = null,\n+        OrderRepositoryInterface $order = null\n     ) {\n         $this->priceFormatter = $priceFormatter;\n         $this->currency = $currency ?: \\Magento\\Framework\\App\\ObjectManager::getInstance()\n             ->create(Currency::class);\n+        $this->order = $order ?: \\Magento\\Framework\\App\\ObjectManager::getInstance()",
+      "path": "app/code/Magento/Sales/Ui/Component/Listing/Column/PurchasedPrice.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "af8443c1638b14a2dc09fedc0297c10801f265fb",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n        $this->orderRepository = $orderRepository ?? \\Magento\\Framework\\App\\ObjectManager::getInstance()\r\n```",
+      "created_at": "2021-01-06T08:11:02Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r552426428",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552426428"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r552426428"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552426428/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 60,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 39,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552431739",
+      "pull_request_review_id": 562392886,
+      "id": 552431739,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjQzMTczOQ==",
+      "diff_hunk": "@@ -28,6 +29,11 @@ class PurchasedPriceTest extends TestCase\n      */\n     protected $currencyMock;\n \n+    /**\n+     * @var OrderRepositoryInterface|MockObject\n+     */\n+    protected $orderMock;",
+      "path": "app/code/Magento/Sales/Test/Unit/Ui/Component/Listing/Column/PurchasedPriceTest.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "af8443c1638b14a2dc09fedc0297c10801f265fb",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n    private $orderRepositoryMock;\r\n```",
+      "created_at": "2021-01-06T08:24:36Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r552431739",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552431739"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r552431739"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552431739/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 35,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 15,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552573333",
+      "pull_request_review_id": 562681835,
+      "id": 552573333,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjU3MzMzMw==",
+      "diff_hunk": "@@ -62,7 +72,9 @@ public function prepareDataSource(array $dataSource)\n     {\n         if (isset($dataSource['data']['items'])) {\n             foreach ($dataSource['data']['items'] as & $item) {\n-                $currencyCode = isset($item['order_currency_code']) ? $item['order_currency_code'] : null;\n+                $currencyCode = isset($item['order_currency_code'])\n+                    ? $item['order_currency_code']\n+                    : $this->order->get($item['order_id'])->getOrderCurrencyCode();",
+      "path": "app/code/Magento/Sales/Ui/Component/Listing/Column/PurchasedPrice.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "af8443c1638b14a2dc09fedc0297c10801f265fb",
+      "user": {
+        "login": "engcom-Echo",
+        "id": 51681435,
+        "node_id": "MDQ6VXNlcjUxNjgxNDM1",
+        "avatar_url": "https://avatars.githubusercontent.com/u/51681435?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/engcom-Echo",
+        "html_url": "https://github.com/engcom-Echo",
+        "followers_url": "https://api.github.com/users/engcom-Echo/followers",
+        "following_url": "https://api.github.com/users/engcom-Echo/following{/other_user}",
+        "gists_url": "https://api.github.com/users/engcom-Echo/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/engcom-Echo/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/engcom-Echo/subscriptions",
+        "organizations_url": "https://api.github.com/users/engcom-Echo/orgs",
+        "repos_url": "https://api.github.com/users/engcom-Echo/repos",
+        "events_url": "https://api.github.com/users/engcom-Echo/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/engcom-Echo/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "1. Thanks.\r\n2. Will do",
+      "created_at": "2021-01-06T12:45:47Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r552573333",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552573333"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r552573333"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552573333/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": 75,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 77,
+      "side": "RIGHT",
+      "in_reply_to_id": 552426130,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 51,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552607907",
+      "pull_request_review_id": 562705195,
+      "id": 552607907,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjYwNzkwNw==",
+      "diff_hunk": "@@ -21,12 +22,17 @@ class PurchasedPriceTest extends TestCase\n     /**\n      * @var Price\n      */\n-    protected $model;\n+    private $model;\n \n     /**\n      * @var Currency|MockObject\n      */\n-    protected $currencyMock;\n+    private $currencyMock;\n+\n+    /**\n+     * @var OrderRepositoryInterface|MockObject\n+     */\n+    private $orderRepository;",
+      "path": "app/code/Magento/Sales/Test/Unit/Ui/Component/Listing/Column/PurchasedPriceTest.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "07f0fad1acca3d00f216b33721f8714069de0098",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n    private $orderRepositoryMock;\r\n```",
+      "created_at": "2021-01-06T13:26:33Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r552607907",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552607907"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r552607907"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552607907/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 35,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 24,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552608682",
+      "pull_request_review_id": 562705195,
+      "id": 552608682,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjYwODY4Mg==",
+      "diff_hunk": "@@ -41,31 +47,60 @@ protected function setUp(): void\n             ->setMethods(['load', 'format'])\n             ->disableOriginalConstructor()\n             ->getMock();\n+        $this->orderRepository = $this->getMockBuilder(OrderRepositoryInterface::class)\n+            ->setMethods(['getList','get','delete','save','getOrderCurrencyCode'])\n+            ->disableOriginalConstructor()\n+            ->getMock();\n         $this->model = $objectManager->getObject(\n             PurchasedPrice::class,\n-            ['currency' => $this->currencyMock, 'context' => $contextMock]\n+            [\n+                'currency' => $this->currencyMock,\n+                'context' => $contextMock,\n+                'order' => $this->orderRepository,",
+      "path": "app/code/Magento/Sales/Test/Unit/Ui/Component/Listing/Column/PurchasedPriceTest.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "07f0fad1acca3d00f216b33721f8714069de0098",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n                'orderRepository' => $this->orderRepositoryMock,\r\n```",
+      "created_at": "2021-01-06T13:27:18Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r552608682",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552608682"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r552608682"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552608682/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 59,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 42,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552609501",
+      "pull_request_review_id": 562705195,
+      "id": 552609501,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MjYwOTUwMQ==",
+      "diff_hunk": "@@ -41,31 +47,60 @@ protected function setUp(): void\n             ->setMethods(['load', 'format'])\n             ->disableOriginalConstructor()\n             ->getMock();\n+        $this->orderRepository = $this->getMockBuilder(OrderRepositoryInterface::class)\n+            ->setMethods(['getList','get','delete','save','getOrderCurrencyCode'])\n+            ->disableOriginalConstructor()\n+            ->getMock();\n         $this->model = $objectManager->getObject(\n             PurchasedPrice::class,\n-            ['currency' => $this->currencyMock, 'context' => $contextMock]\n+            [\n+                'currency' => $this->currencyMock,\n+                'context' => $contextMock,\n+                'order' => $this->orderRepository,\n+            ]\n         );\n     }\n \n-    public function testPrepareDataSource()\n-    {\n-        $itemName = 'itemName';\n-        $oldItemValue = 'oldItemValue';\n-        $newItemValue = 'newItemValue';\n+    /**\n+     * @param string $itemName\n+     * @param string $oldItemValue\n+     * @param string $newItemValue\n+     * @param string|null $orderCurrencyCode\n+     * @dataProvider prepareDataSourceDataProvider\n+     */\n+    public function testPrepareDataSource(\n+        $itemName,\n+        $oldItemValue,\n+        $newItemValue,\n+        $orderCurrencyCode\n+    ): void {",
+      "path": "app/code/Magento/Sales/Test/Unit/Ui/Component/Listing/Column/PurchasedPriceTest.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "07f0fad1acca3d00f216b33721f8714069de0098",
+      "user": {
+        "login": "ihor-sviziev",
+        "id": 1873745,
+        "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/ihor-sviziev",
+        "html_url": "https://github.com/ihor-sviziev",
+        "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+        "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+        "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+        "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+        "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+        "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "```suggestion\r\n    public function testPrepareDataSource(\r\n        string $itemName,\r\n        string $oldItemValue,\r\n        string $newItemValue,\r\n        ?string $orderCurrencyCode\r\n    ): void {\r\n```",
+      "created_at": "2021-01-06T13:28:06Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r552609501",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/552609501"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r552609501"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/552609501/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": 71,
+      "start_side": "RIGHT",
+      "line": null,
+      "original_line": 76,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 64,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/554983547",
+      "pull_request_review_id": 565270623,
+      "id": 554983547,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NDk4MzU0Nw==",
+      "diff_hunk": "@@ -37,21 +49,30 @@ class PurchasedPrice extends Column\n      * @param array $components\n      * @param array $data\n      * @param Currency $currency\n+     * @param OrderRepositoryInterface $orderRepository\n+     * @param SearchCriteriaBuilder $searchCriteriaBuilder\n      */\n     public function __construct(\n         ContextInterface $context,\n         UiComponentFactory $uiComponentFactory,\n         PriceCurrencyInterface $priceFormatter,\n         array $components = [],\n         array $data = [],\n-        Currency $currency = null\n+        Currency $currency = null,\n+        OrderRepositoryInterface $orderRepository = null,\n+        SearchCriteriaBuilder $searchCriteriaBuilder = null",
+      "path": "app/code/Magento/Sales/Ui/Component/Listing/Column/PurchasedPrice.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "940d74adbfe02a5bc5c169285d70dc4f99a739e5",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "It is better use SearchCriteriaBuilderFactory and create SearchCriteriaBuilder using it create() method",
+      "created_at": "2021-01-11T11:30:46Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r554983547",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/554983547"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r554983547"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/554983547/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 63,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 44,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/554993088",
+      "pull_request_review_id": 565270623,
+      "id": 554993088,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NDk5MzA4OA==",
+      "diff_hunk": "@@ -61,8 +82,10 @@ public function __construct(\n     public function prepareDataSource(array $dataSource)\n     {\n         if (isset($dataSource['data']['items'])) {\n+            $orderIds = array_column($dataSource['data']['items'],'order_id');\n+            $orderCurrencyCodes = $this->getOrdersCurrency($orderIds);",
+      "path": "app/code/Magento/Sales/Ui/Component/Listing/Column/PurchasedPrice.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "940d74adbfe02a5bc5c169285d70dc4f99a739e5",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "This additional request to DB can fail PAT tests.\r\nIs there another way to correctly get currency? Why it not appeared in $item['order_currency_code']?\r\nMaybe make sense change request that fill dataSource?",
+      "created_at": "2021-01-11T11:50:07Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r554993088",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/554993088"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r554993088"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/554993088/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 86,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 65,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555709137",
+      "pull_request_review_id": 566186851,
+      "id": 555709137,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTcwOTEzNw==",
+      "diff_hunk": "@@ -33,4 +33,32 @@ public function __construct(\n     ) {\n         parent::__construct($entityFactory, $logger, $fetchStrategy, $eventManager, $mainTable, $resourceModel);\n     }\n+\n+    /**\n+     * @inheritDoc\n+     */\n+    protected function _translateCondition($field, $condition)\n+    {\n+        if ($field !== 'order_currency_code'\n+            && !isset($this->_map['fields'][$field])\n+        ) {\n+            $this->_map['fields'][$field] = 'main_table.' . $field;\n+        }\n+\n+        return parent::_translateCondition($field, $condition);\n+    }\n+\n+    /**\n+     * @inheritDoc\n+     */\n+    protected function _renderFiltersBefore()\n+    {\n+        $this->getSelect()->join(",
+      "path": "app/code/Magento/Sales/Model/ResourceModel/Order/Creditmemo/Grid/Collection.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "3174a697766a5d74831dc3633885cae1be721dd7",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "please change to left join",
+      "created_at": "2021-01-12T11:41:55Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r555709137",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555709137"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r555709137"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555709137/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 56,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 24,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555709269",
+      "pull_request_review_id": 566186851,
+      "id": 555709269,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTcwOTI2OQ==",
+      "diff_hunk": "@@ -33,4 +33,32 @@ public function __construct(\n     ) {\n         parent::__construct($entityFactory, $logger, $fetchStrategy, $eventManager, $mainTable, $resourceModel);\n     }\n+\n+    /**\n+     * @inheritDoc\n+     */\n+    protected function _translateCondition($field, $condition)\n+    {\n+        if ($field !== 'order_currency_code'\n+            && !isset($this->_map['fields'][$field])\n+        ) {\n+            $this->_map['fields'][$field] = 'main_table.' . $field;\n+        }\n+\n+        return parent::_translateCondition($field, $condition);\n+    }\n+\n+    /**\n+     * @inheritDoc\n+     */\n+    protected function _renderFiltersBefore()\n+    {\n+        $this->getSelect()->join(\n+            ['cgf' => $this->getTable('sales_order_grid')],\n+            'main_table.order_id = cgf.entity_id',\n+            [\n+                'order_currency_code'=>'order_currency_code'",
+      "path": "app/code/Magento/Sales/Model/ResourceModel/Order/Creditmemo/Grid/Collection.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "3174a697766a5d74831dc3633885cae1be721dd7",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "add spaces around =>\r\nand add comma at the end",
+      "created_at": "2021-01-12T11:42:09Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r555709269",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555709269"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r555709269"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555709269/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 60,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 28,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555709978",
+      "pull_request_review_id": 566186851,
+      "id": 555709978,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTcwOTk3OA==",
+      "diff_hunk": "@@ -33,4 +33,32 @@ public function __construct(\n     ) {\n         parent::__construct($entityFactory, $logger, $fetchStrategy, $eventManager, $mainTable, $resourceModel);\n     }\n+\n+    /**\n+     * @inheritDoc\n+     */\n+    protected function _translateCondition($field, $condition)\n+    {\n+        if ($field !== 'order_currency_code'\n+            && !isset($this->_map['fields'][$field])\n+        ) {\n+            $this->_map['fields'][$field] = 'main_table.' . $field;\n+        }\n+\n+        return parent::_translateCondition($field, $condition);",
+      "path": "app/code/Magento/Sales/Model/ResourceModel/Order/Creditmemo/Order/Grid/Collection.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "3174a697766a5d74831dc3633885cae1be721dd7",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "I suppose parent call should be in front of your actions",
+      "created_at": "2021-01-12T11:43:26Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r555709978",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555709978"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r555709978"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555709978/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 48,
+      "original_line": 48,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 16,
+      "position": 16,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555710138",
+      "pull_request_review_id": 566186851,
+      "id": 555710138,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTcxMDEzOA==",
+      "diff_hunk": "@@ -33,4 +33,32 @@ public function __construct(\n     ) {\n         parent::__construct($entityFactory, $logger, $fetchStrategy, $eventManager, $mainTable, $resourceModel);\n     }\n+\n+    /**\n+     * @inheritDoc\n+     */\n+    protected function _translateCondition($field, $condition)\n+    {\n+        if ($field !== 'order_currency_code'\n+            && !isset($this->_map['fields'][$field])\n+        ) {\n+            $this->_map['fields'][$field] = 'main_table.' . $field;\n+        }\n+\n+        return parent::_translateCondition($field, $condition);\n+    }\n+\n+    /**\n+     * @inheritDoc\n+     */\n+    protected function _renderFiltersBefore()\n+    {\n+        $this->getSelect()->join(\n+            ['cgf' => $this->getTable('sales_order_grid')],\n+            'main_table.order_id = cgf.entity_id',\n+            [\n+                'order_currency_code'=>'order_currency_code'",
+      "path": "app/code/Magento/Sales/Model/ResourceModel/Order/Creditmemo/Order/Grid/Collection.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "3174a697766a5d74831dc3633885cae1be721dd7",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "add spaces around =>\r\nand add comma at the end",
+      "created_at": "2021-01-12T11:43:45Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r555710138",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555710138"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r555710138"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555710138/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 60,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 28,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555710406",
+      "pull_request_review_id": 566186851,
+      "id": 555710406,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1NTcxMDQwNg==",
+      "diff_hunk": "@@ -33,4 +33,32 @@ public function __construct(\n     ) {\n         parent::__construct($entityFactory, $logger, $fetchStrategy, $eventManager, $mainTable, $resourceModel);\n     }\n+\n+    /**\n+     * @inheritDoc\n+     */\n+    protected function _translateCondition($field, $condition)\n+    {\n+        if ($field !== 'order_currency_code'\n+            && !isset($this->_map['fields'][$field])\n+        ) {\n+            $this->_map['fields'][$field] = 'main_table.' . $field;\n+        }\n+\n+        return parent::_translateCondition($field, $condition);\n+    }\n+\n+    /**\n+     * @inheritDoc\n+     */\n+    protected function _renderFiltersBefore()\n+    {\n+        $this->getSelect()->join(",
+      "path": "app/code/Magento/Sales/Model/ResourceModel/Order/Creditmemo/Order/Grid/Collection.php",
+      "commit_id": "8417b88627435438e67174a4f14122edff9417b2",
+      "original_commit_id": "3174a697766a5d74831dc3633885cae1be721dd7",
+      "user": {
+        "login": "zakdma",
+        "id": 12795788,
+        "node_id": "MDQ6VXNlcjEyNzk1Nzg4",
+        "avatar_url": "https://avatars.githubusercontent.com/u/12795788?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/zakdma",
+        "html_url": "https://github.com/zakdma",
+        "followers_url": "https://api.github.com/users/zakdma/followers",
+        "following_url": "https://api.github.com/users/zakdma/following{/other_user}",
+        "gists_url": "https://api.github.com/users/zakdma/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/zakdma/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/zakdma/subscriptions",
+        "organizations_url": "https://api.github.com/users/zakdma/orgs",
+        "repos_url": "https://api.github.com/users/zakdma/repos",
+        "events_url": "https://api.github.com/users/zakdma/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/zakdma/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "please change to left join",
+      "created_at": "2021-01-12T11:44:11Z",
+      "updated_at": "2021-01-12T16:23:49Z",
+      "html_url": "https://github.com/magento/magento2/pull/31553#discussion_r555710406",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31553",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/555710406"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31553#discussion_r555710406"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31553"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/555710406/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 56,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 24,
+      "position": 1,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "7dd06a1ce5774a2b6f804704a140244ba477016f0a0c774ae2c5080608d1b0ab",
+  "cacheDigest": "1cff4a4a04880cb0b85c8d85eca75726912981907fba4e2685b0c6d6cd396f09"
+}

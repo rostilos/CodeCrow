@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/522354888",
+  "status": 200,
+  "etag": "W/\"55292badf74bbfc453b5f76f84c71145235d10241b6fc5a2a155fe5afd7e616b\"",
+  "headers": {
+    "ETag": "W/\"55292badf74bbfc453b5f76f84c71145235d10241b6fc5a2a155fe5afd7e616b\"",
+    "Last-Modified": "Mon, 24 Aug 2026 17:35:43 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "32",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/522354888",
+    "pull_request_review_id": 526796523,
+    "id": 522354888,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUyMjM1NDg4OA==",
+    "diff_hunk": "@@ -0,0 +1,61 @@\n+# Copyright © Magento, Inc. All rights reserved.\n+# See COPYING.txt for license details.\n+\n+type ComparableItem {\n+    uid: ID!\n+    product: ComparableProduct!\n+    attributes: [ProductAttribute]! @doc(description: \"Product comparable attributes\")\n+}\n+\n+type ComparableProduct implements ProductInterface {\n+}\n+\n+type ProductAttribute {\n+    code: String! @doc(description:\"Attribute code\")\n+    value: String! @doc(description:\"Attribute display value\")\n+}\n+\n+type ComparableAttribute {\n+    code: String! @doc(description: \"Attribute code\")\n+    label: String! @doc(description: \"Attribute label\")\n+}\n+\n+type CompareList {\n+    uid: ID! @doc(description: \"Compare list id\")\n+    items: [ComparableItem] @doc(description: \"Comparable products\")\n+    attributes: [ComparableAttribute] @doc(description: \"Comparable attributes, provides codes and titles for the attributes\")",
+    "path": "app/code/Magento/CompareListGraphQl/etc/schema.graphqls",
+    "commit_id": "b2a1894a4a6899c0c1bdfbfaa9f916c6b4e341c9",
+    "original_commit_id": "098a40792e4d11d6bf3daa6bc08fc3c1d03e845f",
+    "user": {
+      "login": "keharper",
+      "id": 11652541,
+      "node_id": "MDQ6VXNlcjExNjUyNTQx",
+      "avatar_url": "https://avatars.githubusercontent.com/u/11652541?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/keharper",
+      "html_url": "https://github.com/keharper",
+      "followers_url": "https://api.github.com/users/keharper/followers",
+      "following_url": "https://api.github.com/users/keharper/following{/other_user}",
+      "gists_url": "https://api.github.com/users/keharper/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/keharper/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/keharper/subscriptions",
+      "organizations_url": "https://api.github.com/users/keharper/orgs",
+      "repos_url": "https://api.github.com/users/keharper/repos",
+      "events_url": "https://api.github.com/users/keharper/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/keharper/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "```suggestion\r\n    attributes: [ComparableAttribute] @doc(description: \"An array of attributes that can be used for comparing products\")\r\n```",
+    "created_at": "2020-11-12T19:17:34Z",
+    "updated_at": "2020-12-03T16:38:06Z",
+    "html_url": "https://github.com/magento/magento2/pull/29047#discussion_r522354888",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29047",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/522354888"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/29047#discussion_r522354888"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/29047"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/522354888/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 26,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 26,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

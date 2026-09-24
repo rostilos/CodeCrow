@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/389120325",
+  "status": 200,
+  "etag": "W/\"5f09a4d073cdbe3fc0eb7a43f644245fb54cbff79d0ce836c448433a7be38b80\"",
+  "headers": {
+    "ETag": "W/\"5f09a4d073cdbe3fc0eb7a43f644245fb54cbff79d0ce836c448433a7be38b80\"",
+    "Last-Modified": "Thu, 13 Aug 2026 10:56:31 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "41",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/389120325",
+    "pull_request_review_id": 370596749,
+    "id": 389120325,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM4OTEyMDMyNQ==",
+    "diff_hunk": "@@ -32,30 +43,62 @@ class ProductProcessUrlRewriteSavingObserver implements ObserverInterface\n      */\n     private $productUrlPathGenerator;\n \n+    /**\n+     * @var StoreManagerInterface\n+     */\n+    private $storeManager;\n+\n+    /**\n+     * @var ProductScopeRewriteGenerator\n+     */\n+    private $productScopeRewriteGenerator;\n+\n+    /**\n+     * @var DeleteEntitiesFromStores\n+     */\n+    private $deleteEntitiesFromStores;\n+\n+    /**\n+     * @var Collection\n+     */\n+    private $productCollection;\n+\n     /**\n      * @param ProductUrlRewriteGenerator $productUrlRewriteGenerator\n      * @param UrlPersistInterface $urlPersist\n-     * @param ProductUrlPathGenerator|null $productUrlPathGenerator\n+     * @param ProductUrlPathGenerator $productUrlPathGenerator\n+     * @param StoreManagerInterface $storeManager\n+     * @param ProductScopeRewriteGenerator $productScopeRewriteGenerator\n+     * @param DeleteEntitiesFromStores $deleteEntitiesFromStores\n+     * @param Collection $productCollection\n      */\n     public function __construct(\n         ProductUrlRewriteGenerator $productUrlRewriteGenerator,\n         UrlPersistInterface $urlPersist,\n-        ProductUrlPathGenerator $productUrlPathGenerator = null\n+        ProductUrlPathGenerator $productUrlPathGenerator,\n+        StoreManagerInterface $storeManager,\n+        ProductScopeRewriteGenerator $productScopeRewriteGenerator,\n+        DeleteEntitiesFromStores $deleteEntitiesFromStores,\n+        Collection $productCollection",
+    "path": "app/code/Magento/CatalogUrlRewrite/Observer/ProductProcessUrlRewriteSavingObserver.php",
+    "commit_id": "78355a52ccb5ae41a32b5f685f205ba4c13aea12",
+    "original_commit_id": "7b2b5e3bd03b203cdac261a1100f2a3f9fa1aecf",
+    "user": {
+      "login": "ihor-sviziev",
+      "id": 1873745,
+      "node_id": "MDQ6VXNlcjE4NzM3NDU=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1873745?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/ihor-sviziev",
+      "html_url": "https://github.com/ihor-sviziev",
+      "followers_url": "https://api.github.com/users/ihor-sviziev/followers",
+      "following_url": "https://api.github.com/users/ihor-sviziev/following{/other_user}",
+      "gists_url": "https://api.github.com/users/ihor-sviziev/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/ihor-sviziev/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/ihor-sviziev/subscriptions",
+      "organizations_url": "https://api.github.com/users/ihor-sviziev/orgs",
+      "repos_url": "https://api.github.com/users/ihor-sviziev/repos",
+      "events_url": "https://api.github.com/users/ihor-sviziev/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/ihor-sviziev/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Product collection contains state, so for collection you need to use factory in constructor and create collection object only when needed. I think this might cause test failures",
+    "created_at": "2020-03-06T20:10:40Z",
+    "updated_at": "2020-03-16T14:49:58Z",
+    "html_url": "https://github.com/magento/magento2/pull/26999#discussion_r389120325",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/26999",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/389120325"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/26999#discussion_r389120325"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/26999"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/389120325/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 82,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 70,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/489352444",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:38Z",
+  "etag": "W/\"b02459aaad77e9580da6b91d611ccfdd163184e79d8925e5459d192a1dd2c73b\"",
+  "headers": {
+    "ETag": "W/\"b02459aaad77e9580da6b91d611ccfdd163184e79d8925e5459d192a1dd2c73b\"",
+    "Last-Modified": "Tue, 25 Aug 2026 14:01:18 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "25",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/489352444",
+    "pull_request_review_id": 489513187,
+    "id": 489352444,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ4OTM1MjQ0NA==",
+    "diff_hunk": "@@ -91,7 +91,7 @@ public function beforeExecute(\n             $storeId\n         ];\n \n-        if (!$this->config->isEnabled()) {\n+        if (!$this->config->isEnabled() || !$this->config->isMediaGalleryRenditionsEnabled()) {",
+    "path": "app/code/Magento/MediaGalleryRenditions/Plugin/SetRenditionPath.php",
+    "commit_id": "bb3822a5e5f8cb7bd98625b89975ec4c3707a9e8",
+    "original_commit_id": "27f50e4ceb258065c5aa232afc54766cab2f84e6",
+    "user": {
+      "login": "sivaschenko",
+      "id": 2028541,
+      "node_id": "MDQ6VXNlcjIwMjg1NDE=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2028541?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/sivaschenko",
+      "html_url": "https://github.com/sivaschenko",
+      "followers_url": "https://api.github.com/users/sivaschenko/followers",
+      "following_url": "https://api.github.com/users/sivaschenko/following{/other_user}",
+      "gists_url": "https://api.github.com/users/sivaschenko/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/sivaschenko/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/sivaschenko/subscriptions",
+      "organizations_url": "https://api.github.com/users/sivaschenko/orgs",
+      "repos_url": "https://api.github.com/users/sivaschenko/repos",
+      "events_url": "https://api.github.com/users/sivaschenko/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/sivaschenko/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "no change is needed here",
+    "created_at": "2020-09-16T11:05:06Z",
+    "updated_at": "2020-09-18T09:59:42Z",
+    "html_url": "https://github.com/magento/magento2/pull/30057#discussion_r489352444",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30057",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/489352444"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/30057#discussion_r489352444"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/30057"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/489352444/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 94,
+    "side": "RIGHT",
+    "author_association": "MEMBER",
+    "original_position": 5,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "9b6dc24cfd0147e761445ec93b8f4229a56209fc110561ed7f4a7de39b9abf62",
+  "envelopeSha256": "09ead62634a6ee18ebb6bad9d8c3b478c57c4c17d662694336d3baf2ca24579f"
+}

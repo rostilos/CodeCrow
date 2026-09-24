@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/570865163",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:42Z",
+  "etag": "W/\"db0a07f572949fe98fc1e163fdcbacd98c181dcc771cf022de389a64542b3057\"",
+  "headers": {
+    "ETag": "W/\"db0a07f572949fe98fc1e163fdcbacd98c181dcc771cf022de389a64542b3057\"",
+    "Last-Modified": "Sun, 04 Jan 2026 09:43:32 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "17",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/570865163",
+    "pull_request_review_id": 584202099,
+    "id": 570865163,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU3MDg2NTE2Mw==",
+    "diff_hunk": "@@ -0,0 +1,16 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<actionGroups xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+              xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/actionGroupSchema.xsd\">\n+",
+    "path": "app/code/Magento/CatalogSearch/Test/Mftf/ActionGroup/AssertStorefrontNoResultsMessageOnSearchPageActionGroup.xml",
+    "commit_id": "7e71e5cb34614181a5f645d6b98b203d227bb2d4",
+    "original_commit_id": "ededa033a08d583da39497f35e52b82a46220e7f",
+    "user": {
+      "login": "eduard13",
+      "id": 15868188,
+      "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/eduard13",
+      "html_url": "https://github.com/eduard13",
+      "followers_url": "https://api.github.com/users/eduard13/followers",
+      "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+      "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+      "organizations_url": "https://api.github.com/users/eduard13/orgs",
+      "repos_url": "https://api.github.com/users/eduard13/repos",
+      "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/eduard13/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Remove empty line\r\n```suggestion\r\n```",
+    "created_at": "2021-02-05T10:20:22Z",
+    "updated_at": "2021-02-08T16:32:46Z",
+    "html_url": "https://github.com/magento/magento2/pull/31918#discussion_r570865163",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31918",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/570865163"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/31918#discussion_r570865163"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/31918"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/570865163/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 11,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 11,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "b3e13e5b2c2af87aab4a8641c422503c76e291026d884f1b837d830250ddb615",
+  "envelopeSha256": "9931efa04809f06a759eab7e0da61d61041624b7ac1abbce2084643b4e8f2dec"
+}

@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/132482198",
+  "status": 200,
+  "etag": "W/\"026692af28fea31af34a1fa86cd3f2a3c465ca1f7a48d6876732edd3436f54fc\"",
+  "headers": {
+    "ETag": "W/\"026692af28fea31af34a1fa86cd3f2a3c465ca1f7a48d6876732edd3436f54fc\"",
+    "Last-Modified": "Tue, 25 Aug 2026 15:14:39 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "24",
+    "X-RateLimit-Reset": "1787705472"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/132482198",
+    "pull_request_review_id": 55545302,
+    "id": 132482198,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDEzMjQ4MjE5OA==",
+    "diff_hunk": "@@ -0,0 +1,39 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+namespace Magento\\Framework\\App;\n+\n+class Feed implements \\Magento\\Framework\\App\\FeedInterface\n+{\n+    /**\n+     * @var \\Zend_Feed_Abstract\n+     */\n+    private $feed;\n+\n+    /**\n+     * @param \\Zend_Feed_Abstract $feed\n+     */\n+    public function __construct(\\Zend_Feed_Abstract $feed)",
+    "path": "lib/internal/Magento/Framework/App/Feed.php",
+    "commit_id": "4462eaf918f1e8d7362c19cba6bb6db2175efc64",
+    "original_commit_id": "c0b4c7a692ec32ad9b848b9ea4782c56469f90f3",
+    "user": {
+      "login": "maghamed",
+      "id": 1928215,
+      "node_id": "MDQ6VXNlcjE5MjgyMTU=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1928215?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/maghamed",
+      "html_url": "https://github.com/maghamed",
+      "followers_url": "https://api.github.com/users/maghamed/followers",
+      "following_url": "https://api.github.com/users/maghamed/following{/other_user}",
+      "gists_url": "https://api.github.com/users/maghamed/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/maghamed/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/maghamed/subscriptions",
+      "organizations_url": "https://api.github.com/users/maghamed/orgs",
+      "repos_url": "https://api.github.com/users/maghamed/repos",
+      "events_url": "https://api.github.com/users/maghamed/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/maghamed/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Please provide supported formats argument, configurable through DI.\r\nAs described below, to have a possibility verify whether supported format passed to getFormatedContentAs method",
+    "created_at": "2017-08-10T15:12:04Z",
+    "updated_at": "2017-12-22T16:58:42Z",
+    "html_url": "https://github.com/magento/magento2/pull/9347#discussion_r132482198",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/9347",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/132482198"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/9347#discussion_r132482198"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/9347"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/132482198/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 18,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 18,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

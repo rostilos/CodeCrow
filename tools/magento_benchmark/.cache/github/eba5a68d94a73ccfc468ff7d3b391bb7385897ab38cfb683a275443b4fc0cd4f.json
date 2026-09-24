@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/401145181",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:31Z",
+  "etag": "W/\"e53286b856a9d56c1240bbdc239a6426aa173a09322fe1d44fe21fab82cde7d5\"",
+  "headers": {
+    "ETag": "W/\"e53286b856a9d56c1240bbdc239a6426aa173a09322fe1d44fe21fab82cde7d5\"",
+    "Last-Modified": "Tue, 18 Aug 2026 10:03:37 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "39",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/401145181",
+    "pull_request_review_id": 385020402,
+    "id": 401145181,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQwMTE0NTE4MQ==",
+    "diff_hunk": "@@ -5,51 +5,60 @@\n  */\n namespace Magento\\AdminNotification\\Test\\Unit\\Model\\System\\Message;\n \n-class SecurityTest extends \\PHPUnit\\Framework\\TestCase\n+use Magento\\AdminNotification\\Model\\System\\Message\\Security;\n+use Magento\\Framework\\App\\CacheInterface;\n+use Magento\\Framework\\App\\Config\\ScopeConfigInterface;\n+use Magento\\Framework\\HTTP\\Adapter\\Curl;\n+use Magento\\Framework\\HTTP\\Adapter\\CurlFactory;\n+use Magento\\Framework\\TestFramework\\Unit\\Helper\\ObjectManager;\n+use PHPUnit\\Framework\\MockObject\\MockObject;\n+use PHPUnit\\Framework\\TestCase;\n+\n+class SecurityTest extends TestCase\n {\n     /**\n-     * @var \\PHPUnit_Framework_MockObject_MockObject\n+     * @var MockObject\n      */\n     protected $_cacheMock;\n \n     /**\n-     * @var \\PHPUnit_Framework_MockObject_MockObject\n+     * @var MockObject",
+    "path": "app/code/Magento/AdminNotification/Test/Unit/Model/System/Message/SecurityTest.php",
+    "commit_id": "7e29a8986ab42c7ab8894aaa0a3e27b549470b57",
+    "original_commit_id": "0b2cf658eba09cf436e7252f6c8358bf1f7c4547",
+    "user": {
+      "login": "lbajsarowicz",
+      "id": 1639941,
+      "node_id": "MDQ6VXNlcjE2Mzk5NDE=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1639941?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/lbajsarowicz",
+      "html_url": "https://github.com/lbajsarowicz",
+      "followers_url": "https://api.github.com/users/lbajsarowicz/followers",
+      "following_url": "https://api.github.com/users/lbajsarowicz/following{/other_user}",
+      "gists_url": "https://api.github.com/users/lbajsarowicz/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/lbajsarowicz/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/lbajsarowicz/subscriptions",
+      "organizations_url": "https://api.github.com/users/lbajsarowicz/orgs",
+      "repos_url": "https://api.github.com/users/lbajsarowicz/repos",
+      "events_url": "https://api.github.com/users/lbajsarowicz/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/lbajsarowicz/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "There's missing reference to original class type.",
+    "created_at": "2020-03-31T19:01:28Z",
+    "updated_at": "2020-04-02T08:02:18Z",
+    "html_url": "https://github.com/magento/magento2/pull/27521#discussion_r401145181",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27521",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/401145181"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/27521#discussion_r401145181"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/27521"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/401145181/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 25,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 24,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "a46a25243e9de9e2d401703ca5738039c16c42120b9199dc331d3e464d948ae6",
+  "envelopeSha256": "1b46e341c1a36efe74afa2c70824f47303d670ae8f4a8fc64cab3600ae7c2c07"
+}

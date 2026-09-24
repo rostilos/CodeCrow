@@ -1,0 +1,39 @@
+{
+  "kind": "codecrow-magento2-draft-replacement-choices",
+  "sourceDraftFileSha256": "bcf5c0613b4d9fe798ff0f2408b81effb74e8dab333994d8a9fefc49f5c62bb9",
+  "sourceDraftSha256": "613fef3959034aebc08eab510b36d46b9b6bfc1ee77046b117d1882f1220b142",
+  "discoveryDigest": "f87bd5a438239504b158c8b8ef45db23ba92f2f640298be9dcb9c9f7a6968ae7",
+  "candidateSetDigest": "c1e4be664141243fcbf4afe1da2eb00c06416ee39e847d392dc39a01d74b281a",
+  "replacements": [
+    {
+      "replaceCaseId": "magento2-pr-31957-8c6dd037d6f0",
+      "pullRequest": 39099,
+      "headSha": "e4fce5a7b896ba6c6b9e4196c29bf58cfc8bb679",
+      "commentIds": [1819089463, 1819095028, 1819305393]
+    },
+    {
+      "replaceCaseId": "magento2-pr-29081-6f9a2743df52",
+      "pullRequest": 40023,
+      "headSha": "4582620cceb3c852e4691e30b7c025fcdc7ff4cf",
+      "commentIds": [2348826803]
+    },
+    {
+      "replaceCaseId": "magento2-pr-29207-cc4c5d0f2178",
+      "pullRequest": 37362,
+      "headSha": "58467b85045cef860a88c2e447cc2b338ce6f571",
+      "commentIds": [1850098743]
+    },
+    {
+      "replaceCaseId": "magento2-pr-27064-b1480fbb4e12",
+      "pullRequest": 38270,
+      "headSha": "5b77b2c64924993b4ad6530196918d84ea3aad41",
+      "commentIds": [1751316514, 1751317681, 1751338954, 1751340624]
+    },
+    {
+      "replaceCaseId": "magento2-pr-32620-df94b8aef4a8",
+      "pullRequest": 30699,
+      "headSha": "8aa0f015fef7326ce9afee9878e6b265224528ca",
+      "commentIds": [1495445100]
+    }
+  ]
+}

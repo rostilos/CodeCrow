@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/165098420",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:22Z",
+  "etag": "W/\"46ea82cf2a5b24eac80f26c8966fe2a43a565ee9c1e93483fe8658a2dde3bc79\"",
+  "headers": {
+    "ETag": "W/\"46ea82cf2a5b24eac80f26c8966fe2a43a565ee9c1e93483fe8658a2dde3bc79\"",
+    "Last-Modified": "Tue, 25 Aug 2026 15:14:39 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "58",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/165098420",
+    "pull_request_review_id": 92976467,
+    "id": 165098420,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDE2NTA5ODQyMA==",
+    "diff_hunk": "@@ -0,0 +1,61 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\Framework\\MultiDimensionalIndexer;\n+\n+use Magento\\Framework\\Search\\Request\\IndexScopeResolverInterface;\n+\n+/**\n+ * @inheritdoc\n+ */\n+class IndexNameResolver implements IndexNameResolverInterface\n+{\n+    /**\n+     * TODO: move to separate configurable interface (https://github.com/magento-engcom/msi/issues/213)",
+    "path": "lib/internal/Magento/Framework/MultiDimensionalIndexer/IndexNameResolver.php",
+    "commit_id": "d62db82ca4fcdfb5299c59afc5f44ee0ded8db83",
+    "original_commit_id": "992bb67a9cfd55931ca158fcc8644138e6fd75d7",
+    "user": {
+      "login": "maghamed",
+      "id": 1928215,
+      "node_id": "MDQ6VXNlcjE5MjgyMTU=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1928215?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/maghamed",
+      "html_url": "https://github.com/maghamed",
+      "followers_url": "https://api.github.com/users/maghamed/followers",
+      "following_url": "https://api.github.com/users/maghamed/following{/other_user}",
+      "gists_url": "https://api.github.com/users/maghamed/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/maghamed/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/maghamed/subscriptions",
+      "organizations_url": "https://api.github.com/users/maghamed/orgs",
+      "repos_url": "https://api.github.com/users/maghamed/repos",
+      "events_url": "https://api.github.com/users/maghamed/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/maghamed/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "todo  should be removed",
+    "created_at": "2018-01-31T15:59:39Z",
+    "updated_at": "2018-03-27T12:02:16Z",
+    "html_url": "https://github.com/magento/magento2/pull/13434#discussion_r165098420",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/13434",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/165098420"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/13434#discussion_r165098420"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/13434"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/165098420/reactions",
+      "total_count": 1,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 18,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 18,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "ebf1111aece24a8c87f54c62e749884107a2fb551b1a489a4e7518688258006b",
+  "envelopeSha256": "f8901632c59c5e2f513887a8bc58ab3330f8087f6c32c3003506cbc96019b26c"
+}

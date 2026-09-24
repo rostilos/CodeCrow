@@ -1,0 +1,17 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/34138/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T15:36:24Z",
+  "etag": "\"74d1db57f0fec3481bb6b4d9bcdc020d656635ec6c53ee589d27a8831cbbe280\"",
+  "headers": {
+    "ETag": "\"74d1db57f0fec3481bb6b4d9bcdc020d656635ec6c53ee589d27a8831cbbe280\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "13",
+    "X-RateLimit-Reset": "1786981658"
+  },
+  "value": [],
+  "responseDigest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "cacheDigest": "5e6b2087e0853ecd4748ff5e77382631b7505f9ea3c8c70259b383e27d40d9ea"
+}

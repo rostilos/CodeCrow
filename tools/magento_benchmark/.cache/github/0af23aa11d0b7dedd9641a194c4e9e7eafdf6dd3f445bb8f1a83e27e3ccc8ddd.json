@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/470350674",
+  "status": 200,
+  "etag": "W/\"67737e1eb49c7246791d4a0be32ba4d989a06807e679e6f94bffd0fb9b38edf9\"",
+  "headers": {
+    "ETag": "W/\"67737e1eb49c7246791d4a0be32ba4d989a06807e679e6f94bffd0fb9b38edf9\"",
+    "Last-Modified": "Wed, 24 Jun 2026 21:19:44 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "30",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/470350674",
+    "pull_request_review_id": 467241630,
+    "id": 470350674,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ3MDM1MDY3NA==",
+    "diff_hunk": "@@ -0,0 +1,21 @@\n+<?xml version=\"1.0\"?>\n+<!--\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+-->\n+<config xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+        xsi:noNamespaceSchemaLocation=\"urn:magento:framework:ObjectManager/etc/config.xsd\">\n+    <type name=\"Magento\\WishlistGraphQl\\Model\\Resolver\\Type\\WishlistItemType\">\n+        <arguments>\n+            <argument name=\"supportedTypes\" xsi:type=\"array\">\n+                <item name=\"simple\" xsi:type=\"string\">SimpleWishlistItem</item>\n+                <item name=\"virtual\" xsi:type=\"string\">VirtualWishlistItem</item>\n+                <item name=\"configurable\" xsi:type=\"string\">ConfigurableWishlistItem</item>\n+                <item name=\"downloadable\" xsi:type=\"string\">DownloadableWishlistItem</item>",
+    "path": "app/code/Magento/WishlistGraphQl/etc/di.xml",
+    "commit_id": "7ce741eec30c9cf164fc3e0851b1e6a3c70963ce",
+    "original_commit_id": "c6bd685303913717a35e8f9200e06ffc90dee322",
+    "user": {
+      "login": "prabhuram93",
+      "id": 43612864,
+      "node_id": "MDQ6VXNlcjQzNjEyODY0",
+      "avatar_url": "https://avatars.githubusercontent.com/u/43612864?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/prabhuram93",
+      "html_url": "https://github.com/prabhuram93",
+      "followers_url": "https://api.github.com/users/prabhuram93/followers",
+      "following_url": "https://api.github.com/users/prabhuram93/following{/other_user}",
+      "gists_url": "https://api.github.com/users/prabhuram93/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/prabhuram93/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/prabhuram93/subscriptions",
+      "organizations_url": "https://api.github.com/users/prabhuram93/orgs",
+      "repos_url": "https://api.github.com/users/prabhuram93/repos",
+      "events_url": "https://api.github.com/users/prabhuram93/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/prabhuram93/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "These items should be in their corresponding GraphQl modules.",
+    "created_at": "2020-08-14T01:01:20Z",
+    "updated_at": "2020-08-20T23:35:49Z",
+    "html_url": "https://github.com/magento/magento2/pull/29148#discussion_r470350674",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29148",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/470350674"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/29148#discussion_r470350674"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/29148"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/470350674/reactions",
+      "total_count": 1,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 16,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 16,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

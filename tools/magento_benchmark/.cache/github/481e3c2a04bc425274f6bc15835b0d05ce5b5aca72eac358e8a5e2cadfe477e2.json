@@ -1,0 +1,295 @@
+{
+  "kind": "codecrow-magento2-github-rest-cache",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/31455/comments?per_page=100&page=1",
+  "status": 200,
+  "fetchedAt": "2026-08-17T15:48:06Z",
+  "etag": "W/\"6273451a85553bb78b8d7c73768517c73ba4022b8e37ff4dda75d09a1c47db29\"",
+  "headers": {
+    "ETag": "W/\"6273451a85553bb78b8d7c73768517c73ba4022b8e37ff4dda75d09a1c47db29\"",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "54",
+    "X-RateLimit-Reset": "1786985277"
+  },
+  "value": [
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/549318403",
+      "pull_request_review_id": 559111033,
+      "id": 549318403,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU0OTMxODQwMw==",
+      "diff_hunk": "@@ -15,10 +16,12 @@\n use Magento\\Framework\\Registry;\n use Magento\\Framework\\Serialize\\Serializer\\Json;\n use Magento\\Framework\\Stdlib\\StringUtils;\n+use Magento\\Sales\\Model\\Order\\Pdf\\Items\\Invoice\\PreparePriceLines;\n use Magento\\Tax\\Helper\\Data;\n \n /**\n  * Order invoice pdf default items renderer\n+ * @SuppressWarnings(PHPMD.CouplingBetweenObjects)",
+      "path": "app/code/Magento/Bundle/Model/Sales/Order/Pdf/Items/Invoice.php",
+      "commit_id": "1ce3e1fe70b5c549ff519560dd7ada48f7a2034c",
+      "original_commit_id": "a64d5619f2ec6a6b65e8ca6e5a293a0485f685b3",
+      "user": {
+        "login": "engcom-Kilo",
+        "id": 60192090,
+        "node_id": "MDQ6VXNlcjYwMTkyMDkw",
+        "avatar_url": "https://avatars.githubusercontent.com/u/60192090?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/engcom-Kilo",
+        "html_url": "https://github.com/engcom-Kilo",
+        "followers_url": "https://api.github.com/users/engcom-Kilo/followers",
+        "following_url": "https://api.github.com/users/engcom-Kilo/following{/other_user}",
+        "gists_url": "https://api.github.com/users/engcom-Kilo/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/engcom-Kilo/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/engcom-Kilo/subscriptions",
+        "organizations_url": "https://api.github.com/users/engcom-Kilo/orgs",
+        "repos_url": "https://api.github.com/users/engcom-Kilo/repos",
+        "events_url": "https://api.github.com/users/engcom-Kilo/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/engcom-Kilo/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Please try to find different solution without adding new dependency.",
+      "created_at": "2020-12-28T11:43:53Z",
+      "updated_at": "2020-12-31T14:37:15Z",
+      "html_url": "https://github.com/magento/magento2/pull/31455#discussion_r549318403",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31455",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/549318403"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31455#discussion_r549318403"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31455"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/549318403/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 24,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 17,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/550032324",
+      "pull_request_review_id": 559952820,
+      "id": 550032324,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MDAzMjMyNA==",
+      "diff_hunk": "@@ -7,6 +7,7 @@\n \n namespace Magento\\Bundle\\Model\\Sales\\Order\\Pdf\\Items;\n \n+use Magento\\Framework\\App\\ObjectManager;",
+      "path": "app/code/Magento/Bundle/Model/Sales/Order/Pdf/Items/Invoice.php",
+      "commit_id": "1ce3e1fe70b5c549ff519560dd7ada48f7a2034c",
+      "original_commit_id": "4276750babb3a179f0b30ec553875529eb4826f3",
+      "user": {
+        "login": "engcom-Kilo",
+        "id": 60192090,
+        "node_id": "MDQ6VXNlcjYwMTkyMDkw",
+        "avatar_url": "https://avatars.githubusercontent.com/u/60192090?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/engcom-Kilo",
+        "html_url": "https://github.com/engcom-Kilo",
+        "followers_url": "https://api.github.com/users/engcom-Kilo/followers",
+        "following_url": "https://api.github.com/users/engcom-Kilo/following{/other_user}",
+        "gists_url": "https://api.github.com/users/engcom-Kilo/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/engcom-Kilo/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/engcom-Kilo/subscriptions",
+        "organizations_url": "https://api.github.com/users/engcom-Kilo/orgs",
+        "repos_url": "https://api.github.com/users/engcom-Kilo/repos",
+        "events_url": "https://api.github.com/users/engcom-Kilo/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/engcom-Kilo/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Redundant dependency. Please remove.",
+      "created_at": "2020-12-30T08:31:23Z",
+      "updated_at": "2020-12-31T14:37:15Z",
+      "html_url": "https://github.com/magento/magento2/pull/31455#discussion_r550032324",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31455",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/550032324"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31455#discussion_r550032324"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31455"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/550032324/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 10,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 4,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/550033861",
+      "pull_request_review_id": 559952820,
+      "id": 550033861,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MDAzMzg2MQ==",
+      "diff_hunk": "@@ -124,32 +122,64 @@ public function draw()\n                 $feed = 35;\n                 $name = $childItem->getName();\n             }\n-            $line[] = ['text' => $this->string->split($name, 35, true, true), 'feed' => $feed];\n+            $lines[$index][] = ['text' => $this->string->split($name, 35, true, true), 'feed' => $feed];\n \n             // draw SKUs\n             if (!$childItem->getOrderItem()->getParentItem()) {\n                 $text = [];\n                 foreach ($this->string->split($item->getSku(), 17) as $part) {\n                     $text[] = $part;\n                 }\n-                $line[] = ['text' => $text, 'feed' => 255];\n+                $lines[$index][] = ['text' => $text, 'feed' => 255];\n+                $index++;\n             }\n \n             // draw prices\n             if ($this->canShowPriceInfo($childItem)) {\n-                $price = $order->formatPriceTxt($childItem->getPrice());\n-                $line[] = ['text' => $price, 'feed' => 395, 'font' => 'bold', 'align' => 'right'];\n-                $line[] = ['text' => $childItem->getQty() * 1, 'feed' => 435, 'font' => 'bold'];\n+                $lines[$index][] = ['text' => $childItem->getQty() * 1, 'feed' => 435, 'align' => 'right'];\n \n                 $tax = $order->formatPriceTxt($childItem->getTaxAmount());\n-                $line[] = ['text' => $tax, 'feed' => 495, 'font' => 'bold', 'align' => 'right'];\n-\n-                $row_total = $order->formatPriceTxt($childItem->getRowTotal());\n-                $line[] = ['text' => $row_total, 'feed' => 565, 'font' => 'bold', 'align' => 'right'];\n+                $lines[$index][] = ['text' => $tax, 'feed' => 495, 'font' => 'bold', 'align' => 'right'];\n+\n+                $this->_item = $childItem;\n+                $feedPrice = 380;\n+                $feedSubtotal = $feedPrice + 185;\n+                foreach ($this->getItemPricesForDisplay() as $priceData) {",
+      "path": "app/code/Magento/Bundle/Model/Sales/Order/Pdf/Items/Invoice.php",
+      "commit_id": "1ce3e1fe70b5c549ff519560dd7ada48f7a2034c",
+      "original_commit_id": "4276750babb3a179f0b30ec553875529eb4826f3",
+      "user": {
+        "login": "engcom-Kilo",
+        "id": 60192090,
+        "node_id": "MDQ6VXNlcjYwMTkyMDkw",
+        "avatar_url": "https://avatars.githubusercontent.com/u/60192090?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/engcom-Kilo",
+        "html_url": "https://github.com/engcom-Kilo",
+        "followers_url": "https://api.github.com/users/engcom-Kilo/followers",
+        "following_url": "https://api.github.com/users/engcom-Kilo/following{/other_user}",
+        "gists_url": "https://api.github.com/users/engcom-Kilo/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/engcom-Kilo/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/engcom-Kilo/subscriptions",
+        "organizations_url": "https://api.github.com/users/engcom-Kilo/orgs",
+        "repos_url": "https://api.github.com/users/engcom-Kilo/repos",
+        "events_url": "https://api.github.com/users/engcom-Kilo/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/engcom-Kilo/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Could you please try to refactor this piece? This method already has ExcessiveMethodLength suppress.",
+      "created_at": "2020-12-30T08:33:32Z",
+      "updated_at": "2020-12-31T14:37:15Z",
+      "html_url": "https://github.com/magento/magento2/pull/31455#discussion_r550033861",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31455",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/550033861"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31455#discussion_r550033861"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31455"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/550033861/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 147,
+      "side": "RIGHT",
+      "author_association": "CONTRIBUTOR",
+      "original_position": 81,
+      "position": 1,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/550163556",
+      "pull_request_review_id": 560012591,
+      "id": 550163556,
+      "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDU1MDE2MzU1Ng==",
+      "diff_hunk": "@@ -124,32 +122,64 @@ public function draw()\n                 $feed = 35;\n                 $name = $childItem->getName();\n             }\n-            $line[] = ['text' => $this->string->split($name, 35, true, true), 'feed' => $feed];\n+            $lines[$index][] = ['text' => $this->string->split($name, 35, true, true), 'feed' => $feed];\n \n             // draw SKUs\n             if (!$childItem->getOrderItem()->getParentItem()) {\n                 $text = [];\n                 foreach ($this->string->split($item->getSku(), 17) as $part) {\n                     $text[] = $part;\n                 }\n-                $line[] = ['text' => $text, 'feed' => 255];\n+                $lines[$index][] = ['text' => $text, 'feed' => 255];\n+                $index++;\n             }\n \n             // draw prices\n             if ($this->canShowPriceInfo($childItem)) {\n-                $price = $order->formatPriceTxt($childItem->getPrice());\n-                $line[] = ['text' => $price, 'feed' => 395, 'font' => 'bold', 'align' => 'right'];\n-                $line[] = ['text' => $childItem->getQty() * 1, 'feed' => 435, 'font' => 'bold'];\n+                $lines[$index][] = ['text' => $childItem->getQty() * 1, 'feed' => 435, 'align' => 'right'];\n \n                 $tax = $order->formatPriceTxt($childItem->getTaxAmount());\n-                $line[] = ['text' => $tax, 'feed' => 495, 'font' => 'bold', 'align' => 'right'];\n-\n-                $row_total = $order->formatPriceTxt($childItem->getRowTotal());\n-                $line[] = ['text' => $row_total, 'feed' => 565, 'font' => 'bold', 'align' => 'right'];\n+                $lines[$index][] = ['text' => $tax, 'feed' => 495, 'font' => 'bold', 'align' => 'right'];\n+\n+                $this->_item = $childItem;\n+                $feedPrice = 380;\n+                $feedSubtotal = $feedPrice + 185;\n+                foreach ($this->getItemPricesForDisplay() as $priceData) {",
+      "path": "app/code/Magento/Bundle/Model/Sales/Order/Pdf/Items/Invoice.php",
+      "commit_id": "1ce3e1fe70b5c549ff519560dd7ada48f7a2034c",
+      "original_commit_id": "4276750babb3a179f0b30ec553875529eb4826f3",
+      "user": {
+        "login": "engcom-Golf",
+        "id": 51681547,
+        "node_id": "MDQ6VXNlcjUxNjgxNTQ3",
+        "avatar_url": "https://avatars.githubusercontent.com/u/51681547?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/engcom-Golf",
+        "html_url": "https://github.com/engcom-Golf",
+        "followers_url": "https://api.github.com/users/engcom-Golf/followers",
+        "following_url": "https://api.github.com/users/engcom-Golf/following{/other_user}",
+        "gists_url": "https://api.github.com/users/engcom-Golf/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/engcom-Golf/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/engcom-Golf/subscriptions",
+        "organizations_url": "https://api.github.com/users/engcom-Golf/orgs",
+        "repos_url": "https://api.github.com/users/engcom-Golf/repos",
+        "events_url": "https://api.github.com/users/engcom-Golf/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/engcom-Golf/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "refactored draw method",
+      "created_at": "2020-12-30T11:35:03Z",
+      "updated_at": "2020-12-31T14:37:15Z",
+      "html_url": "https://github.com/magento/magento2/pull/31455#discussion_r550163556",
+      "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/31455",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/comments/550163556"
+        },
+        "html": {
+          "href": "https://github.com/magento/magento2/pull/31455#discussion_r550163556"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/magento/magento2/pulls/31455"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/magento/magento2/pulls/comments/550163556/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 147,
+      "side": "RIGHT",
+      "in_reply_to_id": 550033861,
+      "author_association": "CONTRIBUTOR",
+      "original_position": 81,
+      "position": 1,
+      "subject_type": "line"
+    }
+  ],
+  "responseDigest": "746b8ebadc2ed74a15e67608601daca24bc42c1d15bdb6f1c290d25468cbd8ae",
+  "cacheDigest": "ed4f33d3c9eb6d7bde63967e018fae1ea79a975db66159d288601cb916f1465c"
+}

@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/472476385",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:35Z",
+  "etag": "W/\"013b99ef78e1d175e3878e3c8d8312f531f218b24d3e84b83a1e8a535283301e\"",
+  "headers": {
+    "ETag": "W/\"013b99ef78e1d175e3878e3c8d8312f531f218b24d3e84b83a1e8a535283301e\"",
+    "Last-Modified": "Mon, 24 Aug 2026 17:35:43 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "31",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/472476385",
+    "pull_request_review_id": 469731853,
+    "id": 472476385,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQ3MjQ3NjM4NQ==",
+    "diff_hunk": "@@ -19,12 +24,22 @@ type WishlistOutput @doc(description: \"Deprecated: `Wishlist` type should be use\n \n type Wishlist {\n     id: ID @doc(description: \"Wishlist unique identifier\")\n-    items: [WishlistItem] @resolver(class: \"\\\\Magento\\\\WishlistGraphQl\\\\Model\\\\Resolver\\\\WishlistItemsResolver\") @doc(description: \"An array of items in the customer's wish list\"),\n-    items_count: Int @doc(description: \"The number of items in the wish list\"),\n-    sharing_code: String @doc(description: \"An encrypted code that Magento uses to link to the wish list\"),\n+    items: [WishlistItem] @resolver(class: \"\\\\Magento\\\\WishlistGraphQl\\\\Model\\\\Resolver\\\\WishlistItemsResolver\") @deprecated(reason: \"Use field `items_v2` from type `Wishlist` instead\")\n+    items_v2: [WishlistItemInterface] @resolver(class: \"\\\\Magento\\\\WishlistGraphQl\\\\Model\\\\Resolver\\\\WishlistItems\") @doc(description: \"An array of items in the customer's wishlist\")",
+    "path": "app/code/Magento/WishlistGraphQl/etc/schema.graphqls",
+    "commit_id": "7ce741eec30c9cf164fc3e0851b1e6a3c70963ce",
+    "original_commit_id": "1df4ca7381a8963dc206723d75666af832709128",
+    "user": {
+      "login": "keharper",
+      "id": 11652541,
+      "node_id": "MDQ6VXNlcjExNjUyNTQx",
+      "avatar_url": "https://avatars.githubusercontent.com/u/11652541?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/keharper",
+      "html_url": "https://github.com/keharper",
+      "followers_url": "https://api.github.com/users/keharper/followers",
+      "following_url": "https://api.github.com/users/keharper/following{/other_user}",
+      "gists_url": "https://api.github.com/users/keharper/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/keharper/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/keharper/subscriptions",
+      "organizations_url": "https://api.github.com/users/keharper/orgs",
+      "repos_url": "https://api.github.com/users/keharper/repos",
+      "events_url": "https://api.github.com/users/keharper/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/keharper/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "```suggestion\r\n    items_v2: [WishlistItemInterface] @resolver(class: \"\\\\Magento\\\\WishlistGraphQl\\\\Model\\\\Resolver\\\\WishlistItems\") @doc(description: \"An array of items in the customer's wish list\")\r\n```",
+    "created_at": "2020-08-18T20:34:07Z",
+    "updated_at": "2020-08-20T23:35:49Z",
+    "html_url": "https://github.com/magento/magento2/pull/29148#discussion_r472476385",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/29148",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/472476385"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/29148#discussion_r472476385"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/29148"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/472476385/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 28,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 22,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "4042233110452f7fadb8270fe2592a0b7963723cba49a90a24e27a23ca66735d",
+  "envelopeSha256": "5ee03351ae4094bdc41ebdbb9c1cdbc937f567cebc495f4088d0ecf2f8c1b976"
+}

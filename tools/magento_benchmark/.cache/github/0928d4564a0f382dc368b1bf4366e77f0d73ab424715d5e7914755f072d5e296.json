@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/406848849",
+  "status": 200,
+  "etag": "W/\"5b02e7de032cf6484bd041bc2a23d16b0f5b115adeba734b3ce17aa591d9ba5f\"",
+  "headers": {
+    "ETag": "W/\"5b02e7de032cf6484bd041bc2a23d16b0f5b115adeba734b3ce17aa591d9ba5f\"",
+    "Last-Modified": "Tue, 11 Aug 2026 01:38:34 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "39",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/406848849",
+    "pull_request_review_id": 391550467,
+    "id": 406848849,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDQwNjg0ODg0OQ==",
+    "diff_hunk": "@@ -0,0 +1,112 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\MediaGallery\\Model\\ResourceModel;\n+\n+use Magento\\Framework\\App\\ResourceConnection;\n+use Magento\\Framework\\Exception\\CouldNotSaveException;\n+use Magento\\Framework\\Reflection\\DataObjectProcessor;\n+use Magento\\MediaGalleryApi\\Api\\Data\\AssetInterface;\n+use Magento\\MediaGalleryApi\\Api\\SaveAssetsInterface;\n+use Psr\\Log\\LoggerInterface;\n+\n+/**\n+ * Save media asset to the database\n+ */\n+class SaveAssets implements SaveAssetsInterface\n+{\n+    private const TABLE_MEDIA_GALLERY_ASSET = 'media_gallery_asset';\n+\n+    /**\n+     * @var ResourceConnection\n+     */\n+    private $resourceConnection;\n+\n+    /**\n+     * @var DataObjectProcessor\n+     */\n+    private $objectProcessor;\n+\n+    /**\n+     * @var LoggerInterface\n+     */\n+    private $logger;\n+\n+    /**\n+     * Save constructor.\n+     *\n+     * @param ResourceConnection $resourceConnection\n+     * @param DataObjectProcessor $objectProcessor\n+     * @param LoggerInterface $logger\n+     */\n+    public function __construct(\n+        ResourceConnection $resourceConnection,\n+        DataObjectProcessor $objectProcessor,\n+        LoggerInterface $logger\n+    ) {\n+        $this->resourceConnection = $resourceConnection;\n+        $this->objectProcessor = $objectProcessor;\n+        $this->logger = $logger;\n+    }\n+\n+    /**\n+     * @inheritdoc\n+     */\n+    public function execute(array $assets): void\n+    {\n+        $connection = $this->resourceConnection->getConnection();\n+        $tableName = $this->resourceConnection->getTableName(self::TABLE_MEDIA_GALLERY_ASSET);\n+\n+        $failedAssets = [];\n+        foreach ($assets as $asset) {\n+            try {\n+                $connection->insertOnDuplicate(\n+                    $tableName,\n+                    $this->filterData($this->objectProcessor->buildOutputDataArray($asset, AssetInterface::class))",
+    "path": "app/code/Magento/MediaGallery/Model/ResourceModel/SaveAssets.php",
+    "commit_id": "8b3c9b1df5c8584e757670a8d5b9cfc307a5b6f5",
+    "original_commit_id": "6dfb2cc9f5cfb888a578ab63522cd670fe3cf67b",
+    "user": {
+      "login": "VladimirZaets",
+      "id": 8035672,
+      "node_id": "MDQ6VXNlcjgwMzU2NzI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/8035672?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/VladimirZaets",
+      "html_url": "https://github.com/VladimirZaets",
+      "followers_url": "https://api.github.com/users/VladimirZaets/followers",
+      "following_url": "https://api.github.com/users/VladimirZaets/following{/other_user}",
+      "gists_url": "https://api.github.com/users/VladimirZaets/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/VladimirZaets/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/VladimirZaets/subscriptions",
+      "organizations_url": "https://api.github.com/users/VladimirZaets/orgs",
+      "repos_url": "https://api.github.com/users/VladimirZaets/repos",
+      "events_url": "https://api.github.com/users/VladimirZaets/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/VladimirZaets/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Use AssetInterface directly instead of ` $this->filterData($this->objectProcessor->buildOutputDataArray`",
+    "created_at": "2020-04-10T17:02:03Z",
+    "updated_at": "2020-04-19T11:36:54Z",
+    "html_url": "https://github.com/magento/magento2/pull/27499#discussion_r406848849",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/27499",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/406848849"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/27499#discussion_r406848849"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/27499"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/406848849/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 69,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 69,
+    "position": 1,
+    "subject_type": "line"
+  }
+}

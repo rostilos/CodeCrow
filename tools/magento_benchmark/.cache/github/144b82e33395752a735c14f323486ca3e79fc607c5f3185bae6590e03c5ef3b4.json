@@ -1,0 +1,81 @@
+{
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/206165692",
+  "status": 200,
+  "etag": "W/\"e53e2ec0270f1ca8e0c9c5af0cec68cc0674654830a4ea4e45ee34c575a1c08f\"",
+  "headers": {
+    "ETag": "W/\"e53e2ec0270f1ca8e0c9c5af0cec68cc0674654830a4ea4e45ee34c575a1c08f\"",
+    "Last-Modified": "Mon, 10 Aug 2026 07:04:20 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "53",
+    "X-RateLimit-Reset": "1787701782"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/206165692",
+    "pull_request_review_id": 141567350,
+    "id": 206165692,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDIwNjE2NTY5Mg==",
+    "diff_hunk": "@@ -104,18 +104,6 @@ public function __construct(\n     public function cancel($id)",
+    "path": "app/code/Magento/Sales/Model/Service/CreditmemoService.php",
+    "commit_id": "470b5076291aecfef873e8a983d82621174e9167",
+    "original_commit_id": "03b8e6de00fbab084a2d9cfc417a09469fd9884a",
+    "user": {
+      "login": "aleron75",
+      "id": 1199894,
+      "node_id": "MDQ6VXNlcjExOTk4OTQ=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1199894?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/aleron75",
+      "html_url": "https://github.com/aleron75",
+      "followers_url": "https://api.github.com/users/aleron75/followers",
+      "following_url": "https://api.github.com/users/aleron75/following{/other_user}",
+      "gists_url": "https://api.github.com/users/aleron75/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/aleron75/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/aleron75/subscriptions",
+      "organizations_url": "https://api.github.com/users/aleron75/orgs",
+      "repos_url": "https://api.github.com/users/aleron75/repos",
+      "events_url": "https://api.github.com/users/aleron75/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/aleron75/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Some static tests fails because with your refactoring the method parameter `$id` is not used any more.\r\nPlease, add a `@SuppressWarnings(PHPMD.UnusedFormalParameter)` directive in method's docblock to avoid the static test to fail.",
+    "created_at": "2018-07-30T14:47:02Z",
+    "updated_at": "2018-07-31T12:03:43Z",
+    "html_url": "https://github.com/magento/magento2/pull/17256#discussion_r206165692",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/17256",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/206165692"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/17256#discussion_r206165692"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/17256"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/206165692/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 105,
+    "original_line": 104,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 1,
+    "position": 6,
+    "subject_type": "line"
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/698526372",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:44Z",
+  "etag": "W/\"4a56ebb125afeee020c61e7b2bea5b3fee345c781aab0b4c01f9480e9ed28230\"",
+  "headers": {
+    "ETag": "W/\"4a56ebb125afeee020c61e7b2bea5b3fee345c781aab0b4c01f9480e9ed28230\"",
+    "Last-Modified": "Sun, 04 Jan 2026 09:43:32 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "15",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/698526372",
+    "pull_request_review_id": 741700657,
+    "id": 698526372,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDY5ODUyNjM3Mg==",
+    "diff_hunk": "@@ -129,6 +134,11 @@\n             <argument name=\"productName\" value=\"$$createConfigProduct.name$$\"/>\n         </actionGroup>\n         <!--Open Product Store Front Page and Verify Product is Out Of Stock -->\n+        <amOnPage url=\"$$createConfigProduct.custom_attributes[url_key]$$.html\" stepKey=\"openProductInStoreFront1\"/>\n+        <waitForPageLoad stepKey=\"waitForProductToLoad1\"/>\n+        <seeElement selector=\"{{StorefrontHeaderSection.NavigationCategoryByName($$createCategory.name$$)}}\" stepKey=\"seeCategoryInFrontPage1\"/>\n+        <actionGroup ref=\"AssertStorefrontProductInfoMainProductNameActionGroup\" stepKey=\"seeProductNameInStoreFront1\">\n+            <argument name=\"value\" value=\"$$createConfigProduct.name$$\"/>",
+    "path": "app/code/Magento/Catalog/Test/Mftf/Test/AdminDeleteConfigurableChildProductsTest.xml",
+    "commit_id": "76cb0942890782676eed9392726d733c4217a2e1",
+    "original_commit_id": "2a28968cc8180a20176c939cf7a3b7e9f6080c9c",
+    "user": {
+      "login": "eduard13",
+      "id": 15868188,
+      "node_id": "MDQ6VXNlcjE1ODY4MTg4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/15868188?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/eduard13",
+      "html_url": "https://github.com/eduard13",
+      "followers_url": "https://api.github.com/users/eduard13/followers",
+      "following_url": "https://api.github.com/users/eduard13/following{/other_user}",
+      "gists_url": "https://api.github.com/users/eduard13/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/eduard13/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/eduard13/subscriptions",
+      "organizations_url": "https://api.github.com/users/eduard13/orgs",
+      "repos_url": "https://api.github.com/users/eduard13/repos",
+      "events_url": "https://api.github.com/users/eduard13/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/eduard13/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Hi @engcom-Charlie, looks like something went wrong on the last commit while merging the mainline. These changes shouldn't be here.",
+    "created_at": "2021-08-30T14:15:59Z",
+    "updated_at": "2021-08-30T14:16:19Z",
+    "html_url": "https://github.com/magento/magento2/pull/33326#discussion_r698526372",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/33326",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/698526372"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/33326#discussion_r698526372"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/33326"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/698526372/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 137,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 141,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 20,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "20522b40055f22661642a61a2d47629e6a95635bdb2e8252c6369dc728e0276a",
+  "envelopeSha256": "8bcc48357245e95437fe3e4daf7ab8d2aab0c123f1b974d961c10df75e8d0159"
+}

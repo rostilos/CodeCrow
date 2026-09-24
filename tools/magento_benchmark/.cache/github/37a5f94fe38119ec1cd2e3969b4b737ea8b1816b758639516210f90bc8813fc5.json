@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/502788327",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:39Z",
+  "etag": "W/\"56ecae03bf1ebed00d73b0155fd09487569d8fe278e91b9d67be23799a9bd7a3\"",
+  "headers": {
+    "ETag": "W/\"56ecae03bf1ebed00d73b0155fd09487569d8fe278e91b9d67be23799a9bd7a3\"",
+    "Last-Modified": "Thu, 25 Jun 2026 16:47:03 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "23",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/502788327",
+    "pull_request_review_id": 506095583,
+    "id": 502788327,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDUwMjc4ODMyNw==",
+    "diff_hunk": "@@ -0,0 +1,39 @@\n+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n+<!--\n+ /**\n+  * Copyright © Magento, Inc. All rights reserved.\n+  * See COPYING.txt for license details.\n+  */\n+-->\n+\n+<tests xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n+       xsi:noNamespaceSchemaLocation=\"urn:magento:mftf:Test/etc/testSchema.xsd\">\n+    <test name=\"AdminOpenCreditmemoViewPageWithWrongCreditmemoIdTest\">\n+        <annotations>\n+            <stories value=\"Creditmemo Page With Wrong Creditmemo Id\"/>\n+            <title value=\"Open Creditmemo View Page with Wrong Creditmemo Id\"/>\n+            <description value=\"Open Creditmemo View Page with Wrong Creditmemo Id.\"/>\n+            <severity value=\"MAJOR\"/>\n+            <group value=\"sales\"/>\n+        </annotations>\n+\n+        <before>\n+            <actionGroup ref=\"AdminLoginActionGroup\" stepKey=\"LoginAsAdmin\"/>\n+        </before>\n+\n+        <after>\n+            <actionGroup ref=\"AdminLogoutActionGroup\" stepKey=\"logout\"/>\n+        </after>\n+\n+        <actionGroup ref=\"AdminGoToCreditmemoViewActionGroup\" stepKey=\"navigateOpenCreditmemoViewPage\">\n+            <argument name=\"identifier\" value=\"test\"/>\n+        </actionGroup>\n+\n+        <waitForPageLoad stepKey=\"waitForPageLoad\"/>\n+\n+        <seeInCurrentUrl url=\"{{AdminCreditmemosGridPage.url}}\" stepKey=\"redirectToCreditmemosGridPage\"/>\n+\n+        <see selector=\"{{AdminMessagesSection.error}}\" userInput='This creditmemo no longer exists.'",
+    "path": "app/code/Magento/Sales/Test/Mftf/Test/AdminOpenCreditmemoViewPageWithWrongCreditmemoIdTest.xml",
+    "commit_id": "52b527012e6a0693a5b79ca2840426ec1fe0e0ab",
+    "original_commit_id": "1dab4300f18ef2d1c1c09d60d31819796558d53e",
+    "user": {
+      "login": "rogyar",
+      "id": 2148959,
+      "node_id": "MDQ6VXNlcjIxNDg5NTk=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2148959?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/rogyar",
+      "html_url": "https://github.com/rogyar",
+      "followers_url": "https://api.github.com/users/rogyar/followers",
+      "following_url": "https://api.github.com/users/rogyar/following{/other_user}",
+      "gists_url": "https://api.github.com/users/rogyar/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/rogyar/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/rogyar/subscriptions",
+      "organizations_url": "https://api.github.com/users/rogyar/orgs",
+      "repos_url": "https://api.github.com/users/rogyar/repos",
+      "events_url": "https://api.github.com/users/rogyar/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/rogyar/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Please, use the following action group instead\r\n\r\nhttps://github.com/magento/magento2/blob/83e3487a12e1165dde0c9175fbad45b9bfe018c3/app/code/Magento/Backend/Test/Mftf/ActionGroup/AssertMessageInAdminPanelActionGroup.xml#L11",
+    "created_at": "2020-10-10T13:00:32Z",
+    "updated_at": "2020-12-21T15:43:00Z",
+    "html_url": "https://github.com/magento/magento2/pull/30410#discussion_r502788327",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/30410",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/502788327"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/30410#discussion_r502788327"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/30410"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/502788327/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 36,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 36,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "16e53312479e3fc344f51e8d991d04bfe493d7addc44c297a7b82bcca38649ca",
+  "envelopeSha256": "57da336c313c0725d3f097270fce63c44387f620ac36d9fef733a41908aa1ef4"
+}

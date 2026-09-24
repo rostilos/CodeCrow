@@ -1,0 +1,87 @@
+{
+  "kind": "github-rest-get-cache",
+  "schema": "codecrow.github-rest-get-cache-envelope",
+  "method": "GET",
+  "url": "https://api.github.com/repos/magento/magento2/pulls/comments/369129052",
+  "status": 200,
+  "fetchedAt": "2026-08-26T00:52:25Z",
+  "etag": "W/\"f4d5c590bda99b7ec860bee70866a007bf3ae0743c2b551d307b5ef8d5338402\"",
+  "headers": {
+    "ETag": "W/\"f4d5c590bda99b7ec860bee70866a007bf3ae0743c2b551d307b5ef8d5338402\"",
+    "Last-Modified": "Wed, 15 Jul 2026 19:13:29 GMT",
+    "X-RateLimit-Limit": "60",
+    "X-RateLimit-Remaining": "52",
+    "X-RateLimit-Reset": "1787709141"
+  },
+  "value": {
+    "url": "https://api.github.com/repos/magento/magento2/pulls/comments/369129052",
+    "pull_request_review_id": 346044141,
+    "id": 369129052,
+    "node_id": "MDI0OlB1bGxSZXF1ZXN0UmV2aWV3Q29tbWVudDM2OTEyOTA1Mg==",
+    "diff_hunk": "@@ -0,0 +1,29 @@\n+<?php\n+/**\n+ * Copyright © Magento, Inc. All rights reserved.\n+ * See COPYING.txt for license details.\n+ */\n+declare(strict_types=1);\n+\n+namespace Magento\\Security\\Model;\n+\n+/**\n+ * Admin User Expiration model.\n+ * @method string getUserId()\n+ * @method \\Magento\\Security\\Model\\UserExpiration setUserId($userId)\n+ * @method string getExpiresAt()\n+ * @method \\Magento\\Security\\Model\\UserExpiration setExpiresAt($value)\n+ */\n+class UserExpiration extends \\Magento\\Framework\\Model\\AbstractModel",
+    "path": "app/code/Magento/Security/Model/UserExpiration.php",
+    "commit_id": "c8cfb5ba4877e8c9eba533a3979693e5d92590f9",
+    "original_commit_id": "932559d17549ec30d8b27c86be0439a355ff33a7",
+    "user": {
+      "login": "kokoc",
+      "id": 1028034,
+      "node_id": "MDQ6VXNlcjEwMjgwMzQ=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1028034?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/kokoc",
+      "html_url": "https://github.com/kokoc",
+      "followers_url": "https://api.github.com/users/kokoc/followers",
+      "following_url": "https://api.github.com/users/kokoc/following{/other_user}",
+      "gists_url": "https://api.github.com/users/kokoc/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/kokoc/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/kokoc/subscriptions",
+      "organizations_url": "https://api.github.com/users/kokoc/orgs",
+      "repos_url": "https://api.github.com/users/kokoc/repos",
+      "events_url": "https://api.github.com/users/kokoc/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/kokoc/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "This model has no interface. The fields are defined in phpdoc. Suggest to introduce and use the interface for expiration model",
+    "created_at": "2020-01-21T17:06:50Z",
+    "updated_at": "2020-03-05T17:28:46Z",
+    "html_url": "https://github.com/magento/magento2/pull/22837#discussion_r369129052",
+    "pull_request_url": "https://api.github.com/repos/magento/magento2/pulls/22837",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/comments/369129052"
+      },
+      "html": {
+        "href": "https://github.com/magento/magento2/pull/22837#discussion_r369129052"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/magento/magento2/pulls/22837"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/magento/magento2/pulls/comments/369129052/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 17,
+    "side": "RIGHT",
+    "author_association": "MEMBER",
+    "original_position": 17,
+    "position": 1,
+    "subject_type": "line"
+  },
+  "responseSha256": "624d78e28a787e57012b686f6ead5ed863959a73a035ce82996f101fd4287175",
+  "envelopeSha256": "e2f242454ea7dfdb46a55eae1f364e284574b2bcb43ed7afa2f537ca8e2a54c2"
+}
