@@ -366,7 +366,7 @@ class ReviewImpactRadiusRequest(ProposedTreeQueryBinding):
 
 
 class ReviewTraverseRequest(ProposedTreeQueryBinding):
-    """Free-form BFS/DFS over exact proposed-tree AST and plugin relations."""
+    """BFS/DFS over proposed-tree facts, with an optional response token budget."""
 
     start: str = Field(min_length=1, max_length=1000)
     strategy: Literal["bfs", "dfs"] = "bfs"
@@ -374,7 +374,7 @@ class ReviewTraverseRequest(ProposedTreeQueryBinding):
     relation_kinds: List[str] = Field(default_factory=list, max_length=50)
     max_depth: int = Field(default=3, ge=0, le=6)
     max_results: int = Field(default=100, ge=1, le=500)
-    token_budget: int = Field(default=2000, ge=512, le=16000)
+    token_budget: int | None = Field(default=None, ge=512, le=16000)
     detail_level: Literal["minimal", "standard"] = "standard"
     include_source: bool = True
     max_source_windows: int = Field(default=6, ge=1, le=20)

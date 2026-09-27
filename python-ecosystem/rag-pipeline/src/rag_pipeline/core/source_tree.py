@@ -78,7 +78,7 @@ def open_repository_file_no_follow(
     """Open one regular repository file through pinned, no-follow descriptors."""
     parts = _relative_parts(relative_path)
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    file_flags = os.O_RDONLY
+    file_flags = os.O_RDONLY | os.O_NONBLOCK
     no_follow = getattr(os, "O_NOFOLLOW", 0)
     if not no_follow:
         raise RepositorySourceTreeError(

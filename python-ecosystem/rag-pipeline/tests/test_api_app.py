@@ -237,3 +237,24 @@ class TestPendingCollectionJanitor:
         assert any(
             "recovered" in record.getMessage() for record in janitor_records
         )
+
+
+@pytest.mark.asyncio
+async def test_lifespan_closes_manager_when_serving_raises_and_cleanup_fails():
+    import rag_pipeline.api.api as api_module
+    manager = MagicMock()
+    drain = AsyncMock()
+    app = SimpleNamespace(state=SimpleNamespace())
+    with (
+        patch.object(api_module, "RAGConfig", return_value=MagicMock()),
+        patch.object(api_module, "RAGIndexManager", return_value=manager),
+        patch("rag_pipeline.api.routers.index.cleanup_orphaned_index_repository_stream_workspaces", side_effect=OSError("read only")),
+        patch("rag_pipeline.api.routers.index.drain_index_repository_stream_workers", drain),
+    ):
+        with pytest.raises(RuntimeError, match="serving failed"):
+            async with api_module.lifespan(app):
+                raise RuntimeError("serving failed")
+    drain.assert_awaited_once()
+    manager.close.assert_called_once()
+    assert api_module.index_manager is None
+    assert app.state.pending_collection_janitor.done()

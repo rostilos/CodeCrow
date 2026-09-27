@@ -25,57 +25,49 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifecycle: create services on startup, clean up on shutdown."""
-    # --- Startup ---
-    logger.info("Initializing application services...")
-    review_service = ReviewService()
-    command_service = CommandService()
-    
-    # Initialize and start the Redis Queue Consumers
-    from server.queue_consumer import RedisQueueConsumer
-    queue_consumer = RedisQueueConsumer(review_service)
-    app.state.queue_consumer = queue_consumer
-    await queue_consumer.start()
+    services = []
+    consumers = []
+    try:
+        logger.info("Initializing application services...")
+        review_service = ReviewService()
+        services.append(review_service)
+        command_service = CommandService()
+        services.append(command_service)
 
-    from server.command_queue_consumer import CommandQueueConsumer
-    command_queue_consumer = CommandQueueConsumer(command_service)
-    app.state.command_queue_consumer = command_queue_consumer
-    await command_queue_consumer.start()
+        from server.queue_consumer import RedisQueueConsumer
+        from server.command_queue_consumer import CommandQueueConsumer
 
-    app.state.review_service = review_service
-    app.state.command_service = command_service
-    logger.info("Application services ready")
+        queue_consumer = RedisQueueConsumer(review_service)
+        consumers.append(queue_consumer)
+        app.state.queue_consumer = queue_consumer
+        await queue_consumer.start()
 
-    yield
+        command_queue_consumer = CommandQueueConsumer(command_service)
+        consumers.append(command_queue_consumer)
+        app.state.command_queue_consumer = command_queue_consumer
+        await command_queue_consumer.start()
 
-    # --- Shutdown ---
-    logger.info("Shutting down application services...")
-    consumer_stops = []
-    if hasattr(app.state, "queue_consumer"):
-        consumer_stops.append(app.state.queue_consumer.stop())
-    if hasattr(app.state, "command_queue_consumer"):
-        consumer_stops.append(app.state.command_queue_consumer.stop())
-    if consumer_stops:
-        # Stop both intake loops immediately. A sequential drain could let the
-        # second consumer keep admitting work for the full duration of a long
-        # review shutdown.
-        stop_results = await asyncio.gather(
-            *consumer_stops,
+        app.state.review_service = review_service
+        app.state.command_service = command_service
+        logger.info("Application services ready")
+        yield
+    finally:
+        # This also runs when only part of startup succeeds or the application
+        # exits its lifespan with an error. Stop both intakes before draining.
+        logger.info("Shutting down application services...")
+        stopped = await asyncio.gather(
+            *(consumer.stop() for consumer in consumers),
             return_exceptions=True,
         )
-        for stop_result in stop_results:
-            if isinstance(stop_result, BaseException):
-                logger.warning("Error stopping queue consumer: %s", stop_result)
-        
-    # Close the RagClient HTTP pools owned by each service
-    try:
-        await review_service.rag_client.close()
-    except Exception as e:
-        logger.warning(f"Error closing review RagClient: {e}")
-    try:
-        await command_service.rag_client.close()
-    except Exception as e:
-        logger.warning(f"Error closing command RagClient: {e}")
-    logger.info("Application services shut down")
+        for result in stopped:
+            if isinstance(result, BaseException):
+                logger.warning("Error stopping queue consumer: %s", result)
+        for service in services:
+            try:
+                await service.rag_client.close()
+            except Exception as error:
+                logger.warning("Error closing %s RagClient: %s", type(service).__name__, error)
+        logger.info("Application services shut down")
 
 
 def create_app() -> FastAPI:

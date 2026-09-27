@@ -130,20 +130,24 @@ public class CodeAnalysisService {
             Optional<CodeAnalysis> existingAnalysis = codeAnalysisRepository
                     .findByProjectIdAndCommitHashAndPrNumber(project.getId(), commitHash, pullRequestId);
 
-            if (existingAnalysis.isPresent()) {
-                log.info("Analysis already exists for project={}, commit={}, pr={}. Returning existing.",
+            if (existingAnalysis.filter(this::isCompleteAnalysis).isPresent()) {
+                log.info("Complete analysis already exists for project={}, commit={}, pr={}. Returning existing.",
                         project.getId(), commitHash, pullRequestId);
                 return existingAnalysis.get();
             }
 
-            CodeAnalysis analysis = new CodeAnalysis();
-            int previousVersion = codeAnalysisRepository.findMaxPrVersion(project.getId(), pullRequestId).orElse(0);
+            CodeAnalysis analysis = existingAnalysis
+                    .map(previous -> resetAnalysisForRetry(previous, "partial".equals(analysisData.get("status"))))
+                    .orElseGet(CodeAnalysis::new);
+            if (existingAnalysis.isEmpty()) {
+                int previousVersion = codeAnalysisRepository.findMaxPrVersion(project.getId(), pullRequestId).orElse(0);
+                analysis.setPrVersion(previousVersion + 1);
+            }
             analysis.setProject(project);
             analysis.setAnalysisType(AnalysisType.PR_REVIEW);
             analysis.setPrNumber(pullRequestId);
             analysis.setBranchName(targetBranchName);
             analysis.setSourceBranchName(sourceBranchName);
-            analysis.setPrVersion(previousVersion + 1);
             analysis.setDiffFingerprint(diffFingerprint);
             analysis.setTaskId(normalizeTaskValue(taskId, 128));
             analysis.setTaskSummary(normalizeTaskValue(taskSummary, 512));
@@ -194,13 +198,15 @@ public class CodeAnalysisService {
                     .findByProjectIdAndCommitHashAndAnalysisType(
                             project.getId(), commitHash, AnalysisType.BRANCH_ANALYSIS);
 
-            if (existingAnalysis.isPresent()) {
-                log.info("Direct push analysis already exists for project={}, commit={}. Returning existing.",
+            if (existingAnalysis.filter(this::isCompleteAnalysis).isPresent()) {
+                log.info("Complete direct push analysis already exists for project={}, commit={}. Returning existing.",
                         project.getId(), commitHash);
                 return existingAnalysis.get();
             }
 
-            CodeAnalysis analysis = new CodeAnalysis();
+            CodeAnalysis analysis = existingAnalysis
+                    .map(previous -> resetAnalysisForRetry(previous, "partial".equals(analysisData.get("status"))))
+                    .orElseGet(CodeAnalysis::new);
             analysis.setProject(project);
             analysis.setAnalysisType(AnalysisType.BRANCH_ANALYSIS);
             analysis.setPrNumber(null); // No PR for direct push
@@ -243,7 +249,8 @@ public class CodeAnalysisService {
     ) {
         try {
             analysis.setCommitHash(commitHash);
-            analysis.setStatus(AnalysisStatus.ACCEPTED);
+            analysis.setStatus("partial".equals(analysisData.get("status"))
+                    ? AnalysisStatus.PARTIAL : AnalysisStatus.ACCEPTED);
 
             // Extract comment from the analysis data
             String comment = (String) analysisData.get("comment");
@@ -396,9 +403,15 @@ public class CodeAnalysisService {
         return qualityGateRepository.findDefaultWithConditions(workspace.getId()).orElse(null);
     }
 
-    private CodeAnalysis removePreviousAnalysisData(CodeAnalysis codeAnalysis) {
+    private CodeAnalysis resetAnalysisForRetry(CodeAnalysis codeAnalysis, boolean partialRetry) {
         try {
-            codeAnalysis.getIssues().clear();
+            // Missing findings in another incomplete attempt do not refute
+            // previously retained candidates. Ingestion merges exact duplicates.
+            if (!partialRetry || codeAnalysis.getStatus() != AnalysisStatus.PARTIAL) {
+                codeAnalysis.getIssues().clear();
+            }
+            codeAnalysis.setAnalysisResult(null);
+            codeAnalysis.setClonedFromAnalysisId(null);
             codeAnalysis.updateIssueCounts();
             return codeAnalysisRepository.save(codeAnalysis);
 
@@ -408,8 +421,13 @@ public class CodeAnalysisService {
         }
     }
 
+    private boolean isCompleteAnalysis(CodeAnalysis analysis) {
+        return analysis.getStatus() == AnalysisStatus.ACCEPTED;
+    }
+
     public Optional<CodeAnalysis> getCodeAnalysisCache(Long projectId, String commitHash, Long prNumber) {
-        return codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(projectId, commitHash, prNumber).stream().findFirst();
+        return codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(projectId, commitHash, prNumber)
+                .filter(this::isCompleteAnalysis);
     }
 
     /**
@@ -417,7 +435,8 @@ public class CodeAnalysisService {
      * Handles close/reopen scenarios where the same commit gets a new PR number.
      */
     public Optional<CodeAnalysis> getAnalysisByCommitHash(Long projectId, String commitHash) {
-        return codeAnalysisRepository.findTopByProjectIdAndCommitHash(projectId, commitHash);
+        return codeAnalysisRepository.findTopByProjectIdAndCommitHash(projectId, commitHash)
+                .filter(this::isCompleteAnalysis);
     }
 
     /**
@@ -450,7 +469,8 @@ public class CodeAnalysisService {
         if (diffFingerprint == null || diffFingerprint.isBlank()) {
             return Optional.empty();
         }
-        return codeAnalysisRepository.findTopByProjectIdAndDiffFingerprint(projectId, diffFingerprint);
+        return codeAnalysisRepository.findTopByProjectIdAndDiffFingerprint(projectId, diffFingerprint)
+                .filter(this::isCompleteAnalysis);
     }
 
     /**
@@ -477,15 +497,19 @@ public class CodeAnalysisService {
         // Guard against duplicates (same idempotency check as createAnalysisFromAiResponse)
         Optional<CodeAnalysis> existing = codeAnalysisRepository
                 .findByProjectIdAndCommitHashAndPrNumber(project.getId(), commitHash, newPrNumber);
-        if (existing.isPresent()) {
-            log.info("Cloned analysis already exists for project={}, commit={}, pr={}. Returning existing.",
+        if (existing.filter(this::isCompleteAnalysis).isPresent()) {
+            log.info("Complete cloned analysis already exists for project={}, commit={}, pr={}. Returning existing.",
                     project.getId(), commitHash, newPrNumber);
             return existing.get();
         }
 
-        int previousVersion = codeAnalysisRepository.findMaxPrVersion(project.getId(), newPrNumber).orElse(0);
-
-        CodeAnalysis clone = new CodeAnalysis();
+        CodeAnalysis clone = existing
+                .map(analysis -> resetAnalysisForRetry(analysis, false))
+                .orElseGet(CodeAnalysis::new);
+        if (existing.isEmpty()) {
+            int previousVersion = codeAnalysisRepository.findMaxPrVersion(project.getId(), newPrNumber).orElse(0);
+            clone.setPrVersion(previousVersion + 1);
+        }
         clone.setProject(project);
         clone.setAnalysisType(source.getAnalysisType());
         clone.setPrNumber(newPrNumber);
@@ -498,7 +522,6 @@ public class CodeAnalysisService {
         clone.setComment(source.getComment());
         clone.setStatus(source.getStatus());
         clone.setAnalysisResult(source.getAnalysisResult());
-        clone.setPrVersion(previousVersion + 1);
         clone.setClonedFromAnalysisId(source.getId());
 
         // Save first to get an ID

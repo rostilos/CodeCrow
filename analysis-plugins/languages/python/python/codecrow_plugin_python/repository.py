@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import ast
 from pathlib import PurePosixPath
-from typing import Mapping
 
 from codecrow_plugins import (
     FileArtifact,
     ImportBinding,
     ImportFileRecord,
+    ImportRecordIndex,
     ImportedCall,
 )
 
@@ -94,22 +94,39 @@ def parse_import_record(artifact: FileArtifact) -> ImportFileRecord | None:
 def resolve_import(
     source: ImportFileRecord,
     binding: ImportBinding,
-    records: Mapping[str, ImportFileRecord],
+    records: ImportRecordIndex,
 ) -> str:
-    by_module = {
-        record.module: record.path
-        for record in records.values()
-    }
+    def unique_module_path(module: str) -> str:
+        candidates = records.by_module.get(module, ())
+        # A colocated type stub supplements a source module; it is not the
+        # runtime import target. A package initializer wins over a same-name
+        # module under the same search root.
+        source_candidates = tuple(
+            candidate for candidate in candidates
+            if PurePosixPath(candidate.path).suffix == ".py"
+        )
+        if source_candidates:
+            candidates = source_candidates
+        packages = tuple(
+            candidate for candidate in candidates
+            if PurePosixPath(candidate.path).stem == "__init__"
+        )
+        if packages:
+            candidates = packages
+        return candidates[0].path if len(candidates) == 1 else ""
+
     specifier = binding.module
     if not specifier.startswith("."):
-        return by_module.get(specifier, "")
+        return unique_module_path(specifier)
     level = len(specifier) - len(specifier.lstrip("."))
     remainder = specifier[level:]
-    package = source.module.split(".")[:-1]
+    package = source.module.split(".")
+    if PurePosixPath(source.path).stem != "__init__":
+        package = package[:-1]
     if level > len(package):
         return ""
     base = package[: len(package) - level + 1]
     resolved = ".".join(
         [*base, *(part for part in remainder.split(".") if part)]
     )
-    return by_module.get(resolved, "")
+    return unique_module_path(resolved)

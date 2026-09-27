@@ -1,4 +1,4 @@
-"""Inference service package with compatibility exports loaded on demand.
+"""Inference service package with public exports loaded on demand.
 
 Leaf modules are used by provider-free quality tooling. Importing one must not
 initialize unrelated MCP, RAG, or command dependencies.
@@ -12,14 +12,6 @@ from typing import Any
 
 _EXPORTS = {
     "ReviewService": ("service.review", "ReviewService"),
-    "MultiStageReviewOrchestrator": (
-        "service.review",
-        "MultiStageReviewOrchestrator",
-    ),
-    "post_process_analysis_result": (
-        "service.review",
-        "post_process_analysis_result",
-    ),
     "RagClient": ("service.rag", "RagClient"),
     "CommandService": ("service.command", "CommandService"),
 }

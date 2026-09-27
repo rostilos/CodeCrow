@@ -7,6 +7,7 @@ Covers: _slim_stage_results, _build_placeholders, _extract_documented_prs,
         BaseOrchestrator._simple_batch, filter_diff_for_files,
         get_file_content_from_enrichment, build_enrichment_lookup
 """
+from service.qa_documentation import document as qa_document
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -305,18 +306,18 @@ class TestIndependentTestCases:
         - **Expected Result:** Confirmation appears
         <!-- codecrow-test-cases:end -->
         """
-        assert QaDocOrchestrator._contains_extractable_test_cases(valid)
-        assert not QaDocOrchestrator._contains_extractable_test_cases(
+        assert qa_document.contains_extractable_test_cases(valid)
+        assert not qa_document.contains_extractable_test_cases(
             "**Checkout succeeds** (HIGH)"
         )
-        assert not QaDocOrchestrator._contains_extractable_test_cases("""
+        assert not qa_document.contains_extractable_test_cases("""
             <!-- codecrow-test-cases:start -->
             ### Test Scenarios
             <!-- codecrow-test-cases:content -->
             <!-- codecrow-test-cases:end -->
             **Scenario outside the disclosure boundary** (HIGH)
         """)
-        assert not QaDocOrchestrator._contains_extractable_test_cases("""
+        assert not qa_document.contains_extractable_test_cases("""
             <!-- codecrow-test-cases:end -->
             **Scenario between reversed markers** (HIGH)
             <!-- codecrow-test-cases:start -->
@@ -344,7 +345,7 @@ class TestIndependentTestCases:
         <!-- codecrow-environment:end -->
         """
 
-        assert QaDocOrchestrator._has_complete_shareable_sections(valid)
+        assert qa_document.has_complete_shareable_sections(valid)
 
     def test_does_not_infer_sections_from_headings(self):
         unmarked = """
@@ -355,8 +356,8 @@ class TestIndependentTestCases:
         - Використати тестове середовище.
         """
 
-        assert not QaDocOrchestrator._has_complete_shareable_sections(unmarked)
-        assert not QaDocOrchestrator._contains_extractable_test_cases(unmarked)
+        assert not qa_document.has_complete_shareable_sections(unmarked)
+        assert not qa_document.contains_extractable_test_cases(unmarked)
 
     def test_rejects_duplicate_or_misordered_sentinels(self):
         invalid = """
@@ -373,7 +374,7 @@ class TestIndependentTestCases:
         <!-- codecrow-test-cases:end -->
         """
 
-        assert not QaDocOrchestrator._has_complete_shareable_sections(invalid)
+        assert not qa_document.has_complete_shareable_sections(invalid)
 
     def test_rejects_body_text_in_the_heading_slot(self):
         invalid = """
@@ -390,7 +391,7 @@ class TestIndependentTestCases:
         <!-- codecrow-environment:end -->
         """
 
-        assert not QaDocOrchestrator._has_complete_shareable_sections(invalid)
+        assert not qa_document.has_complete_shareable_sections(invalid)
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_repairs_the_complete_document_when_sentinels_are_missing(self):
@@ -474,12 +475,12 @@ class TestIndependentTestCases:
             await orchestrator._ensure_shareable_sections("# Custom QA summary", placeholders)
 
 
-# ── QaDocOrchestrator._build_placeholders ────────────────────────
+# ── qa_document.build_placeholders ────────────────────────
 
 class TestBuildPlaceholders:
     def test_basic_placeholders(self):
         orch = QaDocOrchestrator(llm=MagicMock())
-        result = orch._build_placeholders(
+        result = qa_document.build_placeholders(
             project_name="TestProject",
             pr_number=42,
             issues_found=5,
@@ -503,7 +504,7 @@ class TestBuildPlaceholders:
 
     def test_defaults_when_empty(self):
         orch = QaDocOrchestrator(llm=MagicMock())
-        result = orch._build_placeholders(
+        result = qa_document.build_placeholders(
             project_name=None,
             pr_number=None,
             issues_found=0,
@@ -520,7 +521,7 @@ class TestBuildPlaceholders:
 
     def test_title_falls_back_to_task_summary_before_task_key(self):
         orch = QaDocOrchestrator(llm=MagicMock())
-        result = orch._build_placeholders(
+        result = qa_document.build_placeholders(
             project_name="TestProject",
             pr_number=42,
             issues_found=0,
@@ -538,7 +539,7 @@ class TestBuildPlaceholders:
 
     def test_title_falls_back_to_pr_number_without_task_metadata(self):
         orch = QaDocOrchestrator(llm=MagicMock())
-        result = orch._build_placeholders(
+        result = qa_document.build_placeholders(
             project_name=None,
             pr_number=42,
             issues_found=0,
@@ -558,7 +559,7 @@ class TestBuildPlaceholders:
 Checkout behavior changed.
 """
 
-        normalized = QaDocOrchestrator._normalize_document_title(
+        normalized = qa_document.normalize_document_title(
             documentation,
             "Support split shipments",
         )
@@ -568,7 +569,7 @@ Checkout behavior changed.
 
     def test_custom_language(self):
         orch = QaDocOrchestrator(llm=MagicMock())
-        result = orch._build_placeholders(
+        result = qa_document.build_placeholders(
             project_name="P",
             pr_number=1,
             issues_found=0,
@@ -582,88 +583,88 @@ Checkout behavior changed.
         assert result["output_language"] == "Russian"
 
 
-# ── QaDocOrchestrator._extract_documented_prs ────────────────────
+# ── qa_document.extract_documented_prs ────────────────────
 
 class TestExtractDocumentedPrs:
     def test_extracts_prs(self):
         doc = "some text\n<!-- codecrow-qa-autodoc:prs=1,2,3 -->\nmore text"
-        result = QaDocOrchestrator._extract_documented_prs(doc)
+        result = qa_document.extract_documented_prs(doc)
         assert result == {1, 2, 3}
 
     def test_no_marker(self):
-        assert QaDocOrchestrator._extract_documented_prs("no marker here") == set()
+        assert qa_document.extract_documented_prs("no marker here") == set()
 
     def test_none(self):
-        assert QaDocOrchestrator._extract_documented_prs(None) == set()
+        assert qa_document.extract_documented_prs(None) == set()
 
     def test_empty(self):
-        assert QaDocOrchestrator._extract_documented_prs("") == set()
+        assert qa_document.extract_documented_prs("") == set()
 
     def test_single_pr(self):
         doc = "<!-- codecrow-qa-autodoc:prs=42 -->"
-        result = QaDocOrchestrator._extract_documented_prs(doc)
+        result = qa_document.extract_documented_prs(doc)
         assert result == {42}
 
 
-# ── QaDocOrchestrator._extract_text ──────────────────────────────
+# ── qa_document.extract_text ──────────────────────────────
 
 class TestExtractText:
     def test_string_content(self):
         response = MagicMock(content="hello world")
-        assert QaDocOrchestrator._extract_text(response) == "hello world"
+        assert qa_document.extract_text(response) == "hello world"
 
     def test_list_content_strings(self):
         response = MagicMock(content=["part1", "part2"])
-        result = QaDocOrchestrator._extract_text(response)
+        result = qa_document.extract_text(response)
         assert "part1" in result
         assert "part2" in result
 
     def test_list_content_dicts(self):
         response = MagicMock(content=[{"text": "block1"}, {"text": "block2"}])
-        result = QaDocOrchestrator._extract_text(response)
+        result = qa_document.extract_text(response)
         assert "block1" in result
         assert "block2" in result
 
     def test_plain_string(self):
-        assert QaDocOrchestrator._extract_text("direct string") == "direct string"
+        assert qa_document.extract_text("direct string") == "direct string"
 
     def test_no_content_attr(self):
         # Object without .content
-        result = QaDocOrchestrator._extract_text(42)
+        result = qa_document.extract_text(42)
         assert result == "42"
 
 
-# ── QaDocOrchestrator._parse_json_from_response ─────────────────
+# ── qa_document.parse_json_from_response ─────────────────
 
 class TestParseJsonFromResponse:
     def test_direct_json(self):
-        result = QaDocOrchestrator._parse_json_from_response('{"key": "value"}')
+        result = qa_document.parse_json_from_response('{"key": "value"}')
         assert result == {"key": "value"}
 
     def test_json_in_code_fence(self):
         text = '```json\n{"key": "value"}\n```'
-        result = QaDocOrchestrator._parse_json_from_response(text)
+        result = qa_document.parse_json_from_response(text)
         assert result == {"key": "value"}
 
     def test_trailing_comma(self):
         text = '{"a": 1, "b": 2, }'
-        result = QaDocOrchestrator._parse_json_from_response(text)
+        result = qa_document.parse_json_from_response(text)
         assert result == {"a": 1, "b": 2}
 
     def test_json_embedded_in_text(self):
         text = 'Here is the result: {"answer": "yes"} end.'
-        result = QaDocOrchestrator._parse_json_from_response(text)
+        result = qa_document.parse_json_from_response(text)
         assert result["answer"] == "yes"
 
     def test_empty(self):
-        assert QaDocOrchestrator._parse_json_from_response("") is None
-        assert QaDocOrchestrator._parse_json_from_response(None) is None
+        assert qa_document.parse_json_from_response("") is None
+        assert qa_document.parse_json_from_response(None) is None
 
     def test_no_json(self):
-        assert QaDocOrchestrator._parse_json_from_response("no json here") is None
+        assert qa_document.parse_json_from_response("no json here") is None
 
     def test_trailing_comma_in_list(self):
         text = '{"items": [1, 2, 3, ]}'
-        result = QaDocOrchestrator._parse_json_from_response(text)
+        result = qa_document.parse_json_from_response(text)
         assert result is not None
         assert result["items"] == [1, 2, 3]

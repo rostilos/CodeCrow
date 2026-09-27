@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, AliasChoices
 
 
 class ReviewRequestDto(BaseModel):
-    """Inputs used by the single graph-guided repository review engine."""
+    """Host-owned inputs for planned repository review and final verification."""
 
     projectId: int
     projectVcsWorkspace: str

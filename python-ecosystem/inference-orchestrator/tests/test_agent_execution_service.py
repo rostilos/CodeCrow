@@ -888,7 +888,7 @@ async def test_no_tool_structured_request_uses_one_provider_aware_call():
         },
         "max_tokens": 16_384,
     }
-    assert session.list_tools_calls == 1
+    assert session.list_tools_calls == 0
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -2380,3 +2380,16 @@ async def test_named_server_empty_tool_inventory_is_not_silent():
     assert optional_service.available_tool_names == frozenset({
         "getBranchFileContent",
     })
+
+
+@pytest.mark.asyncio
+async def test_no_tool_structured_request_does_not_need_an_mcp_client():
+    llm = ChatOpenRouter({"raw": None, "parsed": _Output(value="local"), "parsing_error": None})
+    service = AgentExecutionService(llm=llm, client=None)
+    result = await service.execute(AgentExecutionRequest(
+        prompt="complete local evidence", allowed_tool_names=frozenset(),
+        max_steps=1, output_schema=_Output,
+    ))
+    assert result.output == _Output(value="local")
+    assert result.tool_events == ()
+    assert service.available_tool_names == frozenset()

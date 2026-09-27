@@ -1,4 +1,5 @@
 """Extended tests for command_service: _parse_json_response, _extract_json_object, _extract_summary_field_fallback."""
+from service.command import results as command_results
 import pytest
 from unittest.mock import MagicMock, patch
 from service.command.command_service import CommandService
@@ -17,30 +18,30 @@ def service():
 
 class TestParseJsonResponse:
     def test_plain_json(self, service):
-        result = service._parse_json_response('{"key": "val"}')
+        result = command_results.parse_json_response('{"key": "val"}')
         assert result == {"key": "val"}
 
     def test_json_in_markdown(self, service):
         text = '```json\n{"answer": "hello"}\n```'
-        result = service._parse_json_response(text)
+        result = command_results.parse_json_response(text)
         assert result == {"answer": "hello"}
 
     def test_json_in_generic_block(self, service):
         text = '```\n{"answer": "test"}\n```'
-        result = service._parse_json_response(text)
+        result = command_results.parse_json_response(text)
         assert result == {"answer": "test"}
 
     def test_embedded_json(self, service):
         text = 'Here is the result:\n{"answer": "embedded"}\nDone.'
-        result = service._parse_json_response(text)
+        result = command_results.parse_json_response(text)
         assert result["answer"] == "embedded"
 
     def test_no_json(self, service):
-        assert service._parse_json_response("not json at all") is None
+        assert command_results.parse_json_response("not json at all") is None
 
     def test_nested_json(self, service):
         text = '{"outer": {"inner": "val"}}'
-        result = service._parse_json_response(text)
+        result = command_results.parse_json_response(text)
         assert result["outer"]["inner"] == "val"
 
 
@@ -49,24 +50,24 @@ class TestParseJsonResponse:
 
 class TestExtractJsonObject:
     def test_simple_object(self, service):
-        result = service._extract_json_object('prefix {"a": 1} suffix')
+        result = command_results.extract_json_object('prefix {"a": 1} suffix')
         assert result == '{"a": 1}'
 
     def test_nested_braces(self, service):
-        result = service._extract_json_object('{"a": {"b": 2}}')
+        result = command_results.extract_json_object('{"a": {"b": 2}}')
         assert result == '{"a": {"b": 2}}'
 
     def test_no_object(self, service):
-        assert service._extract_json_object("no braces here") is None
+        assert command_results.extract_json_object("no braces here") is None
 
     def test_string_with_braces(self, service):
-        result = service._extract_json_object('{"text": "has {inner} braces"}')
+        result = command_results.extract_json_object('{"text": "has {inner} braces"}')
         # Should handle quoted braces correctly
         assert result is not None
         assert "text" in result
 
     def test_escape_handling(self, service):
-        result = service._extract_json_object('{"key": "val\\"ue"}')
+        result = command_results.extract_json_object('{"key": "val\\"ue"}')
         assert result is not None
 
 
@@ -76,12 +77,12 @@ class TestExtractJsonObject:
 class TestExtractSummaryFieldFallback:
     def test_extracts_summary(self, service):
         text = '{"summary": "This is a summary", "other": "data"}'
-        result = service._extract_summary_field_fallback(text)
+        result = command_results.extract_summary_field_fallback(text)
         assert result is not None
         assert "summary" in result.lower() or len(result) > 0
 
     def test_no_summary(self, service):
-        result = service._extract_summary_field_fallback("no summary here")
+        result = command_results.extract_summary_field_fallback("no summary here")
         # Should return None or empty
         assert result is None or result == ""
 

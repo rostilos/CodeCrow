@@ -62,7 +62,9 @@ class DependencyGraphBuilder:
         self.relationships: List[FileRelationship] = []
 
     def _initialize_nodes(self, file_groups: List[Any]) -> None:
-        """Initialize nodes and preserve deterministic plugin evidence groups."""
+        """Initialize one request graph and preserve plugin evidence groups."""
+        self.nodes.clear()
+        self.relationships.clear()
         for group in file_groups:
             paths = []
             for review_file in group.files:
@@ -94,9 +96,7 @@ class DependencyGraphBuilder:
                         relationship_type="PLUGIN_EVIDENCE",
                         matched_on=str(group.group_id),
                     ))
-        for path, node in self.nodes.items():
-            if node.related_files:
-                node.relationship_degree = self._relationship_degree(path)
+        self._refresh_relationship_degrees()
 
     def build_graph_from_enrichment(
         self,
@@ -161,7 +161,7 @@ class DependencyGraphBuilder:
         for file_path, related in relationships_by_file.items():
             if file_path in self.nodes:
                 self.nodes[file_path].related_files.update(related)
-                self.nodes[file_path].relationship_degree = self._relationship_degree(file_path)
+        self._refresh_relationship_degrees()
 
         logger.info(
             f"Dependency graph built from enrichment: {len(self.nodes)} files, "
@@ -229,6 +229,10 @@ class DependencyGraphBuilder:
                 "edges: %s",
                 e,
             )
+            return self.nodes
+
+        if not isinstance(relation_map, dict):
+            logger.warning("Malformed structural relation response; batching without inferred edges")
             return self.nodes
 
         self._extract_relationships_from_structural_map(
@@ -337,15 +341,17 @@ class DependencyGraphBuilder:
         for file_path, related in file_relationships.items():
             if file_path in self.nodes:
                 self.nodes[file_path].related_files.update(related)
-                self.nodes[file_path].relationship_degree = self._relationship_degree(file_path)
+        self._refresh_relationship_degrees()
 
-    def _relationship_degree(self, file_path: str) -> int:
-        return sum(
-            1
-            for relationship in self.relationships
-            if relationship.source_file == file_path
-            or relationship.target_file == file_path
-        )
+    def _refresh_relationship_degrees(self) -> None:
+        """Count all incident edges in one pass instead of rescanning per file."""
+        for node in self.nodes.values():
+            node.relationship_degree = 0
+        for relationship in self.relationships:
+            for path in {relationship.source_file, relationship.target_file}:
+                node = self.nodes.get(path)
+                if node is not None:
+                    node.relationship_degree += 1
 
     def _build_basic_graph(self, file_groups: List[Any]) -> Dict[str, FileNode]:
         """Fallback without inventing relationships from file co-location."""
@@ -356,27 +362,20 @@ class DependencyGraphBuilder:
         """Find connected components in the dependency graph."""
         visited = set()
         components = []
-
-        def dfs(node_path: str, component: Set[str]):
-            if node_path in visited:
-                return
-            visited.add(node_path)
-            component.add(node_path)
-
-            node = self.nodes.get(node_path)
-            if not node:
-                return
-
-            for related_path in node.related_files:
-                if related_path in self.nodes:
-                    dfs(related_path, component)
-
         for path in self.nodes:
-            if path not in visited:
-                component: Set[str] = set()
-                dfs(path, component)
-                if component:
-                    components.append(component)
+            if path in visited:
+                continue
+            component: Set[str] = set()
+            pending = [path]
+            visited.add(path)
+            while pending:
+                current = pending.pop()
+                component.add(current)
+                for related in self.nodes[current].related_files:
+                    if related in self.nodes and related not in visited:
+                        visited.add(related)
+                        pending.append(related)
+            components.append(component)
 
         return components
 
@@ -835,7 +834,7 @@ def build_dependency_aware_batches(
             if tok > max_batch_token_budget:
                 logger.warning(
                     "Single file %s estimated at %dK tokens (budget=%dK) — "
-                    "will be content-capped at prompt level",
+                    "will be handled by semantic prompt packing",
                     path, tok // 1000, max_batch_token_budget // 1000,
                 )
             if current_batch and (

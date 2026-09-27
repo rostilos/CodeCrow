@@ -1,3 +1,4 @@
+from service.qa_documentation import document as qa_document
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -302,7 +303,7 @@ class TestQaPackedStages:
         )
         repair_prompts = _all_prompt_text(llm)
 
-        assert orchestrator._has_complete_shareable_sections(repaired)
+        assert qa_document.has_complete_shareable_sections(repaired)
         assert llm.ainvoke.await_count <= 4
         assert "QA_COVERAGE_DIAGNOSTIC" in repair_prompts
         assert all(

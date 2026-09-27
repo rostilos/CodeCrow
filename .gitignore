@@ -62,3 +62,6 @@ tools/magento_benchmark/reports/
 tools/magento_benchmark/runs/
 tools/magento_benchmark/site/
 tools/magento_benchmark/work/
+
+# Local full provider request/response artifacts contain repository source.
+review-quality-captures/

@@ -72,3 +72,15 @@ def test_runtime_representation_records_structural_storage_and_file_ceiling():
     assert smaller["max_file_size_bytes"] == 256 * 1024
     assert larger["max_file_size_bytes"] == 512 * 1024
     assert smaller != larger
+
+
+def test_fingerprint_tracks_extracted_implementation_modules(tmp_path):
+    root = _projection_root(tmp_path)
+    previous = compute_index_representation_fingerprint(root, dependency_versions=_dependencies())
+    for directory in ("index_manager", "structural_graph", "splitter", "review_graph"):
+        module = root / "core" / directory / "collaborator.py"
+        module.parent.mkdir(parents=True, exist_ok=True)
+        module.write_text("implementation = True\n")
+        current = compute_index_representation_fingerprint(root, dependency_versions=_dependencies())
+        assert current != previous
+        previous = current

@@ -150,7 +150,7 @@ async def test_start_uses_blocking_read_safe_redis_timeouts():
     consumer._consume_loop = AsyncMock()
 
     with patch(
-        "server.queue_consumer.redis.from_url",
+        "server.redis_job_consumer.redis.from_url",
         return_value=redis_client,
     ) as from_url:
         await consumer.start()
@@ -271,6 +271,7 @@ async def test_stop_waits_for_admitted_review_before_closing_redis():
     job_task.add_done_callback(consumer._job_tasks.discard)
     await started.wait()
 
+    redis_client = consumer._redis
     stop_task = asyncio.create_task(consumer.stop())
     await asyncio.sleep(0)
 
@@ -281,7 +282,7 @@ async def test_stop_waits_for_admitted_review_before_closing_redis():
     await asyncio.wait_for(stop_task, timeout=1)
 
     assert job_task.done()
-    consumer._redis.aclose.assert_awaited_once_with()
+    redis_client.aclose.assert_awaited_once_with()
 
 
 def test_redis_outage_diagnostic_is_bounded_until_recovery():

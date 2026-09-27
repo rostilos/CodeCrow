@@ -62,13 +62,15 @@ class TestRelationshipDegree:
                     matched_on="",
                 )
             )
-        result = graph._relationship_degree("a.py")
+        graph._refresh_relationship_degrees()
+        result = graph.nodes["a.py"].relationship_degree
         assert result == 20
 
     def test_zero_when_no_relationships(self):
         graph = DependencyGraph()
         graph.nodes["a.py"] = FileNode(path="a.py", priority="HIGH")
-        result = graph._relationship_degree("a.py")
+        graph._refresh_relationship_degrees()
+        result = graph.nodes["a.py"].relationship_degree
         assert result == 0
 
 

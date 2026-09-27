@@ -5,6 +5,7 @@ Validates that internal service-to-service requests carry
 the correct X-Service-Secret header matching the SERVICE_SECRET env var.
 """
 import os
+import hmac
 import logging
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -38,7 +39,8 @@ class ServiceSecretMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         provided = request.headers.get("x-service-secret", "")
-        if provided != self.secret:
+        matches = hmac.compare_digest(provided.encode("utf-8"), self.secret.encode("utf-8"))
+        if not matches:
             logger.warning(
                 "Unauthorized request to %s from %s — "
                 "provided_len=%d expected_len=%d match=%s",
@@ -46,7 +48,7 @@ class ServiceSecretMiddleware(BaseHTTPMiddleware):
                 request.client.host if request.client else "unknown",
                 len(provided),
                 len(self.secret),
-                provided == self.secret,
+                matches,
             )
             return JSONResponse(
                 status_code=401,

@@ -1,4 +1,5 @@
 """Extended tests for qa_doc_orchestrator: helper methods and pipeline logic."""
+from service.qa_documentation import document as qa_document
 import json
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -11,24 +12,24 @@ from service.qa_documentation.qa_doc_orchestrator import QaDocOrchestrator as Qa
 
 class TestExtractDocumentedPrs:
     def test_no_previous_doc(self):
-        assert QaDocumentationOrchestrator._extract_documented_prs(None) == set()
+        assert qa_document.extract_documented_prs(None) == set()
 
     def test_empty_string(self):
-        assert QaDocumentationOrchestrator._extract_documented_prs("") == set()
+        assert qa_document.extract_documented_prs("") == set()
 
     def test_extracts_prs(self):
         doc = "some text\n<!-- codecrow-qa-autodoc:prs=1,2,3 -->\nmore text"
-        result = QaDocumentationOrchestrator._extract_documented_prs(doc)
+        result = qa_document.extract_documented_prs(doc)
         assert result == {1, 2, 3}
 
     def test_no_marker(self):
         doc = "Just documentation without markers"
-        result = QaDocumentationOrchestrator._extract_documented_prs(doc)
+        result = qa_document.extract_documented_prs(doc)
         assert result == set()
 
     def test_single_pr(self):
         doc = "<!-- codecrow-qa-autodoc:prs=42 -->"
-        result = QaDocumentationOrchestrator._extract_documented_prs(doc)
+        result = qa_document.extract_documented_prs(doc)
         assert result == {42}
 
 
@@ -39,28 +40,28 @@ class TestExtractText:
     def test_string_content(self):
         resp = MagicMock()
         resp.content = "Hello"
-        assert QaDocumentationOrchestrator._extract_text(resp) == "Hello"
+        assert qa_document.extract_text(resp) == "Hello"
 
     def test_list_content_strings(self):
         resp = MagicMock()
         resp.content = ["Part 1", "Part 2"]
-        result = QaDocumentationOrchestrator._extract_text(resp)
+        result = qa_document.extract_text(resp)
         assert "Part 1" in result
         assert "Part 2" in result
 
     def test_list_content_dicts(self):
         resp = MagicMock()
         resp.content = [{"text": "Block 1"}, {"text": "Block 2"}]
-        result = QaDocumentationOrchestrator._extract_text(resp)
+        result = qa_document.extract_text(resp)
         assert "Block 1" in result
         assert "Block 2" in result
 
     def test_plain_string_response(self):
-        assert QaDocumentationOrchestrator._extract_text("direct") == "direct"
+        assert qa_document.extract_text("direct") == "direct"
 
     def test_non_standard(self):
         resp = MagicMock(spec=[])
-        result = QaDocumentationOrchestrator._extract_text(resp)
+        result = qa_document.extract_text(resp)
         assert isinstance(result, str)
 
 
@@ -70,41 +71,41 @@ class TestExtractText:
 class TestParseJsonFromResponse:
     def test_plain_json(self):
         text = '{"key": "value"}'
-        result = QaDocumentationOrchestrator._parse_json_from_response(text)
+        result = qa_document.parse_json_from_response(text)
         assert result == {"key": "value"}
 
     def test_markdown_fence(self):
         text = '```json\n{"key": "value"}\n```'
-        result = QaDocumentationOrchestrator._parse_json_from_response(text)
+        result = qa_document.parse_json_from_response(text)
         assert result == {"key": "value"}
 
     def test_trailing_comma(self):
         text = '{"key": "value",}'
-        result = QaDocumentationOrchestrator._parse_json_from_response(text)
+        result = qa_document.parse_json_from_response(text)
         assert result == {"key": "value"}
 
     def test_embedded_json(self):
         text = 'Here is the result: {"a": 1} and more text'
-        result = QaDocumentationOrchestrator._parse_json_from_response(text)
+        result = qa_document.parse_json_from_response(text)
         assert result == {"a": 1}
 
     def test_empty_text(self):
-        assert QaDocumentationOrchestrator._parse_json_from_response("") is None
+        assert qa_document.parse_json_from_response("") is None
 
     def test_none_text(self):
-        assert QaDocumentationOrchestrator._parse_json_from_response(None) is None
+        assert qa_document.parse_json_from_response(None) is None
 
     def test_no_json(self):
-        assert QaDocumentationOrchestrator._parse_json_from_response("just text") is None
+        assert qa_document.parse_json_from_response("just text") is None
 
     def test_nested_json(self):
         text = '{"outer": {"inner": "val"}}'
-        result = QaDocumentationOrchestrator._parse_json_from_response(text)
+        result = qa_document.parse_json_from_response(text)
         assert result["outer"]["inner"] == "val"
 
     def test_generic_fence(self):
         text = '```\n{"key": 1}\n```'
-        result = QaDocumentationOrchestrator._parse_json_from_response(text)
+        result = qa_document.parse_json_from_response(text)
         assert result == {"key": 1}
 
 
@@ -116,7 +117,7 @@ class TestBuildPlaceholders:
         self.orch = QaDocumentationOrchestrator.__new__(QaDocumentationOrchestrator)
 
     def test_basic(self):
-        result = self.orch._build_placeholders(
+        result = qa_document.build_placeholders(
             project_name="MyProject",
             pr_number=42,
             issues_found=5,
@@ -135,7 +136,7 @@ class TestBuildPlaceholders:
         assert result["output_language"] == "English"
 
     def test_defaults(self):
-        result = self.orch._build_placeholders(
+        result = qa_document.build_placeholders(
             project_name=None,
             pr_number=None,
             issues_found=0,
@@ -150,7 +151,7 @@ class TestBuildPlaceholders:
         assert result["diff"] == "No diff available."
 
     def test_empty_language_defaults_english(self):
-        result = self.orch._build_placeholders(
+        result = qa_document.build_placeholders(
             project_name="P",
             pr_number=1,
             issues_found=0,

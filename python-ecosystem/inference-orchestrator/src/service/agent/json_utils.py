@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 
 from utils.llm_delegate import llm_class_names
 from utils.llm_response import extract_llm_response_text
+from utils.llm_json import remove_trailing_commas as _remove_trailing_commas
 from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
 from service.agent.structured_output import (
     StructuredOutputInvocation,
@@ -331,10 +332,6 @@ def load_json_with_local_repairs(text: str) -> tuple[str, Any]:
             last_error = exc
 
     raise last_error or ValueError("No JSON content found")
-
-
-def _remove_trailing_commas(text: str) -> str:
-    return re.sub(r",\s*([}\]])", r"\1", text)
 
 
 def _escape_newlines_in_strings(text: str) -> str:

@@ -55,7 +55,9 @@ class TestDependencyGraphBuilderBasic:
             FileRelationship(source_file="a.py", target_file="b.py", relationship_type="import", matched_on="x"),
             FileRelationship(source_file="a.py", target_file="c.py", relationship_type="import", matched_on="y"),
         ]
-        assert b._relationship_degree("a.py") == 2
+        b.nodes["a.py"] = FileNode(path="a.py", priority="HIGH")
+        b._refresh_relationship_degrees()
+        assert b.nodes["a.py"].relationship_degree == 2
 
     def test_get_relationship_summary_empty(self):
         b = DependencyGraphBuilder()
@@ -437,3 +439,41 @@ class TestGetRelationshipSummary:
         assert summary["total_relationships"] == 1
         assert summary["relationship_types"]["import"] == 1
         assert summary["files_with_relationships"] == 1
+
+
+def test_reusing_dependency_builder_does_not_mix_request_graphs():
+    builder = DependencyGraphBuilder()
+    builder.build_graph_from_enrichment(
+        [_make_group("HIGH", [_make_file("old/a.py"), _make_file("old/b.py")])],
+        _make_enrichment(relationships=[("old/a.py", "old/b.py", "IMPORTS")]),
+    )
+    builder._build_basic_graph([_make_group("HIGH", [_make_file("new/a.py")])])
+    assert set(builder.nodes) == {"new/a.py"}
+    assert builder.relationships == []
+    assert builder.get_connected_components() == [{"new/a.py"}]
+
+
+def test_large_dependency_component_does_not_depend_on_python_recursion_limit():
+    size = 2500
+    builder = DependencyGraphBuilder()
+    paths = [f"module/{index}.py" for index in range(size)]
+    builder.build_graph_from_enrichment(
+        [_make_group("MEDIUM", [_make_file(path) for path in paths])],
+        _make_enrichment(relationships=[(paths[i], paths[i + 1], "IMPORTS") for i in range(size - 1)]),
+    )
+    assert builder.get_connected_components() == [set(paths)]
+    assert builder.nodes[paths[0]].relationship_degree == 1
+    assert builder.nodes[paths[size // 2]].relationship_degree == 2
+
+
+@pytest.mark.asyncio
+async def test_malformed_optional_structural_map_preserves_basic_batching():
+    from unittest.mock import AsyncMock
+    client = SimpleNamespace(get_structural_relations=AsyncMock(return_value=["malformed"]))
+    builder = DependencyGraphBuilder(client)
+    nodes = await builder.build_graph_from_structural_relations(
+        [_make_group("HIGH", [_make_file("src/a.py")])],
+        "workspace", "project", ["main"], structural_binding={"revision": "abc"},
+    )
+    assert set(nodes) == {"src/a.py"}
+    assert builder.relationships == []

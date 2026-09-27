@@ -233,8 +233,25 @@ def test_graph_fact_rebase_preserves_contributing_plugins():
         contributing_plugin_ids=("django",),
     )
 
-    rebased = PluginRuntime._rebase_fact(fact, "services/orders")
+    from codecrow_plugins.scope import rebase_fact
+
+    rebased = rebase_fact(fact, "services/orders")
 
     assert rebased.path == "services/orders/routes.py"
     assert rebased.related_paths == ("services/orders/handlers.py",)
     assert rebased.contributing_plugin_ids == ("django",)
+
+
+def test_malformed_graph_contribution_keeps_other_plugin_evidence():
+    valid = _fact("valid", "source")
+    runtime, capabilities = _runtime({
+        "broken": (object(),),
+        "working": (valid,),
+    })
+    facts, diagnostics = runtime.graph_facts(
+        FileArtifact("src/example.py", "pass"), capabilities,
+    )
+    assert facts == (valid,)
+    assert [(item.code, item.plugin_id, item.recoverable) for item in diagnostics] == [
+        ("plugin-index-invalid-result", "broken", True),
+    ]

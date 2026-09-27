@@ -60,7 +60,7 @@ def test_operation_models_share_normalized_review_binding_and_bounded_defaults()
     assert impact.max_depth == 2
     assert traverse.strategy == "bfs"
     assert traverse.direction == "both"
-    assert traverse.token_budget == 2000
+    assert traverse.token_budget is None
     assert graph.detail_level == "standard"
     assert graph.cursor == 0
     assert unit.offset == 0
@@ -205,3 +205,18 @@ def test_minimal_context_router_passes_host_binding_and_operation_arguments(
     assert arguments["question"] == "Review Service.run"
     assert arguments["focus_symbols"] == ["Service.run"]
     assert arguments["include_source"] is True
+
+
+@patch("rag_pipeline.api.routers.query.ProposedTreeReviewContextService")
+@patch("rag_pipeline.api.routers.query._manager")
+def test_traversal_router_preserves_absent_and_explicit_budget(manager_factory, service_class):
+    from rag_pipeline.api.routers.query import review_traverse
+
+    service_class.return_value.traverse_review_graph.return_value = {"status": "ready"}
+    for token_budget in (None, 2000):
+        request = ReviewTraverseRequest(**_binding(), start="unit:changed", token_budget=token_budget, include_source=False)
+        assert review_traverse(request)["status"] == "ready"
+        forwarded = service_class.return_value.traverse_review_graph.call_args.kwargs
+        assert forwarded["token_budget"] == token_budget
+        assert forwarded["review_collection_target"] == "sealed-review"
+        assert forwarded["include_source"] is False

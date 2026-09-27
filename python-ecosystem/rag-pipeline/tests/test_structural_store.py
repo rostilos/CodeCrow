@@ -948,6 +948,7 @@ def test_unit_fts_upsert_avoids_unindexed_delete_and_replaces_duplicate_terms(
     assert duplicate_id == first_id
     assert not any(
         "DELETE FROM UNITS_FTS" in statement.upper()
+        and "WHERE ROWID =" not in statement.upper()
         for statement in statements
     )
     assert sum(
@@ -2336,6 +2337,8 @@ def test_repository_output_reconciliation_removes_obsolete_rows_and_rolls_back(
     )
     delta_writer.abort_repository_analysis_reconciliation()
     assert transient_id == obsolete_id
+    assert delta_writer.unit_count == connection.execute("SELECT count(*) FROM units").fetchone()[0]
+    assert delta_writer.relation_count == connection.execute("SELECT count(*) FROM relations").fetchone()[0]
     assert connection.execute(
         "SELECT 1 FROM units WHERE unit_id = ?", (transient_id,)
     ).fetchone() is None

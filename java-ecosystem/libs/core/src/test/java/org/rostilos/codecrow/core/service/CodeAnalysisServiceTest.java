@@ -156,6 +156,114 @@ class CodeAnalysisServiceTest {
         }
 
         @Test
+        @DisplayName("should persist partial review findings without accepting incomplete work")
+        void shouldPersistPartialReview() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            stubNewPrAnalysis(1L, "abc123", 42L);
+            Map<String, Object> data = createBasicAnalysisData("Verification unavailable");
+            data.put("status", "partial");
+            data.put("issues", List.of(createIssueData("HIGH", "App.java", 10, "Supported defect")));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123", "author1", "authorUser");
+
+            assertThat(result.getStatus()).isEqualTo(AnalysisStatus.PARTIAL);
+            assertThat(result.getIssues()).hasSize(1);
+            assertThat(result.getComment()).isEqualTo("Verification unavailable");
+        }
+
+        @Test
+        @DisplayName("should refresh a partial PR analysis in the same durable record")
+        void shouldRefreshPartialAnalysisInPlace() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            CodeAnalysis existing = createCodeAnalysis(10L, project);
+            existing.setStatus(AnalysisStatus.PARTIAL);
+            existing.setPrVersion(3);
+            existing.setAnalysisResult(AnalysisResult.FAILED);
+            CodeAnalysisIssue previousIssue = new CodeAnalysisIssue();
+            previousIssue.setSeverity(IssueSeverity.HIGH);
+            previousIssue.setFilePath("Old.java");
+            existing.addIssue(previousIssue);
+            when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "abc123", 42L))
+                    .thenReturn(Optional.of(existing));
+            when(codeAnalysisRepository.save(any(CodeAnalysis.class))).thenAnswer(inv -> inv.getArgument(0));
+            Map<String, Object> data = createBasicAnalysisData("Review complete");
+            data.put("status", "complete");
+            data.put("issues", List.of(createIssueData("MEDIUM", "New.java", 5, "Current defect")));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123", "author1", "authorUser", "new-identity");
+
+            assertThat(result).isSameAs(existing);
+            assertThat(result.getStatus()).isEqualTo(AnalysisStatus.ACCEPTED);
+            assertThat(result.getPrVersion()).isEqualTo(3);
+            assertThat(result.getDiffFingerprint()).isEqualTo("new-identity");
+            assertThat(result.getAnalysisResult()).isNull();
+            assertThat(result.getIssues()).extracting(CodeAnalysisIssue::getFilePath).containsExactly("New.java");
+            verify(codeAnalysisRepository, never()).findMaxPrVersion(anyLong(), anyLong());
+        }
+
+        @Test
+        @DisplayName("should retain prior candidates when a partial retry returns no findings")
+        void shouldRetainCandidatesAcrossEmptyPartialRetry() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            CodeAnalysis existing = createCodeAnalysis(10L, project);
+            existing.setStatus(AnalysisStatus.PARTIAL);
+            existing.setPrVersion(3);
+            CodeAnalysisIssue prior = new CodeAnalysisIssue();
+            setField(prior, "id", 77L);
+            prior.setSeverity(IssueSeverity.HIGH);
+            prior.setFilePath("App.java");
+            prior.setReason("Previously supported candidate");
+            existing.addIssue(prior);
+            when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "abc123", 42L))
+                    .thenReturn(Optional.of(existing));
+            when(codeAnalysisRepository.save(any(CodeAnalysis.class))).thenAnswer(inv -> inv.getArgument(0));
+            Map<String, Object> data = createBasicAnalysisData("Verifier still unavailable");
+            data.put("status", "partial");
+            data.put("issues", List.of());
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123", "author1", "authorUser");
+
+            assertThat(result).isSameAs(existing);
+            assertThat(result.getStatus()).isEqualTo(AnalysisStatus.PARTIAL);
+            assertThat(result.getIssues()).containsExactly(prior);
+            assertThat(result.getIssues().get(0).getId()).isEqualTo(77L);
+        }
+
+        @Test
+        @DisplayName("should merge repeated identities and retain distinct candidates across partial retries")
+        void shouldMergeCandidatesAcrossPartialRetry() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            stubNewPrAnalysis(1L, "abc123", 42L);
+            String reason = "The current caller dereferences the nullable response before checking its status, causing a reachable failure.";
+            Map<String, Object> first = createBasicAnalysisData("First partial result");
+            first.put("status", "partial");
+            first.put("issues", List.of(createIssueData("HIGH", "App.java", 10, reason)));
+            CodeAnalysis existing = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, first, 42L, "main", "feature", "abc123", "author1", "authorUser");
+            CodeAnalysisIssue prior = existing.getIssues().get(0);
+            setField(prior, "id", 77L);
+            when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "abc123", 42L))
+                    .thenReturn(Optional.of(existing));
+            Map<String, Object> retry = createBasicAnalysisData("Another partial result");
+            retry.put("status", "partial");
+            retry.put("issues", List.of(
+                    createIssueData("HIGH", "App.java", 10, reason),
+                    createIssueData("MEDIUM", "App.java", 10, "Independent overflow after response processing")));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, retry, 42L, "main", "feature", "abc123", "author1", "authorUser");
+
+            assertThat(result.getStatus()).isEqualTo(AnalysisStatus.PARTIAL);
+            assertThat(result.getIssues()).hasSize(2).contains(prior);
+            assertThat(result.getIssues()).extracting(CodeAnalysisIssue::getReason)
+                    .containsExactly(reason, "Independent overflow after response processing");
+            assertThat(prior.getId()).isEqualTo(77L);
+        }
+
+        @Test
         @DisplayName("should create new analysis with comment and no issues")
         void shouldCreateNewAnalysisWithNoIssues() {
             Project project = createProjectWithWorkspace(1L, "Test", 1L);
@@ -979,6 +1087,82 @@ class CodeAnalysisServiceTest {
             assertThat(result).isSameAs(existing);
             verify(codeAnalysisRepository, never()).save(any());
         }
+    }
+
+    @Test
+    @DisplayName("should retain earlier candidates when a direct-push retry remains partial")
+    void shouldRefreshPartialDirectPushAnalysis() {
+        Project project = createProjectWithWorkspace(1L, "Test", 1L);
+        CodeAnalysis existing = createCodeAnalysis(20L, project);
+        existing.setStatus(AnalysisStatus.PARTIAL);
+        existing.setAnalysisType(AnalysisType.BRANCH_ANALYSIS);
+        CodeAnalysisIssue oldIssue = new CodeAnalysisIssue();
+        oldIssue.setSeverity(IssueSeverity.HIGH);
+        existing.addIssue(oldIssue);
+        when(codeAnalysisRepository.findByProjectIdAndCommitHashAndAnalysisType(
+                1L, "abc123", AnalysisType.BRANCH_ANALYSIS)).thenReturn(Optional.of(existing));
+        when(codeAnalysisRepository.save(any(CodeAnalysis.class))).thenAnswer(inv -> inv.getArgument(0));
+        Map<String, Object> data = createBasicAnalysisData("Still partial");
+        data.put("status", "partial");
+        data.put("issues", List.of(createIssueData("MEDIUM", "App.java", 7, "Retained candidate")));
+
+        CodeAnalysis result = codeAnalysisService.createDirectPushAnalysisFromAiResponse(
+                project, data, "main", "abc123", Collections.emptyMap());
+
+        assertThat(result).isSameAs(existing);
+        assertThat(result.getStatus()).isEqualTo(AnalysisStatus.PARTIAL);
+        assertThat(result.getIssues()).hasSize(2).contains(oldIssue);
+        assertThat(result.getIssues()).allSatisfy(issue ->
+                assertThat(issue.getDetectionSource()).isEqualTo(DetectionSource.DIRECT_PUSH_ANALYSIS));
+        assertThat(result.getIssues()).extracting(CodeAnalysisIssue::getFilePath).contains("App.java");
+    }
+
+    @Test
+    @DisplayName("should exclude incomplete analyses from every completed-result cache lookup")
+    void shouldExcludeIncompleteAnalysesFromCaches() {
+        for (AnalysisStatus status : List.of(AnalysisStatus.PARTIAL, AnalysisStatus.PENDING, AnalysisStatus.ERROR)) {
+            CodeAnalysis incomplete = createCodeAnalysis(10L, createProject(1L, "Test"));
+            incomplete.setStatus(status);
+            when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "abc", 42L))
+                    .thenReturn(Optional.of(incomplete));
+            when(codeAnalysisRepository.findTopByProjectIdAndCommitHash(1L, "abc"))
+                    .thenReturn(Optional.of(incomplete));
+            when(codeAnalysisRepository.findTopByProjectIdAndDiffFingerprint(1L, "fp"))
+                    .thenReturn(Optional.of(incomplete));
+
+            assertThat(codeAnalysisService.getCodeAnalysisCache(1L, "abc", 42L)).isEmpty();
+            assertThat(codeAnalysisService.getAnalysisByCommitHash(1L, "abc")).isEmpty();
+            assertThat(codeAnalysisService.getAnalysisByDiffFingerprint(1L, "fp")).isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("should replace a partial clone destination in place with a completed cached result")
+    void shouldRefreshPartialCloneDestination() {
+        Project project = createProject(1L, "Test");
+        CodeAnalysis source = createCodeAnalysis(10L, project);
+        source.setStatus(AnalysisStatus.ACCEPTED);
+        source.setComment("Verified result");
+        CodeAnalysis existing = createCodeAnalysis(20L, project);
+        existing.setStatus(AnalysisStatus.PARTIAL);
+        existing.setPrVersion(2);
+        CodeAnalysisIssue oldIssue = new CodeAnalysisIssue();
+        oldIssue.setSeverity(IssueSeverity.HIGH);
+        existing.addIssue(oldIssue);
+        when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "abc123", 99L))
+                .thenReturn(Optional.of(existing));
+        when(codeAnalysisRepository.save(any(CodeAnalysis.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        CodeAnalysis result = codeAnalysisService.cloneAnalysisForPr(
+                source, project, 99L, "abc123", "main", "feature", "fingerprint123");
+
+        assertThat(result).isSameAs(existing);
+        assertThat(result.getStatus()).isEqualTo(AnalysisStatus.ACCEPTED);
+        assertThat(result.getPrVersion()).isEqualTo(2);
+        assertThat(result.getClonedFromAnalysisId()).isEqualTo(10L);
+        assertThat(result.getComment()).isEqualTo("Verified result");
+        assertThat(result.getIssues()).isEmpty();
+        verify(codeAnalysisRepository, never()).findMaxPrVersion(anyLong(), anyLong());
     }
 
     @Nested

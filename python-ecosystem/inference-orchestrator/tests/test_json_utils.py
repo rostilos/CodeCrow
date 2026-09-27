@@ -162,3 +162,9 @@ async def test_shared_provider_repair_budget_counts_structured_retry():
 
     structured.ainvoke.assert_awaited_once()
     llm.ainvoke.assert_not_awaited()
+
+
+def test_local_trailing_comma_repair_preserves_code_inside_json_strings():
+    from service.agent.json_utils import load_json_with_local_repairs
+    _, parsed = load_json_with_local_repairs('{"snippet": "func(a, } and b, ]", "items": [1,],}')
+    assert parsed == {"snippet": "func(a, } and b, ]", "items": [1]}

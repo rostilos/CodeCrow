@@ -148,3 +148,11 @@ class TestCreateUserFriendlyError:
         err = RuntimeError("something happened")
         result = create_user_friendly_error(err)
         assert len(result) > 0
+
+
+def test_review_error_envelope_has_no_synthetic_findings():
+    from utils.error_sanitizer import create_error_response
+    assert create_error_response("HTTP request failed", "provider unavailable") == {
+        "status": "error", "comment": "HTTP request failed: provider unavailable",
+        "issues": [], "error": True, "error_message": "HTTP request failed: provider unavailable",
+    }

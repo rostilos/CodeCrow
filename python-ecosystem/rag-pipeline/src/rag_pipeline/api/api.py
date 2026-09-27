@@ -96,39 +96,38 @@ async def lifespan(app: FastAPI):
     logger.info("Starting RAG Pipeline API...")
     config = RAGConfig()
     index_manager = RAGIndexManager(config)
-    from .routers.index import (
-        cleanup_orphaned_index_repository_stream_workspaces,
-    )
-    cleaned_stream_workspaces = (
-        cleanup_orphaned_index_repository_stream_workspaces()
-    )
-    if cleaned_stream_workspaces:
-        logger.info(
-            "Removed %s orphaned RAG HTTP index workspaces",
-            cleaned_stream_workspaces,
-        )
-
-    app.state.pending_collection_janitor = asyncio.create_task(
-        _pending_collection_janitor(index_manager)
-    )
-
-    logger.info("RAG Pipeline API started successfully")
-    yield
-    logger.info("Shutting down RAG Pipeline API...")
-    if hasattr(app.state, "pending_collection_janitor"):
-        app.state.pending_collection_janitor.cancel()
+    janitor = None
+    try:
+        from .routers.index import cleanup_orphaned_index_repository_stream_workspaces
         try:
-            await app.state.pending_collection_janitor
-        except asyncio.CancelledError:
-            pass
-    # HTTP streaming requests run synchronous indexing in dedicated workers.
-    # A disconnected response task can be gone before that call returns, so
-    # drain the independently tracked workers before closing shared state.
-    from .routers.index import drain_index_repository_stream_workers
-    await drain_index_repository_stream_workers()
-    if index_manager is not None:
-        index_manager.close()
-    logger.info("RAG Pipeline API shutdown complete")
+            cleaned = cleanup_orphaned_index_repository_stream_workspaces()
+            if cleaned:
+                logger.info("Removed %s orphaned RAG HTTP index workspaces", cleaned)
+        except Exception:
+            logger.warning("Orphan workspace cleanup unavailable; retaining workspaces", exc_info=True)
+
+        janitor = asyncio.create_task(_pending_collection_janitor(index_manager))
+        app.state.pending_collection_janitor = janitor
+        logger.info("RAG Pipeline API started successfully")
+        yield
+    finally:
+        logger.info("Shutting down RAG Pipeline API...")
+        try:
+            if janitor is not None:
+                janitor.cancel()
+                try:
+                    await janitor
+                except asyncio.CancelledError:
+                    pass
+        finally:
+            # Detached synchronous workers must finish before their manager closes.
+            from .routers.index import drain_index_repository_stream_workers
+            try:
+                await drain_index_repository_stream_workers()
+            finally:
+                index_manager.close()
+                index_manager = None
+        logger.info("RAG Pipeline API shutdown complete")
 
 
 app = FastAPI(

@@ -283,3 +283,44 @@ def test_typescript_validator_rejects_coarse_or_contradicted_relation_claims():
 
     assert coarse[0].decision is ValidationDecision.INSUFFICIENT_EVIDENCE
     assert contradicted[0].decision is ValidationDecision.REJECT
+
+
+def test_python_package_initializer_relative_import_resolves_inside_package():
+    _, _, _, analysis = _analyze({
+        "app/__init__.py": "from .policy import Policy\nPolicy.check()\n",
+        "app/policy.py": "class Policy:\n    def check(self): pass\n",
+    })
+    assert any(
+        fact.kind == "python-call-resolution"
+        and fact.path == "app/__init__.py"
+        and fact.related_paths == ("app/policy.py",)
+        for fact in _facts(analysis)
+    )
+
+
+def test_python_colocated_stub_does_not_replace_runtime_source_target():
+    _, _, _, analysis = _analyze({
+        "app/policy.py": "class Policy: pass\n",
+        "app/policy.pyi": "class Policy: ...\n",
+        "app/use.py": "from app.policy import Policy\n",
+    })
+    assert any(
+        fact.kind == "python-module-resolution"
+        and fact.path == "app/use.py"
+        and fact.related_paths == ("app/policy.py",)
+        for fact in _facts(analysis)
+    )
+
+
+def test_python_package_initializer_wins_over_same_name_module():
+    _, _, _, analysis = _analyze({
+        "app/policy.py": "class Policy: pass\n",
+        "app/policy/__init__.py": "class Policy: pass\n",
+        "app/use.py": "from app.policy import Policy\n",
+    })
+    assert any(
+        fact.kind == "python-module-resolution"
+        and fact.path == "app/use.py"
+        and fact.related_paths == ("app/policy/__init__.py",)
+        for fact in _facts(analysis)
+    )

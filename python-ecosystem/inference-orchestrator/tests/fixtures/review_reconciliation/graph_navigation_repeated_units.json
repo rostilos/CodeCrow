@@ -1,0 +1,789 @@
+{
+  "provenance": "Shape and public repository navigation metadata from the already-produced DeepSeek OpenRouter generation gen-1790333637. Tenant/snapshot digests and opaque evidence/unit IDs replaced with fixture identifiers. No source bodies or credentials.",
+  "result": {
+    "status": "ready",
+    "operation": "query_review_graph",
+    "snapshot": {
+      "kind": "proposed_tree",
+      "branch": "main",
+      "revision": "fixture-revision",
+      "generationManifestSha256": "fixture-generationManifestSha256",
+      "baseRevision": "fixture-baseRevision",
+      "baseCollectionTarget": "fixture-baseCollectionTarget",
+      "baseGenerationManifestSha256": "fixture-baseGenerationManifestSha256",
+      "sourceRevision": "fixture-sourceRevision",
+      "targetSourceTreeSha256": "fixture-targetSourceTreeSha256",
+      "overlaySha256": "fixture-overlaySha256"
+    },
+    "pattern": "callees_of",
+    "target": "getWorkingHours",
+    "cursor": 0,
+    "nextCursor": null,
+    "resolvedUnits": [
+      {
+        "unitId": "unit:fixture-1",
+        "path": "packages/lib/availability.ts",
+        "kind": "function",
+        "name": "getWorkingHours",
+        "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+        "startLine": 62,
+        "endLine": 128,
+        "language": "typescript",
+        "recordType": "source_unit"
+      }
+    ],
+    "results": [
+      {
+        "evidenceId": "relation:fixture-1",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "dayjs().utcOffset",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 74,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-2",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "dayjs",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 74,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-3",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "dayjs().tz",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 74,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-4",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "availability.reduce",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 76,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-5",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "dayjs.get",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 81,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": {
+          "unitId": "unit:fixture-2",
+          "path": "apps/web/lib/core/http/fetch-wrapper.ts",
+          "kind": "function",
+          "name": "get",
+          "qualifiedName": "apps/web/lib/core/http/fetch-wrapper.ts:19-22:get",
+          "startLine": 19,
+          "endLine": 22,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-6",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "dayjs.utc",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 81,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-7",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "dayjs.get",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 82,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": {
+          "unitId": "unit:fixture-2",
+          "path": "apps/web/lib/core/http/fetch-wrapper.ts",
+          "kind": "function",
+          "name": "get",
+          "qualifiedName": "apps/web/lib/core/http/fetch-wrapper.ts:19-22:get",
+          "startLine": 19,
+          "endLine": 22,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-8",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "dayjs.utc",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 82,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-9",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "dayjs.get",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 85,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": {
+          "unitId": "unit:fixture-2",
+          "path": "apps/web/lib/core/http/fetch-wrapper.ts",
+          "kind": "function",
+          "name": "get",
+          "qualifiedName": "apps/web/lib/core/http/fetch-wrapper.ts:19-22:get",
+          "startLine": 19,
+          "endLine": 22,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-10",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "dayjs.utc",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 85,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-11",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "Math.max",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 87,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-12",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "Math.min",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 87,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-13",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "Math.min",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 88,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-14",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "Math.max",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 88,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-15",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "currentWorkingHours.push",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 99,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-16",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "schedule.map",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 105,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-17",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "Math.min",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 107,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-18",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "currentWorkingHours.push",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 110,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-19",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "schedule.map",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 115,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-20",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "Math.max",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 116,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-21",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "currentWorkingHours.push",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 120,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      },
+      {
+        "evidenceId": "relation:fixture-22",
+        "kind": "typescript-call",
+        "source": "packages/lib/availability",
+        "relation": "calls",
+        "target": "workingHours.sort",
+        "origin": {
+          "path": "packages/lib/availability.ts",
+          "line": 126,
+          "extractor": "plugin",
+          "plugin": "typescript",
+          "plugins": [
+            "typescript"
+          ]
+        },
+        "sourceUnit": {
+          "unitId": "unit:fixture-1",
+          "path": "packages/lib/availability.ts",
+          "kind": "function",
+          "name": "getWorkingHours",
+          "qualifiedName": "packages/lib/availability.ts:62-128:getWorkingHours",
+          "startLine": 62,
+          "endLine": 128,
+          "language": "typescript",
+          "recordType": "source_unit"
+        },
+        "targetUnit": null,
+        "relatedPaths": [
+          "packages/lib/availability.ts"
+        ],
+        "attributes": {}
+      }
+    ],
+    "sourceWindows": [],
+    "coverage": {
+      "state": "complete",
+      "truncated": false,
+      "partialReasons": [],
+      "maxResults": 25,
+      "returnedResults": 22,
+      "sourceIncluded": false,
+      "source": {
+        "state": "not_requested",
+        "truncated": false,
+        "availableSourceUnits": 0,
+        "returnedSourceUnits": 0,
+        "omittedSourceUnits": 0,
+        "truncatedSourceWindows": 0
+      }
+    }
+  }
+}

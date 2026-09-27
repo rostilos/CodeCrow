@@ -346,7 +346,11 @@ class AgentExecutionService(Generic[AgentOutputT]):
             request: AgentExecutionRequest[AgentOutputT],
     ) -> AsyncIterator[AgentExecutionEvent[AgentOutputT]]:
         """Stream one prompt agent within the caller's review concurrency."""
-        await self.initialize()
+        # Structured requests without tools have no dependency on an MCP
+        # session or its inventory. Keep optional repository startup failures
+        # and their cost out of this provider-only execution path.
+        if request.allowed_tool_names or request.output_schema is None:
+            await self.initialize()
 
         metadata: Mapping[str, Any] = dict(request.metadata)
         allowed_tool_names = set(request.allowed_tool_names)

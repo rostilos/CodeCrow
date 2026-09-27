@@ -15,10 +15,11 @@ import logging
 import os
 import re
 from abc import ABC
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Dict, Any, List, Optional, Callable, Set, Sequence
 
 from model.enrichment import PrEnrichmentDataDto
+from service.qa_documentation.records import QaSemanticRecord
 
 logger = logging.getLogger(__name__)
 
@@ -49,59 +50,6 @@ QA_COVERAGE_DIAGNOSTIC_RESERVE_TOKENS = 512
 
 class QaPromptPackingError(RuntimeError):
     """Raised when the invariant QA prompt itself cannot fit the request."""
-
-
-@dataclass(frozen=True)
-class QaSemanticRecord:
-    """One QA evidence record or bounded free-text continuation."""
-
-    key: str
-    section: str
-    text: str
-    paths: tuple[str, ...] = ()
-    source_key: str = ""
-    part_index: int = 1
-    part_count: int = 1
-    character_start: int = 0
-    character_end: int = 0
-    source_character_count: int = 0
-
-    @property
-    def identity(self) -> str:
-        return self.source_key or self.key
-
-    @property
-    def display_key(self) -> str:
-        if self.part_count <= 1:
-            return self.key
-        return (
-            f"{self.identity}:part:{self.part_index:06d}-of-"
-            f"{self.part_count:06d}"
-        )
-
-    def envelope(self) -> str:
-        """Render provenance without changing or clipping the owned text."""
-        metadata = {
-            "recordKey": self.identity,
-            "section": self.section,
-            "paths": list(self.paths),
-            "partIndex": self.part_index,
-            "partCount": self.part_count,
-            "characterStart": self.character_start,
-            "characterEnd": self.character_end or len(self.text),
-            "sourceCharacterCount": self.source_character_count or len(self.text),
-        }
-        return (
-            "[QA_SEMANTIC_RECORD "
-            + json.dumps(
-                metadata,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            + "]\n"
-            + self.text
-        )
 
 
 _SEMANTIC_TEXT_BOUNDARY_RE = re.compile(r"(?:\r\n|\r|\n)+|[^\S\r\n]+")

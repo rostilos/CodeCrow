@@ -20,6 +20,10 @@ _REPRESENTATION_SOURCE_PATHS = (
     "core/index_representation.py",
     "core/loader.py",
     "core/review_context.py",
+    "core/review_snapshot.py",
+    "core/review_generation.py",
+    "core/review_evidence.py",
+    "core/review_source.py",
     "core/source_tree.py",
     "core/structural_store.py",
     "core/splitter/languages.py",
@@ -30,6 +34,12 @@ _REPRESENTATION_SOURCE_PATHS = (
     "models/config.py",
     "utils/path_identity.py",
     "utils/utils.py",
+)
+
+# Discover collaborators by responsibility directory so moving implementation
+# out of a facade cannot silently remove it from representation identity.
+_REPRESENTATION_SOURCE_DIRECTORIES = (
+    "core/index_manager", "core/structural_graph", "core/splitter", "core/review_graph",
 )
 
 _REPRESENTATION_DEPENDENCIES = (
@@ -103,6 +113,10 @@ def compute_index_representation_fingerprint(
     runtime_settings: Optional[Mapping[str, object]] = None,
 ) -> str:
     root = Path(package_root).resolve(strict=True)
+    source_paths = set(_REPRESENTATION_SOURCE_PATHS)
+    for relative_directory in _REPRESENTATION_SOURCE_DIRECTORIES:
+        source_paths.update(path.relative_to(root).as_posix()
+                            for path in (root / relative_directory).rglob("*.py"))
     projection = {
         "dependencies": {
             name: str(dependency_versions.get(name, "absent"))
@@ -116,7 +130,7 @@ def compute_index_representation_fingerprint(
                     (root / relative_path).read_bytes()
                 ).hexdigest(),
             }
-            for relative_path in _REPRESENTATION_SOURCE_PATHS
+            for relative_path in sorted(source_paths)
         ],
     }
     encoded = json.dumps(

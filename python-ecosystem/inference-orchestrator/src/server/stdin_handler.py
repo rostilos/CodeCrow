@@ -1,10 +1,14 @@
 import json
+import logging
 import sys
 import asyncio
 from typing import Optional, Dict, Any
 
 from model.dtos import ReviewRequestDto
 from service.review.review_service import ReviewService
+
+
+logger = logging.getLogger(__name__)
 
 
 class StdinHandler:
@@ -51,10 +55,20 @@ class StdinHandler:
             # Convert dict to ReviewRequestDto
             request = ReviewRequestDto(**request_data)
             # Note: No processing token available in stdin mode, will use default
-            result = asyncio.run(self.review_service.process_review_request(request, None))
+            result = asyncio.run(self._process_request(request))
             print(json.dumps(result, ensure_ascii=False))
         except Exception as e:
             print(json.dumps({
                 "error": "Failed to process request",
                 "exception": str(e)
             }))
+
+    async def _process_request(self, request: ReviewRequestDto) -> Dict[str, Any]:
+        """Retire asynchronous clients before the one-shot event loop closes."""
+        try:
+            return await self.review_service.process_review_request(request, None)
+        finally:
+            try:
+                await self.review_service.rag_client.close()
+            except Exception:
+                logger.warning("Failed to close stdin review client", exc_info=True)

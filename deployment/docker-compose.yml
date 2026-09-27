@@ -221,6 +221,11 @@ services:
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       RAG_API_URL: http://codecrow-rag-pipeline:8001
+      # Opt-in exact SDK request/response capture for future review runs.
+      # /app/logs is already persisted by inference_orchestrator_logs.
+      REVIEW_QUALITY_CAPTURE_ENABLED: ${REVIEW_QUALITY_CAPTURE_ENABLED:-false}
+      REVIEW_QUALITY_CAPTURE_PROJECT_IDS: ${REVIEW_QUALITY_CAPTURE_PROJECT_IDS:-}
+      REVIEW_QUALITY_CAPTURE_OUTPUT_DIR: /app/logs/review-quality-captures
       ANALYSIS_QUEUE_HEARTBEAT_SECONDS: ${ANALYSIS_QUEUE_HEARTBEAT_SECONDS:-30}
       ANALYSIS_CONSUMER_HEARTBEAT_SECONDS: ${ANALYSIS_CONSUMER_HEARTBEAT_SECONDS:-5}
       # Redis connection for async analysis queue (DB 1 to isolate from session storage on DB 0)

@@ -234,7 +234,7 @@ async def traverse_code_graph(
     relationKinds: list[Annotated[str, Field(max_length=128)]] | None = None,
     maxDepth: int = 3,
     maxResults: int = 100,
-    tokenBudget: Annotated[int, Field(ge=512, le=16_000)] = 2_000,
+    tokenBudget: Annotated[int | None, Field(ge=512, le=16_000)] = None,
     detailLevel: str = "standard",
     includeSource: bool = True,
     maxSourceWindows: int = 6,

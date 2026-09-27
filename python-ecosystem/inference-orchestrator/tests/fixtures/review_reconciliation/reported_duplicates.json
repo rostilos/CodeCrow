@@ -1,0 +1,62 @@
+[
+  {
+    "name": "cal7232_sendgrid_cancellation",
+    "sourceArtifact": "codecrow-graph-calls-runner-10-2-luna6-mcp.json",
+    "sourcePr": "https://github.com/calcom/cal.com/pull/7232",
+    "headRevision": "6048e2a86b50e81e1e3b1b467dfea5a895add3dc",
+    "issues": [
+      {
+        "file": "packages/features/ee/workflows/api/scheduleEmailReminders.ts",
+        "line": 57,
+        "title": "Single SendGrid failure aborts all reminder cancellations and discards queued deletions",
+        "reason": "The new try block contains a sequential for-loop over all remindersToCancel: each iteration awaits client.request(...) (line 57) and then queues prisma.workflowReminder.delete promises (lines 66-72). The pooled deletes are only flushed by await Promise.all(workflowRemindersToDelete) at line 74, which sits after the loop. If any client.request rejects (network error, invalid API key, or non-2xx if the client throws on HTTP errors), the exception unwinds out of the for-loop straight to the catch at line 75. Consequently (a) every reminder that had not yet been processed in that run receives neither a SendGrid cancel nor a DB delete, so its cancelled/rescheduled booking email remains scheduled in SendGrid and is delivered; (b) the reminders whose cancel DID succeed keep their DB rows (cancelled=true) because the queued deletes are never executed, creating repeat-cancel traffic on the next cron run; (c) the failure is only console.log'd and the handler still terminates with HTTP 200 ('No Emails to schedule' or 'Emails scheduled'), so the end-to-end failure is invisible. This defeats the PR's stated purpose: emails for cancelled bookings should not be sent.",
+        "suggestedFixDescription": "Isolate per-reminder work: wrap each iteration's client.request + delete in its own try/catch (or delete the row in a finally only after the cancel succeeds), so one failure does not skip remaining cancellations; surface cancellation failures (non-200 response or metric) instead of only console.log."
+      },
+      {
+        "file": "packages/features/ee/workflows/api/scheduleEmailReminders.ts",
+        "line": 57,
+        "title": "Single SendGrid request failure aborts the entire reminder-cancellation batch and drops queued deletes",
+        "reason": "The new remindersToCancel block (lines 44-77) sequentially awaits client.request for each cancelled reminder and queues prisma.workflowReminder.delete jobs, flushing them only via await Promise.all after the loop, all inside one try whose catch just console.logs, after which the handler still returns res.status(200). Any single request() rejection unwinds out of the loop to the catch, so (a) every not-yet-processed reminder never gets its SendGrid cancellation and its cancelled-booking email remains scheduled and gets delivered; (b) the successfully-cancelled reminders' DB rows (cancelled=true) are never deleted because the queued delete flush is skipped, so they are re-selected on the next cron run and can abort cancellation again; (c) the failure is invisible to the caller. This defeats the PR's core purpose of suppressing workflow emails for cancelled bookings.",
+        "suggestedFixDescription": "Isolate per-reminder work: wrap each iteration's client.request + row delete in its own try/catch (or flush deletes inside the loop) so one failure does not skip the remaining cancellations, and surface cancellation failures instead of only console.log while returning HTTP 200."
+      }
+    ],
+    "expectedGroup": {
+      "memberIds": [
+        "issue-1",
+        "issue-2"
+      ],
+      "representativeId": "issue-2",
+      "rationale": "One failure mechanism at the same changed anchor; the second record expands the first rather than introducing a distinct defect."
+    }
+  },
+  {
+    "name": "discourse6_website_disclosure",
+    "sourceArtifact": "codecrow-graph-calls-runner-10-2-luna6-mcp.json",
+    "sourcePr": "https://github.com/ai-code-review-evaluation/discourse-graphite/pull/6",
+    "headRevision": "267d8be1f556ed59639ced396c885bb44586da19",
+    "issues": [
+      {
+        "file": "app/serializers/user_serializer.rb",
+        "line": 152,
+        "title": "website_name leaks website URL to restricted users",
+        "reason": "The new `website_name` attribute is included whenever `website.present?`, without honoring the site's `untrusted_attributes` restriction that hides the `website` field for anonymous/TL0 users. This exposes the user's website host and path to viewers who should not see it.",
+        "suggestedFixDescription": "Add `:website_name` to the `untrusted_attributes` list, or change the `include_website_name` method to return false when `scope.restrict_user_fields?(object)` is true, mirroring the `website` include logic."
+      },
+      {
+        "file": "app/serializers/user_serializer.rb",
+        "line": 152,
+        "title": "website_name leaks website URL to anonymous/TL0-restricted users",
+        "reason": "include_website_name (line 152) only checks website.present? and is not in the untrusted_attributes list, so it ignores scope.restrict_user_fields?(object). For anonymous viewers of TL0 users (restrict_user_fields? true, user_guardian.rb:58), the website attribute itself is suppressed via untrusted_attributes :website (read-3), but website_name still computes and serializes the website host and path. The previous client-side websiteName computed property was derived from model.website (null when hidden), so the template's reliance on the new model.website_name (read-24) removes that protection. This reveals website URL info to viewers intended to be denied it.",
+        "suggestedFixDescription": "Add :website_name to the untrusted_attributes list (making include_website_name? respect restrict_user_fields?), mirroring the website include logic."
+      }
+    ],
+    "expectedGroup": {
+      "memberIds": [
+        "issue-1",
+        "issue-2"
+      ],
+      "representativeId": "issue-2",
+      "rationale": "One failure mechanism at the same changed anchor; the second record expands the first rather than introducing a distinct defect."
+    }
+  }
+]

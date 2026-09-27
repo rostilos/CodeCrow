@@ -527,6 +527,12 @@ class TestOpenAICompatibleHelpers:
             == "hello\nworld"
         )
 
+    def test_coerce_non_text_content_preserves_structured_values(self):
+        assert _coerce_openai_compatible_text_content({"count": 3, "label": "café"}) == '{"count": 3, "label": "café"}'
+        assert _coerce_openai_compatible_text_content([
+            {"type": "metadata", "count": 3}, 42, None,
+        ]) == '{"type": "metadata", "count": 3}\n42'
+
     def test_normalize_cloudflare_payload_content_blocks_and_tool_calls(self):
         payload = {
             "parallel_tool_calls": False,

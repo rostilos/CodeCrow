@@ -277,9 +277,11 @@ def test_hyva_template_runtime_links_layout_sibling_to_exact_webapi_call_graph()
 
 def test_hyva_call_graph_context_bounds_a_long_chain_with_diagnostics():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
-    session = catalog.implementation("hyva").start_repository_analysis(
-        "tail-chain",
-    ).value
+    import importlib
+
+    plugin = catalog.implementation("hyva")
+    topology = importlib.import_module(plugin.__class__.__module__ + ".topology")
+    resolver = topology.HyvaTopologyResolver("hyva", {})
     edges = {}
     for index in range(65):
         owner = f"Vendor\\Model\\Owner{index:03d}"
@@ -301,7 +303,7 @@ def test_hyva_call_graph_context_bounds_a_long_chain_with_diagnostics():
         )
         edges[(owner.casefold(), method.casefold())] = (fact,)
 
-    paths, identifiers = session._call_graph_context(
+    paths, identifiers = resolver._call_graph_context(
         "Vendor\\Model\\Owner000",
         "method000",
         edges,
@@ -311,9 +313,9 @@ def test_hyva_call_graph_context_bounds_a_long_chain_with_diagnostics():
     assert "app/code/Vendor/Module/Model/Owner064.php" not in paths
     assert "method064" in identifiers
     assert "method065" not in identifiers
-    assert len(session._diagnostics) == 1
-    assert session._diagnostics[0].code == "hyva-call-graph-state-limit"
-    assert session._diagnostics[0].recoverable is True
+    assert len(resolver.diagnostics) == 1
+    assert resolver.diagnostics[0].code == "hyva-call-graph-state-limit"
+    assert resolver.diagnostics[0].recoverable is True
 
 
 def test_hyva_repository_snapshot_restores_identical_packets():
