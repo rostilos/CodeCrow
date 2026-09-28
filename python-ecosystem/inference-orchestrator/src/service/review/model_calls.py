@@ -9,6 +9,7 @@ from typing import Any
 
 from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
 from llm.request_capture import model_capture
+from utils.llm_json import parse_json_object
 
 
 logger = logging.getLogger(__name__)
@@ -22,12 +23,9 @@ def parse_object(response: Any) -> dict[str, Any]:
             for block in content
             if isinstance(block, Mapping) and block.get("type") == "text"
         )
-    text = str(content).strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-    result = json.loads(text)
-    if not isinstance(result, dict):
-        raise ValueError("review model did not return a JSON object")
+    result = parse_json_object(str(content), allow_trailing_commas=True)
+    if result is None:
+        raise ValueError("Review response did not contain a complete JSON object")
     return result
 
 

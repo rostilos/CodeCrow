@@ -1,5 +1,9 @@
 """Exact, descriptor-bound local source access for review verification."""
 from __future__ import annotations
+from bisect import bisect_right
+from contextlib import contextmanager
+from fnmatch import fnmatchcase
+from functools import lru_cache
 import json
 import logging
 import os
@@ -7,7 +11,12 @@ import stat
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
+import regex
+
 logger = logging.getLogger(__name__)
+
+# Interrupt pathological matching, without limiting source or result content.
+_REGEX_MATCH_TIMEOUT_SECONDS = 1.0
 
 
 class LocalReviewSource:
@@ -58,7 +67,8 @@ class LocalReviewSource:
         return normalized.as_posix()
 
     @classmethod
-    def _read_file(cls, root: Path, path: str) -> bytes:
+    @contextmanager
+    def _open_file(cls, root: Path, path: str):
         # Every component is opened relative to a pinned directory descriptor.
         # A repository entry replaced after lookup cannot redirect this read.
         parts = PurePosixPath(cls._path(path)).parts
@@ -73,13 +83,17 @@ class LocalReviewSource:
             file_fd = os.open(parts[-1], flags | os.O_NONBLOCK, dir_fd=directory_fd)
             if not stat.S_ISREG(os.fstat(file_fd).st_mode):
                 raise ValueError("source entry is not a regular file")
-            with os.fdopen(file_fd, "rb") as source:
-                file_fd = None
-                return source.read()
+            yield file_fd
         finally:
             if file_fd is not None:
                 os.close(file_fd)
             os.close(directory_fd)
+
+    @classmethod
+    def _read_file(cls, root: Path, path: str) -> bytes:
+        with cls._open_file(root, path) as descriptor:
+            with os.fdopen(os.dup(descriptor), "rb") as source:
+                return source.read()
 
     def _location(self, path: str, side: str) -> tuple[tuple[Path, str] | None, str, str]:
         if side not in {"proposed", "target"}:
@@ -191,45 +205,141 @@ class LocalReviewSource:
         errors.extend(scope for scope in scopes if scope not in covered)
         return sorted(paths - self.deleted if side == "proposed" else paths)
 
-    def grep(self, query: str, *, paths: Sequence[str] = (), side: str = "proposed",
-             case_sensitive: bool = True) -> dict[str, Any]:
-        """Return every matching location; source bodies are fetched separately.
-
-        File and directory scopes are expanded within descriptor-bound source
-        roots. Location-only results avoid copying unrelated source while
-        keeping every match available, without result or character truncation.
-        """
-        if not isinstance(query, str) or not query:
-            return {"status": "unavailable", "diagnostic": "a nonempty literal query is required"}
+    def _search_paths(self, side: str, paths: Sequence[str], unavailable: list[str]) -> list[str]:
         if side not in {"proposed", "target"}:
-            return {"status": "unavailable", "diagnostic": "side must be proposed or target"}
+            raise ValueError("side must be proposed or target")
+        scopes = sorted({self._path(path) for path in paths if path not in {".", "./"}})
+        if any(path in {".", "./"} for path in paths):
+            scopes = []
+        if self.target is None and not (
+            side == "proposed" and scopes and all(scope in self.changed for scope in scopes)
+        ):
+            unavailable.append("<target-snapshot>")
+        return self._paths(side, unavailable, scopes)
+
+    def _search_result(self, *, side: str, unavailable: Sequence[str], **values: Any) -> dict[str, Any]:
+        partial = bool(unavailable or (side == "proposed" and self.overlay_error))
+        return {"status": "partial" if partial else "ready", "side": side, **values,
+                "unavailablePaths": sorted(set(unavailable)), "complete": not partial,
+                "diagnostic": ("Search did not cover all requested source; absence is not evidence."
+                               if partial else "")}
+
+    @staticmethod
+    def _glob_match(path: str, pattern: str) -> bool:
+        """Basenames match anywhere; slash patterns are repository-relative globs."""
+        pattern_parts = PurePosixPath(pattern).parts
+        path_parts = PurePosixPath(path).parts
+        if len(pattern_parts) == 1:
+            return fnmatchcase(path_parts[-1], pattern_parts[0])
+
+        @lru_cache(maxsize=None)
+        def match(path_index: int, pattern_index: int) -> bool:
+            if pattern_index == len(pattern_parts):
+                return path_index == len(path_parts)
+            component = pattern_parts[pattern_index]
+            if component == "**":
+                return (match(path_index, pattern_index + 1)
+                        or path_index < len(path_parts) and match(path_index + 1, pattern_index))
+            return (path_index < len(path_parts)
+                    and fnmatchcase(path_parts[path_index], component)
+                    and match(path_index + 1, pattern_index + 1))
+
+        return match(0, 0)
+
+    def find_files(self, pattern: str, *, paths: Sequence[str] = (), side: str = "proposed") -> dict[str, Any]:
+        """Find snapshot file paths without reading or returning their source."""
         unavailable: list[str] = []
         try:
-            scopes = sorted({self._path(path) for path in paths if path not in {".", "./"}})
-            if any(path in {".", "./"} for path in paths):
-                scopes = []
-            selected = self._paths(side, unavailable, scopes)
+            pattern = self._path(pattern)
+            selected = self._search_paths(side, paths, unavailable)
         except (TypeError, ValueError) as error:
-            return {"status": "unavailable", "diagnostic": str(error)}
+            return {"status": "unavailable", "complete": False, "diagnostic": str(error)}
+        matches = []
+        for path in selected:
+            if not self._glob_match(path, pattern):
+                continue
+            # A manifest path does not establish that its source is readable.
+            # Do not replace a missing changed file with the old target version.
+            if side == "proposed" and path in self.changed:
+                location, status, _origin = self._location(path, side)
+                if location is None:
+                    if status != "deleted":
+                        unavailable.append(path)
+                    continue
+                try:
+                    with self._open_file(*location):
+                        pass
+                except (OSError, ValueError):
+                    unavailable.append(path)
+                    continue
+            matches.append(path)
+        return self._search_result(side=side, unavailable=unavailable, pattern=pattern, paths=matches)
+
+    def grep(self, query: str, *, paths: Sequence[str] = (), side: str = "proposed",
+             case_sensitive: bool = True, mode: str = "literal") -> dict[str, Any]:
+        """Return all matching lines with exact text and explicit search semantics.
+
+        Regex matching uses multiline anchors. A match spanning lines includes
+        each affected line. Execution timeout is an incomplete search, never a
+        negative result; no file, line, match or character limit is applied.
+        """
+        if not isinstance(query, str) or not query:
+            return {"status": "unavailable", "complete": False, "diagnostic": "a nonempty query is required"}
+        if mode not in {"literal", "regex"}:
+            return {"status": "unavailable", "complete": False,
+                    "diagnostic": "mode must be literal or regex"}
+        expression = None
+        if mode == "regex":
+            try:
+                expression = regex.compile(query, regex.MULTILINE | (0 if case_sensitive else regex.IGNORECASE))
+            except regex.error as error:
+                return {"status": "unavailable", "complete": False, "query": query, "mode": mode,
+                        "diagnostic": f"Invalid regular expression: {error}. Correct the pattern or use mode=literal."}
+        unavailable: list[str] = []
+        try:
+            selected = self._search_paths(side, paths, unavailable)
+        except (TypeError, ValueError) as error:
+            return {"status": "unavailable", "complete": False, "diagnostic": str(error)}
         needle = query if case_sensitive else query.casefold()
         matches: list[dict[str, Any]] = []
-        for path in selected:
+        interrupted = False
+        for path_index, path in enumerate(selected):
             source = self.read(path, side=side)
             if source["status"] not in {"ready", "binary", "deleted"}:
                 unavailable.append(path)
                 continue
             if source["status"] != "ready":
                 continue
-            lines = [number for number, line in enumerate(source["content"].splitlines(), 1)
-                     if needle in (line if case_sensitive else line.casefold())]
+            content = source["content"]
+            source_lines = content.splitlines()
+            if expression is None:
+                line_numbers = {index for index, line in enumerate(source_lines)
+                                if needle in (line if case_sensitive else line.casefold())}
+            else:
+                starts, offset = [], 0
+                for line in content.splitlines(keepends=True):
+                    starts.append(offset)
+                    offset += len(line)
+                line_numbers = set()
+                try:
+                    for match in expression.finditer(content, timeout=_REGEX_MATCH_TIMEOUT_SECONDS):
+                        first = max(0, bisect_right(starts, match.start()) - 1)
+                        last = max(first, bisect_right(starts, max(match.start(), match.end() - 1)) - 1)
+                        line_numbers.update(range(first, min(last + 1, len(source_lines))))
+                except TimeoutError:
+                    # The engine interrupts matching. A thread timeout would
+                    # leave expensive regex work running in the worker.
+                    # Do not spend another timeout on every remaining file.
+                    unavailable.extend(selected[path_index:])
+                    interrupted = True
+            lines = [{"line": index + 1, "text": source_lines[index]} for index in sorted(line_numbers)]
             if lines:
-                matches.append({"path": path, "lines": lines})
-        unavailable = sorted(set(unavailable))
-        unavailable_source = bool(unavailable or (side == "proposed" and self.overlay_error)
-                                  or ((self.target is None or not self.target.is_dir()) and not paths))
-        return {"status": "partial" if unavailable_source else "ready", "query": query,
-                "side": side, "results": matches, "unavailablePaths": unavailable,
-                "diagnostic": ("Search did not cover all requested source; absence is not evidence."
-                               if unavailable_source else ""), "complete": not unavailable_source}
-
-
+                matches.append({"path": path, "matches": lines})
+            if interrupted:
+                break
+        result = self._search_result(side=side, unavailable=unavailable, query=query, mode=mode, results=matches)
+        if interrupted:
+            result["diagnostic"] = ("Regular-expression matching exceeded its execution timeout. "
+                                    "Use a more specific pattern or literal search. Remaining paths were not searched; "
+                                    "absence is not evidence.")
+        return result

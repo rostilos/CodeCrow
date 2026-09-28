@@ -1,0 +1,71 @@
+{
+  "description": "Sanitized, adapted source examples informed by the September 28 trace audit. These fixtures test context and evidence plumbing, not benchmark quality or model semantic accuracy. No runtime tenant or capture identifiers are included.",
+  "cases": [
+    {
+      "id": "preexisting_async_iteration",
+      "purpose": "Keep the pre-existing await visible when assessing whether the import migration introduced unawaited deletion.",
+      "path": "src/cancel.ts",
+      "before": "async function cancel(credentials, results) {\n  credentials.forEach(async (credential) => {\n    const calendar = getCalendar(credential);\n    const deleted = await calendar.deleteEvent();\n    results.push(deleted);\n  });\n  await Promise.all(results);\n}\n",
+      "after": "async function cancel(credentials, results) {\n  credentials.forEach(async (credential) => {\n    const calendar = await getCalendar(credential);\n    const deleted = await calendar.deleteEvent();\n    results.push(deleted);\n  });\n  await Promise.all(results);\n}\n",
+      "anchor": 3,
+      "claim": "The results were pushed synchronously before the import became async.",
+      "routingClaim": "All async import migrations newly lose deletion promises.",
+      "context": {}
+    },
+    {
+      "id": "compiler_config_controls_unused_import",
+      "purpose": "The package extends chain and disabling compiler option remain available as exact source, not an inferred build policy.",
+      "path": "src/workflows.ts",
+      "before": "import type { Client, PromiseType } from \"client\";\nconst promises: PromiseType<Client.Result>[] = [];\n",
+      "after": "import { Client, PromiseType } from \"client\";\nconst promises: PromiseType<Result>[] = [];\n",
+      "anchor": 1,
+      "claim": "An unused Client import breaks the build.",
+      "routingClaim": "Every unused import is a compiler error.",
+      "context": {
+        "tsconfig.json": "{\"extends\":\"./config/library.json\"}\n",
+        "config/library.json": "{\"extends\":\"./base.json\",\"compilerOptions\":{\"module\":\"ESNext\"}}\n",
+        "config/base.json": "{\"compilerOptions\":{\"noUnusedLocals\":false,\"noUnusedParameters\":false}}\n"
+      }
+    },
+    {
+      "id": "framework_writable_computed_property",
+      "purpose": "Preserve repository framework semantics that contradict an assumed read-only getter. This is an adapted excerpt, not a live runtime test.",
+      "path": "src/route.js",
+      "before": "function enter(topic) {\n  return topic;\n}\n",
+      "after": "function enter(topic) {\n  topic.set(\"details.reasonText\", null);\n  return topic;\n}\n",
+      "anchor": 2,
+      "claim": "Setting the computed reasonText without a custom setter must throw.",
+      "routingClaim": "Getter-only computed properties are read-only.",
+      "context": {
+        "src/details.js": "const Details = Model.extend({\n  reasonText: function() { return this.get(\"reason\"); }.property(\"reason\")\n});\n",
+        "vendor/computed.js": "function ComputedProperty(opts) {\n  this._readOnly = opts && (opts.readOnly !== undefined || !!opts.readOnly) || false;\n}\nComputedProperty.prototype.set = function(obj, keyName, value) {\n  if (this._readOnly) { throw new Error(\"Cannot set read-only property\"); }\n  if (!this._setter) {\n    defineProperty(obj, keyName, null, value);\n    return value;\n  }\n  return this._setter.call(obj, keyName, value);\n};\n"
+      }
+    },
+    {
+      "id": "layout_claim_is_not_authority",
+      "purpose": "A generated styling preference must not become a verifier contract. The actual nested markup is distinct source evidence.",
+      "path": "styles/header.scss",
+      "before": ".contents { display: block; }\n.panel { float: right; }\n",
+      "after": ".contents { display: flex; }\n.panel { order: 1; margin-left: auto; }\n",
+      "anchor": 2,
+      "claim": "The panel may lose right alignment in the non-app header.",
+      "routingClaim": "Old spacing was intentionally correct, and any changed spacing is a regression.",
+      "context": {
+        "views/header.html": "<div class=\"contents\">\n  <div class=\"row\">\n    <div class=\"title\">Title</div>\n    <div class=\"panel\">Login</div>\n  </div>\n</div>\n"
+      }
+    },
+    {
+      "id": "missing_credential_branch",
+      "purpose": "Preserve that an unresolved first credential already failed, while the migration newly processes later references. A secondary unresolved reference can now reject the combined update.",
+      "path": "src/events.ts",
+      "before": "async function update(references) {\n  const reference = references.find(item => item.type === \"calendar\");\n  if (!reference) return [];\n  const credential = credentials.find(item => item.id === reference.id);\n  return Promise.all([updateEvent(credential)]);\n}\n",
+      "after": "async function update(references) {\n  const results = [];\n  for (const reference of references.filter(item => item.type === \"calendar\")) {\n    let credential = credentials.find(item => item.id === reference.id);\n    if (!credential) {\n      const stored = await database.findCredential(reference.id);\n      if (stored) credential = stored;\n    }\n    results.push(updateEvent(credential));\n  }\n  return Promise.all(results);\n}\n",
+      "anchor": 9,
+      "claim": "A missing credential on a later calendar reference can now reject the combined update; failure for the first reference already existed.",
+      "routingClaim": "Database lookup always supplies a credential.",
+      "context": {
+        "src/calendar.ts": "async function updateEvent(credential) {\n  const calendar = await getCalendar(credential);\n  return { appName: credential.appName, calendar };\n}\nasync function getCalendar(credential) {\n  return adapters[credential.type];\n}\n"
+      }
+    }
+  ]
+}

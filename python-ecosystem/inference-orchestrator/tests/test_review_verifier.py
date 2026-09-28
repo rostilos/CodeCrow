@@ -73,8 +73,8 @@ def test_grep_does_not_use_stale_target_and_reports_incomplete_search(source_tre
     assert result["results"] == []
     assert result["status"] == "partial"
     assert result["unavailablePaths"] == ["missing.py"]
-    assert source.grep("compute", paths=["caller.py"])["results"] == [{"path": "caller.py", "lines": [2]}]
-    assert source.grep("old_symbol", side="target")["results"] == [{"path": "deleted.py", "lines": [1]}]
+    assert source.grep("compute", paths=["caller.py"])["results"] == [{"path": "caller.py", "matches": [{"line": 2, "text": "    return compute(1)"}]}]
+    assert source.grep("old_symbol", side="target")["results"] == [{"path": "deleted.py", "matches": [{"line": 1, "text": "old_symbol = True"}]}]
 
 def test_source_reads_do_not_clip_large_semantic_unit(source_tree, tmp_path):
     long_line = "    marker = '" + "x" * 50000 + "'\n"
@@ -105,7 +105,7 @@ async def test_request_bound_mcp_exposes_only_read_tools_and_uses_host_graph_ide
     binding = {**source_tree, "workspace": "tenant-a", "project": "p", "review_collection_target": "sealed"}
     tools = VerificationTools(rag_client=rag, binding=binding, parts=[part()])
     schemas = await tools.schemas()
-    assert {schema["name"] for schema in schemas} == {"queryCodeGraph", "getStructuralUnit", "traverseCodeGraph", "getImpactRadius", "getMinimalReviewContext", "readReviewFile", "grepReviewCode", "getReviewDiff"}
+    assert {schema["name"] for schema in schemas} == {"queryCodeGraph", "getStructuralUnit", "traverseCodeGraph", "getImpactRadius", "getMinimalReviewContext", "readReviewFile", "grepReviewCode", "getReviewDiff", "findReviewFiles"}
     assert all("workspace" not in schema["inputSchema"]["properties"] for schema in schemas)
     result = await tools.call("readReviewFile", {"path": "change.py"})
     assert result["status"] == "ready"
@@ -116,18 +116,6 @@ async def test_request_bound_mcp_exposes_only_read_tools_and_uses_host_graph_ide
     assert rag.query_review_graph.call_args.kwargs["include_source"] is False
     assert (await tools.call("deleteFile", {"path": "change.py"}))["status"] == "unavailable"
 
-@pytest.mark.asyncio
-async def test_investigation_can_discover_missing_issue_without_existing_candidates(source_tree):
-    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
-        response(toolCalls=[{"name": "getReviewDiff", "arguments": {"partIds": ["part-1"]}}]),
-        response(investigations=[{"id": "edge-1", "status": "resolved", "reason": "The function divides by zero", "evidenceIds": ["read-1"]}],
-                 findings=[{**finding(), "evidenceIds": ["read-1"]}]),
-    ]))
-    output = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[], summaries=[], parts=[part()],
-        binding=source_tree, investigations=[{"id": "edge-1", "partIds": ["part-1"], "paths": ["change.py"], "question": "Does compute still return normally?"}])
-    assert len(output.issues) == 1
-    assert output.issues[0]["partId"] == "part-1"
-    assert output.resolved_investigation_ids == {"edge-1"}
 
 def test_duplicate_cycles_and_dismissed_representatives_do_not_publish_hypotheses():
     candidates = {"a": finding(), "b": finding(title="different title")}
@@ -139,51 +127,13 @@ def test_duplicate_cycles_and_dismissed_representatives_do_not_publish_hypothese
         if decisions["b"]["verdict"] == "duplicate":
             assert diagnostics
 
-@pytest.mark.asyncio
-async def test_graph_failure_recovered_by_source_does_not_leave_validation_incomplete(source_tree):
-    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
-        response(toolCalls=[{"name": "queryCodeGraph", "arguments": {"pattern": "callers_of", "target": "compute"}}]),
-        response(toolCalls=[{"name": "readReviewFile", "arguments": {"path": "change.py"}}]),
-        response(decisions=[{"candidateId": "candidate-1", "verdict": "keep",
-                             "reason": "Exact source confirms defect", "evidenceIds": ["read-2"]}]),
-    ]))
-    output = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[finding()], summaries=[],
-                                              parts=[part()], binding=source_tree)
-    assert output.issues == [finding()]
-    assert output.diagnostics == []
 
 def test_malformed_changed_path_metadata_does_not_disable_valid_source_reads(source_tree):
     source = LocalReviewSource(source_tree, ["../invalid.py", "change.py"])
     assert source.metadata_diagnostics
     assert source.read("change.py")["status"] == "ready"
 
-@pytest.mark.asyncio
-async def test_full_pr_context_can_be_read_but_not_published_in_incremental_review(source_tree):
-    historical = part("caller.py", "historical-part")
-    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
-        response(toolCalls=[{"name": "getReviewDiff", "arguments": {"partIds": ["historical-part"]}}]),
-        response(investigations=[{"id": "check-history", "status": "resolved", "reason": "Related earlier change inspected", "evidenceIds": ["read-1"]}],
-                 findings=[{**finding("caller.py", "historical-part"), "evidenceIds": ["read-1"]}]),
-    ]))
-    output = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[], summaries=[], parts=[part()],
-        context_parts=[historical], binding=source_tree,
-        investigations=[{"id": "check-history", "partIds": ["part-1"], "paths": ["change.py"], "question": "Does earlier change compensate?"}])
-    assert output.issues == []
-    assert output.resolved_investigation_ids == {"check-history"}
-    last_prompt = prompt_at(llm, -1)
-    assert last_prompt["contextChangedParts"] == [{"id": "historical-part", "path": "caller.py"}]
-    assert "historical-part" in str(llm.ainvoke.call_args_list[-1].args[0])
 
-@pytest.mark.asyncio
-async def test_new_discovery_must_have_evidence_for_its_changed_anchor(source_tree):
-    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
-        response(toolCalls=[{"name": "readReviewFile", "arguments": {"path": "caller.py"}}]),
-        response(investigations=[{"id": "inspect", "status": "resolved", "reason": "Caller passes one", "evidenceIds": ["read-1"]}],
-                 findings=[{**finding(), "evidenceIds": ["read-1"]}]),
-    ]))
-    output = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[], summaries=[], parts=[part()],
-        binding=source_tree, investigations=[{"id": "inspect", "partIds": ["part-1"], "paths": ["change.py"], "question": "Check call contract"}])
-    assert output.issues == []
 
 def test_duplicate_chain_keeps_one_live_representative():
     candidates = {key: finding(title=key) for key in ("a", "b", "c", "unrelated")}
@@ -197,21 +147,6 @@ def test_duplicate_chain_keeps_one_live_representative():
     assert set(result) == {"c", "unrelated"}
     assert not diagnostics
 
-@pytest.mark.asyncio
-async def test_discovery_without_progress_on_pending_question_terminates_with_partial_result(source_tree):
-    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
-        response(findings=[{**finding(), "evidenceIds": ["diff:part-1"]}]),
-        response(findings=[{**finding(title="Another phrasing"), "evidenceIds": ["diff:part-1"]}]),
-        response(groups=[{"memberIds": ["issue-1", "issue-2"], "representativeId": "issue-1",
-                          "rationale": "Same zero division and repair"}]),
-    ]))
-    output = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[], summaries=[], parts=[part()],
-        binding=source_tree, investigations=[{"id": "unresolved", "partIds": ["part-1"], "paths": ["change.py"], "question": "Check caller compensation"}])
-    assert len(output.issues) == 1
-    assert output.issues[0]["title"] == "Division by zero"
-    assert llm.ainvoke.await_count == 3  # two no-progress case turns, then final reconciliation
-    assert any("unresolved" in item for item in output.diagnostics)
-    assert any("without new facts" in item for item in output.diagnostics)
 
 def test_local_reads_keep_directory_binding_when_parent_is_replaced(source_tree, tmp_path, monkeypatch):
     import os
@@ -294,7 +229,7 @@ def prompt_at(llm, index):
     for message in llm.ainvoke.call_args_list[index].args[0]:
         if isinstance(message, tuple) and message[0] == "human":
             payload = json.loads(message[1])
-            if "candidates" in payload:
+            if "workItems" in payload:
                 return payload
     raise AssertionError("review prompt missing")
 
@@ -303,135 +238,21 @@ def read_call(path):
     return {"name": "readReviewFile", "arguments": {"path": path}}
 
 
-def verdict(candidate_id, value, evidence, reason="The changed expression divides every argument by zero.", **extra):
+def verdict(candidate_id, value, evidence, reason="The changed return divides the supplied value by zero.", **extra):
     return {"candidateId": candidate_id, "verdict": value, "reason": reason, "evidenceIds": evidence, **extra}
 
 
-@pytest.mark.asyncio
-async def test_unconfirmed_caller_hypothesis_is_not_published(source_tree):
-    """Reproduce the observed regression: inability to disprove is not proof."""
-    llm = SimpleNamespace(ainvoke=AsyncMock(return_value=response(decisions=[
-        verdict("candidate-1", "uncertain", [], "No unmigrated consumer was located; the claim assumes one exists.")
-    ])))
-    hypothesis = finding(title="Hypothetical unmigrated caller crashes")
-    result = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[hypothesis],
-                                               summaries=[], parts=[part()], binding=source_tree)
-    assert result.issues == []
-    assert result.decisions[0]["verdict"] == "uncertain"
-    assert any("not published" in message for message in result.diagnostics)
-    assert llm.ainvoke.await_count == 1
 
 
-@pytest.mark.asyncio
-async def test_provider_failure_preserves_undecided_discovery_but_not_settled_uncertainty(source_tree):
-    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
-        response(decisions=[verdict("candidate-1", "uncertain", [], "No concrete failing consumer")],
-                 toolCalls=[read_call("change.py")]),
-        RuntimeError("provider unavailable"),
-    ]))
-    issues = [finding(title="Speculation"), finding()]
-    result = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=issues,
-                                               summaries=[], parts=[part()], binding=source_tree)
-    assert result.issues == [issues[1]]
-    assert any("without verification" in message for message in result.diagnostics)
 
 
-@pytest.mark.asyncio
-async def test_semantic_duplicates_across_cases_are_resolved_after_source_review(source_tree):
-    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
-        response(decisions=[verdict("candidate-1", "keep", ["diff:part-1"])]),
-        response(decisions=[verdict("candidate-1", "keep", ["diff:part-2"])]),
-        response(groups=[{"memberIds": ["issue-1", "issue-2"], "representativeId": "issue-1",
-                          "rationale": "Both report the same zero divisor reached by this caller; same repair"}]),
-    ]))
-    result = await ReviewVerifier(None).verify(llm=llm, request=request(),
-        findings=[finding(), finding("caller.py", "part-2", "Caller crashes")], summaries=[],
-        parts=[part(), part("caller.py", "part-2")], binding=source_tree)
-    assert [item["file"] for item in result.issues] == ["change.py"]
-    assert llm.ainvoke.await_count == 3
-    assert not result.diagnostics
-    final = str(llm.ainvoke.call_args_list[2].args[0])
-    assert "issue-1" in final and "issue-2" in final
-    assert "evidenceIds" not in final and "@@" not in final
-
-@pytest.mark.asyncio
-async def test_settled_decisions_are_not_discarded_when_model_also_requests_source(source_tree, tmp_path):
-    # Related candidates retain their shared source until the case ends.
-    marker = "shared_source_marker_" + "x" * 50000
-    (tmp_path / "overlay" / "files" / "change.py").write_text("def compute(value):\n    return value / 0\n# " + marker + "\n")
-    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
-        response(toolCalls=[read_call("change.py")]),
-        response(decisions=[verdict("candidate-1", "keep", ["read-1"])], toolCalls=[read_call("caller.py")]),
-        response(decisions=[verdict("candidate-2", "dismiss", ["read-1", "read-2"],
-                                    reason="The complete caller establishes compensation for the second allegation")]),
-    ]))
-    result = await ReviewVerifier(None).verify(llm=llm, request=request(),
-        findings=[finding(), finding(title="Caller compensation allegation")],
-        summaries=[{"paths": ["change.py"], "summary": "malformed_summary_" * 10000}],
-        parts=[part()], binding=source_tree)
-    assert result.issues == [finding()]
-    assert llm.ainvoke.await_count == 3
-    second = str(llm.ainvoke.call_args_list[1].args[0])
-    third = str(llm.ainvoke.call_args_list[2].args[0])
-    assert second.count(marker) == 1
-    assert third.count(marker) == 1
-    assert "malformed_summary_" not in second + third
-    assert not result.diagnostics
-
-@pytest.mark.asyncio
-async def test_reworded_partial_searches_do_not_extend_verification(source_tree):
-    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
-        response(toolCalls=[{"name": "grepReviewCode", "arguments": {"query": word, "paths": ["missing.py"]}}])
-        for word in ("oldName", "newName", "anotherGuess", "lastGuess")
-    ]))
-    result = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[finding()],
-                                               summaries=[], parts=[part()], binding=source_tree)
-    assert llm.ainvoke.await_count == 2
-    assert result.issues == []
-    assert any("without new facts" in message for message in result.diagnostics)
 
 
-@pytest.mark.asyncio
-async def test_graph_failure_can_switch_to_source_without_retrying_paid_call(source_tree):
-    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
-        response(toolCalls=[{"name": "queryCodeGraph", "arguments": {"pattern": "callers_of", "target": "compute"}}]),
-        response(toolCalls=[read_call("change.py")]),
-        response(decisions=[verdict("candidate-1", "keep", ["read-2"])]),
-    ]))
-    result = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[finding()],
-                                               summaries=[], parts=[part()], binding=source_tree)
-    assert result.issues == [finding()]
-    assert not result.diagnostics
-    assert any("graph" in message.lower() for message in result.warnings)
 
 
-@pytest.mark.asyncio
-async def test_unrelated_exact_source_cannot_confirm_changed_anchor(source_tree):
-    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
-        response(toolCalls=[read_call("caller.py")]),
-        response(decisions=[verdict("candidate-1", "keep", ["read-1"])]),
-        response(decisions=[verdict("candidate-1", "uncertain", [], "Caller alone does not establish the proposed failure")]),
-    ]))
-    result = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[finding()],
-                                               summaries=[], parts=[part()], binding=source_tree)
-    assert result.issues == []
-    assert result.decisions[0]["verdict"] == "uncertain"
-    assert "changed anchor" in json.loads(llm.ainvoke.call_args_list[2].args[0][-1][1])["corrections"][0]
 
-@pytest.mark.asyncio
-async def test_known_source_compensation_dismisses_migrated_caller_claim(source_tree, tmp_path):
-    (tmp_path / "overlay" / "files" / "caller.py").write_text("async def call():\n    return await compute(1)\n")
-    (tmp_path / "overlay" / "files" / "change.py").write_text("async def compute(value):\n    return value\n")
-    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
-        response(toolCalls=[read_call("change.py"), read_call("caller.py")]),
-        response(decisions=[verdict("candidate-1", "dismiss", ["read-1", "read-2"],
-            reason="The identified caller awaits the newly asynchronous function and still returns the integer.")]),
-    ]))
-    issue = finding(title="Caller receives coroutine instead of integer")
-    result = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[issue],
-                                               summaries=[], parts=[part()], binding=source_tree)
-    assert result.issues == []
-    assert not result.diagnostics
+
+
 
 
 def test_case_source_stays_available_for_later_related_decisions(source_tree):
@@ -467,3 +288,490 @@ def test_discovered_findings_join_same_session_dedup_catalog(source_tree):
     state.record(findings=[{**finding(title="Same propagated failure"), "evidenceIds": [key], "duplicateOf": "candidate-1"}])
     assert len(ReviewVerifier._apply_decisions(state.candidates, state.decisions, [])) == 1
     assert not state.complete  # no invented coverage from finding a defect
+
+
+def test_grep_distinguishes_complete_matching_declarations_without_body_dump(source_tree, tmp_path):
+    source = "model BookingReference {\n  referenceData String\n}\nmodel Booking {\n  id Int @id\n}\nmodel BookingSeat {\n  bookingId Int\n}\n"
+    (tmp_path / "target" / "schema.prisma").write_text(source)
+    matches = LocalReviewSource(source_tree).grep("model Booking", paths=["schema.prisma"])
+    assert matches["results"] == [{"path": "schema.prisma", "matches": [
+        {"line": 1, "text": "model BookingReference {"},
+        {"line": 4, "text": "model Booking {"},
+        {"line": 7, "text": "model BookingSeat {"},
+    ]}]
+    assert "referenceData" not in str(matches)
+    assert matches["complete"]
+
+
+
+
+
+
+
+
+def assess(work_id="work-1", verdict="confirmed", evidence=("diff:part-1",), reason="The changed return divides the supplied value by zero.", **extra):
+    return {"workId": work_id, "verdict": verdict, "reason": reason, "evidenceIds": list(evidence), **extra}
+
+
+def step(*assessments, calls=(), work_ids=("work-1",), findings=()):
+    pending = [key for key in work_ids if not any(item["workId"] == key for item in assessments)] if calls else []
+    return response(assessments=[*assessments, *(assess(key, "needs_evidence", (), "Inspect the caller to establish compensation") for key in pending)],
+                    evidenceRequests=[{"workIds": list(work_ids), "missingFact": "Does the caller compensate for the changed return?", "calls": list(calls)}] if calls else [],
+                    findings=list(findings))
+
+
+async def run_case(model, source_tree, *, findings, investigations=(), parts=None):
+    """Exercise one controller case independently of semantic planning."""
+    from service.review.verification_state import VerificationState
+    parts = parts or [part()]
+    state = VerificationState(findings, list(investigations), {item.id: item for item in parts})
+    for item in parts:
+        state.evidence[f"diff:{item.id}"] = {"kind": "diff", "result": {
+            "status": "ready", "partId": item.id, "path": item.path, "side": item.side, "diff": item.diff,
+        }}
+    tools = VerificationTools(rag_client=None, binding=source_tree, parts=parts)
+    return await ReviewVerifier(None)._verify_case(model, request(), state, tools, {"caseId": "test-case"}, [])
+
+
+async def review(source_tree, responses, *, findings=None, investigations=None, single_case=False, **kwargs):
+    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=responses))
+    findings = [finding()] if findings is None else findings
+    if single_case:
+        result = await run_case(llm, source_tree, findings=findings, investigations=investigations or [], **kwargs)
+    else:
+        result = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=findings,
+            summaries=kwargs.pop("summaries", []), parts=kwargs.pop("parts", [part()]), binding=source_tree,
+            investigations=investigations or [], **kwargs)
+    return result, llm
+
+
+@pytest.mark.asyncio
+async def test_source_question_reports_new_issue_using_same_work_id(source_tree):
+    result, llm = await review(source_tree, [step(assess(issue=finding()))], findings=[], investigations=[
+        {"id": "edge-1", "partIds": ["part-1"], "paths": ["change.py"], "question": "Does compute return normally?"}])
+    assert len(result.issues) == 1
+    assert result.issues[0]["partId"] == "part-1"
+    assert result.resolved_investigation_ids == {"edge-1"}
+    assert llm.ainvoke.await_count == 1
+    assert prompt_at(llm, 0)["workItems"][0]["id"] == "work-1"
+
+
+@pytest.mark.asyncio
+async def test_graph_outage_falls_back_to_local_source_without_protocol_retry(source_tree):
+    result, llm = await review(source_tree, [
+        step(calls=[{"name": "queryCodeGraph", "arguments": {"pattern": "callers_of", "target": "compute"}}]),
+        step(calls=[read_call("change.py")]), step(assess(evidence=["read-2"]))])
+    assert result.issues == [finding()]
+    assert not result.diagnostics
+    assert any("graph" in warning.lower() for warning in result.warnings)
+    assert llm.ainvoke.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_full_pr_context_is_readable_but_not_publishable_in_incremental_review(source_tree):
+    result, llm = await review(source_tree, [
+        step(calls=[{"name": "getReviewDiff", "arguments": {"partIds": ["historical-part"]}}]),
+        step(assess(evidence=["read-1"], issue=finding("caller.py", "historical-part"))),
+        step(),
+    ], findings=[], context_parts=[part("caller.py", "historical-part")], investigations=[
+        {"id": "history", "partIds": ["part-1"], "paths": ["change.py"], "question": "Does earlier work compensate?"}])
+    assert result.issues == []
+    assert result.resolved_investigation_ids == {"history"}
+    assert prompt_at(llm, 1)["contextChangedParts"] == [{"id": "historical-part", "path": "caller.py"}]
+
+
+@pytest.mark.asyncio
+async def test_new_finding_needs_its_active_anchor_not_an_unrelated_caller(source_tree):
+    result, _ = await review(source_tree, [step(calls=[read_call("caller.py")]),
+        step(assess(evidence=["read-1"]), findings=[{**finding(), "evidenceIds": ["read-1"]}]), step()],
+        findings=[], investigations=[{"id": "inspect", "partIds": ["part-1"], "question": "Check call contract"}])
+    assert result.issues == []
+
+
+@pytest.mark.asyncio
+async def test_uncertain_caller_hypothesis_is_not_published(source_tree):
+    result, llm = await review(source_tree, [step(assess(verdict="uncertain", evidence=[], reason="No concrete unmigrated caller was located"))])
+    assert result.issues == []
+    assert result.decisions[0]["verdict"] == "uncertain"
+    assert llm.ainvoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_retains_only_undecided_discovery(source_tree):
+    issues = [finding(title="Speculation"), finding()]
+    result, _ = await review(source_tree, [
+        response(groups=[{"caseIds": ["case-1"]}, {"caseIds": ["case-2"]}]),
+        step(assess(verdict="uncertain", evidence=[], reason="No failing consumer")),
+        RuntimeError("provider unavailable")], findings=issues)
+    assert result.issues == [issues[1]]
+    assert any("without verification" in message for message in result.diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_final_dedup_follows_contract_planning_and_source_review(source_tree):
+    result, llm = await review(source_tree, [
+        response(groups=[{"caseIds": ["case-1"]}, {"caseIds": ["case-2"]}]),
+        step(assess()), step(assess(evidence=["diff:part-2"])),
+        response(groups=[{"memberIds": ["issue-1", "issue-2"], "representativeId": "issue-1", "rationale": "Same divisor and practical repair"}]),
+    ], findings=[finding(), finding("caller.py", "part-2", "Caller crashes")], parts=[part(), part("caller.py", "part-2")])
+    assert [item["file"] for item in result.issues] == ["change.py"]
+    assert llm.ainvoke.await_count == 4
+    assert not result.diagnostics
+
+
+@pytest.mark.asyncio
+async def test_complete_shared_source_survives_settled_sibling_and_context_rebuild(source_tree, tmp_path):
+    marker = "shared_source_marker_" + "x" * 50000
+    (tmp_path / "overlay" / "files" / "change.py").write_text("def compute(value):\n    return value / 0\n# " + marker + "\n")
+    result, llm = await review(source_tree, [step(calls=[read_call("change.py")], work_ids=["work-1", "work-2"]),
+        step(assess(evidence=["read-1"]), calls=[read_call("caller.py")], work_ids=["work-2"]),
+        step(assess("work-2", "refuted", ["read-1", "read-2"], "The caller compensates for this second allegation")),
+    ], findings=[finding(), finding(title="Caller compensation allegation")], single_case=True)
+    assert result.issues == [finding()]
+    assert not result.diagnostics
+    for index in (1, 2):
+        prompt = str(llm.ainvoke.call_args_list[index].args[0])
+        assert prompt.count(marker) == 1
+        assert "malformed_summary_" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_existing_candidate_joins_supplied_anchor_to_caller_witness(source_tree):
+    result, _ = await review(source_tree, [step(calls=[read_call("caller.py")]), step(assess(evidence=["read-1"]))])
+    assert result.issues == [finding()]
+    assert result.decisions[0]["evidenceIds"] == ["read-1", "diff:part-1"]
+
+
+@pytest.mark.asyncio
+async def test_source_compensation_dismisses_migrated_caller_claim(source_tree, tmp_path):
+    (tmp_path / "overlay" / "files" / "caller.py").write_text("async def call():\n    return await compute(1)\n")
+    (tmp_path / "overlay" / "files" / "change.py").write_text("async def compute(value):\n    return value\n")
+    result, _ = await review(source_tree, [step(calls=[read_call("change.py"), read_call("caller.py")]),
+        step(assess(verdict="refuted", evidence=["read-1", "read-2"], reason="The caller awaits the newly asynchronous function"))])
+    assert result.issues == []
+    assert not result.diagnostics
+
+
+@pytest.mark.asyncio
+async def test_requested_counterevidence_defers_same_step_confirmation(source_tree, monkeypatch):
+    original = VerificationTools.call
+    calls = []
+
+    async def tracked(self, name, args):
+        calls.append((name, args))
+        return await original(self, name, args)
+
+    monkeypatch.setattr(VerificationTools, "call", tracked)
+    result, llm = await review(source_tree, [
+        step(assess(), calls=[read_call("caller.py")]),
+        step(assess(verdict="refuted", evidence=["read-1"], reason="The requested caller establishes compensation")),
+    ])
+    assert result.issues == []
+    assert llm.ainvoke.await_count == 2
+    assert calls == [("readReviewFile", {"path": "caller.py"})]
+    work = prompt_at(llm, 1)["workItems"][0]
+    assert "outcome" not in work
+    assert work["pendingAssessment"]["verdict"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_direct_source_call_and_sibling_outcomes_are_processed_together(source_tree, monkeypatch):
+    from service.review.review_step import STEP_TOOL
+    model = SimpleNamespace(bind_tools=lambda schemas, **kw: model)
+    model.ainvoke = AsyncMock(side_effect=[SimpleNamespace(content="", tool_calls=[
+        {"id": "outcome", "name": STEP_TOOL, "args": {"assessments": [
+            assess(), assess("work-2", "refuted", ["diff:part-1"], "Independent second claim is disproved"),
+        ]}},
+        {"id": "source", "name": "readReviewFile", "args": {
+            "path": "caller.py", "workIds": ["work-1"], "missingFact": "Does the caller compensate?",
+        }},
+    ]), SimpleNamespace(content="", tool_calls=[
+        {"id": "final", "name": STEP_TOOL, "args": {"assessments": [assess(evidence=["read-1"])]}},
+    ])])
+    original = VerificationTools.call
+    execute = AsyncMock(side_effect=lambda name, args: None)
+
+    async def tracked(self, name, args):
+        await execute(name, args)
+        return await original(self, name, args)
+
+    monkeypatch.setattr(VerificationTools, "call", tracked)
+    result = await run_case(model, source_tree, findings=[finding(), finding(title="Independent second claim")])
+    assert result.issues == [finding()]
+    execute.assert_awaited_once_with("readReviewFile", {"path": "caller.py"})
+    assert model.ainvoke.await_count == 2
+    work = prompt_at(model, 1)["workItems"]
+    assert "outcome" not in work[0]
+    assert work[1]["outcome"]["verdict"] == "refuted"
+
+
+@pytest.mark.asyncio
+async def test_pending_work_can_read_source_without_repeating_assessment(source_tree):
+    result, llm = await review(source_tree, [
+        response(evidenceRequests=[{"workIds": ["work-1"], "missingFact": "Read the concrete caller", "calls": [read_call("caller.py")]}]),
+        step(assess(evidence=["read-1"])),
+    ])
+    assert result.issues == [finding()]
+    assert llm.ainvoke.await_count == 2
+    assert any(item["id"] == "read-1" for item in prompt_at(llm, 1)["evidence"])
+
+
+@pytest.mark.asyncio
+async def test_reopened_question_keeps_derived_report_pending_for_explicit_disposition(source_tree):
+    result, llm = await review(source_tree, [
+        step(assess(issue=finding()), calls=[read_call("caller.py")], work_ids=["work-2"]),
+        step(assess(verdict="needs_evidence", evidence=[], reason="Recheck the implementation premise"),
+             calls=[read_call("change.py")]),
+        step(assess(verdict="refuted", evidence=["read-2"], reason="Rechecked source changes the answer"),
+             assess("work-2", "confirmed", ["read-1"], "The requested caller question is answered")),
+        step(assess("work-3", "refuted", ["read-2"], "The prior report is explicitly withdrawn using the rechecked source")),
+    ], findings=[], single_case=True, investigations=[
+        {"id": "implementation", "partIds": ["part-1"], "question": "Check the changed implementation"},
+        {"id": "caller", "partIds": ["part-1"], "question": "Check the caller"},
+    ])
+    assert result.issues == []
+    assert result.resolved_investigation_ids == {"implementation", "caller"}
+    assert not result.diagnostics
+    assert llm.ainvoke.await_count == 4
+    pending = prompt_at(llm, 3)
+    assert pending["reviewWork"]["pendingWorkIds"] == ["work-3"]
+    assert "outcome" not in next(item for item in pending["workItems"] if item["id"] == "work-3")
+
+
+@pytest.mark.asyncio
+async def test_malformed_provider_prose_is_not_replayed_as_context(source_tree):
+    prose = "record and conclusion FINAL " * 13000
+    result, llm = await review(source_tree, [SimpleNamespace(content=prose, response_metadata={"finish_reason": "error"}),
+        step(assess(verdict="uncertain", evidence=[], reason="External contract unavailable"))])
+    assert result.issues == []
+    assert prose not in str(llm.ainvoke.call_args_list[1])
+    assert "@@" in str(llm.ainvoke.call_args_list[1])
+    assert any("finish_reason=error" in warning for warning in result.warnings)
+    assert not any("retained" in item for item in result.diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_bad_id_repaired_without_source_acquisition(source_tree):
+    result, llm = await review(source_tree, [step(assess("NEW-FINDING-PANEL")), step(assess())])
+    assert result.issues == [finding()]
+    assert "unknown workId" in str(prompt_at(llm, 1)["reviewWork"]["corrections"])
+    assert llm.ainvoke.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_question_issue_format_repair_keeps_answer_and_requires_no_new_read(source_tree):
+    result, llm = await review(source_tree, [step(assess(issue={"title": "Missing location"})), step(assess(issue=finding()))],
+        findings=[], investigations=[{"id": "header", "partIds": ["part-1"], "question": "Does nesting preserve the layout?"}])
+    assert len(result.issues) == 1
+    assert result.resolved_investigation_ids == {"header"}
+    assert llm.ainvoke.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_tool_requests_without_work_binding_are_rejected_without_execution(source_tree, monkeypatch):
+    execute = AsyncMock()
+    monkeypatch.setattr(VerificationTools, "call", execute)
+    result, llm = await review(source_tree, [response(toolCalls=[read_call("caller.py")]), step(assess())])
+    assert result.issues == [finding()]
+    execute.assert_not_awaited()
+    assert "workIds" in str(prompt_at(llm, 1)["reviewWork"]["corrections"])
+
+
+@pytest.mark.asyncio
+async def test_repeated_source_gets_outcome_assessment_without_funding_more_reads(source_tree, monkeypatch):
+    original = VerificationTools.call
+    reads = []
+    async def tracked(self, name, args):
+        reads.append((name, args))
+        return await original(self, name, args)
+    monkeypatch.setattr(VerificationTools, "call", tracked)
+    result, llm = await review(source_tree, [step(calls=[read_call("caller.py")]),
+        step(calls=[read_call("caller.py")]), step(assess(evidence=["read-1"]))])
+    assert result.issues == [finding()]
+    assert llm.ainvoke.await_count == 3
+    assert "different concrete source lead" in prompt_at(llm, 2)["reviewWork"]["instruction"]
+    assert len(reads) == 2
+
+
+@pytest.mark.asyncio
+async def test_distinct_negative_source_leads_all_get_an_assessment_opportunity(source_tree, monkeypatch):
+    original = VerificationTools.call
+    reads = []
+    async def tracked(self, name, args):
+        reads.append((name, args))
+        return await original(self, name, args)
+    monkeypatch.setattr(VerificationTools, "call", tracked)
+    responses = [step(calls=[{"name": "grepReviewCode", "arguments": {
+        "query": word, "mode": "literal", "paths": ["caller.py"]}}]) for word in ("missing_one", "missing_two", "missing_three")]
+    responses.append(step(assess(verdict="uncertain", evidence=[], reason="None of the concrete source routes establishes the missing contract")))
+    result, llm = await review(source_tree, responses)
+    assert result.issues == []
+    assert llm.ainvoke.await_count == 4
+    assert len(reads) == 3
+    assert result.decisions[0]["verdict"] == "uncertain"
+    assert "missing_one" in str(prompt_at(llm, 2)) and "missing_two" in str(prompt_at(llm, 2))
+
+
+@pytest.mark.asyncio
+async def test_contradictory_reports_reuse_source_in_one_conditional_case(source_tree):
+    singleton_plan = response(groups=[{"caseIds": ["case-1"]}, {"caseIds": ["case-2"]}])
+    reconciliation = response(groups=[{"memberIds": ["issue-1"], "representativeId": "issue-1"},
+                                     {"memberIds": ["issue-2"], "representativeId": "issue-2"}],
+        conflicts=[{"memberIds": ["issue-1", "issue-2"], "question": "Does the identified caller compensate for the return?"}])
+    result, llm = await review(source_tree, [singleton_plan, step(assess()), step(assess(evidence=["diff:part-2"])),
+        reconciliation, step(assess(), assess("work-2", "refuted", ["diff:part-1", "diff:part-2"], "Both exact definitions show the second claim is incorrect"))],
+        findings=[finding(), finding("caller.py", "part-2", "Conflicting compensation claim")], parts=[part(), part("caller.py", "part-2")])
+    assert [item["file"] for item in result.issues] == ["change.py"]
+    assert llm.ainvoke.await_count == 5
+    packet = prompt_at(llm, 4)
+    assert packet["contradictoryClaims"] == "Does the identified caller compensate for the return?"
+    assert {item["id"] for item in packet["workItems"]} == {"work-1", "work-2"}
+    assert {item["result"].get("path") for item in packet["evidence"]} >= {"change.py", "caller.py"}
+    assert not result.diagnostics
+
+
+@pytest.mark.asyncio
+async def test_conflict_source_outage_preserves_previously_verified_reports(source_tree):
+    issues = [finding(), finding("caller.py", "part-2", "Conflicting compensation claim")]
+    result, llm = await review(source_tree, [response(groups=[{"caseIds": ["case-1"]}, {"caseIds": ["case-2"]}]),
+        step(assess()), step(assess(evidence=["diff:part-2"])),
+        response(groups=[{"memberIds": ["issue-1"], "representativeId": "issue-1"}, {"memberIds": ["issue-2"], "representativeId": "issue-2"}],
+                 conflicts=[{"memberIds": ["issue-1", "issue-2"], "question": "Which validation premise is supported?"}]),
+        RuntimeError("provider unavailable")], findings=issues, parts=[part(), part("caller.py", "part-2")])
+    assert result.issues == issues
+    assert llm.ainvoke.await_count == 5
+    assert any("retained" in message for message in result.diagnostics)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adjudication", [
+    [step(assess(verdict="uncertain", evidence=[], reason="Missing external contract"),
+          assess("work-2", "uncertain", [], "Missing external contract"))],
+    [SimpleNamespace(content="unfinished answer"), SimpleNamespace(content="unfinished answer")],
+])
+async def test_inconclusive_optional_conflict_check_cannot_suppress_verified_reports(source_tree, adjudication):
+    issues = [finding(), finding("caller.py", "part-2", "Conflicting compensation claim")]
+    result, _ = await review(source_tree, [response(groups=[{"caseIds": ["case-1"]}, {"caseIds": ["case-2"]}]),
+        step(assess()), step(assess(evidence=["diff:part-2"])),
+        response(groups=[{"memberIds": ["issue-1"], "representativeId": "issue-1"}, {"memberIds": ["issue-2"], "representativeId": "issue-2"}],
+                 conflicts=[{"memberIds": ["issue-1", "issue-2"], "question": "Which validation premise is supported?"}]),
+        *adjudication], findings=issues, parts=[part(), part("caller.py", "part-2")])
+    assert result.issues == issues
+    assert any("prior verified report retained" in message for message in result.diagnostics)
+    assert not any("unconfirmed hypothesis not published" in message for message in result.diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_native_binder_without_forced_choice_keeps_verifier_available(source_tree):
+    from service.review.review_step import STEP_TOOL
+    model = SimpleNamespace(bind_tools=lambda schemas: model)
+    model.ainvoke = AsyncMock(return_value=SimpleNamespace(content="", tool_calls=[
+        {"id": "a", "name": STEP_TOOL, "args": json.loads(step(assess()).content)}]))
+    result = await ReviewVerifier(None).verify(llm=model, request=request(), findings=[finding()], summaries=[], parts=[part()], binding=source_tree)
+    assert result.issues == [finding()]
+    assert model.ainvoke.await_count == 1
+    assert any("does not support forced tool choice" in warning for warning in result.warnings)
+    assert not result.diagnostics
+
+
+@pytest.mark.asyncio
+async def test_declared_provider_capability_omits_forced_choice_before_request(source_tree):
+    from service.review.review_step import STEP_TOOL
+    binding_options = []
+    def bind(schemas, **kwargs):
+        binding_options.append(kwargs)
+        assert {schema["function"]["name"] for schema in schemas} == {STEP_TOOL}
+        return model
+    model = SimpleNamespace(bind_tools=bind, _supports_tool_choice=False)
+    model.ainvoke = AsyncMock(return_value=SimpleNamespace(content="", tool_calls=[
+        {"id": "a", "name": STEP_TOOL, "args": json.loads(step(assess()).content)}]))
+    result = await ReviewVerifier(None).verify(llm=model, request=request(), findings=[finding()], summaries=[], parts=[part()], binding=source_tree)
+    assert result.issues == [finding()]
+    assert binding_options == [{}]
+    assert model.ainvoke.await_count == 1
+
+
+def needs(fact):
+    return step(assess(verdict="needs_evidence", evidence=[], reason=fact))
+
+
+def scoped_read(path, fact):
+    return response(toolCalls=[{"name": "readReviewFile", "arguments": {
+        "path": path, "workIds": ["work-1"], "missingFact": fact,
+    }}])
+
+
+@pytest.mark.asyncio
+async def test_missing_fact_handoff_assesses_each_observation_before_further_read(source_tree):
+    caller_fact = "Does the caller compensate for the changed division?"
+    implementation_fact = "Does compute itself guard the divisor?"
+    result, model = await review(source_tree, [
+        needs(caller_fact), scoped_read("caller.py", caller_fact),
+        needs(implementation_fact), scoped_read("change.py", implementation_fact),
+        step(assess(evidence=["read-1", "read-2"])),
+    ])
+    assert result.issues == [finding()]
+    packets = [prompt_at(model, index) for index in range(5)]
+    assert [packet["reviewWork"]["phase"] for packet in packets] == [
+        "assessment", "evidence", "assessment", "evidence", "assessment"]
+    assert packets[1]["reviewWork"]["missingFacts"] == [{"workId": "work-1", "missingFact": caller_fact}]
+    assert packets[2]["reviewWork"]["missingFacts"] == packets[1]["reviewWork"]["missingFacts"]
+    assert packets[3]["reviewWork"]["missingFacts"] == [{"workId": "work-1", "missingFact": implementation_fact}]
+    assert packets[2]["reviewWork"]["observations"][0]["evidenceId"] == "read-1"
+    assert not result.diagnostics
+
+
+@pytest.mark.asyncio
+async def test_assessment_after_repeated_reads_can_resolve_the_finding(source_tree):
+    fact = "Does the caller guard the changed operation?"
+    responses = [item for _ in range(3) for item in (needs(fact), scoped_read("caller.py", fact))]
+    responses.append(step(assess(evidence=["read-1"])))
+    result, model = await review(source_tree, responses)
+    assert result.issues == [finding()]
+    assert model.ainvoke.await_count == 7
+    assert prompt_at(model, 6)["reviewWork"]["phase"] == "assessment"
+    assert not result.diagnostics
+
+
+@pytest.mark.asyncio
+async def test_stalled_reads_can_recover_through_a_new_missing_fact_handoff(source_tree):
+    fact = "Does the caller guard the changed operation?"
+    new_fact = "Does the implementation validate before dividing?"
+    responses = [item for _ in range(3) for item in (needs(fact), scoped_read("caller.py", fact))]
+    responses.extend([needs(new_fact), scoped_read("change.py", new_fact), step(assess(evidence=["read-1", "read-2"]))])
+    result, model = await review(source_tree, responses)
+    assert result.issues == [finding()]
+    assert model.ainvoke.await_count == 9
+    assert prompt_at(model, 7)["reviewWork"]["missingFacts"] == [{"workId": "work-1", "missingFact": new_fact}]
+    assert not result.diagnostics
+
+
+@pytest.mark.asyncio
+async def test_reworded_purpose_of_repeated_call_cannot_keep_unresolved_case_alive(source_tree):
+    responses = [item for fact in ("Check caller compensation", "Inspect caller guards", "Verify caller inputs", "Caller behavior")
+                 for item in (needs(fact), scoped_read("caller.py", fact))]
+    result, model = await review(source_tree, responses)
+    assert result.issues == []
+    assert model.ainvoke.await_count == 8
+    assert any("outcome correction" in message for message in result.diagnostics)
+    assert all(prompt_at(model, index)["reviewWork"]["phase"] == "assessment" for index in (0, 2, 4, 6))
+    assert not any("without verification" in message for message in result.diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_pending_report_correction_does_not_block_a_valid_missing_source_handoff(source_tree):
+    report = {**finding(), "evidenceIds": ["read-not-observed"]}
+    reason = "The changed return divides the supplied value by zero."
+    result, model = await review(source_tree, [
+        step(assess(issue=report)), needs("Read the definition supporting the report"),
+        scoped_read("change.py", "Read the definition supporting the report"),
+        step(assess(evidence=["read-1"], reason=reason, issue={"evidenceIds": ["read-1"]})),
+    ], findings=[], investigations=[{"id": "compute", "partIds": ["part-1"], "question": "Does compute return normally?"}])
+    assert len(result.issues) == 1
+    assert result.issues[0]["title"] == report["title"]
+    assert result.resolved_investigation_ids == {"compute"}
+    assert model.ainvoke.await_count == 4
+    assert prompt_at(model, 1)["workItems"][0]["issueCorrections"]
+    assert [prompt_at(model, index)["reviewWork"]["phase"] for index in range(4)] == [
+        "assessment", "assessment", "evidence", "assessment"]
+    assert not result.diagnostics

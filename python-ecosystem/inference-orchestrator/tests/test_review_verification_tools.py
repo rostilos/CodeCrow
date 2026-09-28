@@ -127,20 +127,16 @@ async def test_structural_unit_assembles_complete_graph_source_when_local_unavai
 
 
 @pytest.mark.asyncio
-async def test_partial_search_is_observable_and_decision_receipts_are_not_cached(tree):
+async def test_partial_search_is_observable_and_inventory_contains_only_read_tools(tree):
     tools = VerificationTools(rag_client=None, binding=tree, parts=[])
-    partial = await tools.call("grepReviewCode", {"query": "symbol", "paths": ["app/models", "missing"]})
+    partial = await tools.call("grepReviewCode", {"query": "symbol", "mode": "literal", "paths": ["app/models", "missing"]})
     assert partial["status"] == "partial"
     assert partial["results"]
     assert tools.diagnostics
-    handler = AsyncMock(return_value={"status": "ready", "accepted": ["candidate-1"]})
-    tools.register_decisions(handler)
-    arguments = {"decisions": [{"candidateId": "candidate-1", "verdict": "keep", "reason": "Exact source", "evidenceIds": ["read-1"]}], "findings": [{"partId": "part-1", "file": "app/models/base.py", "line": 1, "title": "Same bug", "reason": "Same trigger", "evidenceIds": ["read-1"], "duplicateOf": "candidate-1"}]}
-    for _ in range(2):
-        result = await tools.call("recordReviewDecisions", arguments)
-        assert result["accepted"] == ["candidate-1"]
-    assert handler.await_count == 2
-    assert handler.call_args.kwargs["findings"][0]["duplicateOf"] == "candidate-1"
+    names = {tool["name"] for tool in await tools.schemas()}
+    assert names == {"queryCodeGraph", "getStructuralUnit", "getMinimalReviewContext", "getImpactRadius",
+                     "traverseCodeGraph", "readReviewFile", "grepReviewCode", "findReviewFiles", "getReviewDiff"}
+    assert "recordReviewDecisions" not in names
 
 
 @pytest.mark.asyncio
@@ -193,7 +189,7 @@ async def test_partial_local_search_can_recover_identical_query(tree, tmp_path):
     tools = VerificationTools(rag_client=None, binding=tree, parts=[])
     missing = tmp_path / "overlay" / "files" / "app" / "models" / "added.py"
     missing.unlink()
-    arguments = {"query": "symbol", "paths": ["app/models"]}
+    arguments = {"query": "symbol", "mode": "literal", "paths": ["app/models"]}
     assert (await tools.call("grepReviewCode", arguments))["status"] == "partial"
     missing.write_text("symbol = 5\n")
     recovered = await tools.call("grepReviewCode", arguments)

@@ -16,6 +16,7 @@ from llm.request_capture import (
     attach_http_capture, model_capture, queue_capture_context, review_capture,
 )
 from service.review.agent_calls import ReviewAgentSession
+from service.review.review_step import STEP_TOOL, review_tool_schemas, submitted_steps
 
 SOURCE = "def boundary(value):\n    return value / 0\n" * 2500
 SCHEMAS = [{"name": "readReviewFile", "description": "Read full source", "inputSchema": {
@@ -46,31 +47,38 @@ def capture(monkeypatch, tmp_path):
     return root
 
 
-def response_body(provider):
+def response_body(provider, phase="evidence"):
+    tool_name = "readReviewFile"
+    arguments = {"path": "boundary.py", "workIds": ["work-1"], "missingFact": "The caller contract around the changed boundary"}
+    if phase == "assessment":
+        tool_name = STEP_TOOL
+        arguments = {"assessments": [{"workId": "work-1", "verdict": "needs_evidence",
+            "reason": "The caller contract around the changed boundary", "evidenceIds": []}]}
     if provider == "anthropic":
         return {"id": "provider-generation", "type": "message", "role": "assistant", "model": "test-model",
-            "content": [{"type": "tool_use", "id": "tool-1", "name": "readReviewFile", "input": {"path": "boundary.py"}}],
+            "content": [{"type": "tool_use", "id": "tool-1", "name": tool_name, "input": arguments}],
             "stop_reason": "tool_use", "usage": {"input_tokens": 111, "output_tokens": 17}}
     if provider in {"google", "google_vertex"}:
         return {"responseId": "provider-generation", "modelVersion": "gemini-2.5-flash",
             "candidates": [{"content": {"role": "model", "parts": [
-                {"functionCall": {"name": "readReviewFile", "args": {"path": "boundary.py"}}},
+                {"functionCall": {"name": tool_name, "args": arguments}},
             ]}, "finishReason": "STOP"}],
             "usageMetadata": {"promptTokenCount": 111, "candidatesTokenCount": 17, "totalTokenCount": 128}}
     return {"id": "provider-generation", "object": "chat.completion", "model": "test-model",
         "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
             "role": "assistant", "content": None, "tool_calls": [{"id": "tool-1", "type": "function",
-                "function": {"name": "readReviewFile", "arguments": '{"path":"boundary.py"}'}}],
+                "function": {"name": tool_name, "arguments": json.dumps(arguments)}}],
         }}], "usage": {"prompt_tokens": 111, "completion_tokens": 17, "total_tokens": 128}}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["openai", "openrouter", "anthropic", "google", "google_vertex", "openai_compatible"])
-async def test_actual_sdk_wire_payload_and_response_are_preserved(provider, capture, monkeypatch):
+@pytest.mark.parametrize("phase", ["assessment", "evidence"])
+async def test_actual_sdk_wire_payload_and_response_are_preserved(provider, phase, capture, monkeypatch):
     from llm import ssrf_safe_transport
     monkeypatch.setattr(ssrf_safe_transport, "_ALLOW_PRIVATE", True)
     observed = []
-    response_bytes = json.dumps(response_body(provider)).encode()
+    response_bytes = json.dumps(response_body(provider, phase)).encode()
 
     async def transport(_self, outgoing):
         observed.append(outgoing.content)
@@ -86,23 +94,39 @@ async def test_actual_sdk_wire_payload_and_response_are_preserved(provider, capt
         ai_custom_parameters={"provider": {"order": ["test-route"]}} if provider == "openrouter" else None)
     req = request(provider)
     with queue_capture_context("analysis-job-32"), review_capture(req):
-        session = ReviewAgentSession(model, req, SCHEMAS)
+        session = ReviewAgentSession(model, req, review_tool_schemas(SCHEMAS, phase=phase),
+                                     tool_choice=STEP_TOOL if phase == "assessment" else "any")
         result = await session.invoke([SystemMessage(content="Verify the changed behavior."), HumanMessage(content=SOURCE)],
-                                      stage="verification", batch_ids=["batch-2"])
-    assert result.tool_calls[0]["name"] == "readReviewFile"
+                                      stage="verification", batch_ids=["batch-2"], capture_turn=7)
+    assert result.tool_calls[0]["name"] == (STEP_TOOL if phase == "assessment" else "readReviewFile")
+    steps, errors = submitted_steps(result, tool_names={"readReviewFile"})
+    assert not errors
+    if phase == "assessment":
+        assert steps[0]["assessments"][0]["verdict"] == "needs_evidence"
+        assert steps[0]["assessments"][0]["reason"] == "The caller contract around the changed boundary"
+    else:
+        assert steps[0]["evidenceRequests"][0]["calls"][0]["arguments"] == {"path": "boundary.py"}
+        assert steps[0]["evidenceRequests"][0]["workIds"] == ["work-1"]
     artifacts = list(capture.rglob("*.request.body"))
     assert len(artifacts) == 1
     assert artifacts[0].read_bytes() == observed[0]
     wire = json.loads(observed[0])
     assert SOURCE in json.dumps(wire, ensure_ascii=False).replace("\\n", "\n")
-    assert "readReviewFile" in json.dumps(wire["tools"])
+    assert STEP_TOOL in json.dumps(wire["tools"])
+    if phase == "assessment":
+        assert "readReviewFile" not in json.dumps(wire["tools"])
+        choice = wire.get("tool_choice", wire.get("toolConfig"))
+        assert STEP_TOOL in json.dumps(choice)
+    else:
+        assert "readReviewFile" in json.dumps(wire["tools"])
+        assert "workIds" in json.dumps(wire["tools"])
     if provider == "openrouter":
         assert wire["provider"] == {"order": ["test-route"]}
         assert wire["reasoning"]["effort"] == "medium"
     assert next(capture.rglob("*.response.body")).read_bytes() == response_bytes
     metadata = json.loads(next(capture.rglob("*.complete.json")).read_text())
     assert metadata["stage"] == "verification"
-    assert metadata["turn"] == 1 and metadata["batch_ids"] == ["batch-2"]
+    assert metadata["turn"] == 7 and metadata["batch_ids"] == ["batch-2"]
     assert metadata["job_id"] == "analysis-job-32"
     assert metadata["provider_generation_id"] == "provider-generation"
     assert metadata["response_complete"] is True
@@ -248,14 +272,44 @@ async def test_transport_failure_records_attempt_without_masking_error(capture):
     assert json.loads(next(capture.rglob("*.request.body")).read_text())["source"] == SOURCE
 
 
-@pytest.mark.parametrize("kind", ["symlink", "shared"])
+def test_existing_legacy_root_preserves_old_files_and_captures_private_wire_bodies(capture):
+    capture.mkdir(mode=0o755)
+    capture.chmod(0o755)
+    legacy = capture / "project-91-review-17-legacy.json"
+    legacy.write_bytes(b'{"old_capture":true}')
+    before = legacy.stat()
+    body = json.dumps({"messages": [{"role": "user", "content": SOURCE}]}).encode()
+    response = b'{"id":"legacy-root-generation","choices":[]}'
+    with httpx.Client(transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, content=response))) as client:
+        attach_http_capture(client)
+        req = request()
+        with review_capture(req), model_capture(req, stage="verification"):
+            result = client.post("https://provider.test", content=body)
+    assert result.status_code == 200
+    assert capture.stat().st_mode & 0o777 == 0o755
+    assert legacy.read_bytes() == b'{"old_capture":true}'
+    assert legacy.stat().st_mtime_ns == before.st_mtime_ns
+    stored = next(capture.rglob("*.request.body"))
+    assert stored.read_bytes() == body
+    assert next(capture.rglob("*.response.body")).read_bytes() == response
+    metadata = json.loads(next(capture.rglob("*.complete.json")).read_text())
+    assert metadata["provider_generation_id"] == "legacy-root-generation"
+    assert stored.parent.parent.parent == capture
+    for path in capture.rglob("*"):
+        if path != legacy:
+            assert path.stat().st_mode & 0o077 == 0
+
+
+@pytest.mark.parametrize("kind", ["symlink", "group-writable", "world-writable"])
 def test_insecure_capture_root_is_skipped_without_writing_source(capture, tmp_path, kind):
     target = tmp_path / "target"
     target.mkdir(mode=0o700)
     if kind == "symlink":
         capture.symlink_to(target, target_is_directory=True)
     else:
-        capture.mkdir(mode=0o755)
+        capture.mkdir()
+        capture.chmod(0o770 if kind == "group-writable" else 0o707)
     with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"id": "ok"}))) as client:
         attach_http_capture(client)
         req = request()
@@ -332,3 +386,76 @@ async def test_compressed_response_keeps_wire_body_and_extracts_generation(captu
     manifest = json.loads(next(capture.rglob("*.complete.json")).read_text())
     assert manifest["provider_generation_id"] == "compressed-generation"
     assert manifest["body_encoding"] == "gzip" and manifest["response_complete"] is True
+
+
+def _source_call_sse(provider):
+    arguments = json.dumps({"path": "boundary.py", "workIds": ["work-1"],
+                            "missingFact": "Check the complete caller contract"})
+    split = len(arguments) // 2
+    if provider == "anthropic":
+        events = [
+            ("message_start", {"type": "message_start", "message": {
+                "id": "stream-generation", "type": "message", "role": "assistant", "model": "test-model",
+                "content": [], "stop_reason": None, "usage": {"input_tokens": 111, "output_tokens": 0}}}),
+            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {
+                "type": "tool_use", "id": "tool-1", "name": "readReviewFile", "input": {}}}),
+            *[("content_block_delta", {"type": "content_block_delta", "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": fragment}})
+              for fragment in (arguments[:split], arguments[split:])],
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                               "usage": {"output_tokens": 17}}),
+            ("message_stop", {"type": "message_stop"}),
+        ]
+        return b"".join(f"event: {event}\ndata: {json.dumps(body)}\n\n".encode() for event, body in events)
+    if provider == "google":
+        body = response_body(provider)
+        body["responseId"] = "stream-generation"
+        body["candidates"][0]["content"]["parts"][0]["functionCall"]["args"] = json.loads(arguments)
+        return f"data: {json.dumps(body)}\n\n".encode()
+    chunks = [
+        {"role": "assistant", "tool_calls": [{"index": 0, "id": "tool-1", "type": "function",
+            "function": {"name": "readReviewFile", "arguments": arguments[:split]}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": arguments[split:]}}]},
+        {},
+    ]
+    return b"".join(("data: " + json.dumps({
+        "id": "stream-generation", "object": "chat.completion.chunk", "created": 1, "model": "test-model",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": "tool_calls" if index == 2 else None}],
+        **({"usage": {"prompt_tokens": 111, "completion_tokens": 17, "total_tokens": 128}} if index == 2 else {}),
+    }) + "\n\n").encode() for index, delta in enumerate(chunks)) + b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["openai", "openrouter", "anthropic", "google"])
+async def test_real_sdk_streaming_preserves_work_scope_and_exact_wire_body(provider, capture, monkeypatch):
+    observed = []
+    body = _source_call_sse(provider)
+
+    async def transport(_self, outgoing):
+        observed.append(outgoing.content)
+        protocol = httpx2 if isinstance(outgoing, httpx2.Request) else httpx
+        return protocol.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", transport)
+    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", transport)
+    model = LLMFactory.create_llm(ai_provider=provider,
+        ai_model="gemini-2.5-flash" if provider == "google" else "test-model", ai_api_key="private-provider-key")
+    model.streaming = True
+    req = request(provider)
+    with review_capture(req):
+        session = ReviewAgentSession(model, req, review_tool_schemas(SCHEMAS), tool_choice="any")
+        turn = await session.invoke([HumanMessage(content=SOURCE)], stage="verification_validate")
+    steps, errors = submitted_steps(turn, tool_names={"readReviewFile"})
+    assert not errors
+    assert len(steps) == 1
+    source_request = steps[0]["evidenceRequests"][0]
+    assert source_request["workIds"] == ["work-1"]
+    assert source_request["calls"] == [{"name": "readReviewFile", "arguments": {"path": "boundary.py"}}]
+    assert len(observed) == 1
+    assert next(capture.rglob("*.request.body")).read_bytes() == observed[0]
+    assert next(capture.rglob("*.response.body")).read_bytes() == body
+    assert SOURCE in json.dumps(json.loads(observed[0]), ensure_ascii=False).replace("\\n", "\n")
+    metadata = json.loads(next(capture.rglob("*.complete.json")).read_text())
+    assert metadata["response_complete"] is True
+    assert metadata["provider_generation_id"] == "stream-generation"

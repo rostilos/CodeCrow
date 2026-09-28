@@ -1,7 +1,7 @@
 # CodeCrow
 
 **CodeCrow** is a self-hosted, bring-your-own-model code review platform for
-GitHub, GitLab, and Bitbucket. It combines bounded multi-stage model review with
+GitHub, GitLab, and Bitbucket. It combines multi-stage model review with
 deterministic code evidence and optional Retrieval-Augmented Generation (RAG).
 
 Statically assembled language, framework, and domain plugins add syntax,
@@ -170,7 +170,7 @@ structural context while the normal review pipeline continues.
 | Generation Refresh | Builds a complete snapshot for the new branch revision while readers retain the last complete active generation                                               |
 | PR Context          | Builds eligible review context from the proposed tree relative to paths parsed from the acquired raw unfiltered base-to-head diff (pinned target snapshot + all declared changed bodies - declared deletions); `getReviewFileContent` reads proposed source for declared modified paths and pinned target source for unchanged paths. A missing declared body skips graph enrichment, and silent upstream diff omissions cannot be proven complete |
 | Compatibility Guard | The external generation receipt must match the immutable database seal and the exact workspace, project, branch, revision, and opaque target binding             |
-| Agentic Stage 1     | The existing MCP setting is enabled by default. One proposed-tree generation is prepared before MCP startup; every graph-ready batch must complete compact context, impact radius, a named graph query, and exact-unit inspection in order, then may use broader exploration, traversal, or exact file reads for unresolved gaps. Batch paths and both generation receipts are host-bound. No relation map is preloaded; normal reviews fail open, while controlled structural benchmarks verify the same workflow fail closed |
+| Review Evidence    | Discovery reviews complete selected source without tools. Verification starts with assessment, requests scoped graph/local evidence for concrete missing facts, and reassesses after every read attempt. Optional graph failure leaves local source and diff review available |
 
 The Repository Index Explorer exposes the different record types and their
 relationships. Deterministic architecture and state records use stable content
@@ -193,15 +193,26 @@ publishing stale target-head facts.
 | Control                      | Behavior                                                                                                                             |
 | :--------------------------- | :----------------------------------------------------------------------------------------------------------------------------------- |
 | Immutable Input              | Acquires provider-authoritative base/head revisions, diff, and current source before model review                                    |
-| Bounded Stages               | Plans the review, processes file/hunk batches, verifies candidates, reconciles cross-file evidence, and aggregates the final result  |
+| Review Stages                | Plans complete batches, discovers candidates, routes cross-file questions, verifies each distinct claim, and reconciles publication records |
 | Coverage Ledger              | Gives every reviewable changed hunk and review unit a terminal disposition                                                           |
 | Evidence Gate                | Validates changed-line location, visible evidence, plugin proof decisions, suppression, and duplicate identity before publication    |
 | Idempotent Evidence          | Persists deterministic execution, coverage, candidate, and finding identities for safe retry and lifecycle reconciliation            |
-| Failure Semantics            | A failed or incomplete batch is not interpreted as a clean review; incomplete coverage blocks publication                            |
+| Failure Semantics            | Failed reads and unresolved hypotheses remain explicit; usable findings can accompany a partial result, which is not a clean review or completed cache hit |
 | Queue Liveness               | Capacity-first consumers renew locks and report heartbeats; timeout is based on inactivity rather than total healthy-review duration |
-| Stage 1 Tool Telemetry       | Persists generation preparation, required-first-call compliance, graph/file sequence, revision, source/evidence use, rejected redundant reads, latency, degradation, and partial failures per batch      |
+| Stage and Tool Telemetry     | Records stage usage, tool binding, scoped source observations, unavailable evidence and unresolved work; optional private wire captures retain actual provider requests and responses |
 | Full-Pipeline Prompt Dry Run | Runs normal acquisition, enrichment, plugins, repository context, batching, and prompt assembly with a capture model instead of the review LLM |
 | Capture and Replay Tooling   | Provides opt-in prompt capture, disconnected fixtures, replay, paired evaluation, and publication-gate tooling for operators         |
+
+Verification starts with one candidate or concrete question per case. An optional
+source-free planner merges only descriptions of the same precise failure and
+shared resolution; a common file, definition or API migration does not combine
+unrelated defects. Cases reuse complete source observations without clipping them.
+The verifier first assesses available evidence, opens scoped tools for a concrete
+missing fact, then reassesses after each read attempt. Supported sibling outcomes
+settle independently. Missing report fields receive specific correction feedback,
+and incremental repairs retain locations and reusable citations while the latest
+assessment supplies the final explanation.
+These are execution contracts, not evidence of improved precision, recall or cost.
 
 Prompt dry-run is a deployment/operator switch, not a dashboard setting. It
 suppresses analysis persistence and VCS mutations and writes artifacts under
@@ -245,7 +256,7 @@ High level components:
 - **Web server / API** (`java-ecosystem/services/web-server/`) – main backend API, auth, workspaces/projects, and orchestration.
 - **Pipeline agent** (`java-ecosystem/services/pipeline-agent/`) – receives VCS webhooks, fetches repo/PR data, and coordinates analysis.
 - **Analysis plugins** (`analysis-plugins/`) – neutral contracts and independently owned language, framework, and domain implementations.
-- **Inference orchestrator** (`python-ecosystem/inference-orchestrator/`) – assembles bounded review stages, enforces evidence gates, and calls the configured review model. MCP tools are loaded only for flows that require them.
+- **Inference orchestrator** (`python-ecosystem/inference-orchestrator/`) – assembles review stages, retains exact evidence and work outcomes, and calls the configured review model. MCP tools are exposed only in flows and verification phases that require them.
 - **Repository index pipeline** (`python-ecosystem/rag-pipeline/`) – builds immutable SQLite generations containing exact source units, architecture, plugin state, and graph relations.
 - **PostgreSQL, Redis, and the structural-index volume** – durable application state, queues/liveness coordination, and revision-bound repository context respectively.
 

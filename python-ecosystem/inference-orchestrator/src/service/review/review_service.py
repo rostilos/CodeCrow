@@ -76,15 +76,16 @@ def _parts(raw_diff: str) -> tuple[list[ReviewPart], list[str]]:
     return parts, list(dict.fromkeys(unparsed))
 
 
-def _visible_proposed_lines(part: ReviewPart) -> set[int]:
-    """Lines already present verbatim in a hunk do not need duplicate context."""
-    match = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)", part.diff)
+def _visible_source_lines(part: ReviewPart) -> set[int]:
+    """Exact lines on the anchor's side already supplied by the complete hunk."""
+    match = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)", part.diff)
     if not match:
         return set()
-    line = int(match.group(1))
+    line = int(match.group(2 if part.side == "proposed" else 1))
+    marker = "+" if part.side == "proposed" else "-"
     visible: set[int] = set()
     for text in part.diff.splitlines()[1:]:
-        if text.startswith(("+", " ")):
+        if text.startswith((marker, " ")):
             visible.add(line)
             line += 1
     return visible
@@ -199,8 +200,9 @@ class ReviewService:
         diagnostics.extend(message for result in results for message in result.diagnostics)
         if plan.cross_batch_scopes:
             self._emit(callback, "cross_file", "Checking interactions between batch summaries")
-        cross = await review_cross_batch(llm=llm, request=request, plan=plan, summaries=summaries,
-                                        candidates=candidates, normalize=self._finding, investigations=investigations)
+        async with self._batch_semaphore:
+            cross = await review_cross_batch(llm=llm, request=request, plan=plan, summaries=summaries,
+                                            candidates=candidates, normalize=self._finding, investigations=investigations)
         candidates.extend(cross.findings)
         investigations.extend(cross.investigations)
         diagnostics.extend(cross.diagnostics)
@@ -218,6 +220,7 @@ class ReviewService:
                                         for scope in plan.cross_batch_scopes],
                     investigations=investigations,
                     source_context=[value for values in source_context.values() for value in values], callback=callback,
+                    semaphore=self._batch_semaphore,
                 )
                 candidates = verification.issues
                 diagnostics.extend(verification.diagnostics)
@@ -259,40 +262,68 @@ class ReviewService:
 
     async def _owner_source(self, parts: Any, graph_context: dict[str, Any],
                             source: LocalReviewSource, binding: dict[str, Any]) -> list[dict[str, Any]]:
-        units = {unit["unitId"]: unit for part in parts
-                 for unit in graph_context.get(part.id, {}).get("units", [])}
-        visible: dict[str, set[int]] = {}
+        """Supply complete owners, with an actual file scope when graph ownership is absent."""
+        visible: dict[tuple[str, str], set[int]] = {}
+        ranges: dict[tuple[str, str], list[tuple[int, int]]] = {}
+        file_scopes: set[tuple[str, str]] = set()
         for part in parts:
-            visible.setdefault(part.path, set()).update(_visible_proposed_lines(part))
-        ranges: dict[str, list[tuple[int, int]]] = {}
-        for unit in units.values():
-            path = str(unit.get("path") or "")
-            try:
-                start, end = int(unit["startLine"]), int(unit["endLine"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if not path or start < 1 or end < start:
-                continue
-            if all(line in visible.get(path, set()) for line in range(start, end + 1)):
-                continue
-            ranges.setdefault(path, []).append((start, end))
+            key = (part.path, part.side)
+            visible.setdefault(key, set()).update(_visible_source_lines(part))
+            context = graph_context.get(part.id) or {}
+            context = context if isinstance(context, Mapping) else {}
+            units = context.get("units") or []
+            units = units if isinstance(units, (list, tuple)) else []
+            owner_spans = []
+            # Graph coordinates describe the proposed tree. A deletion's
+            # target-side location must never be resolved against those spans.
+            for unit in units if part.side == "proposed" else ():
+                if not isinstance(unit, Mapping):
+                    continue
+                try:
+                    start, end = int(unit["startLine"]), int(unit["endLine"])
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    continue
+                if str(unit.get("path") or part.path) == part.path and 0 < start <= end:
+                    owner_spans.append((start, end))
+            ranges.setdefault(key, []).extend(owner_spans)
+            if (context.get("structuralOwnershipComplete") is False or not owner_spans
+                    or any(not any(start <= line <= end for start, end in owner_spans) for line in part.anchors)):
+                file_scopes.add(key)
+
         windows: list[dict[str, Any]] = []
-        for path, spans in sorted(ranges.items()):
-            merged: list[tuple[int, int]] = []
-            for start, end in sorted(spans):
-                if merged and start <= merged[-1][1] + 1:
-                    merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-                else:
-                    merged.append((start, end))
+        for (path, side), spans in sorted(ranges.items()):
+            merged: list[tuple[int, int | None]] = []
+            if (path, side) in file_scopes:
+                merged = [(1, None)]
+            else:
+                for start, end in sorted(set(spans)):
+                    if all(line in visible[(path, side)] for line in range(start, end + 1)):
+                        continue
+                    # Adjacent definitions remain independent evidence scopes.
+                    # Only overlapping owners require a shared complete range.
+                    if merged and start <= merged[-1][1]:
+                        merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+                    else:
+                        merged.append((start, end))
             for start, end in merged:
-                value = await asyncio.to_thread(source.read, path, start_line=start, end_line=end)
-                if value.get("status") != "ready" and binding.get("review_collection_target"):
+                value = await asyncio.to_thread(source.read, path, side=side, start_line=start, end_line=end)
+                if (value.get("status") != "ready" and side == "proposed"
+                        and binding.get("review_collection_target")):
                     try:
                         value = await self.rag_client.get_review_file_content(
-                            **binding, focus_paths=[path], path=path, start_line=start, end_line=end,
+                            **binding, focus_paths=[path], path=path, side=side, start_line=start, end_line=end,
                         )
                     except Exception as error:
-                        value = {"status": "unavailable", "path": path, "diagnostic": str(error)}
+                        value = {"status": "unavailable", "path": path, "side": side, "diagnostic": str(error)}
+                if value.get("status") == "ready" and end is None:
+                    # Complete additions/deletions already present in the diff
+                    # need no duplicate file body after resolving its extent.
+                    try:
+                        source_end = int(value["endLine"])
+                    except (KeyError, TypeError, ValueError, OverflowError):
+                        source_end = None
+                    if source_end is not None and all(line in visible[(path, side)] for line in range(start, source_end + 1)):
+                        continue
                 windows.append(value)
         return windows
 

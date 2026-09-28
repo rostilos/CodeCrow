@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from service.review.verification_state import VerificationState, source_discovery
-from service.review.verifier import ReviewVerifier, _observations
+from service.review.verifier import ReviewVerifier
+from service.review.verification_context import VerificationContext
+from service.review.verification_tools import VerificationTools
 
 
 def part(identifier="part-a", path="a.py"):
@@ -101,17 +103,32 @@ def test_contained_source_read_does_not_create_new_semantic_evidence():
                 "endLine": 3, "content": "first\nsecond\nthird\n"}
     contained = {**complete, "endLine": 2, "content": "first\nsecond\n"}
 
-    original = _observations("readReviewFile", complete)
-    repeated = _observations("readReviewFile", contained)
-
-    assert repeated <= original
-    changed = {**contained, "content": "first\nchanged\n"}
-    assert _observations("readReviewFile", changed) - original
-    assert _observations("readReviewFile", {**contained, "side": "target"}) - original
+    state = VerificationState([], [], {})
+    state.add_evidence("readReviewFile", complete)
+    original = VerificationContext(state).fingerprint()
+    state.add_evidence("readReviewFile", contained)
+    assert VerificationContext(state).fingerprint() == original
+    state.add_evidence("readReviewFile", {**contained, "content": "first\nchanged\n"})
+    changed = VerificationContext(state).fingerprint()
+    assert changed != original
+    state.add_evidence("readReviewFile", {**contained, "side": "target"})
+    assert VerificationContext(state).fingerprint() != changed
 
 
 def response(**value):
     return SimpleNamespace(content=json.dumps(value))
+
+
+async def verify_seeded_case(model, request, parts, findings, *, investigations=(), binding=None):
+    """Exercise one controller ledger without routing/planner calls."""
+    state = VerificationState(findings, list(investigations), {value.id: value for value in parts})
+    for value in parts:
+        state.evidence[f"diff:{value.id}"] = {"kind": "diff", "result": {
+            "status": "ready", "partId": value.id, "path": value.path,
+            "side": value.side, "diff": value.diff,
+        }}
+    tools = VerificationTools(rag_client=None, binding=binding or {}, parts=parts)
+    return await ReviewVerifier(None)._verify_case(model, request, state, tools, {"caseId": "case-1"}, [])
 
 
 @pytest.mark.asyncio
@@ -124,23 +141,31 @@ async def test_read_before_record_survives_another_related_source_turn(tmp_path)
     (target / "contract.py").write_text("VALID_CONTRACT = True\n")
     parts = [part(), part("part-b", "a.py")]
     model = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
-        response(toolCalls=[
-            {"name": "readReviewFile", "arguments": {"path": "caller.py"}},
-            {"name": "recordReviewDecisions", "arguments": {
-                "decisions": [decision("candidate-1", "keep", ["diff:part-a"])],
-            }},
+        response(assessments=[
+            {"workId": "work-1", "verdict": "confirmed", "reason": "Supported failure", "evidenceIds": ["diff:part-a"]},
+            {"workId": "work-2", "verdict": "needs_evidence", "reason": "Caller may compensate", "evidenceIds": []},
         ]),
-        response(toolCalls=[{"name": "readReviewFile", "arguments": {"path": "contract.py"}}]),
-        response(decisions=[decision("candidate-2", "dismiss", ["diff:part-b", "read-1"])]),
+        response(toolCalls=[{"name": "readReviewFile", "arguments": {
+            "path": "caller.py", "workIds": ["work-2"], "missingFact": "Does the caller guard this operation?"}}]),
+        response(assessments=[{"workId": "work-2", "verdict": "needs_evidence",
+                              "reason": "What does the observed guard contract guarantee?", "evidenceIds": ["read-1"]}]),
+        response(toolCalls=[{"name": "readReviewFile", "arguments": {
+            "path": "contract.py", "workIds": ["work-2"], "missingFact": "What does the observed guard guarantee?"}}]),
+        response(assessments=[{"workId": "work-2", "verdict": "refuted", "reason": "Caller guards the changed operation",
+                              "evidenceIds": ["diff:part-b", "read-1", "read-2"]}]),
     ]))
     request = SimpleNamespace(aiProvider="openai", pullRequestId=1, projectRules=None, taskContext=None)
-    result = await ReviewVerifier(None).verify(llm=model, request=request, findings=[finding(value) for value in parts],
-                                               summaries=[], parts=parts,
-                                               binding={"target_repo_path": str(target), "review_overlay_path": str(overlay)})
-    third = str(model.ainvoke.call_args_list[2].args[0])
-    assert third.count("if valid(value): changed(value)") == 1
-    assert "VALID_CONTRACT = True" in third
-    assert result.issues == [finding(parts[0])]
+    result = await verify_seeded_case(model, request, parts, [finding(value) for value in parts],
+        binding={"target_repo_path": str(target), "review_overlay_path": str(overlay)})
+    assert model.ainvoke.await_count == 5
+    final = str(model.ainvoke.call_args_list[4].args[0])
+    assert final.count("if valid(value): changed(value)") == 1
+    assert "VALID_CONTRACT = True" in final
+    packets = [json.loads(call.args[0][-1][1]) for call in model.ainvoke.call_args_list]
+    assert [packet["reviewWork"]["phase"] for packet in packets] == [
+        "assessment", "evidence", "assessment", "evidence", "assessment"]
+    assert packets[2]["reviewWork"]["pendingWorkIds"] == ["work-2"]
+    assert result.issues == [{**finding(parts[0]), "reason": "Supported failure"}]
     assert not result.diagnostics
 
 
@@ -288,3 +313,205 @@ def test_candidate_id_with_different_explicit_anchor_cannot_overwrite_original()
     assert state.candidates["candidate-2"]["line"] == 5
     assert state.candidates["candidate-2"]["title"] == "Distinct second failure"
     assert state.decisions["candidate-2"]["verdict"] == "keep"
+
+
+def caller_witness(state):
+    identifier, _ = state.add_evidence("readReviewFile", {
+        "status": "ready", "path": "caller.py", "side": "proposed", "startLine": 1,
+        "endLine": 1, "content": "result = await changed()\n",
+    })
+    state.begin_turn()
+    return identifier
+
+
+@pytest.mark.parametrize("verdict", ["keep", "dismiss", "duplicate"])
+def test_candidate_witness_reuses_already_observed_changed_anchor(verdict):
+    state, changed = ledger()
+    caller = caller_witness(state)
+    extra = {"duplicateOf": "candidate-2"} if verdict == "duplicate" else {}
+
+    result = state.record(decisions=[decision("candidate-1", verdict, [caller], **extra)])
+
+    assert not result["rejected"]
+    assert state.decisions["candidate-1"]["verdict"] == verdict
+    assert state.decisions["candidate-1"]["evidenceIds"] == [caller, changed]
+
+
+@pytest.mark.parametrize("verdict", ["dismiss", "duplicate"])
+def test_contrary_caller_witness_can_dispose_of_existing_hypothesis_without_anchor_citation(verdict):
+    state, changed = ledger()
+    caller = caller_witness(state)
+    state.visible.remove(changed)
+    extra = {"duplicateOf": "candidate-2"} if verdict == "duplicate" else {}
+
+    result = state.record(decisions=[decision("candidate-1", verdict, [caller], **extra)])
+
+    assert not result["rejected"]
+    assert state.decisions["candidate-1"]["evidenceIds"] == [caller]
+
+
+@pytest.mark.parametrize("verdict", ["keep", "dismiss", "duplicate"])
+def test_known_changed_anchor_does_not_salvage_guessed_only_witness_ids(verdict):
+    state, changed = ledger()
+    caller_witness(state)
+    extra = {"duplicateOf": "candidate-2"} if verdict == "duplicate" else {}
+
+    result = state.record(decisions=[decision("candidate-1", verdict, ["read-guessed"], **extra)])
+
+    assert result["rejected"]
+    assert "candidate-1" not in state.decisions
+
+
+def test_candidate_keep_cannot_attach_anchor_that_was_not_delivered():
+    state, changed = ledger()
+    caller = caller_witness(state)
+    state.visible.remove(changed)
+
+    result = state.record(decisions=[decision("candidate-1", "keep", [caller])])
+
+    assert result["rejected"]
+    assert "candidate-1" not in state.decisions
+
+
+def test_candidate_keep_cannot_attach_metadata_in_place_of_exact_anchor():
+    state, changed = ledger()
+    caller = caller_witness(state)
+    state.evidence[changed] = {"kind": "queryCodeGraph", "result": {
+        "status": "ready", "path": "a.py", "partId": "part-a", "startLine": 1,
+        "endLine": 1, "diff": "@@ -1 +1 @@\n-before()\n+changed()\n",
+    }}
+
+    result = state.record(decisions=[decision("candidate-1", "keep", [caller])])
+
+    assert result["rejected"]
+    assert "candidate-1" not in state.decisions
+
+
+def test_refined_existing_report_joins_caller_witness_to_observed_anchor():
+    state, changed = ledger()
+    caller = caller_witness(state)
+
+    result = state.record(findings=[{"candidateId": "candidate-1", "title": "Completion ordering",
+                                     "reason": "Caller starts subsequent work without awaiting completion",
+                                     "evidenceIds": [caller]}])
+
+    assert not result["rejected"]
+    assert len(state.candidates) == 2
+    assert state.candidates["candidate-1"]["title"] == "Completion ordering"
+    assert state.decisions["candidate-1"]["evidenceIds"] == [caller, changed]
+
+
+def test_new_report_still_requires_its_own_observed_changed_anchor_citation():
+    state, changed = ledger()
+    caller = caller_witness(state)
+    initial_candidates = dict(state.candidates)
+
+    result = state.record(findings=[{**finding(part()), "title": "New independent claim",
+                                     "evidenceIds": [caller]}])
+
+    assert result["rejected"]
+    assert state.candidates == initial_candidates
+    assert not state.discoveries
+
+
+@pytest.mark.parametrize("status", ["ready", "partial"])
+def test_positive_exact_grep_line_is_source_even_when_other_files_unavailable(status):
+    state, _ = ledger()
+    witness, _ = state.add_evidence("grepReviewCode", {
+        "status": status, "side": "proposed", "query": "await changed",
+        "results": [{"path": "caller.py", "matches": [{"line": 8, "text": "return await changed(value)"}]}],
+        "complete": status == "ready", "unavailablePaths": [] if status == "ready" else ["elsewhere.py"],
+    })
+    state.begin_turn()
+    result = state.record(decisions=[decision("candidate-1", "dismiss", [witness])])
+    assert result["rejected"] == []
+    assert state.decisions["candidate-1"]["evidenceIds"] == [witness, "read-1"]
+
+
+def test_grep_without_matching_source_does_not_establish_a_verdict():
+    state, _ = ledger()
+    absent, _ = state.add_evidence("grepReviewCode", {
+        "status": "ready", "side": "proposed", "query": "changed", "results": [], "complete": True,
+    })
+    state.begin_turn()
+    result = state.record(decisions=[decision("candidate-1", "keep", [absent])])
+    assert result["rejected"]
+    assert "candidate-1" not in state.decisions
+
+
+def test_new_grep_finding_requires_the_exact_active_side_and_matched_anchor():
+    value = part()
+    for side, line, accepted in [("proposed", 1, True), ("target", 1, False), ("proposed", 2, False)]:
+        evidence = {"match": {"kind": "grepReviewCode", "result": {
+            "status": "ready", "side": side,
+            "results": [{"path": value.path, "matches": [{"line": line, "text": "changed()"}]}],
+        }}}
+        issue = source_discovery({**finding(value), "evidenceIds": ["match"]}, {value.id: value}, evidence)
+        assert bool(issue) is accepted
+
+
+@pytest.mark.asyncio
+async def test_question_issue_repair_keeps_settled_sibling_and_needs_no_source_reread():
+    value = part()
+    original = finding(value)
+    answer = {"workId": "work-2", "verdict": "refuted", "reason": "Title is still floated, but the nested panel loses alignment",
+              "evidenceIds": ["diff:part-a"]}
+    model = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
+        response(assessments=[
+            {"workId": "work-1", "verdict": "refuted", "reason": "The initial candidate is compensated", "evidenceIds": ["diff:part-a"]},
+            {**answer, "issue": {"file": "a.py", "line": 999, "title": "Nested panel loses alignment"}},
+        ], evidenceRequests=[], findings=[]),
+        response(assessments=[{**answer, "issue": {"file": "a.py", "line": 1, "title": "Nested panel loses alignment"}}], evidenceRequests=[], findings=[]),
+    ]))
+    request = SimpleNamespace(aiProvider="openai", pullRequestId=1, projectRules=None, taskContext=None)
+    result = await verify_seeded_case(model, request, [value], [original],
+        investigations=[{"id": "question", "question": "Is the title still floated?", "partIds": [value.id], "paths": [value.path]}])
+    assert model.ainvoke.await_count == 2
+    assert [issue["title"] for issue in result.issues] == ["Nested panel loses alignment"]
+    assert result.issues[0]["line"] == 1
+    assert result.resolved_investigation_ids == {"question"}
+    assert not result.diagnostics
+    second = str(model.ainvoke.call_args_list[1].args[0])
+    assert "corrections" in second
+    assert "work-1" in second
+
+
+def test_new_report_feedback_distinguishes_missing_source_from_missing_report_fields():
+    state, _ = ledger()
+    receipt = state.record(findings=[{**finding(part()), "evidenceIds": ["unobserved-read"]}])
+    assert len(receipt["rejected"]) == 1
+    assert "issue.evidenceIds must cite exact source already observed" in receipt["rejected"][0]
+    assert not state.discoveries
+
+
+def test_new_report_feedback_identifies_observed_source_that_misses_changed_anchor():
+    state, _ = ledger()
+    caller = caller_witness(state)
+    receipt = state.record(findings=[{**finding(part()), "evidenceIds": [caller]}])
+    assert len(receipt["rejected"]) == 1
+    assert "do not include observed source at the reported changed anchor" in receipt["rejected"][0]
+    assert not state.discoveries
+
+
+@pytest.mark.asyncio
+async def test_missing_report_title_is_repaired_in_assessment_without_new_source():
+    value = part()
+    reason = "The changed call reaches the failure for the observed valid input"
+    model = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
+        response(assessments=[{"workId": "work-1", "verdict": "confirmed", "reason": reason,
+            "evidenceIds": ["diff:part-a"], "issue": {"file": "a.py", "line": 1}}]),
+        response(assessments=[{"workId": "work-1", "verdict": "confirmed", "reason": reason,
+            "evidenceIds": [], "issue": {"title": "Introduced failure"}}]),
+    ]))
+    request = SimpleNamespace(aiProvider="openai", pullRequestId=1, projectRules=None, taskContext=None)
+    result = await verify_seeded_case(model, request, [value], [],
+        investigations=[{"id": "question", "question": "Does the new call handle valid input?", "partIds": [value.id]}])
+    assert model.ainvoke.await_count == 2
+    assert not result.diagnostics
+    assert result.issues[0]["title"] == "Introduced failure"
+    assert result.issues[0]["reason"] == reason
+    packet = json.loads(model.ainvoke.call_args_list[1].args[0][-1][1])
+    assert packet["reviewWork"]["phase"] == "assessment"
+    assert not packet["reviewWork"]["observations"]
+    assert any("issue.title is required" in problem for problem in packet["workItems"][0]["issueCorrections"])
+    assert packet["workItems"][0]["pendingIssue"]["file"] == "a.py"

@@ -168,3 +168,105 @@ async def test_provider_outage_preserves_verified_issues_without_retry():
     assert result.issues == issues
     assert "provider unavailable" in result.diagnostics[0]
     llm.ainvoke.assert_awaited_once()
+
+
+def conflict_model(groups, conflicts):
+    return SimpleNamespace(ainvoke=AsyncMock(return_value=SimpleNamespace(
+        content=json.dumps({"groups": groups, "conflicts": conflicts}))))
+
+
+@pytest.mark.asyncio
+async def test_conflicting_nonrepresentative_preserves_whole_duplicate_group_for_source_check():
+    issues = [issue("Server applies guard"), issue("Expanded guard report"),
+              issue("Server skips guard"), issue("Unrelated failure"), issue("Unrelated restatement")]
+    llm = conflict_model([group("issue-1", "issue-2"), group("issue-3"), group("issue-4", "issue-5")],
+                        [{"memberIds": ["issue-2", "issue-3"],
+                          "question": "Does the same save operation execute the registered validation guard?"}])
+    result = await reconcile_issues(llm, request(), issues)
+    assert result.issues == issues[:4]
+    assert len(result.conflicts) == 1
+    assert result.conflicts[0].issues == issues[:3]
+    assert all(actual is original for actual, original in zip(result.conflicts[0].issues, issues))
+    assert result.conflicts[0].question == "Does the same save operation execute the registered validation guard?"
+    assert result.groups == [group("issue-4", "issue-5")]
+    assert not result.diagnostics
+    llm.ainvoke.assert_awaited_once()
+    assert not result.conflicts[0].issues[0].get("verdict")  # Routing never adjudicates a claim.
+
+
+@pytest.mark.asyncio
+async def test_conflict_and_duplicate_overlaps_form_one_complete_source_scope():
+    issues = [issue(f"Report {index}") for index in range(1, 7)]
+    conflicts = [{"memberIds": ["issue-1", "issue-2"], "question": "Is the guard reached before saving?"},
+                 {"memberIds": ["issue-2", "issue-3"], "question": "Does saving validate this record?"}]
+    groups = [group("issue-1"), group("issue-2"), group("issue-3", "issue-4"),
+              group("issue-4", "issue-5"), group("issue-6")]
+    result = await reconcile_issues(conflict_model(groups, conflicts), request(), issues)
+    assert result.issues == issues
+    assert len(result.conflicts) == 1
+    assert result.conflicts[0].issues == issues[:5]
+    assert result.conflicts[0].question == "Does saving validate this record?\n\nIs the guard reached before saving?"
+    assert result.groups == [group("issue-6")]
+    assert any("overlaps" in message for message in result.diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_independent_conflicts_remain_separate_and_deterministic():
+    issues = [issue(str(index)) for index in range(1, 7)]
+    groups = [group(f"issue-{index}") for index in range(1, 7)]
+    conflicts = [{"memberIds": ["issue-4", "issue-3"], "question": "Second distinct contradiction?"},
+                 {"memberIds": ["issue-2", "issue-1"], "question": "First contradiction?"}]
+    first = await reconcile_issues(conflict_model(groups, conflicts), request(), issues)
+    second = await reconcile_issues(conflict_model(list(reversed(groups)), list(reversed(conflicts))), request(), issues)
+    assert first.conflicts == second.conflicts
+    assert [item.issues for item in first.conflicts] == [issues[:2], issues[2:4]]
+    assert first.issues == issues
+    assert not first.diagnostics
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [
+    {"memberIds": ["issue-2"], "question": "One record alone is not a conflict"},
+    {"memberIds": ["issue-2", "issue-2"], "question": "Repeated identity"},
+    {"memberIds": ["issue-2", "missing"], "question": "Unknown member"},
+    {"memberIds": ["issue-2", {}], "question": "Malformed member"},
+    {"memberIds": ["issue-1", "issue-2"], "question": ""},
+    {"memberIds": ["issue-1", "issue-2"], "question": None},
+])
+async def test_invalid_conflict_preserves_affected_duplicate_members_and_valid_siblings(invalid):
+    issues = [issue(str(index)) for index in range(1, 5)]
+    result = await reconcile_issues(conflict_model([group("issue-1", "issue-2"), group("issue-3", "issue-4")],
+                                                  [invalid]), request(), issues)
+    assert result.issues == issues[:3]
+    assert not result.conflicts
+    assert result.groups == [group("issue-3", "issue-4")]
+    assert any("invalid membership or question" in message for message in result.diagnostics)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [None, "not conflicts", [None], [{"question": "No identities"}]])
+async def test_unidentifiable_conflict_output_preserves_all_reports_without_source_route(invalid):
+    issues = [issue(), issue("Restatement")]
+    result = await reconcile_issues(conflict_model([group("issue-1", "issue-2")], invalid), request(), issues)
+    assert result.issues == issues
+    assert not result.conflicts
+    assert result.diagnostics
+
+
+@pytest.mark.asyncio
+async def test_valid_conflict_can_route_even_when_dedup_partition_is_missing():
+    issues = [issue(), issue("Conflicting causal claim")]
+    llm = conflict_model(None, [{"memberIds": ["issue-1", "issue-2"], "question": "Which guard applies to this same path?"}])
+    result = await reconcile_issues(llm, request(), issues)
+    assert result.issues == issues
+    assert result.conflicts[0].issues == issues
+    assert any("no usable partition" in message for message in result.diagnostics)
+    llm.ainvoke.assert_awaited_once()
+
+
+def test_exact_publication_duplicates_ignore_internal_case_and_proof_identity():
+    from service.review.issue_reconciliation import unique_publication_issues
+    original = issue(partId="part-1", batchIds=["first"], _verificationEvidenceIds=["read-1"])
+    repeated = {**original, "partId": "other-part", "batchIds": ["second"], "_verificationEvidenceIds": ["read-2"]}
+    distinct = issue(reason="An independent tenant scoping defect in the same handler")
+    assert unique_publication_issues([original, repeated, distinct]) == [original, distinct]

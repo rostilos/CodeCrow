@@ -7,16 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import inspect
 import json
 import logging
 import time
-from typing import Any, Callable, Literal, Mapping, Sequence
-from typing_extensions import TypedDict
+from typing import Any, Literal, Mapping, Sequence
 
 from service.review.change_context import anchor_ranges
 from service.review.local_source import LocalReviewSource
-from service.review.navigation_context import compact_navigation_result
+from service.review.navigation_context import NavigationContext
 
 logger = logging.getLogger(__name__)
 
@@ -27,42 +25,6 @@ _GRAPH_TOOLS = frozenset({
 })
 
 _GRAPH_NAVIGATION_TOOLS = _GRAPH_TOOLS - {"getStructuralUnit"}
-
-
-class IssueRevision(TypedDict, total=False):
-    title: str
-    reason: str
-    suggestedFixDescription: str
-
-
-class ReviewDecision(TypedDict, total=False):
-    candidateId: str
-    verdict: Literal["keep", "dismiss", "duplicate", "uncertain"]
-    reason: str
-    evidenceIds: list[str]
-    duplicateOf: str
-    issue: IssueRevision
-
-
-class InvestigationDecision(TypedDict, total=False):
-    id: str
-    status: Literal["resolved", "uncertain"]
-    reason: str
-    evidenceIds: list[str]
-
-
-class VerifiedFinding(TypedDict, total=False):
-    candidateId: str
-    partId: str
-    file: str
-    line: int
-    severity: Literal["HIGH", "MEDIUM", "LOW"]
-    category: str
-    title: str
-    reason: str
-    suggestedFixDescription: str
-    evidenceIds: list[str]
-    duplicateOf: str
 
 
 class VerificationTools:
@@ -76,9 +38,9 @@ class VerificationTools:
         self.parts = {part.id: part for part in (*context_parts, *parts)}
         self.source = LocalReviewSource(binding, [part.path for part in self.parts.values()])
         self.cache: dict[str, dict[str, Any]] = {}
+        self.navigation = NavigationContext()
         self.server: Any = None
         self.diagnostics: list[str] = []
-        self._decision_tool: str | None = None
 
     def _focus(self, paths: Sequence[str] = ()) -> list[str]:
         return list(dict.fromkeys(paths)) if paths else (self.focus_paths or sorted({part.path for part in self.parts.values()}))
@@ -155,7 +117,7 @@ class VerificationTools:
 
         @server.tool(name="queryCodeGraph", structured_output=True)
         async def query_code_graph(pattern: str, target: str, cursor: int = 0) -> dict[str, Any]:
-            """Navigate a precise symbol/unit/path. Patterns: callers_of, callees_of, references_to, imports_of, importers_of, children_of, tests_for, inheritors_of, triggers_of, triggered_by, publishers_of, listeners_of, handlers_of, endpoints_for, consumers_of, relations_of, framework_relations, symbol_search, file_summary. Read resolved source separately; follow nextCursor for relevant remaining results. Empty/partial graphs do not prove absence. Navigation results share repeated metadata in unitDefinitions: unitRef selects the complete record there; the accompanying unitId remains directly usable with getStructuralUnit."""
+            """Navigate a precise symbol/unit/path. Patterns: callers_of, callees_of, references_to, imports_of, importers_of, children_of, tests_for, inheritors_of, triggers_of, triggered_by, publishers_of, listeners_of, handlers_of, endpoints_for, consumers_of, relations_of, framework_relations, symbol_search, file_summary. Read resolved source separately; follow nextCursor for relevant remaining results. Empty/partial graphs do not prove absence. Navigation uses case-local unit@N handles directly usable in graph tools and getStructuralUnit. Repeated metadata appears once in unitDefinitions; unitRef selects its record."""
             return await self._graph("query_review_graph", pattern=pattern, target=target,
                                      cursor=cursor, include_source=False)
 
@@ -195,36 +157,38 @@ class VerificationTools:
                                            start_line=startLine, end_line=endLine))
 
         @server.tool(name="grepReviewCode", structured_output=True)
-        async def grep_review_code(query: str, paths: list[str] | None = None,
+        async def grep_review_code(query: str, mode: Literal["literal", "regex"], paths: list[str] | None = None,
                                    caseSensitive: bool = True, side: str = "proposed") -> dict[str, Any]:
-            """Find literal source occurrences. Use a discriminating symbol and relevant paths. Returns all matching locations; read matching definitions separately. Partial results contain usable matches plus unavailablePaths; changing the query cannot repair unavailable files."""
+            """Find source occurrences using an explicit literal or regex mode (regex supports multiline anchors and alternation). Return every matching line with its full exact text; read enclosing definitions separately. Use findReviewFiles for filename lookup. Invalid patterns are unavailable; interrupted/partial searches cannot prove absence."""
             return await asyncio.to_thread(self.source.grep, query, paths=paths or (),
-                                           side=side, case_sensitive=caseSensitive)
+                                           side=side, case_sensitive=caseSensitive, mode=mode)
+
+        @server.tool(name="findReviewFiles", structured_output=True)
+        async def find_review_files(pattern: str, paths: list[str] | None = None,
+                                    side: str = "proposed") -> dict[str, Any]:
+            """Find all snapshot file paths by glob, without reading their contents. A basename pattern such as '*home-logo*' matches at any depth; slash patterns are repository-relative and '**' matches any directory depth. Optional paths restrict exact files/directories. Proposed lookup applies additions/deletions; partial results cannot prove absence."""
+            return await asyncio.to_thread(self.source.find_files, pattern, paths=paths or (), side=side)
 
         @server.tool(name="getReviewDiff", structured_output=True)
-        async def get_review_diff(partIds: list[str]) -> dict[str, Any]:
-            """Read complete changed hunks by supplied part IDs, including inclusive anchorRanges."""
+        async def get_review_diff(partIds: list[str] | None = None,
+                                  paths: list[str] | None = None) -> dict[str, Any]:
+            """Read complete changed hunks by supplied part IDs or exact repository paths, including inclusive anchorRanges. Both selectors form a union; request a relevant changed path rather than the whole PR."""
+            part_ids = list(dict.fromkeys(partIds or []))
+            requested_paths = set(paths or [])
+            if not part_ids and not requested_paths:
+                return {"status": "unavailable", "parts": [], "missingPartIds": [], "missingPaths": [],
+                        "diagnostic": "Supply relevant changed paths or partIds to read complete hunks."}
+            selected = {part_id for part_id in part_ids if part_id in self.parts}
+            selected.update(part.id for part in self.parts.values() if part.path in requested_paths)
             return {"status": "ready", "parts": [
                 {"id": part.id, "path": part.path, "side": part.side,
                  "anchorRanges": anchor_ranges(part.anchors), "diff": part.diff}
-                for part_id in dict.fromkeys(partIds)
-                if (part := self.parts.get(part_id)) is not None
-            ], "missingPartIds": [part_id for part_id in partIds if part_id not in self.parts]}
+                for part in self.parts.values() if part.id in selected
+            ], "missingPartIds": [part_id for part_id in part_ids if part_id not in self.parts],
+                "missingPaths": sorted(requested_paths - {part.path for part in self.parts.values()})}
 
         self.server = server
         return server
-
-    def register_decisions(self, handler: Callable[..., Any]) -> None:
-        """Register a verifier-owned control tool before taking the inventory."""
-        self._decision_tool = "recordReviewDecisions"
-
-        @self._server().tool(name=self._decision_tool, structured_output=True)
-        async def record_review_decisions(decisions: list[ReviewDecision],
-                                          investigations: list[InvestigationDecision] | None = None,
-                                          findings: list[VerifiedFinding] | None = None) -> dict[str, Any]:
-            """Record source-supported verdicts and answers for this evidence case. Cite already supplied evidenceIds. Correct a candidate's publishable title/reason/fix with issue rather than repeating it as a finding. The receipt identifies remaining work; the case transcript stays available until the case ends."""
-            result = handler(decisions=decisions, investigations=investigations or [], findings=findings or [])
-            return await result if inspect.isawaitable(result) else result
 
     async def schemas(self) -> list[dict[str, Any]]:
         return [{"name": tool.name, "description": tool.description,
@@ -237,7 +201,7 @@ class VerificationTools:
     @staticmethod
     def _log_result(name: str, result: Mapping[str, Any], *, cache_hit: bool, started: float) -> None:
         source_characters = len(result["content"]) if isinstance(result.get("content"), str) else 0
-        entries = sum(len(result[key]) for key in ("results", "nodes", "edges", "parts", "candidates", "resolvedUnits")
+        entries = sum(len(result[key]) for key in ("results", "nodes", "edges", "parts", "candidates", "resolvedUnits", "paths")
                       if isinstance(result.get(key), list))
         logger.info("Review tool completed: tool=%s status=%s cache_hit=%s source_characters=%d result_entries=%d duration_ms=%.1f",
                     name, result.get("status"), str(cache_hit).lower(), source_characters,
@@ -245,6 +209,7 @@ class VerificationTools:
 
     async def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         started = time.perf_counter()
+        arguments = self.navigation.resolve_arguments(name, arguments)
         identity: dict[str, Any] = {"name": name, "arguments": arguments}
         if name in _GRAPH_TOOLS:
             # Graph resolution incorporates host-owned case focus even when
@@ -254,10 +219,9 @@ class VerificationTools:
             paths = explicit_paths if isinstance(explicit_paths, list) and all(isinstance(path, str) for path in explicit_paths) else ()
             identity["focusPaths"] = self._focus(paths)
         key = json.dumps(identity, sort_keys=True)
-        cacheable = name != self._decision_tool
-        if cacheable and key in self.cache:
+        if key in self.cache:
             self._log_result(name, self.cache[key], cache_hit=True, started=started)
-            return self.cache[key]
+            return self._present(name, self.cache[key])
         try:
             result = await self._server().call_tool(name, arguments)
             if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], dict):
@@ -269,8 +233,6 @@ class VerificationTools:
         except Exception as error:
             logger.warning("Review tool failed: tool=%s error=%s", name, error, exc_info=True)
             result = {"status": "unavailable", "diagnostic": f"{name} failed ({type(error).__name__}); check the tool name/arguments or use another evidence route."}
-        if name in _GRAPH_NAVIGATION_TOOLS:
-            result = compact_navigation_result(result)
         if result.get("status") in {"unavailable", "partial"}:
             message = f"{name}: {result.get('diagnostic') or result.get('error') or result.get('status')}"
             if message not in self.diagnostics:
@@ -278,8 +240,13 @@ class VerificationTools:
             logger.info("Review tool observation: tool=%s status=%s diagnostic=%s",
                         name, result.get("status"), result.get("diagnostic") or result.get("error"))
         self._log_result(name, result, cache_hit=False, started=started)
-        if cacheable and result.get("status") in {"ready", "deleted", "missing", "binary", "ambiguous"}:
+        if result.get("status") in {"ready", "deleted", "missing", "binary", "ambiguous"}:
             # Outages/partial reads are observations, not immutable snapshot
             # facts. A later attempt may recover after source/service recovery.
             self.cache[key] = result
-        return result
+        return self._present(name, result)
+
+    def _present(self, name: str, result: dict[str, Any]) -> dict[str, Any]:
+        # Cache contains original IDs, safe to reuse across cases. Each case
+        # owns its short-handle registry and can navigate every displayed node.
+        return self.navigation.project(result) if name in _GRAPH_NAVIGATION_TOOLS else result

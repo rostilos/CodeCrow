@@ -4,6 +4,7 @@ These check supplied evidence and host execution, not live-model defect recall.
 The public fixture revisions are documented in plans/review-regression-investigation.md.
 """
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -35,6 +36,34 @@ def response(**value):
 def payload(messages):
     return next(json.loads(message[1]) for message in messages
                 if isinstance(message, tuple) and message[0] == "human")
+
+
+def exact_source(packet, path, start, end):
+    """Decode proposed source from the public packet shape, including diff references."""
+    lines = {}
+    records = {entry["id"]: entry for entry in packet["evidence"]}
+    for entry in records.values():
+        result = entry["result"]
+        values = result.get("parts", []) if entry["kind"] == "getReviewDiff" else [result]
+        for value in values:
+            if value.get("path") != path or value.get("side", "proposed") != "proposed":
+                continue
+            for reference in value.get("sourceReferences", []):
+                assert reference["evidenceId"] in records
+            for segment in ([value] if "content" in value else value.get("sourceSegments", [])):
+                lines.update(enumerate(segment["content"].splitlines(keepends=True), segment["startLine"]))
+            line = None
+            for raw in value.get("diff", "").splitlines(keepends=True):
+                if raw.startswith("@@"):
+                    line = int(re.search(r"\+(\d+)", raw).group(1))
+                elif line is not None and raw[:1] in {" ", "+"}:
+                    lines.setdefault(line, raw[1:])
+                    line += 1
+    return "".join(lines[number] for number in range(start, end + 1))
+
+
+def step_response(*assessments, findings=()):
+    return response(assessments=list(assessments), evidenceRequests=[], findings=list(findings))
 
 
 def case_inputs():
@@ -71,9 +100,9 @@ async def test_case_starts_with_complete_changed_contract_source_and_pr_intent()
     async def answer(messages, **kwargs):
         value = payload(messages)
         captured.append(value)
-        return response(decisions=[{"candidateId": "candidate-1", "verdict": "keep",
+        return step_response({"workId": "work-1", "verdict": "confirmed",
             "reason": "The request can report success while the reminder cancellation promise is pending.",
-            "evidenceIds": [f"diff:{caller.id}"]}])
+            "evidenceIds": [f"diff:{caller.id}"]})
 
     llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=answer))
     result = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[finding(caller, 488)],
@@ -84,9 +113,12 @@ async def test_case_starts_with_complete_changed_contract_source_and_pr_intent()
     assert initial["changePurpose"] == {"title": request().prTitle, "description": request().prDescription}
     assert {record["result"]["diff"] for record in initial["evidence"] if record["kind"] == "diff"} == {part.diff for part in parts}
     supplied_source = [record["result"] for record in initial["evidence"] if record["kind"] == "readReviewFile"]
-    assert supplied_source == cal["sourceContext"]
-    assert "return { message: \"Booking successfully cancelled.\" };" in supplied_source[0]["content"]
-    assert "catch (error)" in supplied_source[1]["content"]
+    assert [(item["path"], item["startLine"], item["endLine"]) for item in supplied_source] == [
+        (item["path"], item["startLine"], item["endLine"]) for item in cal["sourceContext"]]
+    for expected in cal["sourceContext"]:
+        assert exact_source(initial, expected["path"], expected["startLine"], expected["endLine"]) == expected["content"]
+    assert 'return { message: "Booking successfully cancelled." };' in json.dumps(initial).replace('\\"', '"')
+    assert "catch (error)" in json.dumps(initial)
     # The source is usable immediately; no read merely to mint an evidence ID.
     assert llm.ainvoke.await_count == 1
 
@@ -100,12 +132,14 @@ async def test_unrelated_cases_retire_source_bodies_before_next_case():
     async def answer(messages, **kwargs):
         value = payload(messages)
         captured.append(value)
+        if "cases" in value:
+            return response(groups=[{"caseIds": [item["caseId"]]} for item in value["cases"]])
         if "issues" in value:
             return response(groups=[{"memberIds": [item["issueId"]], "representativeId": item["issueId"]}
                                     for item in value["issues"]])
-        candidate = value["candidates"][0]
-        return response(decisions=[{"candidateId": candidate["candidateId"], "verdict": "keep",
-            "reason": candidate["reason"], "evidenceIds": [f"diff:{candidate['partId']}"]}])
+        candidate = value["workItems"][0]
+        return step_response({"workId": candidate["id"], "verdict": "confirmed",
+            "reason": candidate["reason"], "evidenceIds": [f"diff:{candidate['partId']}"]})
 
     llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=answer))
     result = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[finding(caller, 488),
@@ -113,10 +147,13 @@ async def test_unrelated_cases_retire_source_bodies_before_next_case():
         summaries=[], parts=[*cal_parts, *header_parts], binding={}, graph_context=graph,
         source_context=[*cal["sourceContext"], *header["sourceContext"]])
     assert len(result.issues) == 2
-    first, second, reconciliation = captured
+    planning, first, second, reconciliation = captured
+    assert "cases" in planning and "evidence" not in planning
     assert first["caseId"] != second["caseId"]
-    first_bodies = [entry["result"].get("content", "") for entry in first["evidence"] if entry["kind"] == "readReviewFile"]
-    second_bodies = [entry["result"].get("content", "") for entry in second["evidence"] if entry["kind"] == "readReviewFile"]
+    first_bodies = [exact_source(first, source["path"], source["startLine"], source["endLine"]) for source in cal["sourceContext"]]
+    second_bodies = [exact_source(second, source["path"], source["startLine"], source["endLine"]) for source in header["sourceContext"]]
+    assert {item["result"].get("path") for item in first["evidence"]}.isdisjoint({source["path"] for source in header["sourceContext"]})
+    assert {item["result"].get("path") for item in second["evidence"]}.isdisjoint({source["path"] for source in cal["sourceContext"]})
     assert first_bodies == [source["content"] for source in cal["sourceContext"]]
     assert second_bodies == [source["content"] for source in header["sourceContext"]]
     assert all(json.dumps(body)[1:-1] not in json.dumps(second) for body in first_bodies)
@@ -132,10 +169,10 @@ async def test_canonical_correction_preserves_missing_completion_without_rejecte
     corrected = {"title": "Cancellation response does not wait for reminder cleanup",
                  "reason": "The asynchronous helper catches errors internally but its caller does not await completion before returning success.",
                  "suggestedFixDescription": "Await all reminder cancellation promises before returning success."}
-    llm = SimpleNamespace(ainvoke=AsyncMock(return_value=response(decisions=[{
-        "candidateId": "candidate-1", "verdict": "keep", "reason": "The completion defect is independent of the incorrect rejection subtype.",
+    llm = SimpleNamespace(ainvoke=AsyncMock(return_value=step_response({
+        "workId": "work-1", "verdict": "confirmed", "reason": "The completion defect is independent of the incorrect rejection subtype.",
         "evidenceIds": [f"diff:{caller.id}"], "issue": corrected,
-    }])))
+    })))
     result = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[original], summaries=[],
         parts=parts, binding={}, graph_context=graph, source_context=cal["sourceContext"])
     assert result.issues == [{**original, **corrected}]
@@ -155,20 +192,25 @@ async def test_final_reconciliation_includes_original_and_discovery_despite_unre
     async def answer(messages, **kwargs):
         value = payload(messages)
         calls.append(value)
+        if "cases" in value:
+            return response(groups=[{"caseIds": [case["caseId"]]} for case in value["cases"]])
         if "issues" in value:
             return response(groups=[{"memberIds": ["issue-1", "issue-2"], "representativeId": "issue-2",
                                      "rationale": "Both describe the same exception exiting the shared loop and its deletion flush."}])
-        return response(decisions=[{"candidateId": "candidate-1", "verdict": "keep", "reason": pair[0]["reason"],
-                                    "evidenceIds": [f"diff:{part.id}"]}],
-                        findings=[discovery], investigations=[{"id": "external-retry-contract", "status": "uncertain",
-                            "reason": "Provider retry behavior is not available in this snapshot.", "evidenceIds": []}])
+        assert len(value["workItems"]) == 1
+        work = value["workItems"][0]
+        if work["kind"] == "investigation":
+            return step_response({"workId": work["id"], "verdict": "uncertain",
+                                  "reason": "Provider retry behavior is not available in this snapshot.", "evidenceIds": []})
+        return step_response({"workId": work["id"], "verdict": "confirmed", "reason": pair[0]["reason"],
+                              "evidenceIds": [f"diff:{part.id}"]}, findings=[discovery])
 
     llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=answer))
     result = await ReviewVerifier(None).verify(llm=llm, request=request(), findings=[original], summaries=[],
         parts=[part], binding={}, investigations=[{"id": "external-retry-contract", "partIds": [part.id],
             "question": "Does the external queue retry a failed cancellation?", "paths": [part.path]}])
-    assert len(calls) == 2
-    assert [item["title"] for item in calls[1]["issues"]] == [item["title"] for item in pair]
+    assert len(calls) == 4  # Routing, independent candidate/question cases, reconciliation.
+    assert [item["title"] for item in calls[-1]["issues"]] == [item["title"] for item in pair]
     assert len(result.issues) == 1
     assert result.issues[0]["title"] == pair[1]["title"]
     assert any("external-retry-contract" in message for message in result.diagnostics)
@@ -238,13 +280,64 @@ async def test_malformed_graph_paths_remain_tool_diagnostic_not_controller_excep
     assert "getMinimalReviewContext" in result["diagnostic"]
 
 
-def test_partial_structural_ownership_falls_back_to_complete_file_side_case():
+def test_partial_structural_ownership_shares_complete_file_evidence_without_merging_work():
     first = SimpleNamespace(id="first", path="module.py", side="proposed", anchors={1: "first()"})
     second = SimpleNamespace(id="second", path="module.py", side="proposed", anchors={9: "second()"})
     parts = {part.id: part for part in (first, second)}
     graph = {"first": {"units": [{"unitId": "only-partially-covers-first"}], "structuralOwnershipComplete": False},
              "second": {"units": [{"unitId": "fully-owned-second"}], "structuralOwnershipComplete": True}}
     cases = build_cases([finding(first, 1), finding(second, 9)], [], parts, graph)
+    assert len(cases) == 2
+    assert all(set(case.part_ids) == {"first", "second"} for case in cases)
+    assert all(len(case.findings) == 1 for case in cases)
+
+
+def test_finding_anchor_preserves_same_definition_source_without_joining_claims():
+    first = SimpleNamespace(id="mixed", path="module.py", side="proposed", anchors={3: "a()", 12: "b()"})
+    second = SimpleNamespace(id="a-again", path="module.py", side="proposed", anchors={6: "a2()"})
+    third = SimpleNamespace(id="b-again", path="module.py", side="proposed", anchors={15: "b2()"})
+    companion = SimpleNamespace(id="b-caller", path="caller.py", side="proposed", anchors={1: "call_b()"})
+    a = {"unitId": "a", "path": "module.py", "startLine": 1, "endLine": 8}
+    b = {"unitId": "b", "path": "module.py", "startLine": 10, "endLine": 18}
+    relation = {"kind": "CALLS", "source": {"unitId": "caller", "path": "caller.py"}, "target": b}
+    graph = {"mixed": {"units": [a, b], "relations": [relation]},
+             "a-again": {"units": [a]}, "b-again": {"units": [b]},
+             "b-caller": {"units": [{"unitId": "caller"}]}}
+    parts = {part.id: part for part in (first, second, third, companion)}
+    cases = build_cases([finding(first, 3), finding(second, 6), finding(third, 15)], [], parts, graph)
+    assert len(cases) == 3
+    assert cases[0].owner_ids == cases[1].owner_ids == ("a",)
+    assert all(len(case.findings) == 1 for case in cases)
+    assert set(cases[0].part_ids) == set(cases[1].part_ids) == {"mixed", "a-again"}
+    assert related_parts(cases[0], parts, graph) == [first, second]
+    assert related_parts(cases[1], parts, graph) == [first, second]
+    assert related_parts(cases[2], parts, graph) == [first, third, companion]
+
+
+def test_cross_definition_question_preserves_all_its_owners():
+    parts = {name: SimpleNamespace(id=name, path=name + ".py", side="proposed", anchors={1: "changed()"})
+             for name in ("a", "b", "unrelated")}
+    graph = {name: {"units": [{"unitId": name, "startLine": 1, "endLine": 3}]} for name in parts}
+    cases = build_cases([], [{"id": "contract", "partIds": ["a", "b"], "question": "Does b accept a's output?"}], parts, graph)
     assert len(cases) == 1
-    assert set(cases[0].part_ids) == {"first", "second"}
-    assert len(cases[0].findings) == 2
+    assert cases[0].owner_ids == ("a", "b")
+    assert related_parts(cases[0], parts, graph) == [parts["a"], parts["b"]]
+
+
+def test_multi_definition_hunk_keeps_complete_diff_but_reuses_only_owned_extra_body():
+    from service.review.verification_cases import source_for_case
+
+    part = SimpleNamespace(id="mixed", path="module.py", side="proposed", anchors={2: "a()", 5: "b()"})
+    graph = {"mixed": {"units": [
+        {"unitId": "a", "path": part.path, "startLine": 1, "endLine": 3},
+        {"unitId": "b", "path": part.path, "startLine": 4, "endLine": 6},
+    ]}}
+    sources = [{"status": "ready", "path": part.path, "side": "proposed", "startLine": 1,
+                "endLine": 3, "content": "def a():\n    a()\n\n"},
+               {"status": "ready", "path": part.path, "side": "proposed", "startLine": 4,
+                "endLine": 6, "content": "def b():\n    b()\n\n"}]
+    case = build_cases([finding(part, 2)], [], {part.id: part}, graph)[0]
+    selected = related_parts(case, {part.id: part}, graph)
+    assert selected == [part]
+    assert set(selected[0].anchors) == {2, 5}  # Full hunk remains intact.
+    assert source_for_case(selected, sources, owner_ids=case.owner_ids, graph_context=graph) == sources[:1]

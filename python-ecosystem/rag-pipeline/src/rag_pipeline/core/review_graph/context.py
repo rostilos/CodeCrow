@@ -52,6 +52,18 @@ def minimal_review_context(
         max_relations=anchor_limit,
     )
     units: dict[str, dict[str, Any]] = {}
+    unresolved_symbols: list[str] = []
+    for target in dict.fromkeys(focus_symbols):
+        # Graph tools can route a previously observed exact unit identity here.
+        # Name search intentionally does not index opaque unit IDs. Use the same
+        # exact lookup as impact/traversal before falling back to symbol search,
+        # and prioritize explicit roots over incidental changed-file anchors.
+        detail = reader.get_unit(target)
+        unit = detail.get("unit") if isinstance(detail, Mapping) else None
+        if isinstance(unit, Mapping) and _unit_key(unit):
+            units.setdefault(_unit_key(unit), dict(unit))
+        else:
+            unresolved_symbols.append(target)
     for anchor in anchors.get("anchors") or ():
         for unit in anchor.get("symbols") or ():
             if isinstance(unit, Mapping) and _unit_key(unit):
@@ -74,7 +86,7 @@ def minimal_review_context(
         )
         if term.casefold() not in _STOP_TERMS
     ][:8]
-    search_targets = list(dict.fromkeys((*focus_symbols, *task_terms)))
+    search_targets = list(dict.fromkeys((*unresolved_symbols, *task_terms)))
     for target in search_targets:
         if len(units) >= max_relations:
             break

@@ -115,13 +115,17 @@ def _call_capture(stage: str, turn: int, batch_ids: list[str] | None) -> Iterato
         _CALL.reset(token)
 
 
-def _private_directory(path: Path) -> int:
+def _capture_root(path: Path) -> int:
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     stat = os.fstat(descriptor)
-    if stat.st_uid != os.geteuid() or stat.st_mode & 0o077:
+    # Earlier capture implementations created a service-owned 0755 root.
+    # Only tenant/run children hold new source, and those remain 0700. Reading
+    # or traversing the root cannot expose their contents. Other users must
+    # not be able to replace those children, so shared write access is unsafe.
+    if stat.st_uid != os.geteuid() or stat.st_mode & 0o022:
         os.close(descriptor)
-        raise PermissionError("capture directory must be private and owned by service user")
+        raise PermissionError("capture root must be service-owned and not writable by other users")
     return descriptor
 
 
@@ -149,7 +153,7 @@ class AttemptCapture:
         self.encoding = ""
         self.directory = -1
         root = Path(os.getenv("REVIEW_QUALITY_CAPTURE_OUTPUT_DIR", "/app/logs/review-quality-captures"))
-        root_fd = _private_directory(root)
+        root_fd = _capture_root(root)
         tenant = hashlib.sha256(json.dumps([
             call.metadata.get("projectWorkspace"), call.metadata.get("projectNamespace"),
             call.metadata.get("projectId"),

@@ -17,6 +17,7 @@ from model.dtos import ReviewRequestDto
 from service.review import review_service
 from service.review.review_service import ReviewService, _parts
 from service.review.verifier import VerificationResult
+from service.review.review_step import STEP_TOOL
 
 
 def change(path="service.py", before="old()", after="new()"):
@@ -71,38 +72,43 @@ class Model:
         self.calls = []
         self.tool_schemas = []
 
-    def bind_tools(self, schemas):
+    def bind_tools(self, schemas, **options):
         self.tool_schemas = schemas
+        self.binding_options = options
         return self
 
     async def ainvoke(self, messages, **options):
-        # A case keeps its initial source packet and appends native tool pairs.
-        # Expose observed evidence without changing that outgoing transcript.
-        payloads = [json.loads(message[1]) for message in messages
-                    if isinstance(message, tuple) and message[0] == "human"]
-        payload = dict(payloads[0])
-        observations = [dict(json.loads(message.content), tool=message.name)
-                        for message in messages if getattr(message, "type", None) == "tool"]
-        observations += [value for item in payloads[1:] for value in item.get("toolObservations", [])]
-        if observations:
-            payload["toolObservations"] = observations
+        # Each verifier invocation carries its canonical observed evidence.
+        payload = next(json.loads(message[1]) for message in messages
+                       if isinstance(message, tuple) and message[0] == "human")
         self.calls.append((payload, options))
         value = self.handler(payload)
         if isinstance(value, str):
             return SimpleNamespace(content=value, tool_calls=[], invalid_tool_calls=[])
         value = dict(value)
-        calls = value.pop("toolCalls", []) if self.tool_schemas else []
-        return SimpleNamespace(content=json.dumps(value), invalid_tool_calls=[], tool_calls=[{
-            "id": f"call-{len(self.calls)}-{index}", "name": call["name"], "args": call["arguments"],
-        } for index, call in enumerate(calls)])
+        if self.tool_schemas and "assessments" in value:
+            calls = []
+            if value.get("assessments"):
+                calls.append({"id": f"step-{len(self.calls)}", "name": STEP_TOOL,
+                              "args": {"assessments": value["assessments"], "findings": value.get("findings", [])}})
+            for request in value.get("evidenceRequests", []):
+                for call in request["calls"]:
+                    calls.append({"id": f"read-{len(self.calls)}-{len(calls)}", "name": call["name"],
+                                  "args": {**call["arguments"], "workIds": request["workIds"], "missingFact": request["missingFact"]}})
+            return SimpleNamespace(content="", invalid_tool_calls=[], tool_calls=calls)
+        return SimpleNamespace(content=json.dumps(value), invalid_tool_calls=[], tool_calls=[])
 
 
 def observed_evidence(payload, kind):
-    observations = [
-        {"id": result["evidenceId"], "kind": result["tool"], "result": result}
-        for result in payload.get("toolObservations", []) if result.get("evidenceId")
-    ]
-    return next((item for item in [*payload.get("evidence", []), *observations] if item["kind"] == kind), None)
+    return next((item for item in payload.get("evidence", []) if item["kind"] == kind), None)
+
+
+def verify_turn(*assessments, calls=(), findings=()):
+    pending = [item for item in assessments if item["verdict"] == "needs_evidence"]
+    return {"assessments": list(assessments), "findings": list(findings),
+            "evidenceRequests": [{"workIds": [item["workId"] for item in pending],
+                                  "missingFact": "; ".join(item["reason"] for item in pending),
+                                  "calls": list(calls)}] if calls else []}
 
 
 @pytest.fixture
@@ -439,6 +445,12 @@ async def test_real_verifier_semantic_dedup_integrates_with_public_issue_schema(
                 candidate(part, "The zero-length denominator raises on empty input", title="Division by zero"),
             ]
             return turn
+        if "cases" in payload:
+            assert len(payload["cases"]) == 2
+            assert all(len(case["findings"]) == 1 for case in payload["cases"])
+            return {"groups": [{"caseIds": [case["caseId"] for case in payload["cases"]],
+                                "failureMechanism": "Empty input creates a zero denominator in the same division",
+                                "sharedResolution": "Handle empty input before the division"}]}
         if "issues" in payload:
             # Reconciliation receives all source-verified records, including a
             # verifier's expanded restatement, and no source/tool corpus.
@@ -448,20 +460,20 @@ async def test_real_verifier_semantic_dedup_integrates_with_public_issue_schema(
             return {"groups": [{"memberIds": [issue["issueId"] for issue in payload["issues"]],
                                 "representativeId": payload["issues"][-1]["issueId"],
                                 "rationale": "Same empty-input trigger, zero denominator and practical repair"}]}
-        first, second = payload["candidates"]
+        first, second = payload["workItems"]
         evidence = observed_evidence(payload, "diff")
         assert evidence["id"] == f'diff:{first["partId"]}'
         assert "total / len(items)" in evidence["result"]["diff"]
-        return {"decisions": [
-            {"candidateId": item["candidateId"], "verdict": "keep", "reason": "The changed expression divides by the input length",
+        return verify_turn(*[
+            {"workId": item["id"], "verdict": "confirmed", "reason": "The changed expression divides by the input length",
              "evidenceIds": [evidence["id"]]} for item in (first, second)
-        ], "findings": [{
+        ], findings=[{
             "partId": first["partId"], "file": first["file"], "line": first["line"],
             "title": "Empty collections raise during average calculation",
             "reason": "An empty collection gives a zero denominator, so this average raises ZeroDivisionError",
             "suggestedFixDescription": "Handle an empty collection before dividing",
             "evidenceIds": [evidence["id"]],
-        }]}
+        }])
 
     service, model, rag, _ = pipeline(handler)
     monkeypatch.setattr(review_service, "ReviewVerifier", ReviewVerifier)
@@ -473,9 +485,10 @@ async def test_real_verifier_semantic_dedup_integrates_with_public_issue_schema(
     assert result["issues"][0]["title"] == "Empty collections raise during average calculation"
     assert result["issues"][0]["codeSnippet"] == "total / len(items)"
     assert "partId" not in result["issues"][0]
-    assert len(model.calls) == 3  # Discovery, source-seeded verification, semantic partition.
-    assert "caseId" in model.calls[1][0]
-    assert set(model.calls[2][0]) == {"issues"}
+    assert len(model.calls) == 4  # Discovery, atomic-work routing, verification, reconciliation.
+    assert "cases" in model.calls[1][0]
+    assert "caseId" in model.calls[2][0]
+    assert set(model.calls[3][0]) == {"issues"}
     assert model.tool_schemas
     rag.query_review_graph.assert_not_awaited()
 
@@ -499,13 +512,22 @@ async def test_real_local_source_guard_dismisses_batch_candidate(pipeline, monke
             turn["findings"] = [candidate(payload["ownedParts"][0], "Empty input divides by zero")]
             return turn
         source = observed_evidence(payload, "readReviewFile")
+        work = payload["workItems"][0]
         if source is None:
-            return {"toolCalls": [{"name": "readReviewFile", "arguments": {"path": "service.py"}}]}
-        assert source["result"]["content"] == proposed
-        assert source["result"]["origin"] == "review_overlay"
-        return {"decisions": [{"candidateId": payload["candidates"][0]["candidateId"],
-                               "verdict": "dismiss", "reason": "The empty-input guard returns before division",
-                               "evidenceIds": [source["id"]]}]}
+            return verify_turn({"workId": work["id"], "verdict": "needs_evidence",
+                                "reason": "The enclosing function may guard empty input", "evidenceIds": []},
+                               calls=[{"name": "readReviewFile", "arguments": {"path": "service.py"}}])
+        shown = source["result"]
+        if "content" in shown:
+            assert shown["content"] == proposed
+        else:
+            assert shown["sourceSegments"] == [{"startLine": 1, "endLine": 3,
+                "content": "def mean(items):\n    if not items:\n        return 0\n"}]
+            assert shown["sourceReferences"][0]["evidenceId"] == observed_evidence(payload, "diff")["id"]
+            assert "    return sum(items) / len(items)" in observed_evidence(payload, "diff")["result"]["diff"]
+        assert shown["origin"] == "review_overlay"
+        return verify_turn({"workId": work["id"], "verdict": "refuted",
+                            "reason": "The empty-input guard returns before division", "evidenceIds": [source["id"]]})
 
     service, model, rag, _ = pipeline(handler)
     monkeypatch.setattr(review_service, "ReviewVerifier", ReviewVerifier)
@@ -515,8 +537,8 @@ async def test_real_local_source_guard_dismisses_batch_candidate(pipeline, monke
 
     assert result["status"] == "complete"
     assert result["issues"] == []
-    assert len(model.calls) == 3
-    assert model.calls[1][0]["candidates"][0]["line"] == 4
+    assert len(model.calls) == 2
+    assert model.calls[1][0]["workItems"][0]["line"] == 4
     assert all("workspace" not in tool["function"]["parameters"].get("properties", {}) for tool in model.tool_schemas)
     assert "tools" not in model.calls[1][0]
     rag.query_review_graph.assert_not_awaited()
@@ -538,20 +560,21 @@ async def test_incremental_prior_change_is_tool_evidence_but_not_publication_wor
             turn = default_turn(payload)
             turn["findings"] = [candidate(payload["ownedParts"][0], "An invalid value reaches the consumer")]
             return turn
-        assert {part_id for item in payload["changedFiles"] for part_id in item["partIds"]} == {delta_part.id}
+        assert payload["changedFiles"] == [delta_part.path]
         assert {item["id"] for item in payload["contextChangedParts"]} == {previous_part.id}
+        work = payload["workItems"][0]
         source = observed_evidence(payload, "getReviewDiff")
         if source is None:
-            return {"toolCalls": [{"name": "getReviewDiff", "arguments": {"partIds": [previous_part.id, delta_part.id]}}]}
+            return verify_turn({"workId": work["id"], "verdict": "needs_evidence",
+                                "reason": "Prior PR changes may validate the value upstream", "evidenceIds": []},
+                               calls=[{"name": "getReviewDiff", "arguments": {"partIds": [previous_part.id, delta_part.id]}}])
         assert source["result"]["parts"][0]["diff"] == previous_part.diff
-        return {
-            "decisions": [{"candidateId": payload["candidates"][0]["candidateId"], "verdict": "dismiss",
-                           "reason": "The earlier PR change rejects invalid values before this consumer",
-                           "evidenceIds": [source["id"]]}],
-            "findings": [{"partId": previous_part.id, "file": previous_part.path, "line": 1,
-                          "title": "Out-of-delta suggestion", "reason": "This would reopen previously reviewed work",
-                          "evidenceIds": [source["id"]]}],
-        }
+        return verify_turn({"workId": work["id"], "verdict": "refuted",
+                            "reason": "The earlier PR change rejects invalid values before this consumer",
+                            "evidenceIds": [source["id"]]},
+                           findings=[{"partId": previous_part.id, "file": previous_part.path, "line": 1,
+                                      "title": "Out-of-delta suggestion", "reason": "This would reopen previously reviewed work",
+                                      "evidenceIds": [source["id"]]}])
 
     service, model, _, _ = pipeline(handler)
     monkeypatch.setattr(review_service, "ReviewVerifier", ReviewVerifier)
@@ -562,7 +585,7 @@ async def test_incremental_prior_change_is_tool_evidence_but_not_publication_wor
     assert result["status"] == "complete"
     assert result["issues"] == []
     assert result["reviewedHunkIds"] == [delta_part.id]
-    assert len(model.calls) == 3
+    assert len(model.calls) == 3  # Discovery, scoped retrieval, and its final assessment.
 
 
 @pytest.mark.asyncio
@@ -736,8 +759,9 @@ async def test_real_verifier_keeps_unsupported_caller_hypothesis_internal(pipeli
         evidence = observed_evidence(payload, "diff")
         assert evidence["result"]["diff"] == _parts(change())[0][0].diff
         assert "external caller" not in evidence["result"]["diff"]
-        return {"decisions": [{"candidateId": payload["candidates"][0]["candidateId"], "verdict": "uncertain",
-                               "reason": "No actual affected caller or supported external contract establishes a failure"}]}
+        return verify_turn({"workId": payload["workItems"][0]["id"], "verdict": "uncertain",
+                            "reason": "No actual affected caller or supported external contract establishes a failure",
+                            "evidenceIds": []})
 
     service, model, _, _ = pipeline(handler)
     monkeypatch.setattr(review_service, "ReviewVerifier", ReviewVerifier)

@@ -1,0 +1,351 @@
+{
+  "description": "Routing claims copied from the 2026-09-26 rerun captures for public Cal.com PR10967. Source bodies, repository bindings, opaque graph IDs, and account metadata are excluded. Scripted grouping is an architecture check, not a model quality measurement.",
+  "publicPullRequest": "https://github.com/calcom/cal.com/pull/10967",
+  "migrationCaseIds": [
+    "case-14",
+    "case-17",
+    "case-18",
+    "case-19",
+    "case-23",
+    "case-25"
+  ],
+  "cases": [
+    {
+      "caseId": "case-14",
+      "candidates": [],
+      "investigations": [
+        {
+          "id": "batch-cd17e68a76aebc09:question:0",
+          "question": "Are the Prisma fields `Booking.destinationCalendar` and `User.destinationCalendar` still single objects (as in old code), or were they converted to arrays by this PR?",
+          "claim": "If the model fields are now arrays, `selectedDestinationCalendar ? [selectedDestinationCalendar] : []` produces a nested array (`[[...]]`), and the empty-array case `[]` is truthy, so the ternary would wrap an empty array as `[[]]`, breaking the calendar invite email.",
+          "evidenceNeeded": "The Prisma schema / Booking and User model definitions for destinationCalendar (single optional relation vs array), which are not present in the supplied diff or related changes.",
+          "paths": [
+            "apps/web/pages/api/cron/bookingReminder.ts"
+          ]
+        },
+        {
+          "id": "batch-cd17e68a76aebc09:question:1",
+          "question": "Was `sendOrganizerRequestReminderEmail` (packages/emails/email-manager.ts:231-241) and its CalendarEvent consumer migrated to expect `destinationCalendar` as an array?",
+          "claim": "This cron now passes an array where it previously passed a single object (or null); if the email sender still treats destinationCalendar as a single object (e.g., accessing `.id` or `.integration` directly, or checking truthiness where `[]` is truthy), the reminder calendar invite would be malformed or omitted.",
+          "evidenceNeeded": "The body of sendOrganizerRequestReminderEmail and the CalEvent parser/email template handling of evt.destinationCalendar; this file is not in the visible related batches.",
+          "paths": [
+            "apps/web/pages/api/cron/bookingReminder.ts",
+            "packages/emails/email-manager.ts"
+          ]
+        }
+      ],
+      "contractHints": [
+        {
+          "paths": [
+            "apps/web/pages/api/cron/bookingReminder.ts"
+          ],
+          "contracts": [
+            "CalendarEvent.destinationCalendar consumed by the reminder email path is now `DestinationCalendar[]` (possibly `[]`). Downstream email/calendar code must treat it as an array and tolerate empty arrays.",
+            "Selection fallback semantics are preserved for a single calendar: booking-level calendar wins over user-level calendar; otherwise empty."
+          ]
+        }
+      ]
+    },
+    {
+      "caseId": "case-17",
+      "candidates": [],
+      "investigations": [
+        {
+          "id": "batch-b7c3565f4756bc3e:question:0",
+          "question": "Does an un-migrated caller still pass destinationCalendar as a single object (not an array)?",
+          "claim": "createAllCalendarEvents() uses `for (const destination of event.destinationCalendar)`, which throws TypeError if destinationCalendar is a non-iterable object; also create()'s destructure could behave unexpectedly.",
+          "evidenceNeeded": "Caller evidence for handleConfirmation.ts and handleNewBooking.ts confirming destinationCalendar is always set as an array in this proposal.",
+          "paths": [
+            "packages/core/EventManager.ts",
+            "packages/features/bookings/lib/handleConfirmation.ts",
+            "packages/features/bookings/lib/handleNewBooking.ts"
+          ]
+        }
+      ],
+      "contractHints": [
+        {
+          "paths": [
+            "packages/core/EventManager.ts",
+            "packages/types/EventManager.d.ts"
+          ],
+          "contracts": [
+            "CalendarEvent.destinationCalendar is now an array; all callees iterate it.",
+            "EventResult.externalId is populated by createEvent; updateEvent's population is unverified.",
+            "create() must not throw when destinationCalendar is empty even if location is Google Meet.",
+            "createAllCalendarEvents() integrates each destination's externalId into the created reference.",
+            "updateAllCalendarEvents() returns one update result per calendar reference and one failure entry per reference on error."
+          ]
+        },
+        {
+          "paths": [
+            "packages/features/bookings/lib/handleNewBooking.ts"
+          ],
+          "contracts": [
+            "CalendarEvent.destinationCalendar is now consumed as an array by collaborators (EventManager/CalendarService in related batches); index 0 is the organizer/eventType primary calendar.",
+            "Booking.destinationCalendar connect uses the first (primary) calendar; booking carry-over on createBooking uses evt.destinationCalendar[0].",
+            "loadUsers failure mode for empty dynamicUserList changed from downstream 'No available users found' to an immediate 500 'Unable to load users'."
+          ]
+        }
+      ]
+    },
+    {
+      "caseId": "case-18",
+      "candidates": [],
+      "investigations": [
+        {
+          "id": "batch-31f166b47e992d56:question:0",
+          "question": "Are all reads of CalendarEventClass.destinationCalendar outside the shown related-change batches (googlecalendar CalendarService.ts, EventManager.ts, types Calendar.d.ts) migrated to handle the array type? The class itself provides no single-object fallback; any unmigrated consumer doing property access or truthiness checks on the value would misbehave at runtime for array values.",
+          "claim": "A consumer still treating destinationCalendar as a single DestinationCalendar could throw (property access on array) or select wrong behavior when multiple calendars exist.",
+          "evidenceNeeded": "Full set of consumers of CalendarEvent.destinationCalendar (other calendar apps, handlers, ics/outlook/office365/zoom paths) and confirmation each was updated in this PR; graph does not show REFERENCES to class.ts from those files.",
+          "paths": [
+            "packages/core/builders/CalendarEvent/class.ts"
+          ]
+        },
+        {
+          "id": "batch-31f166b47e992d56:question:1",
+          "question": "Was CalendarEventBuilder.setDestinationCalendar (builder.ts:198-200) updated to emit an array into this field? It is not in the changed hunks; if it still assigns a single DestinationCalendar, its call sites would either fail type-checking or rely on a change elsewhere.",
+          "claim": "Builder-produced CalendarEventClass instances may carry a stale single-object value if the builder path was not migrated, contradicting the array contract.",
+          "evidenceNeeded": "Source of CalendarEventBuilder.setDestinationCalendar and its callers to confirm array emission.",
+          "paths": [
+            "packages/core/builders/CalendarEvent/builder.ts",
+            "packages/core/builders/CalendarEvent/class.ts"
+          ]
+        },
+        {
+          "id": "batch-31f166b47e992d56:question:2",
+          "question": "Does CalendarEvent (packages/types/Calendar.d.ts) interface's destinationCalendar mirror the array type? The class implements CalendarEvent, so a mismatch (single in interface, array in class) would break implement/compile-time compatibility and any code typed against the interface.",
+          "claim": "Interface/class type divergence would leave interface-typed consumers on the old single-object contract.",
+          "evidenceNeeded": "Updated declaration of destinationCalendar in packages/types/Calendar.d.ts (related batch-048f4bd85937642f).",
+          "paths": [
+            "packages/core/builders/CalendarEvent/class.ts",
+            "packages/types/Calendar.d.ts"
+          ]
+        }
+      ],
+      "contractHints": [
+        {
+          "paths": [
+            "packages/app-store/googlecalendar/lib/CalendarService.ts",
+            "packages/types/Calendar.d.ts"
+          ],
+          "contracts": [
+            "createEvent callers must now pass a credentialId number.",
+            "Code consuming CalendarEvent.destinationCalendar must treat it as an array (or null), not a single object.",
+            "updateEvent/deleteEvent still accept an optional externalCalendarId; the new array lookup only honors it when a truthy string is passed.",
+            "createEvent insertion targets the calendar matching the given credentialId, falling back to primary when no match exists."
+          ]
+        },
+        {
+          "paths": [
+            "packages/core/builders/CalendarEvent/builder.ts"
+          ],
+          "contracts": [
+            "No contract changes. `Booking` is used only as a type (`buildRescheduleLink(booking: Partial<Booking>)`), so `import type` is valid. `Prisma` is used as a value (`Prisma.validator<Prisma.UserArgs>()` and `Prisma.UserGetPayload`), so it remains a runtime import; both symbols remain available in this module."
+          ]
+        },
+        {
+          "paths": [
+            "packages/core/builders/CalendarEvent/class.ts"
+          ],
+          "contracts": [
+            "destinationCalendar on the CalendarEvent class (and per PR, the CalendarEvent interface / other call sites) now holds an array of destination calendars: consumers selecting the 'main' calendar must index (e.g., [0]) and iterate for multi-host invites; any read of object properties (primaryEmail/credentialId/... ) or truthiness-as-single-object semantics on this field now fails for array inputs.",
+            "The fallback behavior described by the PR (single main destinationCalendar still works, multiple supported) is implemented in consuming code (GoogleCalendarService, EventManager, types/Calendar.d.ts) in the same PR; this hunk provides no equivalent fallback on the class itself."
+          ]
+        }
+      ]
+    },
+    {
+      "caseId": "case-19",
+      "candidates": [],
+      "investigations": [
+        {
+          "id": "batch-e82f07f5f8111e97:question:0",
+          "question": "Is CalendarEvent.destinationCalendar consistently typed/migrated to an array at every call site that constructs CalendarEvent used by this email, given this component destructively iterates it with array destructuring?",
+          "claim": "If any caller still supplies the old single object shape for destinationCalendar, array destructuring would throw 'object is not iterable' at runtime.",
+          "evidenceNeeded": "The CalendarEvent type definition and each construction site of destinationCalendar (the PR states all usages were patched, which is counterevidence but not independently verified in the supplied source).",
+          "paths": [
+            "packages/emails/src/templates/BrokenIntegrationEmail.tsx"
+          ]
+        }
+      ],
+      "contractHints": [
+        {
+          "paths": [
+            "packages/emails/src/templates/BrokenIntegrationEmail.tsx"
+          ],
+          "contracts": [
+            "CalendarEvent.destinationCalendar is now an array of destination calendar entries; consumers must treat it as iterable.",
+            "BrokenIntegrationEmail emits a calendar-name in the broken_calendar_action email text derived from `integration` field of the first entry by splitting on '_' and capitalizing the first two parts.",
+            "The email's literal 'calendar' fallback unchanged for missing/empty destinationCalendar."
+          ]
+        }
+      ]
+    },
+    {
+      "caseId": "case-23",
+      "candidates": [],
+      "investigations": [
+        {
+          "id": "batch-00270e44510f448f:question:1",
+          "question": "Are there any remaining callers that still pass the old single-object destinationCalendar shape?",
+          "claim": "Destructuring a non-array value would throw a TypeError (object not iterable), aborting event creation/listCalendars.",
+          "evidenceNeeded": "Full call graph of createEvent and listCalendars confirming all callers were migrated to the array type.",
+          "paths": [
+            "packages/lib/CalendarService.ts",
+            "packages/types/Calendar.d.ts"
+          ]
+        }
+      ],
+      "contractHints": [
+        {
+          "paths": [
+            "packages/app-store/googlecalendar/lib/CalendarService.ts",
+            "packages/types/Calendar.d.ts"
+          ],
+          "contracts": [
+            "createEvent callers must now pass a credentialId number.",
+            "Code consuming CalendarEvent.destinationCalendar must treat it as an array (or null), not a single object.",
+            "updateEvent/deleteEvent still accept an optional externalCalendarId; the new array lookup only honors it when a truthy string is passed.",
+            "createEvent insertion targets the calendar matching the given credentialId, falling back to primary when no match exists."
+          ]
+        },
+        {
+          "paths": [
+            "packages/lib/CalendarService.ts"
+          ],
+          "contracts": [
+            "createEvent: given a destinationCalendar array whose first element's externalId is absent from the service account's calendar list, zero events are created and a success result is returned (no exception, no error response).",
+            "listCalendars: IntegrationCalendar.primary reflects only the first destination calendar entry and can be false for valid user calendars or true for a calendar belonging to the main host only.",
+            "Both methods now assume event.destinationCalendar is iterable (array); callers must supply the new array type or destructuring will throw."
+          ]
+        }
+      ]
+    },
+    {
+      "caseId": "case-25",
+      "candidates": [],
+      "investigations": [
+        {
+          "id": "batch-1e89af2d1b5593d9:question:0",
+          "question": "Are Prisma relations User.destinationCalendar and Booking.destinationCalendar single objects (DestinationCalendar?) or arrays (DestinationCalendar[])?",
+          "claim": "If either field is already an array, wrapping it in a new array creates a nested array (e.g. [[cal1, cal2]]), which would break downstream calendar consumers that expect DestinationCalendar[].",
+          "evidenceNeeded": "Prisma schema definitions or TypeScript types for User.destinationCalendar and Booking.destinationCalendar, plus the session/select that produced ctx.user and the booking select.",
+          "paths": [
+            "packages/trpc/server/routers/viewer/bookings/confirm.handler.ts"
+          ]
+        },
+        {
+          "id": "batch-1e89af2d1b5593d9:question:1",
+          "question": "Do all consumers of evt.destinationCalendar in the confirmation/calendar-sending path handle both the new [] value and the array type correctly?",
+          "claim": "Returning [] instead of null changes truthiness; a consumer that checks `if (evt.destinationCalendar)` may enter the calendar path with no actual calendar and fail when no destination calendar is configured.",
+          "evidenceNeeded": "Implementation of handleConfirmation and calendar-message sending code that uses evt.destinationCalendar.",
+          "paths": [
+            "packages/trpc/server/routers/viewer/bookings/confirm.handler.ts"
+          ]
+        }
+      ],
+      "contractHints": [
+        {
+          "paths": [
+            "packages/trpc/server/routers/viewer/bookings/confirm.handler.ts"
+          ],
+          "contracts": [
+            "CalendarEvent.destinationCalendar is now expected to be an array by this handler; evt passed to handleConfirmation will contain an array with zero or one destination calendar records.",
+            "When neither booking nor user has a destination calendar, the value changes from null/undefined to [], so consumers must treat an empty array as 'no destination calendar' rather than checking truthiness of destinationCalendar."
+          ]
+        }
+      ]
+    },
+    {
+      "caseId": "case-5",
+      "candidates": [
+        {
+          "title": "Crash in create() when destinationCalendar is an empty array",
+          "reason": "The fallback check now destructures `const [mainHostDestinationCalendar] = evt.destinationCalendar ?? [];` and then reads `mainHostDestinationCalendar.integration`. When `evt.destinationCalendar` is `[]` (or undefined), the destructured element is `undefined` and `undefined.integration` throws `TypeError: Cannot read properties of undefined (reading 'integration')`. The previous code used optional chaining `evt.destinationCalendar?.integration` and was safe for a missing calendar. The companion webhook edits (paypal-webhook.ts and webhook.ts) explicitly set `destinationCalendar: []` when neither the booking nor the user has a destination calendar, so a paid Google-Meet booking without any destination calendar reaches this crash during `eventManager.create(evt)`, preventing the booking reference creation and payment confirmation.",
+          "file": "packages/core/EventManager.ts",
+          "line": 119,
+          "evidenceToCheck": [
+            "Confirm the empty-array case is reachable: webhook callers pass destinationCalendar: [] when no calendar is set; verify no other guard prevents create() from running with location === MeetLocationType."
+          ],
+          "relatedPaths": [
+            "packages/features/ee/payments/api/paypal-webhook.ts",
+            "packages/features/ee/payments/api/webhook.ts"
+          ]
+        }
+      ],
+      "investigations": [],
+      "contractHints": [
+        {
+          "paths": [
+            "packages/core/EventManager.ts",
+            "packages/types/EventManager.d.ts"
+          ],
+          "contracts": [
+            "CalendarEvent.destinationCalendar is now an array; all callees iterate it.",
+            "EventResult.externalId is populated by createEvent; updateEvent's population is unverified.",
+            "create() must not throw when destinationCalendar is empty even if location is Google Meet.",
+            "createAllCalendarEvents() integrates each destination's externalId into the created reference.",
+            "updateAllCalendarEvents() returns one update result per calendar reference and one failure entry per reference on error."
+          ]
+        },
+        {
+          "paths": [
+            "packages/features/ee/payments/api/paypal-webhook.ts"
+          ],
+          "contracts": [
+            "CalendarEvent.destinationCalendar is now an array (possibly empty or multi-element) that downstream consumers must tolerate; an empty array must be a valid value.",
+            "Consumers that previously read destinationCalendar?.X now must handle undefined first element plus possibly multiple entries.",
+            "PayPal webhook path depends on EventManager.create not throwing for bookings with Meet location and no destination calendar."
+          ]
+        },
+        {
+          "paths": [
+            "packages/features/ee/payments/api/webhook.ts"
+          ],
+          "contracts": [
+            "CalendarEvent.destinationCalendar is always an array; first element is the main host destination calendar, empty array means no destination calendar.",
+            "Payment webhook builds evt with destinationCalendar:[] when no booking/user calendar exists and passes it to EventManager.create for already-ACCEPTED paid bookings and to handleConfirmation/sendScheduledEmails otherwise.",
+            "EventManager.create dereferences the first element of destinationCalendar in the Google Meet fallback, so an empty array is no longer a safe absence signal."
+          ]
+        }
+      ]
+    },
+    {
+      "caseId": "case-13",
+      "candidates": [
+        {
+          "title": "Organization slug no longer stored when team billing is disabled",
+          "reason": "Before the change the two conditions were complementary: `!IS_TEAM_BILLING_ENABLED` produced `{ slug }` in the create data, and `IS_TEAM_BILLING_ENABLED` produced `{ requestedSlug: slug }` in metadata. The change makes both branches keyed on the same `IS_TEAM_BILLING_ENABLED` condition, so in an environment where team billing is disabled the organization is created with neither `slug` in the data nor `requestedSlug` in `metadata`. The `metadata` block still unconditionally sets `isOrganization: true` and `orgAutoAcceptEmail`, and nothing later in `createHandler` assigns a slug, so such a deployment creates organizations with a null slug and no pending requested slug. Org subdomains/URLs are derived from the slug, so the org is left without its resolving slug; billing-enabled deployments conversely now set both `slug` and `requestedSlug` for the same value, duplicating the intended pending-approval signal. The regression to the previously complementary logic is observable in ordinary self-hosted (non-billing) runs of this handler, e.g. `check === false` with `IS_TEAM_BILLING_ENABLED` unset.",
+          "file": "packages/trpc/server/routers/viewer/organizations/create.handler.ts",
+          "line": 151,
+          "evidenceToCheck": [
+            "Confirm `IS_TEAM_BILLING_ENABLED` constant evaluation in this file and that no later step in `createHandler` (e.g. the check branch or post-creation update) assigns `slug` or consumes `requestedSlug` for the non-billing path.",
+            "Check consumers of `metadata.requestedSlug` to see whether billing-enabled orgs now setting both `slug` and `requestedSlug` breaks pending-approval/waitlist assignment logic."
+          ],
+          "relatedPaths": []
+        }
+      ],
+      "investigations": [
+        {
+          "id": "batch-14e82a0a2e6e56a6:question:0",
+          "question": "Is there a post-creation routine (outside this unit) that assigns `slug` from `requestedSlug` or otherwise backfills the org slug in non-billing environments?",
+          "claim": "If such a backfill exists, the missing-slug regression in non-billing deployments could be mitigated, changing the finding's severity.",
+          "evidenceNeeded": "A caller or follow-up procedure that reads `metadata.requestedSlug` or sets `team.slug` after this handler returns in the `check === false` non-billing path.",
+          "paths": [
+            "packages/trpc/server/routers/viewer/organizations/create.handler.ts"
+          ]
+        }
+      ],
+      "contractHints": [
+        {
+          "paths": [
+            "packages/trpc/server/routers/viewer/organizations/create.handler.ts"
+          ],
+          "contracts": [
+            "The `organization.create` payload previously guaranteed exactly one of `slug`/`requestedSlug` depending on `IS_TEAM_BILLING_ENABLED`; it now guarantees none when billing is disabled and both when enabled. `metadata.isOrganization`, `isOrganizationVerified`, `isOrganizationConfigured` and `orgAutoAcceptEmail` remain unconditional."
+          ]
+        }
+      ]
+    }
+  ]
+}
