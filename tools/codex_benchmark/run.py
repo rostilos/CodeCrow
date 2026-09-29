@@ -15,6 +15,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-dir', type=Path, required=True)
     parser.add_argument('--limit', type=int, required=True)
+    parser.add_argument('--dataset-file', type=Path)
+    parser.add_argument('--jobs', type=int, default=5)
+    parser.add_argument('--index-jobs', type=int, default=5)
+    parser.add_argument('--score-batch-size', type=int, default=4)
     parser.add_argument('--tool-name', required=True)
     parser.add_argument('--resume', action='store_true')
     parser.add_argument('--score-only', action='store_true')
@@ -39,8 +43,8 @@ def main():
         'CODECROW_AI_BASE_URL': 'http://host.docker.internal:18771/v1',
         'MARTIAN_API_KEY': token, 'MARTIAN_BASE_URL': 'http://172.17.0.1:18771/v1',
         'MARTIAN_MODEL': MODEL, 'MARTIAN_PROVIDER': '',
-        'CRB_EXTRACT_BATCH_SIZE': '4', 'CRB_DEDUP_BATCH_SIZE': '4',
-        'CRB_JUDGE_BATCH_SIZE': '4', 'CRB_LLM_CALL_TIMEOUT': '300',
+        'CRB_EXTRACT_BATCH_SIZE': str(args.score_batch_size), 'CRB_DEDUP_BATCH_SIZE': str(args.score_batch_size),
+        'CRB_JUDGE_BATCH_SIZE': str(args.score_batch_size), 'CRB_LLM_CALL_TIMEOUT': '300',
         'CRB_REVIEW_TIMEOUT': '10800', 'CRB_MAX_RETRIES': '8',
         'CRB_RATE_LIMIT_SLEEP': '75',
         'CRB_LLM_LEDGER_PATH': str(run/'scoring-llm-ledger.jsonl'),
@@ -51,7 +55,7 @@ def main():
         '--rag-source', 'benchmark', '--rag-index-scope', 'repository',
         '--benchmark-dir', str(run/'scorer'), '--work-dir', str(run/'work'),
         '--output', str(run/'benchmark_data.json'), '--workspace', 'code-review-benchmark',
-        '--tool-name', args.tool_name, '--limit', str(args.limit), '--jobs', '5', '--index-jobs', '5',
+        '--tool-name', args.tool_name, '--limit', str(args.limit), '--jobs', str(args.jobs), '--index-jobs', str(args.index_jobs),
         '--review-timeout', '10800', '--index-timeout', '7200', '--skip-existing-index',
         '--rag-url', env['CODECROW_RAG_URL'], '--inference-url', env['CODECROW_INFERENCE_URL'],
         '--rag-filesystem-mode', 'docker', '--rag-container', env['CODECROW_RAG_CONTAINER'],
@@ -64,6 +68,9 @@ def main():
     score = common + ['score', '--benchmark-dir', str(run/'scorer'),
         '--work-dir', str(run/'work'), '--output', str(run/'benchmark_data.json'),
         '--tool-name', args.tool_name, '--score-run-name', run.name, '--skip-uv-sync']
+    if args.dataset_file:
+        review += ['--dataset-file', str(args.dataset_file.resolve())]
+        score += ['--dataset-file', str(args.dataset_file.resolve())]
     if args.resume:
         review.append('--resume'); score.append('--reuse-score')
     steps = [('review', review), ('scoring', score)]

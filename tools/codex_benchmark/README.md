@@ -90,3 +90,23 @@ reuses saved reviews and completed scoring. Its status reports subprocess
 completion; verify all selected review and evaluation records before reporting metrics.
 Service `.env` mounts must be readable by the application UID while their host
 parent directory remains private. CLI OAuth files are never mounted.
+
+
+For the full Qodo corpus, keep the supplied 100-row JSONL unchanged in the run
+directory and use an isolated scorer output. Empty Martian golden-comment files
+are not a substitute for this dataset flag. For a Luna 5.6 run, set
+`CODECROW_CODEX_BENCHMARK_MODEL=gpt-5.6-luna` consistently in the bridge,
+inference service and runner, then run:
+
+```bash
+CODECROW_CODEX_BENCHMARK_MODEL=gpt-5.6-luna python -m tools.codex_benchmark.run \
+  --run-dir "$RUN" --dataset-file "$RUN/qodo100.jsonl" --limit 100 \
+  --tool-name CodeCrow-Qodo100-CodexLuna56 --jobs 10 --index-jobs 10 \
+  --score-batch-size 8
+```
+
+The same dataset path is passed to review and scoring. The restored harness uses
+Qodo's reference issues, checks complete extraction and judging, and builds a
+Qodo dashboard. Report Qodo metrics across all `qodo_issue` references; Martian's
+strict/core category profiles exclude those references and are not valid Qodo
+scores. Model proxy capacity is independently controlled by bridge `--capacity`.

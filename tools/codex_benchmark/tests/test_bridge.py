@@ -147,14 +147,15 @@ def test_benchmark_factory_uses_chat_facade_despite_gpt6_sdk_default():
     assert model.use_responses_api is False
 
 
-def test_selected_sol_model_blocks_luna_and_other_provider_routes():
+@pytest.mark.parametrize("selected", ["gpt-6-sol", "gpt-5.6-luna"])
+def test_selected_model_blocks_luna6_and_other_provider_routes(selected):
     class Factory:
         @staticmethod
         def create_llm(ai_provider, ai_model, ai_api_key, ai_base_url=None):
             return ai_model
-    install_subscription_guard(Factory, "http://bridge/v1", "local-token", "gpt-6-sol")
-    assert Factory.create_llm("openai_compatible", "gpt-6-sol", "local-token", "http://bridge/v1") == "gpt-6-sol"
+    install_subscription_guard(Factory, "http://bridge/v1", "local-token", selected)
+    assert Factory.create_llm("openai_compatible", selected, "local-token", "http://bridge/v1") == selected
     with pytest.raises(ValueError):
         Factory.create_llm("openai_compatible", "gpt-6-luna", "local-token", "http://bridge/v1")
     with pytest.raises(ValueError):
-        Factory.create_llm("openrouter", "gpt-6-sol", "local-token", "http://bridge/v1")
+        Factory.create_llm("openrouter", selected, "local-token", "http://bridge/v1")
