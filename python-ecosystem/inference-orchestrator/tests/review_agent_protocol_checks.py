@@ -129,7 +129,7 @@ async def test_every_provider_binds_real_mcp_inventory_without_network(provider)
     session = ReviewAgentSession(model, REQUEST, await tools.schemas())
     assert session.native_tools
     definitions = session.model.kwargs["tools"]
-    assert len(definitions) == 9
+    assert len(definitions) == 10
     assert not session.diagnostics
 
 

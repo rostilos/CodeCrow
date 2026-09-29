@@ -8,10 +8,11 @@ from llm.review_invocation import _call_timeout_seconds, invoke_review_model
 from llm.openai_parameters import _openrouter_custom_extra_body
 
 
-def test_default_router_speed_preference_preserves_all_explicit_constraints():
-    assert _openrouter_custom_extra_body(None) == {"provider": {"sort": "throughput"}}
+def test_default_router_has_no_implicit_provider_parameters():
+    assert _openrouter_custom_extra_body(None) == {}
+    assert _openrouter_custom_extra_body({}) == {}
     privacy = {"ignore": ["provider-a"], "quantizations": ["bf16"], "data_collection": "deny", "allow_fallbacks": False}
-    assert _openrouter_custom_extra_body({"provider": privacy}) == {"provider": {**privacy, "sort": "throughput"}}
+    assert _openrouter_custom_extra_body({"provider": privacy}) == {"provider": privacy}
     for explicit in ({"order": ["cloudflare"]}, {"only": ["cloudflare"]}, {"sort": "latency"}, {"order": []}):
         configured = {**privacy, **explicit}
         assert _openrouter_custom_extra_body({"extra_body": {"provider": configured}}) == {"provider": configured}

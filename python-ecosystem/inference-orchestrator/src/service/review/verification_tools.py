@@ -76,6 +76,7 @@ class VerificationTools:
         self.binding = dict(binding)
         self.focus_paths = list(focus_paths)
         self.parts = {part.id: part for part in (*context_parts, *parts)}
+        self.active_part_ids = {part.id for part in parts}
         self.source = LocalReviewSource(binding, [part.path for part in self.parts.values()])
         self.cache: dict[str, dict[str, Any]] = {}
         self.in_flight: dict[str, asyncio.Task[dict[str, Any]]] = {}
@@ -156,6 +157,24 @@ class VerificationTools:
             return self.server
         from mcp.server.fastmcp import FastMCP
         server = FastMCP("CodeCrow review verification", log_level="WARNING")
+
+        @server.tool(name="listReviewChanges", structured_output=True)
+        async def list_review_changes(paths: list[str] | None = None, cursor: int = 0,
+                                      maxFiles: int = 50) -> dict[str, Any]:
+            """List changed paths and hunk IDs/anchor ranges without diff or source content. Optional exact paths locate a changed dependency. Follow nextCursor for further files; active=false hunks are prior incremental context and cannot anchor new findings."""
+            selected = sorted({part.path for part in self.parts.values()
+                               if not paths or part.path in paths})
+            start = max(0, cursor)
+            count = max(1, maxFiles)
+            page = selected[start:start + count]
+            files = [{"path": path, "parts": [
+                {"id": part.id, "side": part.side, "active": part.id in self.active_part_ids,
+                 "anchorRanges": anchor_ranges(part.anchors), "diffCharacters": len(part.diff)}
+                for part in self.parts.values() if part.path == path
+            ]} for path in page]
+            following = start + len(page)
+            return {"status": "ready", "files": files, "totalFiles": len(selected),
+                    "nextCursor": following if following < len(selected) else None}
 
         @server.tool(name="queryCodeGraph", structured_output=True)
         async def query_code_graph(pattern: str, target: str, cursor: int = 0) -> dict[str, Any]:

@@ -64,7 +64,7 @@ def review_capture(request: Any) -> Iterator[None]:
             identity = {key: getattr(request, key, None) for key in (
                 "projectId", "projectWorkspace", "projectNamespace", "pullRequestId",
                 "sourceBranchName", "targetBranchName", "currentCommitHash", "commitHash",
-                "targetHeadCommitHash", "aiProvider", "aiModel",
+                "targetHeadCommitHash", "aiProvider", "aiModel", "reviewExecutionMode",
             )}
             identity.update(run_id=uuid4().hex, job_id=_JOB.get())
     token = _REVIEW.set(identity)

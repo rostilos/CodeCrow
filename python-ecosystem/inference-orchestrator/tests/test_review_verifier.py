@@ -105,7 +105,7 @@ async def test_request_bound_mcp_exposes_only_read_tools_and_uses_host_graph_ide
     binding = {**source_tree, "workspace": "tenant-a", "project": "p", "review_collection_target": "sealed"}
     tools = VerificationTools(rag_client=rag, binding=binding, parts=[part()])
     schemas = await tools.schemas()
-    assert {schema["name"] for schema in schemas} == {"queryCodeGraph", "getStructuralUnit", "traverseCodeGraph", "getImpactRadius", "getMinimalReviewContext", "readReviewFile", "grepReviewCode", "getReviewDiff"}
+    assert {schema["name"] for schema in schemas} == {"queryCodeGraph", "getStructuralUnit", "traverseCodeGraph", "getImpactRadius", "getMinimalReviewContext", "readReviewFile", "grepReviewCode", "getReviewDiff", "listReviewChanges"}
     assert all("workspace" not in schema["inputSchema"]["properties"] for schema in schemas)
     result = await tools.call("readReviewFile", {"path": "change.py"})
     assert result["status"] == "ready"

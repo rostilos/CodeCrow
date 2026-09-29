@@ -25,6 +25,8 @@ from service.review.snapshot_identity import (
 )
 from service.review.verification_tools import LocalReviewSource
 from service.review.verifier import ReviewVerifier
+from service.review.execution_mode import review_execution_mode
+from service.review.mcp_review import McpReview
 from utils.diff_processor import HunkDisposition, process_raw_diff
 
 
@@ -179,6 +181,7 @@ class ReviewService:
         return binding, diagnostics
 
     async def _review(self, request: ReviewRequestDto, callback: Any) -> dict[str, Any]:
+        execution_mode, mode_diagnostics = review_execution_mode(request)
         raw_diff = (request.deltaDiff if str(request.analysisMode or "").upper() == "INCREMENTAL"
                     and request.deltaDiff else request.rawDiff)
         if not raw_diff:
@@ -188,12 +191,30 @@ class ReviewService:
         # accessible as evidence when a contract spans PR iterations.
         context_parts = _parts(request.rawDiff)[0] if request.rawDiff and request.rawDiff != raw_diff else []
         if not parts and not unparsed_paths:
-            return {"status": "complete", "comment": "No changed text to review.", "issues": []}
+            return {"status": "complete", "comment": "No changed text to review.", "issues": [],
+                    "reviewExecutionMode": execution_mode, "diagnostics": mode_diagnostics}
         if not parts:
             return {"status": "partial", "comment": "Review incomplete: the changed text could not be parsed.",
-                    "issues": [], "reviewedHunkIds": [],
+                    "issues": [], "reviewedHunkIds": [], "reviewExecutionMode": execution_mode,
+                    "diagnostics": mode_diagnostics,
                     "unresolvedScopes": {f"path:{path}": "changed text could not be parsed into a hunk" for path in unparsed_paths}}
         binding, diagnostics = await self._prepare_context(request, callback)
+        diagnostics.extend(mode_diagnostics)
+        self._emit(callback, "review_execution_mode", f"Review execution mode: {execution_mode}")
+        llm = LLMFactory.create_llm(request.aiModel, request.aiProvider, request.aiApiKey,
+                                    ai_base_url=request.aiBaseUrl, ai_custom_parameters=request.aiCustomParameters)
+        if execution_mode == "mcp_only":
+            outcome = await McpReview(self.rag_client).review(
+                llm=llm, request=request, parts=parts, context_parts=context_parts,
+                binding=binding, normalize=self._finding, callback=callback,
+            )
+            result = self._finish_review(request, callback, parts, unparsed_paths,
+                                         outcome.findings, outcome.reviewed, outcome.unresolved,
+                                         [*diagnostics, *outcome.diagnostics])
+            result["reviewExecutionMode"] = execution_mode
+            result["graphAvailable"] = bool(binding.get("review_collection_target"))
+            result["executionStatistics"] = outcome.statistics
+            return result
         self._emit(callback, "planning", "Planning change ownership and cross-file dependencies")
 
         async def graph_reader(**query: Any) -> list[dict[str, Any]]:
@@ -201,8 +222,6 @@ class ReviewService:
 
         plan = await ReviewPlanner(graph_reader if binding.get("review_collection_target") else None).plan(parts)
         diagnostics.extend(plan.diagnostics)
-        llm = LLMFactory.create_llm(request.aiModel, request.aiProvider, request.aiApiKey,
-                                    ai_base_url=request.aiBaseUrl, ai_custom_parameters=request.aiCustomParameters)
         source = LocalReviewSource(binding, [part.path for part in parts])
         source_context: dict[str, list[dict[str, Any]]] = {}
 
@@ -259,6 +278,15 @@ class ReviewService:
                 message = f"Final verification unavailable; discovery findings retained: {error}"
                 diagnostics.append(message)
                 unresolved["verification"] = message
+        result = self._finish_review(request, callback, parts, unparsed_paths,
+                                     candidates, reviewed, unresolved, diagnostics)
+        result["reviewExecutionMode"] = execution_mode
+        result["graphAvailable"] = bool(binding.get("review_collection_target"))
+        return result
+
+    def _finish_review(self, request: Any, callback: Any, parts: Any, unparsed_paths: Any,
+                       candidates: Any, reviewed: set[str], unresolved: dict[str, str],
+                       diagnostics: list[str]) -> dict[str, Any]:
         for part in parts:
             if part.id not in reviewed:
                 unresolved.setdefault(f"hunk:{part.id}", "changed hunk remains unresolved")

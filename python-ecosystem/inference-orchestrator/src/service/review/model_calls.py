@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -25,9 +26,21 @@ def parse_object(response: Any) -> dict[str, Any]:
             if isinstance(block, Mapping) and block.get("type") == "text"
         )
     text = str(content).strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-    result = json.loads(text)
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError:
+        # Native tool models may wrap the final object in an explanation. Read
+        # explicit JSON fences instead of discarding an otherwise usable plan or
+        # verdict. Do not salvage arbitrary nested braces from malformed output.
+        blocks = re.findall(r"```(?:json)?[ \t]*\r?\n(.*?)```", text, re.IGNORECASE | re.DOTALL)
+        for block in reversed(blocks):
+            try:
+                result = json.loads(block.strip())
+                break
+            except json.JSONDecodeError:
+                continue
+        else:
+            raise
     if not isinstance(result, dict):
         raise ValueError("review model did not return a JSON object")
     return result

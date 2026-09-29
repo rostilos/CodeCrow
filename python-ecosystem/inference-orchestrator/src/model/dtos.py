@@ -45,6 +45,7 @@ class ReviewRequestDto(BaseModel):
     projectRules: Optional[str] = None
     rawDiff: Optional[str] = None
     analysisMode: Optional[str] = "FULL"
+    reviewExecutionMode: Optional[Any] = None
     deltaDiff: Optional[str] = None
     localRepoPath: Optional[str] = None
     localRepoTargetBranch: Optional[str] = None

@@ -63,16 +63,8 @@ def _openrouter_custom_extra_body(
             sorted(removed_output_limits),
         )
     provider = extra_body.get("provider")
-    if provider is None or isinstance(provider, dict):
-        provider = dict(provider or {})
-        selection_keys = [key for key in ("order", "sort", "only") if key in provider]
-        if not selection_keys:
-            # Same model and reasoning behavior, ordered by generation speed.
-            # Explicit routing/privacy/quantization/fallback settings still win.
-            provider["sort"] = "throughput"
-        logger.info("OpenRouter provider routing: mode=%s explicit_selection_fields=%s",
-                    "explicit" if selection_keys else "default_throughput", selection_keys)
-        extra_body["provider"] = provider
+    logger.info("OpenRouter provider routing: mode=%s",
+                "explicit" if provider else "account_default")
     return _normalize_openrouter_chat_payload(extra_body)
 
 
