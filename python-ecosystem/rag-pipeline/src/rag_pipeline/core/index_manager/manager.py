@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, List, Mapping, Optional, Sequence
 
-from ...models.config import IndexStats, RAGConfig
+from ...models.config import DEFAULT_FULL_INDEX_CONCURRENCY, IndexStats, RAGConfig
 from ..coordination import ProjectMutationCoordinator
 from ..exact_index import ExactIndexPreconditionError
 from ..index_representation import (
@@ -50,7 +50,7 @@ class RAGIndexManager:
             index_representation_fingerprint(config)
         )
         self._full_index_capacity = threading.BoundedSemaphore(
-            _config_int(config, "full_index_concurrency", 1)
+            _config_int(config, "full_index_concurrency", DEFAULT_FULL_INDEX_CONCURRENCY)
         )
         self._mutation_coordinator = ProjectMutationCoordinator(
             os.getenv("REDIS_URL", "redis://redis:6379/1"),

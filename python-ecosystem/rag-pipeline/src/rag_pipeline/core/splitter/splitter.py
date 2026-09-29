@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
-from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
+from langchain_text_splitters import Language
 from ..documents import Document, TextNode
 from .metadata import MetadataExtractor, ContentType
 from .chunk import ASTChunk, generate_deterministic_id, compute_file_hash, normalize_chunk, normalize_metadata
@@ -36,9 +36,9 @@ class ASTCodeSplitter:
         self._parser = get_parser()
         metadata = MetadataExtractor()
         self.extractor = SemanticExtractor(self._parser, get_query_runner(), metadata)
-        self.emitter = ChunkEmitter(max_chunk_size=max_chunk_size,
-                                    min_chunk_size=min_chunk_size,
-                                    chunk_overlap=chunk_overlap, metadata_extractor=metadata)
+        # Constructor sizing options remain accepted by existing integrations;
+        # structural units retain semantic ownership independently of text size.
+        self.emitter = ChunkEmitter(metadata_extractor=metadata)
 
     def split_documents(
         self,
@@ -98,7 +98,7 @@ class ASTCodeSplitter:
                 )
 
             all_nodes.extend(nodes)
-            logger.debug(f"Split {path} into {len(nodes)} chunks (AST={use_ast})")
+            logger.debug("Extracted %s structural source units from %s (AST=%s)", len(nodes), path, use_ast)
 
         return all_nodes
 

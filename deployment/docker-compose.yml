@@ -153,6 +153,9 @@ services:
       SPRING_REDIS_PORT: 6379
       CODECROW_RAG_API_URL: http://codecrow-rag-pipeline:8001
       RAG_ENABLED: "true"
+      # Java admission for durable repository-index jobs; independent of the
+      # Python service's per-process RAG_FULL_INDEX_CONCURRENCY setting.
+      CODECROW_RAG_BRANCH_BUILD_GLOBAL_PARALLELISM: ${RAG_BRANCH_BUILD_PARALLELISM:-16}
       CODECROW_RAG_LIFECYCLE_FAILED_RETRY_MINUTES: ${RAG_LIFECYCLE_FAILED_RETRY_MINUTES:-60}
       CODECROW_INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       CODECROW_RAG_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}

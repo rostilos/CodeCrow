@@ -41,8 +41,8 @@ def test_ownership_acquisition_failure_closes_and_removes_initialized_database(t
     connections = []
     initialize = store.initialize
 
-    def recording_initialize(paths):
-        connection = initialize(paths)
+    def recording_initialize(paths, **kwargs):
+        connection = initialize(paths, **kwargs)
         connections.append(connection)
         return connection
 

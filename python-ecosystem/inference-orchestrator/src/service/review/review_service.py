@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
@@ -13,7 +12,12 @@ from llm.llm_factory import LLMFactory
 from llm.request_capture import review_capture
 from model.dtos import ReviewRequestDto
 from service.rag.rag_client import RagClient
+from service.runtime_capacity import review_concurrency, review_call_concurrency
 from service.review.planner import ReviewPlanner
+from service.review.async_work import gather_review_work
+from service.review.execution_scheduler import (
+    FairReviewScheduler, review_execution, review_context_slot,
+)
 from service.review.change_context import resolve_changed_anchor
 from service.review.review_stages import review_batch, review_cross_batch
 from service.review.snapshot_identity import (
@@ -91,20 +95,21 @@ def _visible_proposed_lines(part: ReviewPart) -> set[int]:
 
 
 class ReviewService:
-    MAX_CONCURRENT_REVIEWS = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4"))
-
     def __init__(self, rag_client: RagClient | None = None):
         self.rag_client = rag_client or RagClient()
-        self._review_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_REVIEWS)
-        # Share capacity across requests instead of multiplying concurrency by
-        # the number of files in every queued review.
-        self._batch_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_REVIEWS)
+        self._model_scheduler = FairReviewScheduler(review_call_concurrency())
+        self._context_semaphore = asyncio.Semaphore(review_concurrency())
+        self._preparation_semaphore = asyncio.Semaphore(review_concurrency())
 
     async def process_review_request(
         self, request: ReviewRequestDto,
         event_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
-        async with self._review_semaphore:
+        with review_execution(
+            self._model_scheduler, self._context_semaphore, event_callback=event_callback,
+            preparation_semaphore=self._preparation_semaphore,
+            project_id=request.projectId, pull_request_id=request.pullRequestId,
+        ):
             try:
                 with review_capture(request):
                     return {"result": await self._review(request, event_callback)}
@@ -132,18 +137,40 @@ class ReviewService:
         if request.ragCollectionTarget and request.ragBaseGenerationManifestSha256:
             binding["base_collection_target"] = request.ragCollectionTarget
             binding["base_generation_manifest_sha256"] = request.ragBaseGenerationManifestSha256
+            if request.ragBaseGenerationRevision:
+                binding["base_generation_revision"] = request.ragBaseGenerationRevision
         if not base_revision:
             diagnostics.append("Target snapshot binding unavailable; only staged proposed files can supply local source.")
         if not (self.rag_client.enabled and target_branch and head_revision and base_revision
                 and binding["target_repo_path"] and binding["review_overlay_path"]):
             diagnostics.append("Proposed-tree graph unavailable; continuing with changed-code and available local source.")
             return binding, diagnostics
+        preparation = dict(binding)
+        if request.ragIndexPolicy is not None:
+            preparation["index_policy"] = request.ragIndexPolicy.model_dump()
+        if request.ragGenerationCandidates:
+            preparation["base_generation_candidates"] = [
+                candidate.model_dump() for candidate in request.ragGenerationCandidates
+            ]
         self._emit(callback, "graph_preparing", "Preparing proposed-tree graph")
         try:
-            prepared = await self.rag_client.prepare_review_generation(**binding)
+            async with review_context_slot("graph_preparation", preparation=True):
+                prepared = await self.rag_client.prepare_review_generation(**preparation)
             if (prepared.get("status") != "ready" or prepared.get("source_revision") != head_revision
                     or not prepared.get("collection_target") or not prepared.get("generation_manifest_sha256")):
                 raise ValueError(str(prepared.get("error") or "graph snapshot receipt is unavailable"))
+            if ("base_collection_target" in prepared
+                    and "base_generation_manifest_sha256" in prepared):
+                # Preparation may use a full source build when the supplied
+                # base receipt is stale. Subsequent queries must bind the actual
+                # sealed generation, including its explicit lack of a base.
+                binding["base_collection_target"] = prepared["base_collection_target"]
+                binding["base_generation_manifest_sha256"] = prepared["base_generation_manifest_sha256"]
+            if "base_generation_revision" in prepared:
+                binding["base_generation_revision"] = prepared["base_generation_revision"]
+            if isinstance(prepared.get("index_policy"), dict):
+                for field in ("include_patterns", "exclude_patterns", "project_type", "source_root"):
+                    binding[field] = prepared["index_policy"].get(field)
             binding["review_collection_target"] = prepared["collection_target"]
             binding["review_generation_manifest_sha256"] = prepared["generation_manifest_sha256"]
             self._emit(callback, "graph_ready", "Proposed-tree graph is ready")
@@ -180,18 +207,18 @@ class ReviewService:
         source_context: dict[str, list[dict[str, Any]]] = {}
 
         async def discover(batch: Any) -> Any:
-            async with self._batch_semaphore:
-                self._emit(callback, "reviewing", f"Reviewing {', '.join(sorted({part.path for part in batch.parts}))}")
-                try:
+            self._emit(callback, "reviewing", f"Reviewing {', '.join(sorted({part.path for part in batch.parts}))}")
+            try:
+                async with review_context_slot("discovery_source"):
                     owner_source = await self._owner_source((*batch.parts, *batch.companion_parts), plan.graph_context, source, binding)
-                except Exception as error:
-                    owner_source = [{"status": "unavailable", "diagnostic": f"Owner source unavailable: {error}"}]
-                    logger.warning("Batch source context unavailable: %s", error)
-                source_context[batch.id] = owner_source
-                return await review_batch(llm=llm, request=request, batch=batch, plan=plan,
-                                          owner_source=owner_source, normalize=self._finding)
+            except Exception as error:
+                owner_source = [{"status": "unavailable", "diagnostic": f"Owner source unavailable: {error}"}]
+                logger.warning("Batch source context unavailable: %s", error)
+            source_context[batch.id] = owner_source
+            return await review_batch(llm=llm, request=request, batch=batch, plan=plan,
+                                      owner_source=owner_source, normalize=self._finding)
 
-        results = await asyncio.gather(*(discover(batch) for batch in plan.batches))
+        results = await gather_review_work(*(discover(batch) for batch in plan.batches))
         candidates = [issue for result in results for issue in result.findings]
         reviewed = {part_id for result in results for part_id in result.reviewed}
         summaries = [summary for result in results for summary in result.summaries]
@@ -301,8 +328,9 @@ class ReviewService:
         values: list[dict[str, Any]] = []
         cursor = 0
         while True:
-            page = await self.rag_client.query_review_graph(**binding, focus_paths=[focus_path],
-                pattern=pattern, target=target, cursor=cursor, max_results=100, include_source=False)
+            async with review_context_slot("graph_planning"):
+                page = await self.rag_client.query_review_graph(**binding, focus_paths=[focus_path],
+                    pattern=pattern, target=target, cursor=cursor, max_results=100, include_source=False)
             if page.get("status") != "ready":
                 raise ValueError(str(page.get("error") or f"graph {pattern} query unavailable"))
             values.extend(item for item in page.get("results") or [] if isinstance(item, dict))

@@ -38,6 +38,7 @@ class RedisJobConsumer(ABC):
         self._consumer_heartbeat_task: Optional[asyncio.Task] = None
         self._job_tasks: set[asyncio.Task] = set()
         self._redis_outage_channels: set[str] = set()
+        self.max_concurrent = max_concurrent
         self._job_semaphore = asyncio.Semaphore(max_concurrent)
         self._operation_label = operation_label
         self._logger = logger
@@ -51,7 +52,8 @@ class RedisJobConsumer(ABC):
         if self.is_running:
             return
             
-        self._logger.info("Starting %s queue consumer", self._operation_label)
+        self._logger.info("Starting %s queue consumer: admission_capacity=%s",
+                          self._operation_label, self.max_concurrent)
         self._redis = redis.from_url(
             self.redis_url,
             decode_responses=True,

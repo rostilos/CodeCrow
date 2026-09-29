@@ -1,4 +1,5 @@
 """Provider-specific OpenAI protocol payload and endpoint adapters."""
+from contextlib import aclosing, closing
 import json
 import os
 from typing import Any, Optional
@@ -9,6 +10,8 @@ from langchain_core.utils.utils import secret_from_env
 from pydantic import SecretStr
 
 from llm.openai_parameters import _normalize_openrouter_chat_payload
+from llm.openrouter_reasoning import STREAM_DETAILS_KEY, reasoning_fields, replay_reasoning
+from llm.review_invocation import observe_openrouter_chunk
 
 
 _CLOUDFLARE_ROLE_BY_MESSAGE_TYPE = {
@@ -71,7 +74,67 @@ class ChatOpenRouter(ChatOpenAI):
         """
 
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        messages = self._convert_input(input_).to_messages()
+        for source, outgoing in zip(messages, payload.get("messages", [])):
+            if outgoing.get("role") == "assistant":
+                outgoing.update(replay_reasoning(source.additional_kwargs))
         return _normalize_openrouter_chat_payload(payload)
+
+    def _create_chat_result(self, response: Any, generation_info: Any = None):
+        result = super()._create_chat_result(response, generation_info)
+        raw = response if isinstance(response, dict) else response.model_dump(
+            exclude={"choices": {"__all__": {"message": {"parsed"}}}}, warnings=False,
+        )
+        for generation, choice in zip(result.generations, raw.get("choices", [])):
+            message = choice.get("message") or {}
+            generation.message.additional_kwargs.update(reasoning_fields(message))
+        return result
+
+    def _convert_chunk_to_generation_chunk(self, chunk: dict, default_chunk_class: type,
+                                           base_generation_info: dict | None):
+        observe_openrouter_chunk(chunk)
+        result = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
+        choices = chunk.get("choices") or chunk.get("chunk", {}).get("choices") or []
+        if result is not None and choices:
+            fields = reasoning_fields(choices[0].get("delta") or {})
+            details = fields.pop("reasoning_details", None)
+            if details is not None:
+                # The unindexed wrapper survives normal AIMessageChunk addition
+                # without treating provider block indices as LangChain indices.
+                fields[STREAM_DETAILS_KEY] = [{"blocks": details}]
+            result.message.additional_kwargs.update(fields)
+        return result
+
+
+    def _stream(self, *args: Any, **kwargs: Any):
+        terminal_metadata: dict[str, Any] = {}
+        with closing(super()._stream(*args, **kwargs)) as chunks:
+            for chunk in chunks:
+                _deduplicate_terminal_metadata(chunk, terminal_metadata)
+                yield chunk
+
+    async def _astream(self, *args: Any, **kwargs: Any):
+        terminal_metadata: dict[str, Any] = {}
+        async with aclosing(super()._astream(*args, **kwargs)) as chunks:
+            async for chunk in chunks:
+                _deduplicate_terminal_metadata(chunk, terminal_metadata)
+                yield chunk
+
+
+def _deduplicate_terminal_metadata(chunk: Any, seen: dict[str, Any]) -> None:
+    # OpenRouter repeats the terminal choice on its final usage frame. Generic
+    # LangChain string merging would produce "stopstop" and duplicate model IDs.
+    # Preserve accounting/content, and emit identical terminal metadata once.
+    metadata = chunk.generation_info
+    if not metadata or not metadata.get("finish_reason"):
+        return
+    for field in ("finish_reason", "model_name", "system_fingerprint", "service_tier"):
+        if field in metadata:
+            value = metadata[field]
+            if field in seen and seen[field] == value:
+                del metadata[field]
+            else:
+                seen[field] = value
 
 
 def _is_cloudflare_base_url(base_url: str) -> bool:

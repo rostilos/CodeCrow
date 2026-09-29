@@ -18,11 +18,16 @@ from .shared import (
 )
 
 from .write_state import GraphWriteState
+from .relation_buffer import RelationBuffer
 
 
 class RelationWriter:
     def __init__(self, state: GraphWriteState):
         self.state = state
+        self.buffer = RelationBuffer(state)
+
+    def flush_pending(self) -> None:
+        self.buffer.flush()
 
     def add_file_containment(
         self,
@@ -212,6 +217,14 @@ class RelationWriter:
                 "_identityDiscriminator": str(identity_discriminator),
             }
         relation_id = _relation_id(identity_projection)
+        if self.state.buffer_file_relations and not self.state.capturing_repository_outputs:
+            self.buffer.add((
+                relation_id, projection["kind"], projection["source"],
+                projection["relation"], projection["target"], source_unit_id,
+                target_unit_id, normalized_path, projection["line"],
+                projection["origin"], None, _canonical_json(projection["attributes"]),
+            ), (normalized_path, *normalized_related), normalized_plugin_ids)
+            return relation_id
         if self.state.capturing_repository_outputs:
             self.state.repository_output_relation_plugins.setdefault(
                 relation_id,
@@ -359,6 +372,8 @@ class RelationWriter:
     def flush_deferred_file_relation_ownership(self) -> None:
         """Materialize fresh-build file ownership from canonical edge tables."""
 
+        self.flush_pending()
+        self.state.buffer_file_relations = False
         if not self.state.defer_file_relation_ownership:
             return
         # A fresh full build contains only file-produced relations until the

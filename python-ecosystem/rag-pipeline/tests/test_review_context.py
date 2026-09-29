@@ -676,7 +676,8 @@ def test_review_context_selects_direct_relations_fairly_across_changed_roots():
     )
 
 
-def test_review_context_indexes_and_caches_exact_proposed_topology(tmp_path):
+@pytest.mark.parametrize("base_available", [True, False])
+def test_review_context_indexes_and_caches_exact_proposed_topology(tmp_path, monkeypatch, base_available):
     pytest.importorskip("tree_sitter")
     pytest.importorskip("tree_sitter_python")
     target = tmp_path / "target"
@@ -740,19 +741,20 @@ def test_review_context_indexes_and_caches_exact_proposed_topology(tmp_path):
     manager.plugin_selector = None
     service = ProposedTreeReviewContextService(manager)
     base_collection_target = "cc_test_base_generation"
+    indexed_revision = "base-revision" if base_available else "older-base-revision"
     manager.index_repository(
         repo_path=str(target),
         workspace="workspace",
         project="project",
         branch="main",
-        commit="base-revision",
+        commit=indexed_revision,
         collection_target=base_collection_target,
     )
     base_receipt = manager.get_revision_preflight(
         "workspace",
         "project",
         "main",
-        "base-revision",
+        indexed_revision,
         collection_target=base_collection_target,
     )
     assert base_receipt is not None
@@ -778,13 +780,28 @@ def test_review_context_indexes_and_caches_exact_proposed_topology(tmp_path):
         if key not in {"focus_paths", "question", "focus_symbols"}
     }
     try:
-        generation = service.prepare_generation_singleflight(
-            **preparation_arguments
+        from rag_pipeline.api.models import ProposedTreePrepareRequest
+        from rag_pipeline.api.routers import query as query_router
+
+        monkeypatch.setattr(query_router, "_manager", lambda: manager)
+        prepared = query_router.prepare_review_generation(
+            ProposedTreePrepareRequest(**preparation_arguments)
         )
-        arguments["review_collection_target"] = generation.collection_target
-        arguments["review_generation_manifest_sha256"] = generation.receipt[
-            "generation_manifest_sha256"
-        ]
+        arguments["review_collection_target"] = prepared["collection_target"]
+        arguments["review_generation_manifest_sha256"] = prepared["generation_manifest_sha256"]
+        arguments["base_collection_target"] = prepared["base_collection_target"]
+        arguments["base_generation_manifest_sha256"] = prepared["base_generation_manifest_sha256"]
+        assert prepared["base_collection_target"] == (base_collection_target if base_available else None)
+        if not base_available:
+            assert prepared["base_generation_manifest_sha256"] is None
+            # The stale input pair must not override the provenance sealed by
+            # full fallback. Keeping it reproduces the live garden HTTP 409.
+            with pytest.raises(ExactIndexPreconditionError, match="incompatible provenance"):
+                service.review_context(**{
+                    **arguments,
+                    "base_collection_target": base_collection_target,
+                    "base_generation_manifest_sha256": base_receipt["generation_manifest_sha256"],
+                })
         first = service.review_context(**arguments)
         # Sealed graph evidence remains usable after temporary archives expire.
         # Source tools still require the exact local bytes and fail separately.
@@ -1605,6 +1622,8 @@ def test_proposed_tree_delta_matches_changed_topology_from_full_oracle(
     ("exclude_patterns", ["vendor/**"]),
     ("project_type", "python"),
     ("source_root", "services/orders"),
+    ("index_policy", {"include_patterns": ["src/**"]}),
+    ("base_generation_candidates", [{"collection_target": "active", "generation_manifest_sha256": "a" * 64, "revision": "older"}]),
 ))
 def test_review_singleflight_keeps_source_and_selection_bindings_separate(
     tmp_path, field, other_value,
@@ -1660,3 +1679,89 @@ def test_review_overlay_manifest_cannot_follow_a_symlink(tmp_path):
     manifest.symlink_to(external)
     with pytest.raises(ProposedTreeUnavailableError, match="manifest is unavailable"):
         load_review_overlay(overlay)
+
+
+@pytest.mark.parametrize("unavailable", ["missing", "representation", "selection", "profile", "tenant"])
+def test_authoritative_project_policy_survives_unusable_seed(tmp_path, unavailable):
+    target = tmp_path / "target"
+    for path in ("src/kept.py", "src/generated/excluded.py", "vendor/excluded.py"):
+        file = target / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("def item():\n    return 'base'\n")
+    overlay = tmp_path / "overlay"
+    _write_overlay(overlay, changed=("src/kept.py",),
+                   bodies={"src/kept.py": "def item():\n    return 'proposed'\n"})
+    manager = RAGIndexManager(RAGConfig(structural_index_root=str(tmp_path / "index")))
+    manager._mutation_coordinator.close()
+    manager._mutation_coordinator = _Coordinator()
+    manager.plugin_catalog = manager.plugin_runtime = manager.plugin_selector = None
+    policy = {"include_patterns": ["src/**"], "exclude_patterns": ["src/generated/**"],
+              "project_type": None, "source_root": "src"}
+    try:
+        manifest = "a" * 64
+        if unavailable != "missing":
+            manager.index_repository(
+                repo_path=str(target), workspace="other-tenant" if unavailable == "tenant" else "workspace",
+                project="project", branch="main", commit="base", collection_target="seed",
+                include_patterns=None if unavailable == "selection" else policy["include_patterns"],
+                exclude_patterns=policy["exclude_patterns"],
+                source_root="other" if unavailable == "profile" else "src",
+            )
+            manifest = manager.store.read_receipt("seed")["generation_manifest_sha256"]
+        if unavailable == "representation":
+            manager.index_representation_fingerprint = "sha256:" + "f" * 64
+        generation = ProposedTreeReviewContextService(manager).prepare_generation(
+            target_repo_path=str(target), review_overlay_path=str(overlay), workspace="workspace",
+            project="project", target_branch="main", base_revision="base", source_revision="head",
+            base_collection_target="seed", base_generation_manifest_sha256=manifest,
+            index_policy=policy,
+        )
+        assert generation.receipt["snapshot_metadata"]["base_collection_target"] is None
+        assert generation.receipt["snapshot_metadata"]["source_root"] == "src"
+        assert generation.receipt["index_include_patterns"] == ["src/**"]
+        assert generation.receipt["index_exclude_patterns"] == ["src/generated/**"]
+        with manager.open_reader(workspace="workspace", project="project", branch="main",
+                revision="head", collection_target=generation.collection_target,
+                generation_manifest_sha256=generation.receipt["generation_manifest_sha256"]) as reader:
+            assert reader.repository_facts()["paths"] == ["src/kept.py"]
+    finally:
+        manager.close()
+
+
+@pytest.mark.parametrize("malformed_metadata", [False, True])
+def test_missing_historical_exact_seed_does_not_shadow_available_active_seed(tmp_path, malformed_metadata):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "service.py").write_text("def service():\n    return 'target'\n")
+    overlay = tmp_path / "overlay"
+    _write_overlay(overlay, changed=("service.py",),
+                   bodies={"service.py": "def service():\n    return 'proposed'\n"})
+    manager = RAGIndexManager(RAGConfig(structural_index_root=str(tmp_path / "index")))
+    manager._mutation_coordinator.close()
+    manager._mutation_coordinator = _Coordinator()
+    manager.plugin_catalog = manager.plugin_runtime = manager.plugin_selector = None
+    try:
+        manager.index_repository(repo_path=str(target), workspace="workspace", project="project",
+            branch="main", commit="active-revision", collection_target="active-seed")
+        receipt = manager.store.read_receipt("active-seed")
+        manager.index_repository = MagicMock(wraps=manager.index_repository)
+        generation = ProposedTreeReviewContextService(manager).prepare_generation(
+            target_repo_path=str(target), review_overlay_path=str(overlay), workspace="workspace",
+            project="project", target_branch="main", base_revision="exact-target", source_revision="head",
+            base_collection_target="evicted-historical-exact", base_generation_manifest_sha256="a" * 64,
+            base_generation_revision="exact-target",
+            base_generation_candidates=([None, "bad", {"revision": "partial"}] if malformed_metadata else [])
+                + [{"collection_target": "active-seed",
+                    "generation_manifest_sha256": receipt["generation_manifest_sha256"],
+                    "revision": "active-revision"}],
+            index_policy="bad" if malformed_metadata else {
+                "include_patterns": [], "exclude_patterns": [], "project_type": None, "source_root": None},
+        )
+        manager.index_repository.assert_not_called()
+        metadata = generation.receipt["snapshot_metadata"]
+        assert metadata["base_revision"] == "exact-target"
+        assert metadata["base_generation_revision"] == "active-revision"
+        assert metadata["base_collection_target"] == "active-seed"
+        assert metadata["base_generation_manifest_sha256"] == receipt["generation_manifest_sha256"]
+    finally:
+        manager.close()

@@ -14,6 +14,7 @@ from ...core.review_context import (
     ProposedTreeUnavailableError,
 )
 from ...core.source_tree import RepositorySourceTreeError
+from ..heavy_work import get_build_workers, run_heavy_operation
 from ..models import (
     CodeSearchRequest,
     ReviewContextRequest,
@@ -46,6 +47,7 @@ _PROPOSED_TREE_BINDING_FIELDS = (
     "focus_paths",
     "base_collection_target",
     "base_generation_manifest_sha256",
+    "base_generation_revision",
     "review_collection_target",
     "review_generation_manifest_sha256",
     "include_patterns",
@@ -196,6 +198,7 @@ def review_context(request: ReviewContextRequest):
             base_revision=request.base_revision,
             source_revision=request.source_revision,
             base_collection_target=request.base_collection_target,
+            base_generation_revision=request.base_generation_revision,
             base_generation_manifest_sha256=(
                 request.base_generation_manifest_sha256
             ),
@@ -239,19 +242,62 @@ def review_context(request: ReviewContextRequest):
         raise HTTPException(status_code=500, detail=str(exception))
 
 
-@router.post("/query/review-generation")
-def prepare_review_generation(request: ProposedTreePrepareRequest):
-    """Prepare one sealed proposed-tree generation before Stage 1 fan-out."""
+@router.post("/query/review-generation", name="prepare_review_generation")
+async def prepare_review_generation_endpoint(request: ProposedTreePrepareRequest):
+    workers = get_build_workers()
+    if workers is None:
+        return await run_heavy_operation(prepare_review_generation, request)
+    from ...core.review_generation import ReviewGenerationService
+    service = ReviewGenerationService(_manager())
+    try:
+        key = await run_heavy_operation(service.preparation_key, **_preparation_arguments(request))
+    except (ExactIndexPreconditionError, ProposedTreeUnavailableError, RepositorySourceTreeError) as exception:
+        raise HTTPException(status_code=409, detail=str(exception))
+    except ValueError as exception:
+        raise HTTPException(status_code=400, detail=str(exception))
+    except Exception as exception:
+        raise HTTPException(status_code=500, detail=str(exception))
+    return await workers.run_coalesced(key, "prepare_review", {
+        "request": request.model_dump(mode="json"),
+    })
 
-    service = ProposedTreeReviewContextService(_manager())
+
+def _preparation_arguments(request):
     arguments = {
         field: getattr(request, field)
         for field in _PROPOSED_TREE_PREPARATION_FIELDS
     }
+    if request.index_policy is not None:
+        arguments["index_policy"] = request.index_policy.model_dump()
+    if request.base_generation_candidates:
+        arguments["base_generation_candidates"] = [
+            candidate.model_dump() for candidate in request.base_generation_candidates
+        ]
+    return arguments
+
+
+def prepare_review_generation(request: ProposedTreePrepareRequest, *, manager=None, cancellation_event=None):
+    """Prepare one sealed proposed-tree generation before Stage 1 fan-out."""
+    service = ProposedTreeReviewContextService(manager if manager is not None else _manager())
+    arguments = _preparation_arguments(request)
+    if cancellation_event is not None:
+        arguments["cancellation_event"] = cancellation_event
     try:
         generation = service.prepare_generation_singleflight(**arguments)
+        metadata = generation.receipt["snapshot_metadata"]
         return {
             "status": "ready",
+            "index_policy": {
+                "include_patterns": generation.receipt.get("index_include_patterns") or [],
+                "exclude_patterns": generation.receipt.get("index_exclude_patterns") or [],
+                "project_type": metadata.get("project_type"),
+                "source_root": metadata.get("source_root"),
+            },
+            # Preparation may rebuild without an unusable base receipt. Query
+            # callers must bind to the provenance actually sealed in that tree.
+            "base_collection_target": metadata.get("base_collection_target"),
+            "base_generation_revision": metadata.get("base_generation_revision"),
+            "base_generation_manifest_sha256": metadata.get("base_generation_manifest_sha256"),
             "collection_target": generation.collection_target,
             "generation_manifest_sha256": generation.receipt[
                 "generation_manifest_sha256"

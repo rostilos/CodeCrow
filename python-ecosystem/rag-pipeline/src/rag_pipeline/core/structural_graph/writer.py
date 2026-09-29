@@ -1,9 +1,10 @@
 """Public pending-graph writer composed from focused persistence services."""
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Callable
 
 from ..documents import TextNode
@@ -13,6 +14,9 @@ from .relations import RelationWriter
 from .reconciliation import GraphReconciler
 from .resolution import RelationResolver
 from .shared import _canonical_json, _interrupt_sql_on_cancel
+from .schema import _SECONDARY_INDEX_SQL, _FTS_TABLE_SQL
+
+logger = logging.getLogger(__name__)
 
 
 class StructuralGraphWriter:
@@ -24,11 +28,13 @@ class StructuralGraphWriter:
         *,
         track_mutations: bool = False,
         defer_file_relation_ownership: bool = False,
+        buffer_file_relations: bool = False,
     ):
         self._state = GraphWriteState(
             connection,
             track_mutations=track_mutations,
-            defer_file_relation_ownership=defer_file_relation_ownership,
+            defer_file_relation_ownership=defer_file_relation_ownership or buffer_file_relations,
+            buffer_file_relations=buffer_file_relations,
         )
         self._relations = RelationWriter(self._state)
         self._units = UnitWriter(self._state, self._relations)
@@ -45,6 +51,7 @@ class StructuralGraphWriter:
 
     @property
     def relation_count(self):
+        self._relations.flush_pending()
         return self._state.relation_count
 
     @property
@@ -225,6 +232,7 @@ class StructuralGraphWriter:
         return self._reconciliation.remove_repository_state_output()
 
     def begin_repository_analysis_reconciliation(self) -> None:
+        self._relations.flush_deferred_file_relation_ownership()
         return self._reconciliation.begin_repository_analysis_reconciliation()
 
     def abort_repository_analysis_reconciliation(self) -> None:
@@ -257,6 +265,26 @@ class StructuralGraphWriter:
             preferred_paths=preferred_paths,
             allow_short_name=allow_short_name,
         )
+
+    def build_lookup_indexes(self, cancellation_check: Callable[[], None] | None = None) -> None:
+        """Build derived structures once after a cold graph's source ingestion.
+
+        The pending generation is private. Canonical units, aliases, edges and
+        foreign keys remain authoritative throughout loading. Sorted index
+        construction avoids rewriting lookup B-trees for every source fact.
+        """
+        self._relations.flush_deferred_file_relation_ownership()
+        with _interrupt_sql_on_cancel(self.connection, cancellation_check):
+            for statement in _SECONDARY_INDEX_SQL:
+                self.connection.execute(statement)
+            if not self._state.fts_available:
+                try:
+                    self.connection.execute(_FTS_TABLE_SQL)
+                except sqlite3.OperationalError as error:
+                    logger.warning("SQLite FTS5 unavailable; retaining indexed name/path search: %s", error)
+                else:
+                    self.connection.execute("INSERT INTO units_fts(units_fts) VALUES('rebuild')")
+                    self._state.fts_available = True
 
     def seal(self, receipt: Mapping[str, Any]) -> None:
         encoded = _canonical_json(dict(receipt))

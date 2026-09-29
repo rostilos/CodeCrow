@@ -161,6 +161,14 @@ Java and Python hosts remain the fallback when no plugin implementation matches.
 Repository indexing is optional per project. Disabling it skips persistent
 structural context while the normal review pipeline continues.
 
+Managed repository builds wait durably in the database when Java dispatch is
+full. `RAG_BRANCH_BUILD_PARALLELISM` in `deployment/.env` controls those workers
+(default 4 per pipeline-agent). Python structural builds have separate capacity:
+`RAG_FULL_INDEX_CONCURRENCY` in `deployment/config/rag-pipeline/.env` supplies
+slots per API process, multiplied by `RAG_UVICORN_WORKERS` in the Compose setup.
+Increasing only Python capacity cannot release a saturated Java dispatcher.
+Changes take effect on service startup; pending jobs remain recoverable.
+
 | Capability          | Implemented Behavior                                                                                                                                       |
 | :------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Retrieval           | Exact source-unit, symbol, path, revision, architecture, and typed graph lookup in a local SQLite structural store                                           |

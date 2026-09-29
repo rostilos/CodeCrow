@@ -13,6 +13,7 @@ import org.rostilos.codecrow.pipelineagent.generic.service.PipelineJobService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -26,6 +27,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.Map;
 import java.nio.charset.StandardCharsets;
@@ -46,17 +48,20 @@ public class ProviderPipelineActionController {
     private final PipelineJobService pipelineJobService;
     private final ObjectMapper objectMapper;
     private final boolean streamingResponseEnabled;
+    private final Executor actionExecutor;
 
     public ProviderPipelineActionController(
             PipelineActionProcessor pipelineActionProcessor,
             PipelineJobService pipelineJobService,
             ObjectMapper objectMapper,
-            @Value("${codecrow.pipeline.streaming-response.enabled:true}") boolean streamingResponseEnabled
+            @Value("${codecrow.pipeline.streaming-response.enabled:true}") boolean streamingResponseEnabled,
+            @Qualifier("pipelineActionExecutor") Executor actionExecutor
     ) {
         this.pipelineActionProcessor = pipelineActionProcessor;
         this.pipelineJobService = pipelineJobService;
         this.objectMapper = objectMapper;
         this.streamingResponseEnabled = streamingResponseEnabled;
+        this.actionExecutor = actionExecutor;
     }
 
     @PostMapping("/webhook/pr")
@@ -178,7 +183,7 @@ public class ProviderPipelineActionController {
                     log.error("Error in webhook processing", e);
                     return Map.of("status", "error", "message", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
                 }
-            });
+            }, actionExecutor);
 
             try {
                 Map<String, Object> quickResult = processingFuture.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);

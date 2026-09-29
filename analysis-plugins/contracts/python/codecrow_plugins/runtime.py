@@ -15,7 +15,7 @@ from .api import (
     ValidationResult,
 )
 from .catalog import PluginCatalog
-from .graph_composition import GraphFactComposer, GraphFactLimits
+from .graph_composition import GraphFactComposer
 from .repository_runtime import RepositoryAnalysisHandle
 from .scope import plugin_root_for_path, relative_to_root
 
@@ -23,14 +23,6 @@ from .scope import plugin_root_for_path, relative_to_root
 class PluginRuntime:
     """Host-side composition. Implementations return data; the host owns policy."""
 
-    # Facts are persisted in the structural store and are not admitted to a
-    # model prompt wholesale. Keep pathological output bounded without
-    # discarding ordinary large-file topology (routers, generated registries,
-    # schemas, and framework configuration commonly exceed the old 200 facts).
-    MAX_FACTS_PER_FILE = 5_000
-    MAX_FRAMEWORK_FACTS_PER_FILE = 2_000
-    MAX_GRAPH_FACT_STRING_LENGTH = 4_096
-    MAX_GRAPH_FACT_BYTES_PER_ARTIFACT = 16_777_216
     MAX_REVIEW_PATHS_PER_PLUGIN = 80
     MAX_RULES = 40
     MAX_EVIDENCE_REQUESTS = 80
@@ -362,10 +354,5 @@ class PluginRuntime:
         artifact: FileArtifact,
         capabilities: ProjectCapabilities,
     ) -> tuple[tuple[GraphFact, ...], tuple[PluginDiagnostic, ...]]:
-        composer = GraphFactComposer(self.catalog, GraphFactLimits(
-            facts_per_file=self.MAX_FACTS_PER_FILE,
-            framework_facts_per_file=self.MAX_FRAMEWORK_FACTS_PER_FILE,
-            string_length=self.MAX_GRAPH_FACT_STRING_LENGTH,
-            artifact_bytes=self.MAX_GRAPH_FACT_BYTES_PER_ARTIFACT,
-        ))
+        composer = GraphFactComposer(self.catalog)
         return composer.graph_facts(artifact, capabilities)

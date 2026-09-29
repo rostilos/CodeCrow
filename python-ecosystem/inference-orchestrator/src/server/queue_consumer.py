@@ -11,6 +11,7 @@ from server.job_events import OrderedJobEvents
 from llm.request_capture import queue_capture_context
 from model.dtos import ReviewRequestDto
 from service.review.review_service import ReviewService
+from service.runtime_capacity import review_concurrency
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ class RedisQueueConsumer(RedisJobConsumer):
             job_queue_key="codecrow:analysis:jobs",
             consumer_heartbeat_key="codecrow:analysis:consumer:heartbeat",
             heartbeat_seconds=float(os.environ.get("ANALYSIS_CONSUMER_HEARTBEAT_SECONDS", "5")),
-            max_concurrent=int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4")),
+            max_concurrent=review_concurrency(),
             operation_label="review",
             logger=logger,
         )
@@ -40,6 +41,7 @@ class RedisQueueConsumer(RedisJobConsumer):
         job_id = "UNKNOWN"
         event_queue_key = None
         events: Optional[OrderedJobEvents] = None
+        review_task: asyncio.Task | None = None
         
         try:
             payload = json.loads(payload_str)
@@ -134,6 +136,12 @@ class RedisQueueConsumer(RedisJobConsumer):
                 else:
                     event_callback(event)
                     await events.drain()
+        finally:
+            # Cancellation of an admitted handler must join its request-owned
+            # review before returning its admission permit.
+            if review_task is not None and not review_task.done():
+                review_task.cancel()
+                await asyncio.gather(review_task, return_exceptions=True)
 
     async def _publish_event(self, key: str, event: Dict[str, Any]):
         """Publish an event back to the job's specific event list. LPUSH (Java uses rightPop)."""

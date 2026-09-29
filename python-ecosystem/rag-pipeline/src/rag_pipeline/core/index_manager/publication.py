@@ -81,7 +81,7 @@ def pending_generation(
     resources = None
     try:
         if base_binding is None:
-            connection = store.initialize(paths)
+            connection = store.initialize(paths, bulk_load=True)
             ownership = store.acquire_pending_ownership(paths)
             base_receipt = {}
         else:

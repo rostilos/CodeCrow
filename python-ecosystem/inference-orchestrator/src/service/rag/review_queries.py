@@ -18,7 +18,13 @@ class ReviewQueries:
     async def prepare_review_generation(self, **binding: Any) -> Dict[str, Any]:
         """Prepare one exact review graph before any Stage 1 batch starts."""
 
+        policy = binding.pop("index_policy", None)
+        candidates = binding.pop("base_generation_candidates", None)
         payload = review_query_payload(**binding)
+        if policy is not None:
+            payload["index_policy"] = policy
+        if candidates:
+            payload["base_generation_candidates"] = candidates
         return await self.transport._post_review_query(
             "/query/review-generation",
             payload,

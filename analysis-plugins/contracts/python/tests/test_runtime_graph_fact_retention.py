@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,7 @@ from codecrow_plugins import (
     DetectionRules,
     FileArtifact,
     GraphFact,
+    PluginCatalog,
     PluginDescriptor,
     PluginKind,
     PluginOutcome,
@@ -29,11 +31,12 @@ class _FactPlugin:
 
 def _runtime(
     contributions: dict[str, tuple[GraphFact, ...]],
+    kinds: dict[str, PluginKind] | None = None,
 ) -> tuple[PluginRuntime, ProjectCapabilities]:
     descriptors = {
         plugin_id: PluginDescriptor(
             id=plugin_id,
-            kind=PluginKind.DOMAIN,
+            kind=(kinds or {}).get(plugin_id, PluginKind.DOMAIN),
             requires=(),
             capabilities=(Capability.GRAPH,),
             detection=DetectionRules(),
@@ -52,6 +55,12 @@ def _runtime(
     )
     capabilities = ProjectCapabilities(
         repository_plugins=tuple(contributions),
+        file_plugins={
+            "src/example.py": tuple(
+                plugin_id for plugin_id, descriptor in descriptors.items()
+                if descriptor.kind is PluginKind.LANGUAGE
+            ),
+        },
         fingerprint="sha256:" + "0" * 64,
     )
     return PluginRuntime(catalog), capabilities
@@ -78,87 +87,99 @@ def _fact(
     )
 
 
-def test_graph_facts_reject_large_strings_in_every_fact_location():
-    overlong = "x" * 4_097
-    valid = _fact("valid", "kept")
-    invalid = (
-        _fact(overlong, "kind"),
-        _fact("source", overlong),
-        _fact("relation", "source", relation=overlong),
-        _fact("target", "source", target=overlong),
-        _fact("path", "source", path=overlong),
-        _fact("attribute-key", "source", attributes=((overlong, "value"),)),
-        _fact("attribute-value", "source", attributes=(("key", overlong),)),
-        _fact("related-path", "source", related_paths=(overlong,)),
+def test_graph_facts_preserve_long_strings_in_every_fact_location():
+    long_value = "x" * 4_097
+    expected = (
+        _fact(long_value, "kind"),
+        _fact("source", long_value),
+        _fact("relation", "source", relation=long_value),
+        _fact("target", "source", target=long_value),
+        _fact("path", "source", path=long_value),
+        _fact("attribute-key", "source", attributes=((long_value, "value"),)),
+        _fact("attribute-value", "source", attributes=(("key", long_value),)),
+        _fact("related-path", "source", related_paths=(long_value,)),
+        replace(_fact("provenance", "source"), contributing_plugin_ids=(long_value,)),
     )
+    runtime, capabilities = _runtime({"complete": tuple(reversed(expected))})
+
+    facts, diagnostics = runtime.graph_facts(
+        FileArtifact("src/example.py", "pass"), capabilities,
+    )
+
+    assert facts == tuple(sorted(expected))
+    assert diagnostics == ()
+    assert all("complete" in fact.contributing_plugin_ids for fact in facts)
+    assert next(fact for fact in facts if fact.kind == "provenance").contributing_plugin_ids == (
+        "complete", long_value,
+    )
+
+
+def test_graph_facts_preserve_payload_larger_than_previous_serialized_byte_limit():
+    # Each string is below the former string limit; together the distinct facts
+    # exceed 16 MiB. Neither payload admission nor provenance merging may drop one.
+    payload = "α" * 3_000
+    expected = tuple(
+        _fact("route", f"controller-{index:04d}", target=payload)
+        for index in range(3_000)
+    )
+    assert len(json.dumps(
+        [dict(fact.as_metadata()) for fact in expected],
+        ensure_ascii=False,
+    ).encode("utf-8")) > 16_777_216
     runtime, capabilities = _runtime({
-        "complete": tuple(reversed((valid, *invalid))),
+        "first": expected,
+        "second": (expected[-1],),
     })
 
     facts, diagnostics = runtime.graph_facts(
-        FileArtifact("src/example.py", "pass"),
-        capabilities,
+        FileArtifact("src/example.py", "pass"), capabilities,
     )
 
-    assert facts == (valid,)
-    assert len(diagnostics) == 1
-    diagnostic = diagnostics[0]
-    assert diagnostic.code == "plugin-index-output-limit"
-    assert diagnostic.plugin_id == "complete"
-    assert diagnostic.path == "src/example.py"
-    assert diagnostic.recoverable is True
-    assert "8 fact(s)" in diagnostic.message
-    assert "4096 characters" in diagnostic.message
+    assert facts == expected
+    assert facts[-1].contributing_plugin_ids == ("first", "second")
+    assert diagnostics == ()
 
 
-def test_graph_facts_bound_serialized_payload_bytes():
-    first = _fact("first", "first", target="α" * 32)
-    second = _fact("second", "second", target="β" * 32)
-    runtime, capabilities = _runtime({"first": (first,), "second": (second,)})
-    attributed_first = replace(first, contributing_plugin_ids=("first",))
-    runtime.MAX_GRAPH_FACT_BYTES_PER_ARTIFACT = len(json.dumps(
-        [dict(attributed_first.as_metadata())],
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8"))
+def test_graph_facts_keep_language_and_framework_evidence_beyond_previous_counts():
+    language = tuple(_fact("language", f"symbol-{index:05d}") for index in range(5_001))
+    framework = tuple(_fact("framework", f"route-{index:05d}") for index in range(2_001))
+    shared = _fact("shared", "symbol")
+    runtime, capabilities = _runtime(
+        {"language": (*language, shared), "framework": (*framework, shared)},
+        {"language": PluginKind.LANGUAGE, "framework": PluginKind.FRAMEWORK},
+    )
 
     facts, diagnostics = runtime.graph_facts(
-        FileArtifact("src/example.py", "pass"),
-        capabilities,
+        FileArtifact("src/example.py", "pass"), capabilities,
     )
 
-    assert facts == (first,)
-    assert len(diagnostics) == 1
-    diagnostic = diagnostics[0]
-    assert diagnostic.code == "plugin-index-output-limit"
-    assert diagnostic.plugin_id == "second"
-    assert diagnostic.path == "src/example.py"
-    assert diagnostic.recoverable is True
-    assert "1 fact(s)" in diagnostic.message
-    assert "byte artifact budget" in diagnostic.message
+    assert facts == tuple(sorted((*language, *framework, shared)))
+    assert len(facts) == 7_003
+    assert facts[-1].contributing_plugin_ids == ("framework", "language")
+    assert diagnostics == ()
 
 
-def test_graph_facts_bound_records_with_diagnostics():
-    first = tuple(_fact("first", f"first-{index:03d}") for index in range(125))
-    second = tuple(_fact("second", f"second-{index:03d}") for index in range(125))
-    runtime, capabilities = _runtime({"first": first, "second": second})
-    runtime.MAX_FACTS_PER_FILE = 200
-
-    facts, diagnostics = runtime.graph_facts(
-        FileArtifact("src/example.py", "pass"),
-        capabilities,
+def test_javascript_long_call_expression_is_retained_exactly():
+    catalog = PluginCatalog.discover(Path(__file__).resolve().parents[3])
+    runtime = PluginRuntime(catalog)
+    path = "app/code/Shop/Module/view/frontend/web/js/lib/library.js"
+    expression = '(function () { const value = "' + ("payload" * 1_000) + '"; return value; })'
+    artifact = FileArtifact(path, f"const result = {expression}();")
+    expected = catalog.implementation("javascript").index_file(artifact).value
+    long_call = next(fact for fact in expected if len(fact.target) > 4_096)
+    assert long_call.target == expression
+    capabilities = ProjectCapabilities(
+        repository_plugins=("javascript",),
+        file_plugins={path: ("javascript",)},
+        fingerprint="sha256:" + "0" * 64,
     )
 
-    assert facts == tuple(sorted((*first, *second[:75])))
-    assert len(facts) == 200
-    assert len(diagnostics) == 1
-    diagnostic = diagnostics[0]
-    assert diagnostic.code == "plugin-index-output-limit"
-    assert diagnostic.plugin_id == "second"
-    assert diagnostic.path == "src/example.py"
-    assert diagnostic.recoverable is True
-    assert "50 fact(s)" in diagnostic.message
+    facts, diagnostics = runtime.graph_facts(artifact, capabilities)
+
+    assert facts == expected
+    assert long_call in facts
+    assert all(fact.contributing_plugin_ids == ("javascript",) for fact in facts)
+    assert diagnostics == ()
 
 
 def test_graph_fact_merge_is_deterministic_across_kinds_and_duplicates():

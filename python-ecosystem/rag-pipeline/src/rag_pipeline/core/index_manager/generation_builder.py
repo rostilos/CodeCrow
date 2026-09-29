@@ -379,7 +379,7 @@ class GenerationBuilder:
             repository_facts_json = write_repository_state(
                 writer, commit=commit, repository_facts=repository_facts,
                 repository_files=repository_files, project_type=project_type,
-                source_root=source_root,
+                source_root=source_root, source_file_sha256=source_tree.file_sha256_by_path,
             )
             self._raise_if_cancelled(cancellation_event)
             self._progress(
@@ -487,6 +487,7 @@ class GenerationBuilder:
             writer = StructuralGraphWriter(
                 connection,
                 defer_file_relation_ownership=True,
+                buffer_file_relations=True,
             )
             skipped_paths: set[str] = set()
             document_count = 0
@@ -592,7 +593,14 @@ class GenerationBuilder:
                 on_batch=report_batch, replace_missing_files=False,
             )
 
-            writer.flush_deferred_file_relation_ownership()
+            self._progress(
+                progress_callback, "building_lookup_indexes",
+                "Building graph lookup and source search indexes", 80,
+                indexedUnits=writer.unit_count, indexedRelations=writer.relation_count,
+            )
+            writer.build_lookup_indexes(
+                cancellation_check=lambda: self._raise_if_cancelled(cancellation_event),
+            )
             if analysis_handle is not None:
                 self._raise_if_cancelled(cancellation_event)
                 self._progress(
@@ -618,7 +626,7 @@ class GenerationBuilder:
             repository_facts_json = write_repository_state(
                 writer, commit=commit, repository_facts=repository_facts,
                 repository_files=repository_files, project_type=project_type,
-                source_root=source_root,
+                source_root=source_root, source_file_sha256=source_tree.file_sha256_by_path,
             )
             self._raise_if_cancelled(cancellation_event)
             self._progress(

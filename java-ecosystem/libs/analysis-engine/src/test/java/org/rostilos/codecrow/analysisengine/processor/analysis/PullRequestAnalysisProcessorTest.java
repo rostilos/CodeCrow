@@ -6,6 +6,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
@@ -33,6 +35,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
+import org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent;
 import org.rostilos.codecrow.core.service.TaskImplementationEvidenceService;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
@@ -520,21 +523,58 @@ class PullRequestAnalysisProcessorTest {
                                         any(), any(), anyLong(), any(), any());
                 }
 
+                @ParameterizedTest
+                @EnumSource(EVcsProvider.class)
+                @DisplayName("partial review publishes findings without granting complete coverage")
+                void shouldPublishPartialReviewForEachProvider(EVcsProvider provider) throws Exception {
+                        Map<String, Object> response = Map.of(
+                                        "status", "partial",
+                                        "comment", "Vendor source unavailable; findings are partial",
+                                        "issues", List.of(Map.of("reason", "Supported defect")),
+                                        "unresolvedScopes", List.of(Map.of("reason", "Vendor source unavailable")));
+                        stubReviewThroughAi(response, provider);
+                        var workspace = new org.rostilos.codecrow.core.model.workspace.Workspace();
+                        workspace.setName("review-workspace");
+                        when(project.getWorkspace()).thenReturn(workspace);
+                        when(codeAnalysisService.createAnalysisFromAiResponse(
+                                        any(), any(), anyLong(), anyString(), anyString(), anyString(),
+                                        any(), any(), any(), any(), any(), any())).thenReturn(codeAnalysis);
+                        PullRequestAnalysisProcessor.EventConsumer observer = mock(
+                                        PullRequestAnalysisProcessor.EventConsumer.class);
+
+                        assertThat(processor.process(createRequest(), observer, project)).isEqualTo(response);
+
+                        verify(codeAnalysisService).createAnalysisFromAiResponse(
+                                        eq(project), eq(response), anyLong(), anyString(), anyString(), anyString(),
+                                        any(), any(), any(), any(), any(), any());
+                        verify(reportingService).postAnalysisResults(
+                                        eq(codeAnalysis), eq(project), eq(42L), any(), any());
+                        verify(observer).accept(argThat(event -> "warning".equals(event.get("type"))));
+                        verify(eventPublisher).publishEvent(argThat((org.springframework.context.ApplicationEvent event) ->
+                                        event instanceof AnalysisCompletedEvent completion
+                                                        && completion.getStatus() == AnalysisCompletedEvent.CompletionStatus.PARTIAL_SUCCESS));
+                        verifyNoInteractions(analyzedCommitService, prIssueTrackingService);
+                }
+
                 private void stubReviewThroughAi(Map<String, Object> aiResponse) throws Exception {
+                        stubReviewThroughAi(aiResponse, EVcsProvider.BITBUCKET_CLOUD);
+                }
+
+                private void stubReviewThroughAi(Map<String, Object> aiResponse, EVcsProvider provider) throws Exception {
                         VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
                         when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
                         when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
                         when(project.getId()).thenReturn(1L);
-                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+                        when(vcsConnection.getProviderType()).thenReturn(provider);
                         when(analysisLockService.acquireLockWithWait(
                                         any(), anyString(), any(), anyString(), anyLong(), any()))
                                         .thenReturn(Optional.of("lock-key-123"));
                         when(pullRequestService.createOrUpdatePullRequest(
                                         anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
                                         .thenReturn(pullRequest);
-                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
+                        when(vcsServiceFactory.getReportingService(provider))
                                         .thenReturn(reportingService);
-                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                        when(vcsServiceFactory.getAiClientService(provider))
                                         .thenReturn(aiClientService);
                         when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong()))
                                         .thenReturn(List.of());

@@ -10,6 +10,7 @@ class GraphWriteState:
     connection: sqlite3.Connection
     track_mutations: bool = False
     defer_file_relation_ownership: bool = False
+    buffer_file_relations: bool = False
     unit_count: int = 0
     relation_count: int = 0
     file_unit_ids: dict[str, str] = field(default_factory=dict)

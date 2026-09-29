@@ -9,10 +9,14 @@ ownership and file fallback preserve every complete hunk without token clipping.
 from __future__ import annotations
 
 from collections import defaultdict
+import asyncio
 from dataclasses import dataclass
 from hashlib import sha256
 import json
 from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
+
+from service.runtime_capacity import review_concurrency
+from service.review.async_work import gather_review_work
 
 
 class ChangePart(Protocol):
@@ -154,15 +158,17 @@ class ReviewPlanner:
         for part in sorted(parts, key=lambda item: (item.path, min(item.anchors, default=0), item.id)):
             by_path[part.path].append(part)
 
-        async def read(pattern: str, target: str, path: str) -> list[Mapping[str, Any]]:
+        graph_slots = asyncio.Semaphore(review_concurrency())
+
+        async def read(pattern: str, target: str, path: str) -> tuple[list[Mapping[str, Any]], list[str]]:
             if self.graph_reader is None:
-                return []
+                return [], []
             try:
-                values = await self.graph_reader(pattern=pattern, target=target, focus_path=path)
-                return [value for value in values if isinstance(value, Mapping)]
+                async with graph_slots:
+                    values = await self.graph_reader(pattern=pattern, target=target, focus_path=path)
+                return [value for value in values if isinstance(value, Mapping)], []
             except Exception as error:
-                diagnostics.append(f"Graph {pattern} unavailable for {path}: {error}")
-                return []
+                return [], [f"Graph {pattern} unavailable for {path}: {error}"]
 
         if parts and self.graph_reader is None:
             diagnostics.append("Graph planning unavailable; using complete file scopes.")
@@ -170,8 +176,9 @@ class ReviewPlanner:
         units_by_part: dict[str, list[dict[str, Any]]] = {}
         ownership_complete: dict[str, bool] = {}
         units_by_id: dict[str, dict[str, Any]] = {}
-        for path, path_parts in by_path.items():
-            raw_units = await read("file_summary", path, path)
+        file_results = await gather_review_work(*(read("file_summary", path, path) for path in by_path))
+        for (path, path_parts), (raw_units, messages) in zip(by_path.items(), file_results):
+            diagnostics.extend(messages)
             units = _unique([
                 _unit({**unit, "path": unit.get("path") or path})
                 for unit in raw_units
@@ -189,12 +196,12 @@ class ReviewPlanner:
                 diagnostics.append(f"Changed lines lack proposed-tree structural ownership in {path}; using complete file scope.")
 
         relations_by_unit: dict[str, list[dict[str, Any]]] = {}
-        for unit_id in sorted(units_by_id):
-            unit = units_by_id[unit_id]
-            relations_by_unit[unit_id] = _unique([
-                _relation(relation)
-                for relation in await read("relations_of", unit_id, str(unit["path"]))
-            ])
+        unit_ids = sorted(units_by_id)
+        relation_results = await gather_review_work(*(read("relations_of", unit_id, str(units_by_id[unit_id]["path"]))
+                                                   for unit_id in unit_ids))
+        for unit_id, (relations, messages) in zip(unit_ids, relation_results):
+            diagnostics.extend(messages)
+            relations_by_unit[unit_id] = _unique([_relation(relation) for relation in relations])
 
         graph_context = {
             part.id: {

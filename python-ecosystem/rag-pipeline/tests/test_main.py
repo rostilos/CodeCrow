@@ -1,38 +1,91 @@
 """RAG service process-topology tests."""
 
+import logging
 from unittest.mock import patch
 
+import pytest
+
 import main
+from rag_pipeline.models.config import RAGConfig
+from rag_pipeline.core.index_manager.build_support import _config_int
 
 
-def test_uvicorn_workers_normalize_per_process_index_capacity(caplog):
-    with patch.dict(
-        "os.environ",
-        {
-            "UVICORN_WORKERS": "3",
-            "RAG_FULL_INDEX_CONCURRENCY": "4",
-        },
-    ):
+@pytest.mark.parametrize("workers, capacity", [(3, 4), (1, 3), (3, 40)])
+def test_worker_topology_preserves_configured_index_capacity(
+    caplog, workers, capacity
+):
+    configured = {
+        "UVICORN_WORKERS": str(workers),
+        "RAG_FULL_INDEX_CONCURRENCY": str(capacity),
+    }
+    with patch.dict("os.environ", configured, clear=True):
+        with caplog.at_level(logging.INFO):
+            assert main.effective_uvicorn_workers() == workers
+        assert dict(main.os.environ) == configured
+        assert RAGConfig().full_index_concurrency == capacity
+
+    assert f"{capacity} slot(s) per process" in caplog.text
+    assert f"{workers * capacity} total slot(s)" in caplog.text
+
+
+def test_default_topology_does_not_create_environment_overrides(caplog):
+    with patch.dict("os.environ", {}, clear=True):
+        with caplog.at_level(logging.INFO):
+            assert main.effective_uvicorn_workers() == 1
+        assert dict(main.os.environ) == {}
+        assert RAGConfig().full_index_concurrency == 16
+
+    assert "16 total slot(s)" in caplog.text
+
+
+@pytest.mark.parametrize("raw_workers", ["invalid", "0", "-3"])
+def test_invalid_uvicorn_workers_fall_back_without_environment_mutation(
+    caplog, raw_workers
+):
+    configured = {
+        "UVICORN_WORKERS": raw_workers,
+        "RAG_FULL_INDEX_CONCURRENCY": "4",
+    }
+    with patch.dict("os.environ", configured, clear=True):
+        with caplog.at_level(logging.INFO):
+            assert main.effective_uvicorn_workers() == 1
+        assert dict(main.os.environ) == configured
+        assert RAGConfig().full_index_concurrency == 4
+
+    assert "4 total slot(s)" in caplog.text
+    if raw_workers == "invalid":
+        assert "Invalid UVICORN_WORKERS" in caplog.text
+
+
+def test_invalid_capacity_remains_subject_to_worker_configuration_validation(caplog):
+    raw_capacity = "invalid"
+    configured = {
+        "UVICORN_WORKERS": "3",
+        "RAG_FULL_INDEX_CONCURRENCY": raw_capacity,
+    }
+    with patch.dict("os.environ", configured, clear=True):
         assert main.effective_uvicorn_workers() == 3
-        assert main.os.environ["RAG_FULL_INDEX_CONCURRENCY"] == "1"
+        assert dict(main.os.environ) == configured
+        with pytest.raises(ValueError):
+            RAGConfig()
 
-    assert "capacity is not multiplicative" in caplog.text
-
-
-def test_single_uvicorn_worker_keeps_configured_thread_capacity():
-    with patch.dict(
-        "os.environ",
-        {
-            "UVICORN_WORKERS": "1",
-            "RAG_FULL_INDEX_CONCURRENCY": "3",
-        },
-    ):
-        assert main.effective_uvicorn_workers() == 1
-        assert main.os.environ["RAG_FULL_INDEX_CONCURRENCY"] == "3"
+    assert "Invalid RAG_FULL_INDEX_CONCURRENCY" in caplog.text
+    assert "total slot(s)" not in caplog.text
 
 
-def test_invalid_uvicorn_workers_falls_back_to_one(caplog):
-    with patch.dict("os.environ", {"UVICORN_WORKERS": "invalid"}):
-        assert main.effective_uvicorn_workers() == 1
+@pytest.mark.parametrize("raw_capacity", ["0", "-3"])
+def test_nonpositive_capacity_reports_manager_normalization_without_mutation(
+    caplog, raw_capacity
+):
+    configured = {
+        "UVICORN_WORKERS": "3",
+        "RAG_FULL_INDEX_CONCURRENCY": raw_capacity,
+    }
+    with patch.dict("os.environ", configured, clear=True):
+        with caplog.at_level(logging.INFO):
+            assert main.effective_uvicorn_workers() == 3
+        assert dict(main.os.environ) == configured
+        assert _config_int(RAGConfig(), "full_index_concurrency", 1) == 1
 
-    assert "Invalid UVICORN_WORKERS" in caplog.text
+    assert "1 slot(s) per process" in caplog.text
+    assert "3 total slot(s)" in caplog.text

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+
+import pytest
 from pathlib import Path
 
 from rag_pipeline.core.index_manager.manager import RAGIndexManager
@@ -371,3 +373,95 @@ def test_repository_delta_finalizer_failure_drops_stale_base_plugin_output(
     assert "javascript-component-resolution" not in delta_kinds
     assert "javascript-jsx-prop-contract" not in delta_kinds
     assert delta_receipt["snapshot_count"] == 0
+
+
+@pytest.mark.parametrize("missing_seed_hashes", [False, True])
+def test_review_reuses_different_revision_seed_with_complete_content_delta(tmp_path, monkeypatch, missing_seed_hashes):
+    """A warm graph is an optimization seed, never a substitute target snapshot."""
+    from unittest.mock import Mock
+    from rag_pipeline.api.models import ProposedTreePrepareRequest
+    from rag_pipeline.api.routers import query as query_router
+    from rag_pipeline.core.review_context import ProposedTreeReviewContextService
+    from rag_pipeline.core.review_snapshot import load_review_overlay, materialize_proposed_tree
+
+    seed, target, overlay = (tmp_path / name for name in ("seed", "target", "overlay"))
+    common = "export function stable(): boolean { return true; }\n"
+    _write(seed / "src/stable.ts", common)
+    _write(seed / "src/contract.ts", "export function allow(): boolean { return false; }\n")
+    _write(seed / "src/reviewed.ts", "import { allow } from './contract';\nexport function run(): boolean { return allow(); }\n")
+    _write(seed / "src/seed-only.ts", "export const seedOnly = true;\n")
+    shutil.copytree(seed, target)
+    _write(target / "src/contract.ts", "export function allow(): boolean { return true; }\n")
+    (target / "src/seed-only.ts").unlink()
+    _write(target / "src/target-only.ts", "export const targetOnly = true;\n")
+    _write(overlay / "files/src/reviewed.ts", "import { allow } from './contract';\nexport function run(): boolean { return !allow(); }\n")
+    _write(overlay / "manifest.json", json.dumps({"changedFiles": ["src/reviewed.ts"], "deletedFiles": []}))
+    manager = RAGIndexManager(RAGConfig(structural_index_root=str(tmp_path / "indexes")))
+    manager._mutation_coordinator.enabled = False
+    try:
+        manager.index_repository(repo_path=str(seed), workspace="workspace", project="project",
+            branch="main", commit="seed-revision", collection_target="warm-seed")
+        seed_receipt = manager.store.read_receipt("warm-seed")
+        if missing_seed_hashes:
+            from contextlib import contextmanager
+            original_open = manager.open_reader
+
+            @contextmanager
+            def without_hashes(**arguments):
+                with original_open(**arguments) as reader:
+                    if arguments["revision"] == "seed-revision":
+                        facts = reader.repository_facts()
+                        facts.pop("fileSha256")
+                        reader.repository_facts = lambda: facts
+                    yield reader
+
+            monkeypatch.setattr(manager, "open_reader", without_hashes)
+        delta = Mock(wraps=manager.index_proposed_tree_delta)
+        full = Mock(wraps=manager.index_repository)
+        monkeypatch.setattr(manager, "index_proposed_tree_delta", delta)
+        monkeypatch.setattr(manager, "index_repository", full)
+        monkeypatch.setattr(query_router, "_manager", lambda: manager)
+        binding = dict(target_repo_path=str(target), review_overlay_path=str(overlay),
+            workspace="workspace", project="project", target_branch="main", base_revision="target-revision",
+            source_revision="source-revision", base_collection_target="warm-seed",
+            base_generation_revision="seed-revision",
+            base_generation_manifest_sha256=seed_receipt["generation_manifest_sha256"])
+        prepared = query_router.prepare_review_generation(ProposedTreePrepareRequest(**binding))
+        if missing_seed_hashes:
+            # Older receipts remain useful for exact-base reuse, but cannot
+            # establish unchanged files across different revisions. Rebuild the
+            # same exact tree with an observable fallback rather than rejecting.
+            full.assert_called_once()
+            delta.assert_not_called()
+            assert prepared["base_generation_revision"] is None
+        else:
+            full.assert_not_called()
+            assert delta.call_count == 1
+            assert delta.call_args.kwargs["base_revision"] == "seed-revision"
+            assert set(delta.call_args.kwargs["changed_paths"]) == {
+                "src/contract.ts", "src/reviewed.ts", "src/target-only.ts"}
+            assert delta.call_args.kwargs["deleted_paths"] == ("src/seed-only.ts",)
+            assert prepared["base_generation_revision"] == "seed-revision"
+        binding.update({key: prepared[key] for key in (
+            "base_collection_target", "base_generation_manifest_sha256", "base_generation_revision")})
+        binding.update(review_collection_target=prepared["collection_target"],
+                       review_generation_manifest_sha256=prepared["generation_manifest_sha256"])
+        service = ProposedTreeReviewContextService(manager)
+        with service.open_read_session(**binding) as session:
+            assert session.reader.snapshot()["baseRevision"] == "target-revision"
+            assert session.reader.repository_facts()["revision"] == "source-revision"
+        expected = tmp_path / "expected"
+        materialize_proposed_tree(target, load_review_overlay(overlay), expected)
+        manager.index_repository(repo_path=str(expected), workspace="workspace", project="project",
+            branch="main", commit="source-revision", collection_target="oracle-full")
+        with manager.store.connect(manager.store.paths_for_target(prepared["collection_target"]).database,
+                                   read_only=True) as reused, manager.store.connect(
+                                       manager.store.paths_for_target("oracle-full").database,
+                                       read_only=True) as rebuilt:
+            assert _canonical_units(reused) == _canonical_units(rebuilt)
+            for table in _SEMANTIC_TABLES:
+                assert _canonical_rows(reused, table) == _canonical_rows(rebuilt, table)
+            assert _canonical_fts(reused) == _canonical_fts(rebuilt)
+            assert _canonical_rows(reused, "repository_snapshots") == _canonical_rows(rebuilt, "repository_snapshots")
+    finally:
+        manager.close()

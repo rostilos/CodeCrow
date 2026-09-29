@@ -13,6 +13,7 @@ from fastapi import FastAPI
 
 from ..models.config import RAGConfig
 from ..core.index_manager import RAGIndexManager
+from .heavy_work import configure_heavy_operations, configure_build_workers, close_build_workers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -95,7 +96,9 @@ async def lifespan(app: FastAPI):
     global config, index_manager
     logger.info("Starting RAG Pipeline API...")
     config = RAGConfig()
+    configure_heavy_operations(config.full_index_concurrency)
     index_manager = RAGIndexManager(config)
+    configure_build_workers(config)
     janitor = None
     try:
         from .routers.index import cleanup_orphaned_index_repository_stream_workspaces
@@ -125,8 +128,11 @@ async def lifespan(app: FastAPI):
             try:
                 await drain_index_repository_stream_workers()
             finally:
-                index_manager.close()
-                index_manager = None
+                try:
+                    await close_build_workers()
+                finally:
+                    index_manager.close()
+                    index_manager = None
         logger.info("RAG Pipeline API shutdown complete")
 
 

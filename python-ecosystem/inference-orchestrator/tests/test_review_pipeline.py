@@ -748,3 +748,273 @@ async def test_real_verifier_keeps_unsupported_caller_hypothesis_internal(pipeli
     assert result["issues"] == []
     assert len(model.calls) == 2
     assert any("unconfirmed hypothesis not published" in message for message in result["diagnostics"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prepared_base,expected_base", [
+    ({"base_collection_target": None, "base_generation_manifest_sha256": None}, (None, None)),
+    ({"base_collection_target": "canonical-base", "base_generation_manifest_sha256": "canonical-manifest"},
+     ("canonical-base", "canonical-manifest")),
+    ({}, ("requested-base", "requested-manifest")),
+    ({"base_collection_target": "incomplete-pair"}, ("requested-base", "requested-manifest")),
+])
+async def test_preparation_receipt_binds_canonical_base_to_following_queries(
+    pipeline, tmp_path, prepared_base, expected_base,
+):
+    service, _, rag, _ = pipeline(enabled=True)
+    req = request(localRepoPath=str(tmp_path / "target"),
+                  localReviewOverlayPath=str(tmp_path / "overlay"),
+                  ragCollectionTarget="requested-base",
+                  ragBaseGenerationManifestSha256="requested-manifest")
+    ready_graph(rag, req)
+    rag.prepare_review_generation.return_value.update(prepared_base)
+
+    result = (await service.process_review_request(req))["result"]
+
+    assert result["status"] == "complete"
+    initial = rag.prepare_review_generation.await_args.kwargs
+    assert initial["base_collection_target"] == "requested-base"
+    assert initial["base_generation_manifest_sha256"] == "requested-manifest"
+    queried = rag.query_review_graph.await_args.kwargs
+    assert (queried["base_collection_target"], queried["base_generation_manifest_sha256"]) == expected_base
+    assert queried["base_revision"] == req.targetHeadCommitHash
+    assert queried["source_revision"] == req.currentCommitHash
+    assert queried["review_collection_target"] == "bound-review-collection"
+
+
+@pytest.mark.asyncio
+async def test_unexpected_discovery_failure_joins_peer_work_before_review_finishes(pipeline, monkeypatch):
+    import asyncio
+
+    service, _, _, _ = pipeline()
+    peer_started = asyncio.Event()
+    peer_finished = asyncio.Event()
+
+    async def discovery(**kwargs):
+        if kwargs["batch"].parts[0].path == "a.py":
+            await peer_started.wait()
+            raise RuntimeError("unexpected discovery failure")
+        try:
+            peer_started.set()
+            await asyncio.Event().wait()
+        finally:
+            peer_finished.set()
+
+    monkeypatch.setattr(review_service, "review_batch", discovery)
+    result = await asyncio.wait_for(
+        service.process_review_request(request(rawDiff=change("a.py") + change("b.py"))), 1,
+    )
+
+    assert result["result"]["status"] == "error"
+    assert peer_finished.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("receipt_seed,expected_seed", [
+    ({"base_collection_target": "requested-base", "base_generation_manifest_sha256": "requested-manifest",
+      "base_generation_revision": "older-seed"},
+     ("requested-base", "requested-manifest", "older-seed")),
+    ({"base_collection_target": "canonical-base", "base_generation_manifest_sha256": "canonical-manifest",
+      "base_generation_revision": "canonical-seed"},
+     ("canonical-base", "canonical-manifest", "canonical-seed")),
+    ({"base_collection_target": None, "base_generation_manifest_sha256": None,
+      "base_generation_revision": None}, None),
+    ({}, ("requested-base", "requested-manifest", "older-seed")),
+])
+async def test_seed_revision_round_trips_through_real_rag_payloads_without_replacing_review_identity(
+    pipeline, tmp_path, receipt_seed, expected_seed,
+):
+    from service.rag.review_queries import ReviewQueries
+
+    service, _, rag, _ = pipeline(enabled=True)
+    policy = {"include_patterns": ["src/**"], "exclude_patterns": ["vendor/**"],
+              "project_type": "generic", "source_root": "src"}
+    candidates = [{"collection_target": "active-seed", "generation_manifest_sha256": "c" * 64,
+                   "revision": "active-revision"}]
+    req = request(localRepoPath=str(tmp_path / "exact-target"),
+                  localReviewOverlayPath=str(tmp_path / "overlay"),
+                  ragCollectionTarget="requested-base",
+                  ragBaseGenerationManifestSha256="requested-manifest",
+                  ragBaseGenerationRevision="older-seed",
+                  ragIndexPolicy=policy, ragGenerationCandidates=candidates)
+    transmitted = []
+
+    async def respond(endpoint, payload, empty_result, **kwargs):
+        transmitted.append((endpoint, dict(payload)))
+        if endpoint == "/query/review-generation":
+            return {"status": "ready", "source_revision": req.currentCommitHash,
+                    "collection_target": "sealed-review", "generation_manifest_sha256": "review-manifest",
+                    "index_policy": policy, **receipt_seed}
+        assert endpoint == "/query/review-graph"
+        return {"status": "ready", "results": [], "nextCursor": None}
+
+    queries = ReviewQueries(SimpleNamespace(
+        _post_review_query=respond, _review_preparation_timeout_seconds=lambda: 1800,
+    ))
+    # Exercise the real DTO -> host binding -> endpoint payload chain while
+    # intercepting transport before any HTTP request is made.
+    rag.prepare_review_generation = queries.prepare_review_generation
+    rag.query_review_graph = queries.query_review_graph
+    result = (await service.process_review_request(req))["result"]
+
+    assert result["status"] == "complete"
+    preparation = transmitted[0][1]
+    assert preparation["index_policy"] == policy
+    assert preparation["base_generation_candidates"] == candidates
+    assert preparation["base_collection_target"] == "requested-base"
+    assert preparation["base_generation_manifest_sha256"] == "requested-manifest"
+    assert preparation["base_generation_revision"] == "older-seed"
+    assert len(transmitted) > 1
+    seed_keys = ("base_collection_target", "base_generation_manifest_sha256", "base_generation_revision")
+    for _, query in transmitted[1:]:
+        assert "index_policy" not in query and "base_generation_candidates" not in query
+        assert {key: query[key] for key in policy} == policy
+        if expected_seed is None:
+            assert all(key not in query for key in seed_keys)
+        else:
+            assert tuple(query[key] for key in seed_keys) == expected_seed
+        assert query["review_collection_target"] == "sealed-review"
+        assert query["review_generation_manifest_sha256"] == "review-manifest"
+    for _, payload in transmitted:
+        assert payload["base_revision"] == "base123"
+        assert payload["source_revision"] == "head123"
+        assert payload["target_branch"] == "main"
+        assert payload["target_repo_path"] == str(tmp_path / "exact-target")
+        assert payload["workspace"] == req.projectWorkspace
+        assert payload["project"] == req.projectNamespace
+    assert req.targetHeadCommitHash == req.localRepoRevision == "base123"
+    assert req.ragBaseGenerationRevision == "older-seed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy,candidates", [
+    ("invalid-policy", "invalid-candidates"),
+    ({"include_patterns": "not-an-array"}, [None, {"revision": "partial"}]),
+    ({"source_root": {"invalid": "object"}}, [False]),
+])
+async def test_malformed_optional_rag_metadata_does_not_reject_review(pipeline, tmp_path, caplog, policy, candidates):
+    service, _, rag, _ = pipeline(enabled=True)
+    req = request(localRepoPath=str(tmp_path / "target"),
+                  localReviewOverlayPath=str(tmp_path / "overlay"),
+                  ragIndexPolicy=policy, ragGenerationCandidates=candidates)
+    ready_graph(rag, req)
+    assert req.ragIndexPolicy is None and req.ragGenerationCandidates == []
+    assert (await service.process_review_request(req))["result"]["status"] == "complete"
+    assert "malformed optional repository" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_confirmed_issue", [False, True])
+async def test_missing_vendor_source_preserves_completed_review_and_confirmed_findings(
+    pipeline, monkeypatch, tmp_path, with_confirmed_issue,
+):
+    """Garden PR-5: unavailable vendor evidence is coverage, not job failure.
+
+    Exercise real local MCP reads/searches and the verifier ledger. Only model
+    responses are scripted; no provider or graph service is contacted.
+    """
+    from service.review.verifier import ReviewVerifier
+
+    plugin_path = "app/code/Acme/StripeEventsFix/Plugin/StripeCustomer.php"
+    vendor_path = "vendor/stripe/module-payments"
+    vendor_file = vendor_path + "/Model/StripeCustomer.php"
+    before = "public function beforeCreateStripeCustomerIfNotExists($subject) { return null; }"
+    after = "public function beforeCreateStripeCustomerIfNotExists($subject) { return []; }"
+    raw = change(plugin_path, before, after)
+    changed = {plugin_path: after}
+    if with_confirmed_issue:
+        raw += change("app/code/Acme/Totals.php", "return $amount / 1;", "return $amount / 0;")
+        changed["app/code/Acme/Totals.php"] = "return $amount / 0;"
+
+    target, overlay = tmp_path / "target", tmp_path / "overlay"
+    target.mkdir()
+    overlay.mkdir()
+    for path, content in changed.items():
+        location = overlay / "files" / path
+        location.parent.mkdir(parents=True, exist_ok=True)
+        location.write_text(content + "\n")
+    (overlay / "manifest.json").write_text(json.dumps({
+        "changedFiles": list(changed), "deletedFiles": [],
+    }))
+    unavailable_reason = (
+        "The repository's vendor/stripe/module-payments source is unavailable, "
+        "so StripeCustomer's final/non-final declaration and its direct callers "
+        "cannot be inspected. The available plugin hook does not establish them."
+    )
+
+    def handler(payload):
+        if "ownedParts" in payload:
+            turn = default_turn(payload)
+            part = payload["ownedParts"][0]
+            if part["path"] == plugin_path:
+                turn["findings"] = [candidate(
+                    part, "The vendor class might be final, preventing interception",
+                    title="Unconfirmed vendor interception claim",
+                    relatedPaths=[vendor_file],
+                )]
+                turn["summary"]["unresolvedQuestions"] = [{
+                    "question": "Is StripeCustomer final, and do its callers bypass this hook?",
+                    "evidenceNeeded": "The vendor class declaration and its direct callers",
+                    "partIds": [part["id"]], "paths": [plugin_path, vendor_path],
+                }]
+            else:
+                turn["findings"] = [candidate(
+                    part, "Every call now divides the supplied amount by zero",
+                    title="Total calculation divides by zero",
+                )]
+            return turn
+
+        assert "caseId" in payload
+        if payload["candidates"][0]["file"] != plugin_path:
+            evidence = observed_evidence(payload, "diff")
+            return {"decisions": [{
+                "candidateId": payload["candidates"][0]["candidateId"],
+                "verdict": "keep", "reason": "The changed divisor is the literal zero",
+                "evidenceIds": [evidence["id"]],
+            }]}
+
+        observations = payload.get("toolObservations", [])
+        if not observations:
+            return {"toolCalls": [
+                {"name": "readReviewFile", "arguments": {"path": vendor_file}},
+                {"name": "grepReviewCode", "arguments": {
+                    "query": "StripeCustomer", "paths": [vendor_path, "app/code/Acme/StripeEventsFix"],
+                }},
+            ]}
+        read = next(item for item in observations if item["tool"] == "readReviewFile")
+        search = next(item for item in observations if item["tool"] == "grepReviewCode")
+        assert read["status"] == "missing"
+        assert search["status"] == "partial" and not search["complete"]
+        assert search["unavailablePaths"] == [vendor_path]
+        assert search["results"] == [{"path": plugin_path, "lines": [1]}]
+        return {
+            "decisions": [{"candidateId": payload["candidates"][0]["candidateId"],
+                           "verdict": "uncertain", "reason": unavailable_reason}],
+            "investigations": [{"id": item["id"], "status": "uncertain", "reason": unavailable_reason}
+                               for item in payload["investigations"]],
+        }
+
+    service, model, rag, _ = pipeline(handler)
+    monkeypatch.setattr(review_service, "ReviewVerifier", ReviewVerifier)
+    events = []
+    result = (await service.process_review_request(request(
+        pullRequestId=5, rawDiff=raw, localRepoPath=str(target),
+        localReviewOverlayPath=str(overlay),
+    ), event_callback=events.append))["result"]
+
+    assert result["status"] == "partial"
+    assert result["reviewedHunkIds"] == sorted(part.id for part in _parts(raw)[0])
+    assert result["unresolvedScopes"]
+    assert [issue["title"] for issue in result["issues"]] == (
+        ["Total calculation divides by zero"] if with_confirmed_issue else []
+    )
+    assert any(unavailable_reason in message for message in result["diagnostics"])
+    assert any("unconfirmed hypothesis not published" in message for message in result["diagnostics"])
+    assert any("Search did not cover all requested source" in message for message in result["diagnostics"])
+    assert any(event.get("state") == "review_diagnostic" and unavailable_reason in event["message"]
+               for event in events)
+    # One discovery and two verification turns for the unavailable vendor case;
+    # its completed sibling needs only discovery plus a source-grounded verdict.
+    assert len(model.calls) == (5 if with_confirmed_issue else 3)
+    rag.prepare_review_generation.assert_not_awaited()
+    rag.query_review_graph.assert_not_awaited()

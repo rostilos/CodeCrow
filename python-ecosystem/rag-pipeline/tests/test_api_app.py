@@ -121,7 +121,7 @@ class TestAppCreation:
         test_app = SimpleNamespace(state=SimpleNamespace())
 
         with (
-            patch.object(api_module, "RAGConfig", return_value=MagicMock()),
+            patch.object(api_module, "RAGConfig", return_value=SimpleNamespace(full_index_concurrency=16, model_dump=lambda **kwargs: {"full_index_concurrency": 16})),
             patch.object(
                 api_module,
                 "RAGIndexManager",
@@ -246,7 +246,7 @@ async def test_lifespan_closes_manager_when_serving_raises_and_cleanup_fails():
     drain = AsyncMock()
     app = SimpleNamespace(state=SimpleNamespace())
     with (
-        patch.object(api_module, "RAGConfig", return_value=MagicMock()),
+        patch.object(api_module, "RAGConfig", return_value=SimpleNamespace(full_index_concurrency=16, model_dump=lambda **kwargs: {"full_index_concurrency": 16})),
         patch.object(api_module, "RAGIndexManager", return_value=manager),
         patch("rag_pipeline.api.routers.index.cleanup_orphaned_index_repository_stream_workspaces", side_effect=OSError("read only")),
         patch("rag_pipeline.api.routers.index.drain_index_repository_stream_workers", drain),

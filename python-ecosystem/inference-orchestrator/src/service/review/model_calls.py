@@ -9,6 +9,8 @@ from typing import Any
 
 from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
 from llm.request_capture import model_capture
+from llm.review_invocation import invoke_review_model
+from service.review.execution_scheduler import review_model_slot
 
 
 logger = logging.getLogger(__name__)
@@ -39,11 +41,12 @@ async def invoke_json(
     options = reasoning_request_kwargs(llm, effort)
     if request.aiProvider.lower() in {"openrouter", "openai"}:
         options["response_format"] = {"type": "json_object"}
-    with model_capture(request, stage=stage, batch_ids=batch_ids):
-        response = await llm.ainvoke([
-            ("system", system),
-            ("human", json.dumps(payload, ensure_ascii=False)),
-        ], **options)
+    async with review_model_slot(stage):
+        with model_capture(request, stage=stage, batch_ids=batch_ids):
+            response = await invoke_review_model(llm, [
+                ("system", system),
+                ("human", json.dumps(payload, ensure_ascii=False)),
+            ], request=request, stage=stage, options=options)
     logger.info(
         "Review model response: stage=%s PR=%s usage=%s",
         stage, request.pullRequestId, getattr(response, "usage_metadata", None),

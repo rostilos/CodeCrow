@@ -2,6 +2,7 @@
 import asyncio
 import gzip
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -64,19 +65,34 @@ def response_body(provider):
         }}], "usage": {"prompt_tokens": 111, "completion_tokens": 17, "total_tokens": 128}}
 
 
+def streamed_response_body(value):
+    """The capture remains byte-exact when review transport uses SSE."""
+    chunk = {**value, "object": "chat.completion.chunk", "created": 1}
+    choices = []
+    for choice in value["choices"]:
+        delta = dict(choice["message"])
+        if delta.get("tool_calls"):
+            delta["tool_calls"] = [{"index": index, **call} for index, call in enumerate(delta["tool_calls"])]
+        choices.append({"index": choice["index"], "finish_reason": choice["finish_reason"], "delta": delta})
+    chunk["choices"] = choices
+    return ("data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n").encode()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["openai", "openrouter", "anthropic", "google", "google_vertex", "openai_compatible"])
 async def test_actual_sdk_wire_payload_and_response_are_preserved(provider, capture, monkeypatch):
     from llm import ssrf_safe_transport
     monkeypatch.setattr(ssrf_safe_transport, "_ALLOW_PRIVATE", True)
     observed = []
-    response_bytes = json.dumps(response_body(provider)).encode()
+    response_bytes = (streamed_response_body(response_body(provider)) if provider == "openrouter"
+                      else json.dumps(response_body(provider)).encode())
 
     async def transport(_self, outgoing):
         observed.append(outgoing.content)
         # Headers/query may contain secrets; none are part of the artifact.
         protocol = httpx2 if isinstance(outgoing, httpx2.Request) else httpx
-        return protocol.Response(200, content=response_bytes, headers={"content-type": "application/json", "set-cookie": "private-cookie"})
+        return protocol.Response(200, content=response_bytes, headers={"content-type": "text/event-stream" if provider == "openrouter" else "application/json",
+                                                                      "set-cookie": "private-cookie"})
 
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", transport)
     monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", transport)
@@ -121,7 +137,8 @@ async def test_sdk_retries_are_separate_attempts_of_the_same_call(capture, monke
         observed.append(outgoing.content)
         if len(observed) == 1:
             return httpx2.Response(503, json={"error": {"message": "temporarily unavailable"}})
-        return httpx2.Response(200, json=response_body("openrouter"))
+        return httpx2.Response(200, content=streamed_response_body(response_body("openrouter")),
+                               headers={"content-type": "text/event-stream"})
 
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", transport)
     monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", transport)
@@ -248,14 +265,19 @@ async def test_transport_failure_records_attempt_without_masking_error(capture):
     assert json.loads(next(capture.rglob("*.request.body")).read_text())["source"] == SOURCE
 
 
-@pytest.mark.parametrize("kind", ["symlink", "shared"])
-def test_insecure_capture_root_is_skipped_without_writing_source(capture, tmp_path, kind):
+@pytest.mark.parametrize("kind", ["symlink", "group_writable", "world_writable", "foreign_owner"])
+def test_insecure_capture_root_is_skipped_without_writing_source(capture, tmp_path, kind, monkeypatch):
     target = tmp_path / "target"
     target.mkdir(mode=0o700)
     if kind == "symlink":
         capture.symlink_to(target, target_is_directory=True)
     else:
         capture.mkdir(mode=0o755)
+        if kind == "foreign_owner":
+            uid = os.geteuid()
+            monkeypatch.setattr(os, "geteuid", lambda: uid + 1)
+        else:
+            capture.chmod(0o770 if kind == "group_writable" else 0o702)
     with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"id": "ok"}))) as client:
         attach_http_capture(client)
         req = request()
@@ -263,6 +285,44 @@ def test_insecure_capture_root_is_skipped_without_writing_source(capture, tmp_pa
             assert client.post("https://provider.test", json={"source": SOURCE}).status_code == 200
     assert not list(target.iterdir())
     assert not list(capture.iterdir())
+
+
+@pytest.mark.parametrize("root_mode", [0o750, 0o755])
+def test_service_owned_volume_root_keeps_capture_children_private(capture, root_mode):
+    capture.mkdir(mode=root_mode)
+    capture.chmod(root_mode)
+    with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"id": "ok"}))) as client:
+        attach_http_capture(client)
+        req = request()
+        with review_capture(req), model_capture(req, stage="verification"):
+            assert client.post("https://provider.test", json={"source": SOURCE}).status_code == 200
+    assert capture.stat().st_mode & 0o777 == root_mode
+    assert json.loads(next(capture.rglob("*.request.body")).read_text())["source"] == SOURCE
+    assert json.loads(next(capture.rglob("*.complete.json")).read_text())["response_complete"] is True
+    for path in capture.rglob("*"):
+        assert path.stat().st_mode & 0o777 == (0o700 if path.is_dir() else 0o600)
+        assert path.stat().st_uid == os.geteuid()
+
+
+@pytest.mark.parametrize("kind", ["readable", "symlink"])
+def test_existing_tenant_directory_must_remain_private(capture, tmp_path, kind):
+    capture.mkdir(mode=0o755)
+    with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"id": "ok"}))) as client:
+        attach_http_capture(client)
+        req = request()
+        with review_capture(req), model_capture(req, stage="verification"):
+            assert client.post("https://provider.test", json={"source": SOURCE}).status_code == 200
+        tenant = next(capture.iterdir())
+        if kind == "readable":
+            tenant.chmod(0o755)
+        else:
+            target = tmp_path / "moved-tenant"
+            tenant.rename(target)
+            tenant.symlink_to(target, target_is_directory=True)
+        original_files = {path for path in tenant.rglob("*") if path.is_file()}
+        with review_capture(req), model_capture(req, stage="verification"):
+            assert client.post("https://provider.test", json={"source": "must not be captured"}).status_code == 200
+        assert {path for path in tenant.rglob("*") if path.is_file()} == original_files
 
 
 @pytest.mark.asyncio
@@ -281,7 +341,7 @@ async def test_native_verification_and_final_json_reconciliation_capture_distinc
             value["choices"] = [{"index": 0, "finish_reason": "stop", "message": {
                 "role": "assistant", "content": json.dumps(groups),
             }}]
-        return httpx2.Response(200, json=value)
+        return httpx2.Response(200, content=streamed_response_body(value), headers={"content-type": "text/event-stream"})
 
     monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", transport)
     model = LLMFactory.create_llm(ai_provider="openrouter", ai_model="test-model", ai_api_key="private-key")
@@ -303,11 +363,11 @@ async def test_native_verification_and_final_json_reconciliation_capture_distinc
         record = json.loads(manifest.read_text())
         prefix = manifest.name.removesuffix(".complete.json")
         request_body = json.loads(manifest.with_name(prefix + ".request.body").read_text())
-        response = json.loads(manifest.with_name(prefix + ".response.body").read_text())
+        response = json.loads(manifest.with_name(prefix + ".response.body").read_text().splitlines()[0].removeprefix("data: "))
         assert request_body in observed
         assert response["usage"]["total_tokens"] == 128
         if record["stage"] == "reconciliation":
-            assert json.loads(response["choices"][0]["message"]["content"]) == groups
+            assert json.loads(response["choices"][0]["delta"]["content"]) == groups
 
 
 @pytest.mark.asyncio

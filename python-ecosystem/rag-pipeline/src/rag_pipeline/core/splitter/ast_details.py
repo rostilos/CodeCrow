@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
-from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 from ..documents import Document, TextNode
 from .metadata import MetadataExtractor, ContentType
 from .chunk import ASTChunk, generate_deterministic_id, compute_file_hash, normalize_chunk, normalize_metadata

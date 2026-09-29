@@ -5,6 +5,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -130,6 +132,39 @@ class CodeAnalysisServiceTest {
             throw new NoSuchFieldException(fieldName);
         } catch (Exception e) {
             throw new RuntimeException("Failed to set field: " + fieldName, e);
+        }
+    }
+
+    @ParameterizedTest(name = "partial {0} review with {1} supported findings")
+    @CsvSource({"PR_REVIEW, 0", "PR_REVIEW, 1", "BRANCH_ANALYSIS, 0", "BRANCH_ANALYSIS, 1"})
+    void missingSourceDoesNotDiscardPartialReview(AnalysisType type, int issueCount) {
+        Project project = createProjectWithWorkspace(1L, "Test", 1L);
+        if (type == AnalysisType.PR_REVIEW) {
+            stubNewPrAnalysis(1L, "abc123", 42L);
+        } else {
+            when(codeAnalysisRepository.findByProjectIdAndCommitHashAndAnalysisType(
+                    1L, "abc123", AnalysisType.BRANCH_ANALYSIS)).thenReturn(Optional.empty());
+            when(codeAnalysisRepository.save(any(CodeAnalysis.class))).thenAnswer(inv -> inv.getArgument(0));
+        }
+        Map<String, Object> data = createBasicAnalysisData(
+                "Vendor source unavailable; no conclusion was drawn for that question.");
+        data.put("status", "partial");
+        data.put("issues", issueCount == 0 ? List.of() : List.of(
+                createIssueData("HIGH", "App.java", 10, "Independently supported defect")));
+        data.put("unresolvedScopes", List.of(Map.of("reason", "vendor source unavailable")));
+
+        CodeAnalysis result = type == AnalysisType.PR_REVIEW
+                ? codeAnalysisService.createAnalysisFromAiResponse(
+                        project, data, 42L, "main", "feature", "abc123", null, null, null, Map.of())
+                : codeAnalysisService.createDirectPushAnalysisFromAiResponse(
+                        project, data, "main", "abc123", Map.of());
+
+        assertThat(result.getStatus()).isEqualTo(AnalysisStatus.PARTIAL);
+        assertThat(result.getComment()).contains("Vendor source unavailable");
+        assertThat(result.getIssues()).hasSize(issueCount);
+        if (issueCount > 0) {
+            assertThat(result.getIssues().get(0).getReason()).isEqualTo("Independently supported defect");
+            assertThat(result.getIssues().get(0).getLineHash()).isNull();
         }
     }
 

@@ -6,6 +6,8 @@ import os
 from typing import Dict, List, Optional, Any
 import httpx
 
+from service.runtime_capacity import review_concurrency
+
 logger = logging.getLogger(__name__)
 
 _REVIEW_CONTEXT_MUTATION_CONFLICT_PREFIX = (
@@ -80,7 +82,10 @@ class RagTransport:
             headers = {"x-service-secret": self._service_secret} if self._service_secret else {}
             pool = httpx.AsyncClient(
                 timeout=self.timeout,
-                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+                limits=httpx.Limits(
+                    max_connections=review_concurrency(),
+                    max_keepalive_connections=review_concurrency(),
+                ),
                 headers=headers,
             )
             if mutation:

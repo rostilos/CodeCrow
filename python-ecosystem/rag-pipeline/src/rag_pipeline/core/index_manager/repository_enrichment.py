@@ -5,7 +5,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from ..documents import TextNode
 from ..structural_store import StructuralGraphWriter
@@ -109,10 +109,12 @@ class RepositoryEnrichment:
 def write_repository_state(
     writer: StructuralGraphWriter, *, commit: str, repository_facts: Any,
     repository_files: Sequence[Path], project_type: str | None,
-    source_root: str | None,
+    source_root: str | None, source_file_sha256: Mapping[str, str],
 ) -> str:
     repository_facts_payload = {
         "revision": commit,
+        "fileSha256": {path.as_posix(): source_file_sha256[path.as_posix()]
+                       for path in repository_files},
         "paths": (
             list(repository_facts.paths)
             if repository_facts is not None

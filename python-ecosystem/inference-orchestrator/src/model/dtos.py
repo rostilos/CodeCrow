@@ -1,6 +1,22 @@
 from typing import Optional, Any, List, Dict
-from pydantic import BaseModel, Field, AliasChoices
+from pydantic import BaseModel, Field, AliasChoices, ValidationError, field_validator
+import logging
 
+logger = logging.getLogger(__name__)
+
+
+
+class ReviewIndexPolicyDto(BaseModel):
+    include_patterns: List[str] = Field(default_factory=list)
+    exclude_patterns: List[str] = Field(default_factory=list)
+    project_type: Optional[str] = None
+    source_root: Optional[str] = None
+
+
+class ReviewGenerationCandidateDto(BaseModel):
+    collection_target: str
+    generation_manifest_sha256: str
+    revision: str
 
 
 class ReviewRequestDto(BaseModel):
@@ -37,6 +53,36 @@ class ReviewRequestDto(BaseModel):
     localReviewOverlayPath: Optional[str] = None
     ragCollectionTarget: Optional[str] = None
     ragBaseGenerationManifestSha256: Optional[str] = None
+    ragBaseGenerationRevision: Optional[str] = None
+    ragIndexPolicy: Optional[ReviewIndexPolicyDto] = None
+    ragGenerationCandidates: List[ReviewGenerationCandidateDto] = Field(default_factory=list)
+
+    @field_validator("ragIndexPolicy", mode="before")
+    @classmethod
+    def optional_index_policy(cls, value):
+        if value is None:
+            return None
+        try:
+            return ReviewIndexPolicyDto.model_validate(value)
+        except (ValidationError, TypeError, ValueError):
+            logger.warning("Ignoring malformed optional repository index policy; source review remains available")
+            return None
+
+    @field_validator("ragGenerationCandidates", mode="before")
+    @classmethod
+    def optional_generation_candidates(cls, value):
+        if value is None:
+            return []
+        if not isinstance(value, (list, tuple)):
+            logger.warning("Ignoring malformed optional repository generation candidates")
+            return []
+        candidates = []
+        for position, candidate in enumerate(value):
+            try:
+                candidates.append(ReviewGenerationCandidateDto.model_validate(candidate))
+            except (ValidationError, TypeError, ValueError):
+                logger.warning("Ignoring malformed optional repository generation candidate at position %s", position)
+        return candidates
 
     def get_target_head_commit_hash(self) -> Optional[str]:
         for value in (self.targetHeadCommitHash, self.baseCommitHash):

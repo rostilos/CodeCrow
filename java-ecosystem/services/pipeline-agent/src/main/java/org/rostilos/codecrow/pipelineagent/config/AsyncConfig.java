@@ -80,21 +80,54 @@ public class AsyncConfig {
         return executor;
     }
 
+    /** Blocking manual PR/branch actions must not occupy the common ForkJoin pool. */
+    @Bean(name = "pipelineActionExecutor")
+    public ThreadPoolTaskExecutor pipelineActionExecutor(
+            @Value("${pipeline.review.concurrency:16}") int concurrency) {
+        return blockingExecutor(concurrency, "pipeline-action-", 120);
+    }
+
     /**
-     * Dedicated executor for RAG indexing operations.
-     * Lower concurrency since RAG operations are resource-intensive.
+     * Stream writers wait for work performed by the action/index executors.
+     * Keeping these pools separate avoids all writers waiting for work queued
+     * behind themselves. The default accommodates both classes of stream.
+     */
+    @Bean(name = "webMvcAsyncExecutor")
+    public ThreadPoolTaskExecutor webMvcAsyncExecutor(
+            @Value("${pipeline.review.concurrency:16}") int reviews,
+            @Value("${codecrow.rag.branch-build.global-parallelism:16}") int indexes,
+            @Value("${pipeline.streaming.concurrency:0}") int configured) {
+        return blockingExecutor(configured > 0 ? configured : reviews + indexes,
+                "mvc-async-", 120);
+    }
+
+    /**
+     * Manual index maintenance is blocking I/O orchestration. It must use a
+     * different pool from both review actions and branch-build dispatch itself.
      */
     @Bean(name = "ragExecutor")
-    public Executor ragExecutor() {
+    public ThreadPoolTaskExecutor ragExecutor(
+            @Value("${codecrow.rag.branch-build.global-parallelism:16}") int concurrency) {
+        return blockingExecutor(concurrency, "rag-maintenance-", 300);
+    }
+
+    private static ThreadPoolTaskExecutor blockingExecutor(
+            int concurrency, String prefix, int shutdownSeconds) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(2);
-        executor.setMaxPoolSize(4);
-        executor.setQueueCapacity(50);
-        executor.setThreadNamePrefix("rag-");
+        executor.setCorePoolSize(concurrency);
+        executor.setMaxPoolSize(concurrency);
+        // Preserve accepted request work when the I/O workers are occupied. These
+        // request/stream submissions have no webhook-style durable redelivery
+        // at the executor boundary; saturation must not reject the next request.
+        // Running work is bounded by the fixed pool, waiting work stays queued.
+        executor.setQueueCapacity(Integer.MAX_VALUE);
+        executor.setThreadNamePrefix(prefix);
         executor.setWaitForTasksToCompleteOnShutdown(true);
-        executor.setAwaitTerminationSeconds(300); // RAG operations can be long
+        executor.setAwaitTerminationSeconds(shutdownSeconds);
+        executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
         executor.initialize();
-        log.info("RAG executor initialized with core={}, max={}", 2, 4);
+        log.info("Executor initialized: name={} concurrency={} waiting queue enabled",
+                prefix, concurrency);
         return executor;
     }
 

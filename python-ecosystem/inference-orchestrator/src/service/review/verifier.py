@@ -1,12 +1,16 @@
 """Source-seeded verification cases and final publication reconciliation."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
+from service.runtime_capacity import review_concurrency
 from service.review.agent_calls import ReviewAgentSession, result_message
+from service.review.async_work import gather_review_work
 from service.review.verification_state import VerificationState, fingerprint
 from service.review.verification_tools import VerificationTools
 from service.review.verification_cases import build_cases, related_parts, source_for_case
@@ -124,9 +128,18 @@ class ReviewVerifier:
         cases = build_cases(findings, investigations or [], parts_by_id, graph_context)
         output = VerificationResult(issues=[])
         cache: dict[str, dict[str, Any]] = {}
-        for case_index, case in enumerate(cases, 1):
+        in_flight: dict[str, asyncio.Task[dict[str, Any]]] = {}
+        source_slots = asyncio.Semaphore(review_concurrency())
+
+        completed_cases = 0
+
+        async def verify_case(case: Any) -> VerificationResult:
+            nonlocal completed_cases
+            started = time.perf_counter()
             if callback:
-                callback({"type": "status", "state": "verifying", "message": f"Verifying related changes {case_index} of {len(cases)}"})
+                callback({"type": "status", "state": "verification_case_started", "caseId": case.id,
+                          "completedCases": completed_cases, "totalCases": len(cases),
+                          "message": f"Verifying evidence case {case.id}"})
             case_parts = related_parts(case, parts_by_id, graph_context)
             paths = {part.path for part in case_parts}
             paths.update(path for item in (*case.findings, *case.investigations)
@@ -134,6 +147,8 @@ class ReviewVerifier:
             tools = VerificationTools(rag_client=self.rag_client, binding=binding, parts=parts,
                                       context_parts=context_parts, focus_paths=sorted(paths))
             tools.cache = cache  # Same tenant/snapshot only; reused across this request's cases.
+            tools.in_flight = in_flight
+            tools.source_slots = source_slots
             state = VerificationState(case.findings, case.investigations, parts_by_id)
             for part in case_parts:
                 state.evidence[f"diff:{part.id}"] = {"kind": "diff", "result": {
@@ -163,7 +178,30 @@ class ReviewVerifier:
                 "contextChangedParts": [{"id": part.id, "path": part.path} for part in context_parts if part.id not in parts_by_id],
                 "projectRules": getattr(request, "projectRules", None), "taskContext": getattr(request, "taskContext", None),
             }
-            result = await self._verify_case(llm, request, state, tools, payload, sorted(case.batch_ids))
+            result = None
+            outcome = "interrupted"
+            try:
+                result = await self._verify_case(llm, request, state, tools, payload, sorted(case.batch_ids))
+                outcome = "partial" if result.diagnostics else "complete"
+            except BaseException as error:
+                outcome = type(error).__name__
+                raise
+            finally:
+                logger.info("Review verification case finished: PR=%s case=%s duration_ms=%.1f outcome=%s diagnostics=%d",
+                            getattr(request, "pullRequestId", None), case.id,
+                            (time.perf_counter() - started) * 1000, outcome,
+                            len(result.diagnostics) if result is not None else 0)
+            completed_cases += 1
+            if callback:
+                callback({"type": "status", "state": "verification_case_completed", "caseId": case.id,
+                          "completedCases": completed_cases, "totalCases": len(cases), "outcome": outcome,
+                          "message": f"Completed {completed_cases} of {len(cases)} evidence cases"})
+            return result
+
+        # Cases already have independent ledgers and native conversations. Only
+        # execution overlaps; publication order and reconciliation IDs stay stable.
+        results = await gather_review_work(*(verify_case(case) for case in cases))
+        for case, result in zip(cases, results):
             output.issues.extend(result.issues)
             output.decisions.extend({"caseId": case.id, **decision} for decision in result.decisions)
             output.resolved_investigation_ids.update(result.resolved_investigation_ids)
@@ -197,7 +235,7 @@ class ReviewVerifier:
         output.warnings.extend(session.diagnostics)
         # Keep the actual native conversation for this case. Source appears once
         # in the transcript; stable prefixes can be reused by provider caches.
-        # Finishing a case retires its whole transcript before the next case.
+        # Concurrent cases retain separate transcripts, retired on completion.
         messages: list[Any] = [("system", _SYSTEM_PROMPT), ("human", json.dumps(payload, ensure_ascii=False))]
         delivered: set[str] = set(state.evidence)
         observations = {fact for record in state.evidence.values()
@@ -221,11 +259,7 @@ class ReviewVerifier:
                 novel = False
                 native_results: list[Any] = []
                 json_results: list[dict[str, Any]] = []
-                for call in turn.tool_calls:
-                    if call.get("error"):
-                        result = {"status": "unavailable", "diagnostic": call["error"]}
-                    else:
-                        result = await tools.call(call["name"], call["arguments"])
+                async for call, result in self._tool_results(tools, turn.tool_calls):
                     evidence_id = None
                     if call["name"] != "recordReviewDecisions":
                         key, _ = state.add_evidence(call["name"], result, call["arguments"])
@@ -289,6 +323,32 @@ class ReviewVerifier:
         output.diagnostics.extend(state.rejections)
         output.warnings.extend(tools.diagnostics)
         return output
+
+    @staticmethod
+    async def _tool_results(tools: VerificationTools, calls: Sequence[dict[str, Any]]):
+        """Overlap independent reads, preserving ledger barriers and wire order."""
+        async def execute(call: dict[str, Any]) -> dict[str, Any]:
+            if call.get("error"):
+                return {"status": "unavailable", "diagnostic": call["error"]}
+            return await tools.call(call["name"], call["arguments"])
+
+        offset = 0
+        while offset < len(calls):
+            end = offset
+            while end < len(calls) and calls[end]["name"] != "recordReviewDecisions":
+                end += 1
+            if end > offset:
+                group = calls[offset:end]
+                results = await gather_review_work(*(execute(call) for call in group))
+                for call, result in zip(group, results):
+                    yield call, result
+                offset = end
+            else:
+                # Decision receipts depend on the ledger left by earlier calls.
+                # Execute them only after their preceding results were consumed.
+                call = calls[offset]
+                yield call, await execute(call)
+                offset += 1
 
     @staticmethod
     def _apply_decisions(candidates: dict[str, dict[str, Any]], decisions: Mapping[str, Any],

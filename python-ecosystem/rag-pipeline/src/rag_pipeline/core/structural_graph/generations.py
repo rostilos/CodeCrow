@@ -29,7 +29,7 @@ from .shared import (
     _canonical_json,
 )
 
-from .schema import _SCHEMA_SQL, _FTS_SCHEMA_SQL
+from .schema import _SCHEMA_SQL, _FTS_SCHEMA_SQL, _BASE_SCHEMA_SQL, _FTS_CONTENT_SQL
 
 
 logger = logging.getLogger(__name__)
@@ -101,16 +101,16 @@ class StructuralGenerationStore:
         connection.execute("PRAGMA busy_timeout=5000")
         return connection
 
-    def initialize(self, paths: GenerationPaths) -> sqlite3.Connection:
+    def initialize(self, paths: GenerationPaths, *, bulk_load: bool = False) -> sqlite3.Connection:
         paths.directory.mkdir(parents=True, exist_ok=False)
         connection = self.connect(paths.database)
         try:
-            connection.executescript(_SCHEMA_SQL)
+            connection.executescript(_BASE_SCHEMA_SQL if bulk_load else _SCHEMA_SQL)
             connection.execute(
                 f"PRAGMA user_version = {STRUCTURAL_STORE_SCHEMA_REVISION}"
             )
             try:
-                connection.executescript(_FTS_SCHEMA_SQL)
+                connection.executescript(_FTS_CONTENT_SQL if bulk_load else _FTS_SCHEMA_SQL)
             except sqlite3.OperationalError as exception:
                 logger.warning(
                     "SQLite FTS5 is unavailable; structural symbol search will use "

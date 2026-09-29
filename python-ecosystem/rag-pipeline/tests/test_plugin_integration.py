@@ -50,7 +50,7 @@ PLUGINS_ROOT = Path(__file__).resolve().parents[3] / "analysis-plugins"
         ),
     ),
 )
-def test_selected_language_plugins_produce_bounded_ast_chunks(
+def test_selected_language_plugins_produce_complete_semantic_units(
     path,
     language_id,
     source,
@@ -69,7 +69,7 @@ def test_selected_language_plugins_produce_bounded_ast_chunks(
     )
 
     assert chunks
-    assert all(len(chunk.text) <= splitter.max_chunk_size for chunk in chunks)
+    assert all(not chunk.metadata.get("is_fragment") for chunk in chunks)
     assert all(chunk.metadata["plugin_syntax"] == {
         "plugin": language_id,
         "language": language_id,
@@ -208,7 +208,7 @@ def validate():
     rendered_source = "\n".join(chunk.text for chunk in chunks)
     assert "def review():" in rendered_source
     assert "def validate():" in rendered_source
-    assert all(len(chunk.text) <= splitter.max_chunk_size for chunk in chunks)
+    assert all(not chunk.metadata.get("is_fragment") for chunk in chunks)
     assert all("structural_record_type" not in chunk.metadata for chunk in chunks)
 
 

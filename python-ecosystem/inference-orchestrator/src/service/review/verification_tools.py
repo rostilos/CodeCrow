@@ -14,7 +14,9 @@ import time
 from typing import Any, Callable, Literal, Mapping, Sequence
 from typing_extensions import TypedDict
 
+from service.runtime_capacity import review_concurrency
 from service.review.change_context import anchor_ranges
+from service.review.execution_scheduler import review_context_slot
 from service.review.local_source import LocalReviewSource
 from service.review.navigation_context import compact_navigation_result
 
@@ -76,6 +78,8 @@ class VerificationTools:
         self.parts = {part.id: part for part in (*context_parts, *parts)}
         self.source = LocalReviewSource(binding, [part.path for part in self.parts.values()])
         self.cache: dict[str, dict[str, Any]] = {}
+        self.in_flight: dict[str, asyncio.Task[dict[str, Any]]] = {}
+        self.source_slots = asyncio.Semaphore(review_concurrency())
         self.server: Any = None
         self.diagnostics: list[str] = []
         self._decision_tool: str | None = None
@@ -258,6 +262,40 @@ class VerificationTools:
         if cacheable and key in self.cache:
             self._log_result(name, self.cache[key], cache_hit=True, started=started)
             return self.cache[key]
+        if cacheable:
+            task = self.in_flight.get(key)
+            if task is None:
+                task = asyncio.create_task(self._load(name, arguments, key))
+                self.in_flight[key] = task
+            try:
+                result = await task
+            finally:
+                # Cancellation can happen before _load starts its own finally.
+                if task.done() and self.in_flight.get(key) is task:
+                    self.in_flight.pop(key, None)
+        else:
+            result = await self._execute(name, arguments)
+        if result.get("status") in {"unavailable", "partial"}:
+            message = f"{name}: {result.get('diagnostic') or result.get('error') or result.get('status')}"
+            if message not in self.diagnostics:
+                self.diagnostics.append(message)
+            logger.info("Review tool observation: tool=%s status=%s diagnostic=%s",
+                        name, result.get("status"), result.get("diagnostic") or result.get("error"))
+        self._log_result(name, result, cache_hit=False, started=started)
+        return result
+
+    async def _load(self, name: str, arguments: dict[str, Any], key: str) -> dict[str, Any]:
+        try:
+            async with self.source_slots, review_context_slot("verification_source"):
+                result = await self._execute(name, arguments)
+            if result.get("status") in {"ready", "deleted", "missing", "binary", "ambiguous"}:
+                # Outages/partial reads stay retryable after the in-flight request.
+                self.cache[key] = result
+            return result
+        finally:
+            self.in_flight.pop(key, None)
+
+    async def _execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         try:
             result = await self._server().call_tool(name, arguments)
             if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], dict):
@@ -271,15 +309,4 @@ class VerificationTools:
             result = {"status": "unavailable", "diagnostic": f"{name} failed ({type(error).__name__}); check the tool name/arguments or use another evidence route."}
         if name in _GRAPH_NAVIGATION_TOOLS:
             result = compact_navigation_result(result)
-        if result.get("status") in {"unavailable", "partial"}:
-            message = f"{name}: {result.get('diagnostic') or result.get('error') or result.get('status')}"
-            if message not in self.diagnostics:
-                self.diagnostics.append(message)
-            logger.info("Review tool observation: tool=%s status=%s diagnostic=%s",
-                        name, result.get("status"), result.get("diagnostic") or result.get("error"))
-        self._log_result(name, result, cache_hit=False, started=started)
-        if cacheable and result.get("status") in {"ready", "deleted", "missing", "binary", "ambiguous"}:
-            # Outages/partial reads are observations, not immutable snapshot
-            # facts. A later attempt may recover after source/service recovery.
-            self.cache[key] = result
         return result

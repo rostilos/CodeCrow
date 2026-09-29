@@ -179,7 +179,7 @@ def test_anthropic_native_payload_preserves_tool_use_and_result_pair():
 
 
 @pytest.mark.asyncio
-async def test_native_verifier_keeps_case_history_and_retires_it_before_unrelated_case(tmp_path):
+async def test_native_verifier_keeps_history_isolated_between_concurrent_cases(tmp_path):
     from langchain_openai import ChatOpenAI
     from service.review.verifier import ReviewVerifier
 
@@ -220,7 +220,15 @@ async def test_native_verifier_keeps_case_history_and_retires_it_before_unrelate
         {"memberIds": ["issue-1"], "representativeId": "issue-1"},
         {"memberIds": ["issue-2"], "representativeId": "issue-2"},
     ]}))
-    model = NativeModel([first_read, first_verdict, second_verdict, final_partition])
+    replies = {"case-1": iter([first_read, first_verdict]), "case-2": iter([second_verdict]),
+               "reconcile": iter([final_partition])}
+
+    async def respond(messages, **options):
+        payload = json.loads(messages[1][1])
+        return next(replies[payload.get("caseId", "reconcile")])
+
+    model = NativeModel([])
+    model.bound.ainvoke.side_effect = respond
     output = await ReviewVerifier(None).verify(llm=model, request=REQUEST, findings=findings,
         summaries=[{"batchId": "unrelated", "paths": ["other.py"], "summary": {"contracts": ["irrelevant summary corpus"]}}],
         parts=parts, source_context=sources,
@@ -229,9 +237,13 @@ async def test_native_verifier_keeps_case_history_and_retires_it_before_unrelate
     assert not output.diagnostics
     assert model.bound.ainvoke.await_count == 4
 
-    initial_messages = model.bound.ainvoke.call_args_list[0].args[0]
-    continued_messages = model.bound.ainvoke.call_args_list[1].args[0]
-    next_case_messages = model.bound.ainvoke.call_args_list[2].args[0]
+    histories = {}
+    for call in model.bound.ainvoke.call_args_list:
+        messages = call.args[0]
+        case_id = json.loads(messages[1][1]).get("caseId", "reconcile")
+        histories.setdefault(case_id, []).append(messages)
+    initial_messages, continued_messages = histories["case-1"]
+    next_case_messages, = histories["case-2"]
     initial_payload = json.loads(initial_messages[1][1])
     assert len(initial_messages) == 2
     assert continued_messages[:2] == initial_messages  # Stable full source prefix.

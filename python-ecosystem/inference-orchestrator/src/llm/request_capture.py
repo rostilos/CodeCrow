@@ -119,9 +119,13 @@ def _private_directory(path: Path) -> int:
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     stat = os.fstat(descriptor)
-    if stat.st_uid != os.geteuid() or stat.st_mode & 0o077:
+    # Captures are written beneath opaque tenant directories. Docker commonly
+    # creates the mount root as 0755; privacy belongs to the 0700 children and 0600
+    # files below them. It must still be service-owned and not writable by
+    # another user, so they cannot replace a tenant directory between opens.
+    if stat.st_uid != os.geteuid() or stat.st_mode & 0o022:
         os.close(descriptor)
-        raise PermissionError("capture directory must be private and owned by service user")
+        raise PermissionError("capture root must be service-owned and not group/world writable")
     return descriptor
 
 

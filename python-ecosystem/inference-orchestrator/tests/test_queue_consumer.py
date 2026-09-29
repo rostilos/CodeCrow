@@ -77,6 +77,29 @@ async def test_review_events_are_ordered_and_terminal_event_is_last():
 
 
 @pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("issues", [[], [{"file": "totals.php", "line": 1, "title": "Division by zero"}]])
+async def test_partial_review_is_a_final_result_with_findings_and_coverage_preserved(issues):
+    result = {
+        "status": "partial", "comment": "Reviewed with unresolved vendor source",
+        "issues": issues, "reviewedHunkIds": ["changed-part"],
+        "unresolvedScopes": {"vendor-class": "Vendor declaration unavailable"},
+        "diagnostics": ["Search did not cover all requested source; absence is not evidence."],
+    }
+    service = MagicMock()
+    service.process_review_request = AsyncMock(return_value={"result": result})
+    consumer = RedisQueueConsumer(service)
+    consumer._redis = FakeRedis()
+
+    with patch("server.queue_consumer.ReviewRequestDto", return_value=MagicMock()):
+        await consumer._handle_job(_payload())
+
+    events = [event for _, event in consumer._redis.events]
+    assert events[-1] == {"type": "final", "result": result}
+    assert sum(event["type"] in {"error", "final"} for event in events) == 1
+    assert all(event["type"] != "error" for event in events)
+
+
+@pytest.mark.asyncio(loop_scope="function")
 async def test_long_running_review_emits_liveness_before_terminal_event():
     review_service = MagicMock()
     release = asyncio.Event()
@@ -304,3 +327,127 @@ def test_redis_outage_diagnostic_is_bounded_until_recovery():
         "Redis connectivity restored during %s",
         "review consumer heartbeat",
     )
+
+
+@pytest.mark.asyncio
+async def test_default_capacity_admits_sixteen_reviews_and_they_all_reach_source_and_model(monkeypatch):
+    from collections import deque
+    from types import SimpleNamespace
+    from service.review.execution_scheduler import review_context_slot
+    from service.review.model_calls import invoke_json
+
+    monkeypatch.delenv("MAX_CONCURRENT_REVIEWS", raising=False)
+    monkeypatch.delenv("MAX_CONCURRENT_REVIEW_CALLS", raising=False)
+    source_started = set()
+    model_started = set()
+    all_source_started = asyncio.Event()
+    all_model_started = asyncio.Event()
+    release_source = asyncio.Event()
+    release_model = asyncio.Event()
+
+    class Model:
+        async def ainvoke(self, messages, **kwargs):
+            project = json.loads(messages[1][1])["project"]
+            model_started.add(project)
+            if len(model_started) == 16:
+                all_model_started.set()
+            await release_model.wait()
+            return SimpleNamespace(content='{"issues":[]}')
+
+    model = Model()
+    service = ReviewService(SimpleNamespace(enabled=False))
+
+    async def review(request, callback):
+        async with review_context_slot("graph_preparation"):
+            source_started.add(request.projectId)
+            if len(source_started) == 16:
+                all_source_started.set()
+            await release_source.wait()
+        return {"status": "complete", **await invoke_json(
+            model, request, stage="discovery", system="unchanged instructions",
+            payload={"project": request.projectId},
+        )}
+
+    monkeypatch.setattr(service, "_review", review)
+    consumer = RedisQueueConsumer(service)
+
+    class QueueRedis(FakeRedis):
+        def __init__(self):
+            super().__init__()
+            self.pending = deque(json.dumps({
+                "job_id": f"job-{number}",
+                "request": {"projectId": number, "pullRequestId": str(number)},
+            }) for number in range(17))
+            self.popped = 0
+
+        async def brpop(self, *args, **kwargs):
+            if not self.pending:
+                await asyncio.Event().wait()
+            self.popped += 1
+            return consumer.job_queue_key, self.pending.popleft()
+
+    redis_client = QueueRedis()
+    consumer._redis = redis_client
+    consumer.is_running = True
+    monkeypatch.setattr("server.queue_consumer.ReviewRequestDto", lambda **values: SimpleNamespace(
+        **values, aiProvider="openai", sourceBranchName="feature", targetBranchName="main",
+    ))
+    intake = asyncio.create_task(consumer._consume_loop())
+    try:
+        await asyncio.wait_for(all_source_started.wait(), 2)
+        assert consumer.max_concurrent == 16
+        assert len(consumer._job_tasks) == 16
+        assert redis_client.popped == 16
+        assert len(redis_client.pending) == 1
+        await asyncio.sleep(0)
+        assert sum(event.get("state") == "acknowledged" for _, event in redis_client.events) == 16
+
+        release_source.set()
+        await asyncio.wait_for(all_model_started.wait(), 2)
+        assert service._model_scheduler._active == 16
+        assert not any(event.get("type") == "final" for _, event in redis_client.events)
+        assert redis_client.popped == 16  # No unbounded dequeue behind busy jobs.
+
+        consumer.is_running = False
+        intake.cancel()
+        await asyncio.gather(intake, return_exceptions=True)
+        release_model.set()
+        await asyncio.wait_for(asyncio.gather(*tuple(consumer._job_tasks)), 2)
+        assert sum(event.get("type") == "final" for _, event in redis_client.events) == 16
+        assert len(redis_client.pending) == 1
+        assert service._model_scheduler._active == 0
+        assert not service._model_scheduler._pending
+    finally:
+        consumer.is_running = False
+        intake.cancel()
+        release_source.set()
+        release_model.set()
+        await asyncio.gather(intake, *tuple(consumer._job_tasks), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_review_handler_joins_its_processing_task_before_returning_capacity(monkeypatch):
+    from types import SimpleNamespace
+
+    started = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def process(request, callback):
+        try:
+            started.set()
+            await asyncio.Event().wait()
+        finally:
+            finished.set()
+
+    consumer = RedisQueueConsumer(SimpleNamespace(process_review_request=process))
+    consumer._redis = FakeRedis()
+    monkeypatch.setattr("server.queue_consumer.ReviewRequestDto", lambda **values: SimpleNamespace(
+        **values, pullRequestId="42", sourceBranchName="feature", targetBranchName="main",
+    ))
+    task = asyncio.create_task(consumer._bounded_handle_job(_payload()))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert finished.is_set()
+    assert consumer._job_semaphore._value == consumer.max_concurrent

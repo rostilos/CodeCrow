@@ -10,12 +10,15 @@ async def service_event_stream(
     *,
     queued_message: str,
     result_value: Callable[[Any], Any] = lambda value: value,
+    heartbeat_seconds: float = 30.0,
 ) -> AsyncIterator[str]:
     """Deliver ordered progress and exactly one terminal event.
 
     Completion uses an explicit sentinel instead of polling or adding a fixed
     delay to every completed request. Closing the stream cancels and joins its
-    processor before shared application clients can be closed.
+    processor before shared application clients can be closed. Idle heartbeats
+    keep NDJSON connections alive while queued or awaiting a provider; they do
+    not claim stage progress or add delay to normal events.
     """
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     terminal = False
@@ -40,7 +43,15 @@ async def service_event_stream(
     task = asyncio.create_task(run())
     try:
         while True:
-            event = await queue.get()
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+            except TimeoutError:
+                if not terminal:
+                    yield json.dumps({
+                        "type": "status", "state": "heartbeat",
+                        "message": "Request is still active; waiting for progress",
+                    }) + "\n"
+                continue
             if event is None:
                 break
             yield json.dumps(event) + "\n"

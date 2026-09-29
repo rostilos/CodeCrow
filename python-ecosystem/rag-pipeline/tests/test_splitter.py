@@ -1,4 +1,4 @@
-"""Focused coverage for the bounded AST source splitter."""
+"""Coverage for complete structural source units and metadata."""
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -32,7 +32,7 @@ def test_chunk_identity_and_file_hash_are_deterministic():
     assert compute_file_hash("value = 1") != compute_file_hash("value = 2")
 
 
-def test_default_splitter_restores_bounded_chunk_configuration():
+def test_existing_splitter_constructor_configuration_remains_accepted():
     splitter = ASTCodeSplitter()
 
     assert splitter.max_chunk_size == 8000
@@ -305,7 +305,7 @@ def test_symbol_inventory_is_complete_without_changing_primary_path_identity():
     assert not metadata.get("structural_metadata_partial_reasons")
 
 
-def test_unknown_source_is_split_into_bounded_raw_chunks():
+def test_unknown_source_remains_one_complete_raw_unit():
     source = "\n".join(
         f"opaque line {index:03d} " + "x" * 30
         for index in range(30)
@@ -320,8 +320,8 @@ def test_unknown_source_is_split_into_bounded_raw_chunks():
         Document(source, {"path": "assets/data.unknown", "language": "text"})
     ])
 
-    assert len(nodes) > 1
-    assert all(0 < len(node.text) <= 160 for node in nodes)
+    assert len(nodes) == 1
+    assert nodes[0].text == source
     assert all(
         node.metadata["content_type"] == ContentType.FALLBACK.value
         for node in nodes
@@ -331,7 +331,7 @@ def test_unknown_source_is_split_into_bounded_raw_chunks():
     assert "".join(node.text for node in nodes) == source
 
 
-def test_fallback_preserves_a_small_trailing_fragment_exactly():
+def test_fallback_preserves_small_tail_in_the_complete_source():
     source = ("A" * 20) + "\n" + "z"
     splitter = ASTCodeSplitter(
         max_chunk_size=21,
@@ -344,13 +344,13 @@ def test_fallback_preserves_a_small_trailing_fragment_exactly():
         {"path": "assets/tail.unknown", "language": "text"},
     ))
 
-    assert [node.text for node in nodes] == [("A" * 20) + "\n", "z"]
+    assert [node.text for node in nodes] == [source]
     assert "".join(node.text for node in nodes).encode("utf-8") == source.encode(
         "utf-8"
     )
 
 
-def test_fallback_losslessly_bounds_a_fragment_above_thirty_thousand_chars():
+def test_fallback_preserves_large_source_without_size_fragmentation():
     source = "X" * 35_001
     splitter = ASTCodeSplitter(
         max_chunk_size=50_000,
@@ -363,15 +363,11 @@ def test_fallback_losslessly_bounds_a_fragment_above_thirty_thousand_chars():
         {"path": "assets/large.unknown", "language": "text"},
     ))
 
-    assert [len(node.text) for node in nodes] == [8_000, 8_000, 8_000, 8_000, 3_001]
-    assert all(
-        len(node.text) <= ASTCodeSplitter.DEFAULT_MAX_CHUNK_SIZE
-        for node in nodes
-    )
+    assert [node.text for node in nodes] == [source]
     assert "".join(node.text for node in nodes) == source
 
 
-def test_fallback_hard_splits_only_an_indivisible_atom_without_byte_loss():
+def test_fallback_keeps_large_unicode_atom_and_exact_byte_coordinates():
     source = "界" * 25_001
     splitter = ASTCodeSplitter(
         max_chunk_size=10_000,
@@ -384,17 +380,15 @@ def test_fallback_hard_splits_only_an_indivisible_atom_without_byte_loss():
         {"path": "assets/atom.unknown", "language": "text"},
     ))
 
-    assert [len(node.text) for node in nodes] == [8_000, 8_000, 8_000, 1_001]
-    assert all(
-        len(node.text) <= ASTCodeSplitter.DEFAULT_MAX_CHUNK_SIZE
-        for node in nodes
-    )
+    assert [node.text for node in nodes] == [source]
+    assert nodes[0].metadata["start_byte"] == 0
+    assert nodes[0].metadata["end_byte"] == len(source.encode("utf-8"))
     assert b"".join(node.text.encode("utf-8") for node in nodes) == source.encode(
         "utf-8"
     )
 
 
-def test_oversized_ast_unit_is_fragmented_without_copying_global_details():
+def test_large_ast_unit_retains_complete_owner_source_and_relation_metadata():
     splitter = ASTCodeSplitter(
         max_chunk_size=120,
         min_chunk_size=1,
@@ -408,8 +402,7 @@ def test_oversized_ast_unit_is_fragmented_without_copying_global_details():
         content_type=ContentType.FUNCTIONS_CLASSES,
         language="python",
         path="src/service.py",
-        # Only the primary owning identity is repeated on each fragment; the
-        # intact semantic unit path retains the complete symbol inventory.
+        # Source size must not remove any owning declaration metadata.
         symbol_names=["run", *[f"nested_{index}_界" for index in range(70)]],
         calls=[f"dependency_{index}" for index in range(20)],
         start_line=1,
@@ -424,41 +417,16 @@ def test_oversized_ast_unit_is_fragmented_without_copying_global_details():
         chunk.path,
     )
 
-    assert len(nodes) > 1
-    assert all(len(node.text) <= 120 for node in nodes)
-    assert all(node.metadata["is_fragment"] is True for node in nodes)
-    assert all(
-        node.metadata["content_type"] == ContentType.OVERSIZED_SPLIT.value
-        for node in nodes
-    )
-    assert all(node.metadata["primary_name"] == "run" for node in nodes)
-    assert all(node.metadata["symbol_names"] == ["run"] for node in nodes)
-    assert all(node.metadata["fragment_of"] == "run" for node in nodes)
-    assert len({node.id_ for node in nodes}) == len(nodes)
-    assert [node.metadata["sub_chunk_index"] for node in nodes] == list(
-        range(len(nodes))
-    )
-    assert all(
-        node.metadata["total_sub_chunks"] == len(nodes) for node in nodes
-    )
-    assert len({node.metadata["parent_chunk_id"] for node in nodes}) == 1
-    assert all("calls" not in node.metadata for node in nodes)
-
-    previous_offset = -1
-    for node in nodes:
-        fragment_offset = chunk.content.find(node.text, previous_offset + 1)
-        assert fragment_offset >= 0
-        previous_offset = fragment_offset
-        expected_start_line = (
-            chunk.start_line
-            + chunk.content[:fragment_offset].count("\n")
-        )
-        assert node.metadata["start_line"] == expected_start_line
-        assert node.metadata["end_line"] == (
-            expected_start_line + node.text.count("\n")
-        )
-        assert chunk.start_line <= node.metadata["start_line"]
-        assert node.metadata["end_line"] <= chunk.end_line
+    assert len(nodes) == 1
+    node = nodes[0]
+    assert node.text == chunk.content
+    assert node.metadata["content_type"] == ContentType.FUNCTIONS_CLASSES.value
+    assert node.metadata["primary_name"] == "run"
+    assert node.metadata["symbol_names"] == chunk.symbol_names
+    assert node.metadata["calls"] == chunk.calls
+    assert node.metadata["start_line"] == 1
+    assert node.metadata["end_line"] == 20
+    assert "is_fragment" not in node.metadata
 
 
 def test_complete_docstring_is_preserved_in_both_metadata_paths():
@@ -565,7 +533,7 @@ def test_chunk_identity_includes_complete_content():
     assert generate_deterministic_id("src/a.py", prefix + "return 1") != generate_deterministic_id("src/a.py", prefix + "return 2")
 
 
-def test_oversized_semantic_chunk_keeps_short_final_source_fragment():
+def test_large_semantic_unit_keeps_short_final_source_statement():
     prefix = "def execute():\n" + "    work()\n" * 20
     tail = "    return False\n"
     chunk = ASTChunk(
@@ -575,10 +543,31 @@ def test_oversized_semantic_chunk_keeps_short_final_source_fragment():
         symbol_names=["execute"], node_type="function",
     )
     splitter = ASTCodeSplitter(max_chunk_size=100, min_chunk_size=50, chunk_overlap=10)
-    splitter.emitter._default_splitter = SimpleNamespace(
-        split_text=lambda _text: [prefix, tail],
-    )
-    nodes = splitter.emitter._split_oversized_chunk(chunk, None, {}, chunk.path)
-    assert [node.text for node in nodes] == [prefix, tail]
-    assert nodes[-1].metadata["start_line"] == 22
-    assert all(node.metadata["total_sub_chunks"] == 2 for node in nodes)
+    nodes = splitter.emitter._process_chunks([chunk], Document(chunk.content, {"path": chunk.path}), None, chunk.path)
+    assert [node.text for node in nodes] == [prefix + tail]
+    assert nodes[0].metadata["start_line"] == 1
+    assert nodes[0].metadata["end_line"] == 22
+    assert "total_sub_chunks" not in nodes[0].metadata
+
+
+@pytest.mark.parametrize("source", ["", "plain", "\n", "\r\n", "界\r\nalpha\nβ\n", "é\r終", "a\n\n末尾"])
+def test_query_capture_byte_points_match_prefix_scan_at_every_unicode_and_newline_boundary(monkeypatch, source):
+    from rag_pipeline.core.splitter.query_runner import QueryRunner
+    tree_sitter = pytest.importorskip("tree_sitter")
+
+    raw = source.encode("utf-8")
+    nodes = [SimpleNamespace(start_byte=offset, end_byte=offset, type="identifier")
+             for offset in range(len(raw) + 1)]
+    cursor = SimpleNamespace(matches=lambda _root: [(0, {"function": [node]}) for node in nodes])
+    monkeypatch.setattr(tree_sitter, "QueryCursor", lambda _query: cursor)
+    runner = QueryRunner()
+    monkeypatch.setattr(runner, "_get_compiled_query", lambda *_args: object())
+    matches = runner.run_query(source, "python", tree=SimpleNamespace(root_node=object()))
+    assert len(matches) == len(nodes)
+    for offset, match in enumerate(matches):
+        expected_line = raw.count(b"\n", 0, offset)
+        prior_newline = raw.rfind(b"\n", 0, offset)
+        expected_column = offset if prior_newline < 0 else offset - prior_newline - 1
+        capture = match.get("function")
+        assert capture.start_point == capture.end_point == (expected_line, expected_column)
+        assert capture.start_byte == capture.end_byte == offset

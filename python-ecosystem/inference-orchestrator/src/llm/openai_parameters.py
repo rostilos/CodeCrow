@@ -20,11 +20,9 @@ def _openrouter_custom_extra_body(
     request_parameters: Optional[dict[str, Any]],
 ) -> dict[str, Any]:
     """Translate request-scoped OpenRouter controls into its JSON body."""
-    if not request_parameters:
-        return {}
     removed_output_limits: list[str] = []
     incoming = _without_output_token_limits(
-        request_parameters,
+        request_parameters or {},
         path="openrouter.request",
         removed=removed_output_limits,
     )
@@ -64,6 +62,17 @@ def _openrouter_custom_extra_body(
             "finite stage cap remains authoritative: %s",
             sorted(removed_output_limits),
         )
+    provider = extra_body.get("provider")
+    if provider is None or isinstance(provider, dict):
+        provider = dict(provider or {})
+        selection_keys = [key for key in ("order", "sort", "only") if key in provider]
+        if not selection_keys:
+            # Same model and reasoning behavior, ordered by generation speed.
+            # Explicit routing/privacy/quantization/fallback settings still win.
+            provider["sort"] = "throughput"
+        logger.info("OpenRouter provider routing: mode=%s explicit_selection_fields=%s",
+                    "explicit" if selection_keys else "default_throughput", selection_keys)
+        extra_body["provider"] = provider
     return _normalize_openrouter_chat_payload(extra_body)
 
 

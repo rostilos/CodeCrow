@@ -46,6 +46,7 @@ def review_query_payload(
     focus_paths: Optional[List[str]] = None,
     base_collection_target: Optional[str] = None,
     base_generation_manifest_sha256: Optional[str] = None,
+    base_generation_revision: Optional[str] = None,
     review_collection_target: Optional[str] = None,
     review_generation_manifest_sha256: Optional[str] = None,
     include_patterns: Optional[List[str]] = None,
@@ -67,6 +68,7 @@ def review_query_payload(
         payload["focus_paths"] = focus_paths
     for key, value in (
         ("base_collection_target", base_collection_target),
+        ("base_generation_revision", base_generation_revision),
         (
             "base_generation_manifest_sha256",
             base_generation_manifest_sha256,

@@ -177,6 +177,40 @@ class RepositoryIndexJobQueueServiceTest {
     }
 
     @Test
+    void repositoryAccessDeferralUpdatesOnlyPendingDiagnosticFields() throws Exception {
+        OffsetDateTime attemptedAt = OffsetDateTime.now();
+        when(jobRepository.recordPendingRepositoryIndexAccessDeferral(91L, attemptedAt))
+                .thenReturn(1);
+
+        assertThat(queue.recordRepositoryAccessDeferral(91L, attemptedAt)).isTrue();
+
+        Query query = JobRepository.class.getMethod(
+                        "recordPendingRepositoryIndexAccessDeferral",
+                        Long.class, OffsetDateTime.class)
+                .getAnnotation(Query.class);
+        assertThat(query.value())
+                .contains("Waiting for repository access; branch-head lookup will retry")
+                .contains("j.updatedAt = :attemptedAt WHERE j.id = :jobId")
+                .contains("j.jobType = org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD")
+                .contains("j.status = org.rostilos.codecrow.core.model.job.JobStatus.PENDING")
+                .doesNotContain("j.commitHash =", "SET j.status", ", j.status =");
+        verify(jobRepository, never()).save(any());
+    }
+
+    @Test
+    void concurrentClaimOrCompletionCannotBeOverwrittenByAnAccessDiagnostic() {
+        OffsetDateTime attemptedAt = OffsetDateTime.now();
+        when(jobRepository.recordPendingRepositoryIndexAccessDeferral(91L, attemptedAt))
+                .thenReturn(0);
+
+        assertThat(queue.recordRepositoryAccessDeferral(91L, attemptedAt)).isFalse();
+
+        verify(jobRepository).recordPendingRepositoryIndexAccessDeferral(91L, attemptedAt);
+        verifyNoMoreInteractions(jobRepository);
+        verifyNoInteractions(jobService);
+    }
+
+    @Test
     void dispatchQueryRotatesTouchedFailuresAndSerializesBranchSuccessors()
             throws Exception {
         Query query = JobRepository.class.getMethod(

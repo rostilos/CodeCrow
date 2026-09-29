@@ -15,7 +15,9 @@ from langchain_core.messages import SystemMessage, ToolMessage
 
 from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
 from llm.request_capture import model_capture
+from llm.review_invocation import invoke_review_model
 from service.review.model_calls import parse_object
+from service.review.execution_scheduler import review_model_slot
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +83,10 @@ class ReviewAgentSession:
                 "otherwise return the requested final review object. Available tools: "
                 + json.dumps(self.schemas, ensure_ascii=False)
             )))
-        with model_capture(self.request, stage=stage, turn=self._turn, batch_ids=batch_ids):
-            response = await self.model.ainvoke(outgoing, **self.options)
+        async with review_model_slot(stage):
+            with model_capture(self.request, stage=stage, turn=self._turn, batch_ids=batch_ids):
+                response = await invoke_review_model(self.model, outgoing, request=self.request, stage=stage,
+                                                     options=self.options, provider_model=self.llm)
         logger.info("Review model response: stage=%s PR=%s protocol=%s usage=%s",
                     stage, getattr(self.request, "pullRequestId", None),
                     "native_tools" if self.native_tools else "json_fallback",

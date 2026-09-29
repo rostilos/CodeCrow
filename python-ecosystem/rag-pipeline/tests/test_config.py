@@ -16,7 +16,7 @@ class TestRAGConfig:
         with patch.dict(os.environ, {}, clear=True):
             config = RAGConfig()
         assert config.structural_index_root == "/var/lib/codecrow/structural-index"
-        assert config.full_index_concurrency == 1
+        assert config.full_index_concurrency == 16
         assert config.architecture_finalization_timeout_seconds == 600
         assert config.review_generation_ttl_seconds == 21600
         assert config.max_file_size_bytes == 512 * 1024
