@@ -8,13 +8,14 @@ from pathlib import Path
 import subprocess
 import sys
 
-MODEL = 'gpt-6-luna'
-TOOL = 'CodeCrow-RestoreAug-CodexLuna-25PR-20260930'
+from .rpc import MODEL
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-dir', type=Path, required=True)
+    parser.add_argument('--limit', type=int, required=True)
+    parser.add_argument('--tool-name', required=True)
     parser.add_argument('--resume', action='store_true')
     parser.add_argument('--score-only', action='store_true')
     args = parser.parse_args()
@@ -50,19 +51,19 @@ def main():
         '--rag-source', 'benchmark', '--rag-index-scope', 'repository',
         '--benchmark-dir', str(run/'scorer'), '--work-dir', str(run/'work'),
         '--output', str(run/'benchmark_data.json'), '--workspace', 'code-review-benchmark',
-        '--tool-name', TOOL, '--limit', '25', '--jobs', '5', '--index-jobs', '5',
+        '--tool-name', args.tool_name, '--limit', str(args.limit), '--jobs', '5', '--index-jobs', '5',
         '--review-timeout', '10800', '--index-timeout', '7200', '--skip-existing-index',
         '--rag-url', env['CODECROW_RAG_URL'], '--inference-url', env['CODECROW_INFERENCE_URL'],
         '--rag-filesystem-mode', 'docker', '--rag-container', env['CODECROW_RAG_CONTAINER'],
         '--rag-workspace-root', '/tmp', '--agentic-workspace-mode', 'docker',
         '--agentic-container', env['CODECROW_AGENTIC_CONTAINER'],
-        '--agentic-workspace-root', '/tmp/codecrow-agentic-codex-luna-25',
+        '--agentic-workspace-root', '/tmp/codecrow-agentic-codex-subscription',
         '--index-capacity-lock', str(run/'work/index-capacity.lock'),
         '--ai-provider', 'openai_compatible', '--ai-model', MODEL,
         '--ai-base-url', env['CODECROW_AI_BASE_URL'], '--ai-custom-parameters', '{}']
     score = common + ['score', '--benchmark-dir', str(run/'scorer'),
         '--work-dir', str(run/'work'), '--output', str(run/'benchmark_data.json'),
-        '--tool-name', TOOL, '--score-run-name', run.name, '--skip-uv-sync']
+        '--tool-name', args.tool_name, '--score-run-name', run.name, '--skip-uv-sync']
     if args.resume:
         review.append('--resume'); score.append('--reuse-score')
     steps = [('review', review), ('scoring', score)]

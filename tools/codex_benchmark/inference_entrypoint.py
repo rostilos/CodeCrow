@@ -8,7 +8,7 @@ import runpy
 import sys
 
 
-def install_subscription_guard(factory, bridge_url: str, bridge_token: str):
+def install_subscription_guard(factory, bridge_url: str, bridge_token: str, model_name: str = "gpt-6-luna"):
     original = factory.create_llm
     signature = inspect.signature(original)
 
@@ -19,11 +19,11 @@ def install_subscription_guard(factory, bridge_url: str, bridge_token: str):
         provider = str(values.get("ai_provider", "")).lower().replace("-", "_")
         if (
             provider != "openai_compatible"
-            or values.get("ai_model") != "gpt-6-luna"
+            or values.get("ai_model") != model_name
             or str(values.get("ai_base_url", "")).rstrip("/") != bridge_url.rstrip("/")
             or values.get("ai_api_key") != bridge_token
         ):
-            raise ValueError("This benchmark permits only the local Codex subscription bridge with gpt-6-luna")
+            raise ValueError(f"This benchmark permits only the local Codex subscription bridge with {model_name}")
         model = original(*args, **kwargs)
         # LangChain auto-selects Responses for GPT-6. This local facade implements
         # Chat Completions; app-server remains the actual subscription transport.
@@ -48,7 +48,7 @@ def main():
     for name in ("OPENROUTER_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
         os.environ.pop(name, None)
     from llm.llm_factory import LLMFactory
-    install_subscription_guard(LLMFactory, bridge_url, bridge_token)
+    install_subscription_guard(LLMFactory, bridge_url, bridge_token, os.environ.get("CODECROW_CODEX_BENCHMARK_MODEL", "gpt-6-luna"))
     sys.argv = [str(application / "main.py")]
     runpy.run_path(sys.argv[0], run_name="__main__")
 

@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-MODEL = "gpt-6-luna"
+MODEL = os.environ.get("CODECROW_CODEX_BENCHMARK_MODEL", "gpt-6-luna")
 CONFIG = {
     "model_provider": "openai",
     "forced_login_method": "chatgpt",
