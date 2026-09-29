@@ -35,6 +35,7 @@ from .import_graph import (
     ImportBinding,
     ImportFileRecord,
     ImportGraphSession,
+    ImportRecordIndex,
     ImportedCall,
 )
 from .manifest import load_descriptor, load_descriptors
@@ -60,6 +61,7 @@ __all__ = [
     "ImportBinding",
     "ImportFileRecord",
     "ImportGraphSession",
+    "ImportRecordIndex",
     "ImportedCall",
     "OutcomeStatus",
     "PluginCatalog",

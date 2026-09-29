@@ -1059,8 +1059,7 @@ async def test_normal_review_entrypoint_routes_marked_job_to_prompt_capture(
     )
     monkeypatch.setattr(ReviewService, "_process_review", fail_normal_review)
 
-    service = ReviewService.__new__(ReviewService)
-    service._review_semaphore = asyncio.Semaphore(1)
+    service = ReviewService()
     service.rag_client = DeterministicRagSpy()
     request = _request().model_copy(update={
         "promptDryRun": True,

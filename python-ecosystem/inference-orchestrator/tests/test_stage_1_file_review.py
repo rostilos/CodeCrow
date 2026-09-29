@@ -296,6 +296,8 @@ def _packing_request(paths, enrichment):
         commitHash="a" * 40,
         maxAllowedTokens=200000,
         useMcpTools=False,
+        ragBaseGenerationRevision=None,
+        ragIndexPolicy=None,
     )
     request.get_rag_branch.return_value = "feature"
     request.get_rag_base_branch.return_value = "main"
@@ -332,7 +334,7 @@ def test_exact_proposed_tree_binding_accepts_dedicated_rag_snapshot_path():
 
 @pytest.mark.parametrize(
     "field",
-    ("ragCollectionTarget", "ragBaseGenerationManifestSha256"),
+    ("ragReviewCollectionTarget", "ragReviewGenerationManifestSha256"),
 )
 def test_exact_proposed_tree_binding_requires_sealed_generation_receipt(field):
     request = _bind_exact_proposed_tree(_packing_request([], MagicMock()))

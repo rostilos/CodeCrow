@@ -1,6 +1,7 @@
 """
 JSON parsing, repair, and cleaning utilities for LLM responses.
 """
+from service.review.execution_scheduler import review_model_slot
 import json
 import logging
 import os
@@ -293,10 +294,11 @@ async def repair_json_with_llm(
         schema,
         max(1_000, input_token_target or JSON_REPAIR_INPUT_TOKEN_TARGET),
     )
-    response = await llm.ainvoke(
-        prompt,
-        **reasoning_request_kwargs(llm, ReasoningEffort.NONE),
-    )
+    async with review_model_slot("json_utils"):
+        response = await llm.ainvoke(
+            prompt,
+            **reasoning_request_kwargs(llm, ReasoningEffort.NONE),
+        )
     return extract_llm_response_text(response)
 
 

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 
 DEFAULT_MAX_FILE_SIZE_BYTES = 512 * 1024
+DEFAULT_FULL_INDEX_CONCURRENCY = 16
 
 
 class RAGConfig(BaseModel):
@@ -20,7 +21,7 @@ class RAGConfig(BaseModel):
     )
 
     full_index_concurrency: int = Field(
-        default_factory=lambda: int(os.getenv("RAG_FULL_INDEX_CONCURRENCY", "1")),
+        default_factory=lambda: int(os.getenv("RAG_FULL_INDEX_CONCURRENCY", str(DEFAULT_FULL_INDEX_CONCURRENCY))),
         ge=1,
     )
     rag_mutation_lease_seconds: int = Field(

@@ -1,6 +1,7 @@
 """
 Stage 3: Aggregation & final report — executive summary, optional MCP verification.
 """
+from service.review.execution_scheduler import review_model_slot
 import json
 import logging
 import os
@@ -396,10 +397,11 @@ async def _invoke_stage_3_report(
     allow_retry: bool = True,
     reasoning_effort: ReasoningEffort = ReasoningEffort.LOW,
 ) -> Dict[str, Any]:
-    response = await llm.ainvoke(
-        prompt,
-        **reasoning_request_kwargs(llm, reasoning_effort),
-    )
+    async with review_model_slot("stage_3_aggregation"):
+        response = await llm.ainvoke(
+            prompt,
+            **reasoning_request_kwargs(llm, reasoning_effort),
+        )
     if (
         _response_finished_by_length(response)
         and allow_retry
@@ -409,13 +411,14 @@ async def _invoke_stage_3_report(
             "Stage 3 report exhausted its output; retrying once as a "
             "reasoning-free direct output request"
         )
-        response = await fallback_llm.ainvoke(
-            prompt,
-            **reasoning_request_kwargs(
-                fallback_llm,
-                ReasoningEffort.NONE,
-            ),
-        )
+        async with review_model_slot("stage_3_aggregation"):
+            response = await fallback_llm.ainvoke(
+                prompt,
+                **reasoning_request_kwargs(
+                    fallback_llm,
+                    ReasoningEffort.NONE,
+                ),
+            )
     return {"report": extract_llm_response_text(response), "dismissed_issue_ids": []}
 
 

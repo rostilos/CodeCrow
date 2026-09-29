@@ -16,7 +16,8 @@ from codecrow_plugins import (
     ValidationResult,
 )
 
-from .repository import PhpRepositorySession, php_file_use_facts
+from .repository import PhpRepositorySession
+from .ast_parser import php_file_use_facts
 
 
 _NAMESPACE = re.compile(r"^\s*namespace\s+([^;{]+)", re.MULTILINE)

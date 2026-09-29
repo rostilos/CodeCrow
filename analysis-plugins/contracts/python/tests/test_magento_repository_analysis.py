@@ -1604,7 +1604,9 @@ def test_layout_binds_selected_phtml_to_exact_block_method_and_view_model(
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     plugin = catalog.implementation("magento")
     session = plugin.start_repository_analysis("0123456789abcdef").value
-    repository_module = sys.modules[session.__class__.__module__]
+    repository_module = sys.modules[
+        session.__class__.__module__.rsplit(".", 1)[0] + ".frontend_topology"
+    ]
     monkeypatch.setattr(
         repository_module,
         "extract_template_global_references",

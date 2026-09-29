@@ -1,6 +1,8 @@
 """Serialize MCP tool calls per connection without reducing job parallelism."""
 
 import asyncio
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager, nullcontext
 import math
 import os
 from typing import Any
@@ -31,8 +33,13 @@ def _tool_call_timeout_seconds(configured: float | None = None) -> float:
 class PerConnectionToolCallMiddleware:
     """Keep concurrent tool responses from contending on one MCP transport."""
 
-    def __init__(self, operation_timeout_seconds: float | None = None) -> None:
+    def __init__(
+            self,
+            operation_timeout_seconds: float | None = None,
+            admission_context: Callable[[], AbstractAsyncContextManager[Any]] = nullcontext,
+    ) -> None:
         self._connection_locks: dict[str, asyncio.Lock] = {}
+        self._admission_context = admission_context
         self.operation_timeout_seconds = _tool_call_timeout_seconds(
             operation_timeout_seconds
         )
@@ -41,6 +48,12 @@ class PerConnectionToolCallMiddleware:
         if getattr(context, "method", None) != "tools/call":
             return await call_next(context)
 
+        # Shared source admission belongs to the host. Waiting for its capacity
+        # does not consume the existing serialized-operation timeout.
+        async with self._admission_context():
+            return await self._call_serialized(context, call_next)
+
+    async def _call_serialized(self, context: Any, call_next: Any) -> Any:
         connection_id = str(getattr(context, "connection_id", ""))
         lock = self._connection_locks.setdefault(
             connection_id,
@@ -69,9 +82,11 @@ def install_per_connection_tool_serialization(
         client: Any,
         *,
         operation_timeout_seconds: float | None = None,
+        admission_context: Callable[[], AbstractAsyncContextManager[Any]] = nullcontext,
 ) -> Any:
     """Install one request-scoped serializer before MCP sessions are created."""
     client.add_middleware(PerConnectionToolCallMiddleware(
         operation_timeout_seconds=operation_timeout_seconds,
+        admission_context=admission_context,
     ))
     return client

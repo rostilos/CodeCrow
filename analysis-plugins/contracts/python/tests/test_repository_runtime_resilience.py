@@ -250,3 +250,50 @@ def test_repository_runtime_discards_result_that_returns_after_deadline(
     assert [(item.code, item.recoverable) for item in diagnostics] == [
         ("plugin-repository-finalization-timeout", True),
     ]
+
+
+class _ClosableRepositorySession(_StaticRepositorySession):
+    def __init__(self, *, fail_close=False):
+        super().__init__(RepositoryAnalysis())
+        self.close_count = 0
+        self.fail_close = fail_close
+
+    def close(self):
+        self.close_count += 1
+        if self.fail_close:
+            raise RuntimeError("cleanup unavailable")
+
+
+def test_repository_runtime_closes_all_sessions_when_deadline_skips_finalization():
+    first = _ClosableRepositorySession()
+    second = _ClosableRepositorySession()
+    handle = RepositoryAnalysisHandle(
+        SimpleNamespace(MAX_REPOSITORY_SYMBOLS=10, MAX_ARCHITECTURE_PACKETS=10),
+        [("first", first), ("second", second)],
+        [],
+    )
+    analysis, diagnostics = handle.finish(deadline=time.monotonic() - 1)
+    assert analysis == RepositoryAnalysis()
+    assert first.close_count == second.close_count == 1
+    assert not first.finished and not second.finished
+    assert not handle.active
+    assert [item.code for item in diagnostics] == ["plugin-repository-finalization-timeout"]
+    handle.close()
+    assert first.close_count == second.close_count == 1
+
+
+def test_repository_runtime_cleanup_failure_is_recoverable_and_other_sessions_close():
+    first = _ClosableRepositorySession(fail_close=True)
+    second = _ClosableRepositorySession()
+    handle = RepositoryAnalysisHandle(
+        SimpleNamespace(MAX_REPOSITORY_SYMBOLS=10, MAX_ARCHITECTURE_PACKETS=10),
+        [("first", first), ("second", second)],
+        [],
+    )
+    analysis, diagnostics = handle.finish()
+    assert analysis == RepositoryAnalysis()
+    assert first.finished and second.finished
+    assert first.close_count == second.close_count == 1
+    assert [(item.code, item.plugin_id, item.recoverable) for item in diagnostics] == [
+        ("plugin-repository-close-exception", "first", True),
+    ]

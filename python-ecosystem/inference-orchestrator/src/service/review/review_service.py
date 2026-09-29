@@ -1,3 +1,7 @@
+from service.runtime_capacity import review_concurrency, review_call_concurrency
+from service.review.execution_scheduler import (
+    FairReviewScheduler, review_execution, review_context_slot,
+)
 import os
 import asyncio
 import json
@@ -14,7 +18,6 @@ from mcp_use import MCPClient
 from model.dtos import ReviewRequestDto
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
-from utils.response_parser import ResponseParser
 from utils.mcp_tool_serialization import (
     install_per_connection_tool_serialization,
 )
@@ -32,7 +35,7 @@ from service.review.evidence_scopes import (
     select_review_evidence_diff,
 )
 from utils.hunk_coverage import validate_acquired_diff_manifest
-from utils.error_sanitizer import create_user_friendly_error
+from utils.error_sanitizer import create_user_friendly_error, create_error_response
 from service.review.orchestrator import MultiStageReviewOrchestrator
 from service.review.snapshot_identity import (
     resolve_exact_structural_base_revision,
@@ -47,9 +50,6 @@ class ReviewService:
     # Maximum retries for LLM-based response fixing
     MAX_FIX_RETRIES = 2
 
-    # Maximum concurrent reviews (each spawns a JVM subprocess + LLM calls)
-    MAX_CONCURRENT_REVIEWS = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4"))
-
     # Hard timeout ceiling per review (seconds). Configurable via .env
     REVIEW_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "1500"))
     MCP_SESSION_INITIALIZATION_TIMEOUT_SECONDS = float(os.environ.get(
@@ -60,15 +60,17 @@ class ReviewService:
         "MCP_SESSION_CLOSE_TIMEOUT_SECONDS",
         "10",
     ))
-    def __init__(self):
+    def __init__(self, rag_client: Optional[RagClient] = None):
         load_dotenv(interpolate=False)
         self.default_jar_path = os.environ.get(
             "MCP_SERVER_JAR",
             #"/var/www/html/codecrow/codecrow-public/java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar",
             "/app/codecrow-vcs-mcp-1.0.jar"
         )
-        self.rag_client = RagClient()
-        self._review_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_REVIEWS)
+        self.rag_client = rag_client or RagClient()
+        self._model_scheduler = FairReviewScheduler(review_call_concurrency())
+        self._context_semaphore = asyncio.Semaphore(review_concurrency())
+        self._preparation_semaphore = asyncio.Semaphore(review_concurrency())
 
     async def process_review_request(
             self,
@@ -92,7 +94,12 @@ class ReviewService:
         # same exact immutable repository snapshot.
         validate_review_snapshot_identity(request)
         self._validate_local_only_mcp_request(request)
-        async with self._review_semaphore:
+        with review_execution(
+            self._model_scheduler, self._context_semaphore,
+            preparation_semaphore=self._preparation_semaphore,
+            event_callback=lambda event: self._emit_event(event_callback, event),
+            project_id=request.projectId, pull_request_id=request.pullRequestId,
+        ):
             if request.promptDryRun:
                 return await self._process_prompt_dry_run(request, event_callback)
             quality_capture = create_quality_capture_session(request)
@@ -346,7 +353,7 @@ class ReviewService:
                 timeout_msg = f"Review timed out after {self.REVIEW_TIMEOUT_SECONDS} seconds"
                 logger.error(timeout_msg)
                 self._emit_event(event_callback, {"type": "error", "message": timeout_msg})
-                error_response = ResponseParser.create_error_response(
+                error_response = create_error_response(
                     "Review timed out", timeout_msg
                 )
                 return {"result": error_response}
@@ -354,7 +361,7 @@ class ReviewService:
             except Exception as e:
                 logger.error(f"Direct reconciliation failed: {str(e)}", exc_info=True)
                 sanitized_message = create_user_friendly_error(e)
-                error_response = ResponseParser.create_error_response(
+                error_response = create_error_response(
                     "Direct reconciliation failed", sanitized_message
                 )
                 self._emit_event(event_callback, {
@@ -597,7 +604,7 @@ class ReviewService:
             timeout_msg = f"Review timed out after {self.REVIEW_TIMEOUT_SECONDS} seconds"
             logger.error(timeout_msg)
             self._emit_event(event_callback, {"type": "error", "message": timeout_msg})
-            error_response = ResponseParser.create_error_response(
+            error_response = create_error_response(
                 "Review timed out", timeout_msg
             )
             return {"result": error_response}
@@ -607,7 +614,7 @@ class ReviewService:
             logger.error(f"Review processing failed: {str(e)}", exc_info=True)
             sanitized_message = create_user_friendly_error(e)
             
-            error_response = ResponseParser.create_error_response(
+            error_response = create_error_response(
                 "Review execution failed", sanitized_message
             )
             self._emit_event(event_callback, {
@@ -852,8 +859,6 @@ class ReviewService:
             "source_revision": source_revision,
             "target_repo_path": structural_repo_path,
             "review_overlay_path": request.localReviewOverlayPath,
-            "manifest": request.ragBaseGenerationManifestSha256,
-            "collection_target": request.ragCollectionTarget,
             "review_collection_target": request.ragReviewCollectionTarget,
             "review_generation_manifest_sha256": (
                 request.ragReviewGenerationManifestSha256
@@ -866,11 +871,25 @@ class ReviewService:
             logger.info(
                 "Stage 1 proposed-tree graph tool is unavailable because the "
                 "request has no complete target snapshot, review overlay, "
-                "revision binding, or exact sealed base generation; repository "
+                "revision binding, or sealed review generation; repository "
                 "tools remain available without indexed relationships"
             )
             return None
 
+        for key, value in (
+            ("manifest", request.ragBaseGenerationManifestSha256),
+            ("collection_target", request.ragCollectionTarget),
+            ("base_generation_revision", request.ragBaseGenerationRevision),
+        ):
+            if value:
+                context[key] = value
+        if request.ragIndexPolicy is not None:
+            policy = request.ragIndexPolicy
+            context["include_patterns_json"] = json.dumps(policy.include_patterns)
+            context["exclude_patterns_json"] = json.dumps(policy.exclude_patterns)
+            for key, value in (("project_type", policy.project_type), ("source_root", policy.source_root)):
+                if value is not None:
+                    context[key] = value
         return context
 
     async def _prepare_rag_review_generation(
@@ -904,16 +923,24 @@ class ReviewService:
             "source_revision": source_revision,
             "target_repo_path": structural_repo_path,
             "review_overlay_path": request.localReviewOverlayPath,
-            "base_collection_target": request.ragCollectionTarget,
-            "base_generation_manifest_sha256": (
-                request.ragBaseGenerationManifestSha256
-            ),
         }
         if not all(
             isinstance(value, str) and bool(value.strip())
             for value in binding.values()
         ):
             return
+
+        if request.ragCollectionTarget and request.ragBaseGenerationManifestSha256:
+            binding["base_collection_target"] = request.ragCollectionTarget
+            binding["base_generation_manifest_sha256"] = request.ragBaseGenerationManifestSha256
+            if request.ragBaseGenerationRevision:
+                binding["base_generation_revision"] = request.ragBaseGenerationRevision
+        if request.ragIndexPolicy is not None:
+            binding["index_policy"] = request.ragIndexPolicy.model_dump()
+        if request.ragGenerationCandidates:
+            binding["base_generation_candidates"] = [
+                candidate.model_dump() for candidate in request.ragGenerationCandidates
+            ]
 
         request.ragReviewGenerationStatus = "preparing"
         self._emit_event(event_callback, {
@@ -924,7 +951,8 @@ class ReviewService:
             ),
         })
         try:
-            response = await rag_client.prepare_review_generation(**binding)
+            async with review_context_slot("graph_preparation", preparation=True):
+                response = await rag_client.prepare_review_generation(**binding)
         except Exception as error:
             response = {
                 "status": "error",
@@ -944,6 +972,15 @@ class ReviewService:
             and response_revision == source_revision
         )
         if ready:
+            if "base_collection_target" in response and "base_generation_manifest_sha256" in response:
+                # A full source build explicitly clears stale seed coordinates.
+                # Reads must bind the seed actually accepted by preparation.
+                request.ragCollectionTarget = response["base_collection_target"]
+                request.ragBaseGenerationManifestSha256 = response["base_generation_manifest_sha256"]
+            if "base_generation_revision" in response:
+                request.ragBaseGenerationRevision = response["base_generation_revision"]
+            if isinstance(response.get("index_policy"), dict):
+                request.ragIndexPolicy = ReviewRequestDto.optional_index_policy(response["index_policy"])
             request.ragReviewGenerationStatus = "ready"
             request.ragReviewCollectionTarget = collection_target
             request.ragReviewGenerationManifestSha256 = generation_manifest
@@ -1020,7 +1057,8 @@ class ReviewService:
         """Create MCP client from configuration."""
         try:
             return install_per_connection_tool_serialization(
-                MCPClient.from_dict(config)
+                MCPClient.from_dict(config),
+                admission_context=lambda: review_context_slot("repository_source"),
             )
         except Exception as e:
             raise Exception(f"Failed to construct MCPClient: {str(e)}")

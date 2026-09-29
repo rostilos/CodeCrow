@@ -37,6 +37,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final boolean useLocalMcp;
     protected final boolean useMcpTools;
     protected final boolean ragEnabled;
+    protected final ReviewIndexPolicy ragIndexPolicy;
     protected final AnalysisType analysisType;
     protected final String prTitle;
     protected final String prDescription;
@@ -89,6 +90,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.useLocalMcp = builder.useLocalMcp;
         this.useMcpTools = builder.useMcpTools;
         this.ragEnabled = builder.ragEnabled;
+        this.ragIndexPolicy = builder.ragIndexPolicy;
         this.analysisType = builder.analysisType;
         this.prTitle = builder.prTitle;
         this.prDescription = builder.prDescription;
@@ -330,6 +332,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private boolean useLocalMcp;
         private boolean useMcpTools;
         private boolean ragEnabled = true;
+        private ReviewIndexPolicy ragIndexPolicy;
         private AnalysisType analysisType;
         private String prTitle;
         private String prDescription;
@@ -569,6 +572,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             return self();
         }
 
+        public T withRagIndexPolicy(ReviewIndexPolicy ragIndexPolicy) {
+            this.ragIndexPolicy = ragIndexPolicy;
+            return self();
+        }
+
         public T withRagEnabled(boolean ragEnabled) {
             this.ragEnabled = ragEnabled;
             return self();
@@ -717,6 +725,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     @Override
     public boolean getUseMcpTools() {
         return useMcpTools;
+    }
+
+    @Override
+    public ReviewIndexPolicy getRagIndexPolicy() {
+        return ragIndexPolicy;
     }
 
     @Override

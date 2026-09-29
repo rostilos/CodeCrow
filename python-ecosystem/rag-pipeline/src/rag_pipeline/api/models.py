@@ -5,9 +5,12 @@ All models are defined here to avoid circular imports between routers
 and to keep the router files focused on endpoint logic.
 """
 import os
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_repo_path(path: str) -> str:
@@ -245,6 +248,7 @@ class ProposedTreeGenerationBinding(BaseModel):
     target_repo_path: str
     review_overlay_path: str
     base_collection_target: Optional[str] = Field(default=None, min_length=1)
+    base_generation_revision: Optional[str] = Field(default=None, min_length=1)
     base_generation_manifest_sha256: Optional[str] = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
@@ -279,8 +283,59 @@ class ProposedTreeGenerationBinding(BaseModel):
         return _validate_source_root(value)
 
 
+class ReviewIndexPolicy(BaseModel):
+    """Authoritative project scope, independent of graph seed availability."""
+
+    include_patterns: List[str] = Field(default_factory=list)
+    exclude_patterns: List[str] = Field(default_factory=list)
+    project_type: Optional[str] = None
+    source_root: Optional[str] = None
+
+
+    @field_validator("source_root")
+    @classmethod
+    def validate_source_root(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_source_root(value)
+
+
+class ReviewGenerationCandidate(BaseModel):
+    collection_target: str
+    generation_manifest_sha256: str
+    revision: str
+
+
 class ProposedTreePrepareRequest(ProposedTreeGenerationBinding):
     """Prepare and seal one review generation before Stage 1 fans out."""
+
+    index_policy: Optional[ReviewIndexPolicy] = None
+    base_generation_candidates: List[ReviewGenerationCandidate] = Field(default_factory=list)
+
+    @field_validator("index_policy", mode="before")
+    @classmethod
+    def optional_index_policy(cls, value):
+        if value is None:
+            return None
+        try:
+            return ReviewIndexPolicy.model_validate(value)
+        except (ValidationError, TypeError, ValueError):
+            logger.warning("Ignoring malformed optional repository index policy")
+            return None
+
+    @field_validator("base_generation_candidates", mode="before")
+    @classmethod
+    def optional_generation_candidates(cls, value):
+        if value is None:
+            return []
+        if not isinstance(value, (list, tuple)):
+            logger.warning("Ignoring malformed optional repository generation candidates")
+            return []
+        candidates = []
+        for position, candidate in enumerate(value):
+            try:
+                candidates.append(ReviewGenerationCandidate.model_validate(candidate))
+            except (ValidationError, TypeError, ValueError):
+                logger.warning("Ignoring malformed optional repository generation candidate at position %s", position)
+        return candidates
 
 
 class ProposedTreeQueryBinding(ProposedTreeGenerationBinding):
@@ -366,7 +421,7 @@ class ReviewImpactRadiusRequest(ProposedTreeQueryBinding):
 
 
 class ReviewTraverseRequest(ProposedTreeQueryBinding):
-    """Free-form BFS/DFS over exact proposed-tree AST and plugin relations."""
+    """BFS/DFS over proposed-tree facts, with an optional response token budget."""
 
     start: str = Field(min_length=1, max_length=1000)
     strategy: Literal["bfs", "dfs"] = "bfs"
@@ -374,7 +429,7 @@ class ReviewTraverseRequest(ProposedTreeQueryBinding):
     relation_kinds: List[str] = Field(default_factory=list, max_length=50)
     max_depth: int = Field(default=3, ge=0, le=6)
     max_results: int = Field(default=100, ge=1, le=500)
-    token_budget: int = Field(default=2000, ge=512, le=16000)
+    token_budget: int | None = Field(default=None, ge=512, le=16000)
     detail_level: Literal["minimal", "standard"] = "standard"
     include_source: bool = True
     max_source_windows: int = Field(default=6, ge=1, le=20)
@@ -414,6 +469,10 @@ class ReviewUnitRequest(ProposedTreeQueryBinding):
     unit_id: str = Field(min_length=1, max_length=200)
     offset: int = Field(default=0, ge=0)
     max_characters: int = Field(default=12000, ge=1, le=60000)
+
+
+
+
 
 
 class ReviewContextResponse(BaseModel):

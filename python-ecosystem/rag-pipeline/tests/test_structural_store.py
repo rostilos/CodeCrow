@@ -797,6 +797,116 @@ def test_lexical_fallback_treats_like_metacharacters_as_text(tmp_path):
     connection.close()
 
 
+def test_add_unit_fresh_insert_skips_duplicate_reads_and_name_cleanup(tmp_path):
+    connection, recording, writer = _recording_writer(tmp_path)
+
+    unit_id = writer.add_unit(_node("a.py", "a.Foo"))
+
+    statements = _compact_sql(recording.execute_calls)
+    assert statements[0].startswith("INSERT INTO UNITS(")
+    assert "ON CONFLICT(UNIT_ID) DO NOTHING" in statements[0]
+    assert "RETURNING ROWID" in statements[0]
+    assert not any("FROM UNITS WHERE UNIT_ID = ?" in item for item in statements)
+    assert not any("DELETE FROM UNIT_NAMES" in item for item in statements)
+    assert len(recording.executemany_calls) == 1
+    name_statement, name_rows = recording.executemany_calls[0]
+    assert "INSERT OR IGNORE INTO unit_names" in name_statement
+    assert name_rows == (
+        ("foo", "Foo", unit_id),
+        ("a.foo", "a.Foo", unit_id),
+    )
+    assert writer.unit_count == 1
+    assert writer._touched_names == {"foo", "a.foo"}
+    assert connection.execute("SELECT count(*) FROM units").fetchone()[0] == 1
+    if writer.fts_available:
+        assert sum(
+            "INSERT OR REPLACE INTO UNITS_FTS" in item for item in statements
+        ) == 1
+        assert connection.execute("SELECT count(*) FROM units_fts").fetchone()[0] == 1
+    connection.close()
+
+
+def test_add_unit_equal_duplicate_does_not_rewrite_names_or_fts(tmp_path):
+    connection, recording, writer = _recording_writer(tmp_path)
+    node = _node("a.py", "a.Foo")
+    unit_id = writer.add_unit(node)
+    recording.reset()
+    writer._touched_names.clear()
+
+    duplicate_id = writer.add_unit(node)
+
+    statements = _compact_sql(recording.execute_calls)
+    assert duplicate_id == unit_id
+    assert len(statements) == 2
+    assert statements[0].startswith("INSERT INTO UNITS(")
+    assert "ON CONFLICT(UNIT_ID) DO NOTHING" in statements[0]
+    assert statements[1].startswith("SELECT ROWID, RECORD_TYPE")
+    assert not any(item.startswith("UPDATE UNITS SET") for item in statements)
+    assert not any("DELETE FROM UNIT_NAMES" in item for item in statements)
+    assert not any("UNITS_FTS" in item for item in statements)
+    assert recording.executemany_calls == []
+    assert writer.unit_count == 1
+    assert writer._touched_names == set()
+    connection.close()
+
+
+def test_add_unit_changed_collision_updates_names_fts_and_not_count(tmp_path):
+    connection, recording, writer = _recording_writer(tmp_path)
+    unit_id = writer.add_unit(_alias_node("ObsoleteAlias"))
+    recording.reset()
+    writer._touched_names.clear()
+
+    changed_id = writer.add_unit(_alias_node("CurrentAlias"))
+
+    statements = _compact_sql(recording.execute_calls)
+    assert changed_id == unit_id
+    assert statements[0].startswith("INSERT INTO UNITS(")
+    assert statements[1].startswith("SELECT ROWID, RECORD_TYPE")
+    assert sum(item.startswith("UPDATE UNITS SET") for item in statements) == 1
+    assert sum("DELETE FROM UNIT_NAMES" in item for item in statements) == 1
+    assert len(recording.executemany_calls) == 1
+    _, name_rows = recording.executemany_calls[0]
+    assert name_rows == (
+        ("currentalias", "CurrentAlias", unit_id),
+        ("currentaliasextra", "CurrentAliasExtra", unit_id),
+        ("stableservice", "StableService", unit_id),
+        ("package.stableservice", "package.StableService", unit_id),
+    )
+    assert writer.unit_count == 1
+    assert writer._touched_names == {
+        "currentalias",
+        "currentaliasextra",
+        "stableservice",
+        "package.stableservice",
+    }
+    assert [
+        row["display_name"]
+        for row in connection.execute(
+            "SELECT display_name FROM unit_names WHERE unit_id = ? "
+            "ORDER BY display_name",
+            (unit_id,),
+        )
+    ] == [
+        "CurrentAlias",
+        "CurrentAliasExtra",
+        "StableService",
+        "package.StableService",
+    ]
+    if writer.fts_available:
+        assert sum(
+            "INSERT OR REPLACE INTO UNITS_FTS" in item for item in statements
+        ) == 1
+        assert connection.execute(
+            "SELECT count(*) FROM units_fts WHERE units_fts MATCH ?",
+            ('"ObsoleteAlias"',),
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT count(*) FROM units_fts WHERE units_fts MATCH ?",
+            ('"CurrentAlias"',),
+        ).fetchone()[0] == 1
+    connection.close()
+
+
 def test_unit_fts_upsert_avoids_unindexed_delete_and_replaces_duplicate_terms(
     tmp_path,
 ):
@@ -838,6 +948,7 @@ def test_unit_fts_upsert_avoids_unindexed_delete_and_replaces_duplicate_terms(
     assert duplicate_id == first_id
     assert not any(
         "DELETE FROM UNITS_FTS" in statement.upper()
+        and "WHERE ROWID =" not in statement.upper()
         for statement in statements
     )
     assert sum(
@@ -2226,6 +2337,8 @@ def test_repository_output_reconciliation_removes_obsolete_rows_and_rolls_back(
     )
     delta_writer.abort_repository_analysis_reconciliation()
     assert transient_id == obsolete_id
+    assert delta_writer.unit_count == connection.execute("SELECT count(*) FROM units").fetchone()[0]
+    assert delta_writer.relation_count == connection.execute("SELECT count(*) FROM relations").fetchone()[0]
     assert connection.execute(
         "SELECT 1 FROM units WHERE unit_id = ?", (transient_id,)
     ).fetchone() is None

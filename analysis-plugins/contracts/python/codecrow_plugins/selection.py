@@ -80,6 +80,12 @@ def _paths_under_root(paths: tuple[str, ...], root: str) -> tuple[str, ...]:
     return paths[start:end]
 
 
+def _contains_path(paths: tuple[str, ...], path: str) -> bool:
+    """RepositoryFacts paths are sorted; exact marker lookup needs no full scan."""
+    index = bisect_left(paths, path)
+    return index < len(paths) and paths[index] == path
+
+
 def _group_evidence(group: DetectionAlternative, facts: RepositoryFacts) -> tuple[str, ...] | None:
     candidate_sets = [
         _suffix_roots(facts.paths, relative)
@@ -118,7 +124,7 @@ def _group_evidence(group: DetectionAlternative, facts: RepositoryFacts) -> tupl
             path
             for relative in group.files_any
             for path in (f"{root}/{relative}" if root else relative,)
-            if path in facts.paths
+            if _contains_path(facts.paths, path)
         )
         if group.files_any and not file_any_hits:
             continue

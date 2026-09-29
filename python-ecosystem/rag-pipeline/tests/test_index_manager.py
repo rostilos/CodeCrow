@@ -220,8 +220,9 @@ def test_generation_is_not_published_when_source_changes_after_scan(
         manager.close()
 
 
-def test_generation_cancellation_at_batch_boundary_removes_pending_state(
-    tmp_path,
+@pytest.mark.parametrize("cancel_stage,batches", [("indexing", 1), ("building_lookup_indexes", 2)])
+def test_generation_cancellation_at_build_phase_removes_pending_state(
+    tmp_path, cancel_stage, batches,
 ):
     repository = tmp_path / "repository"
     repository.mkdir()
@@ -243,7 +244,7 @@ def test_generation_cancellation_at_batch_boundary_removes_pending_state(
     target = "cancelled-generation"
 
     def cancel_after_first_batch(event):
-        if event["stage"] == "indexing":
+        if event["stage"] == cancel_stage:
             cancellation_event.set()
 
     try:
@@ -268,7 +269,7 @@ def test_generation_cancellation_at_batch_boundary_removes_pending_state(
                 cancellation_event=cancellation_event,
             )
 
-        assert manager.loader.load_file_batch.call_count == 1
+        assert manager.loader.load_file_batch.call_count == batches
         assert manager.store.read_receipt(target) is None
         assert not manager.store.paths_for_target(target).directory.exists()
         assert tuple(manager.store.pending_root.iterdir()) == ()

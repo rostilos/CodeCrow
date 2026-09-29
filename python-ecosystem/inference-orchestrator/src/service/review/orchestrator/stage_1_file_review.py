@@ -1,4 +1,5 @@
 """Stage 1: Parallel file reviews with exact repository context."""
+from service.review.execution_scheduler import review_model_slot
 import asyncio
 from collections import Counter
 from collections.abc import Mapping
@@ -3817,15 +3818,16 @@ async def _invoke_stage_1_batch_llm(
         )
 
     try:
-        response = await llm.ainvoke(
-            direct_prompt,
-            **reasoning_request_kwargs(
-                llm,
-                ReasoningEffort.NONE
-                if force_unstructured
-                else ReasoningEffort.LOW,
-            ),
-        )
+        async with review_model_slot("stage_1_file_review"):
+            response = await llm.ainvoke(
+                direct_prompt,
+                **reasoning_request_kwargs(
+                    llm,
+                    ReasoningEffort.NONE
+                    if force_unstructured
+                    else ReasoningEffort.LOW,
+                ),
+            )
         content = extract_llm_response_text(response)
         if not content.strip():
             logger.warning(

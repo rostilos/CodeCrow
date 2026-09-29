@@ -20,6 +20,7 @@ import org.springframework.web.client.RestTemplate;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -377,29 +378,44 @@ public class AiAnalysisClient {
         String targetHeadCommitHash = request.getTargetHeadCommitHash();
         payload.put("targetHeadCommitHash", targetHeadCommitHash);
         payload.put("baseCommitHash", request.getBaseCommitHash());
+        if (request.getRagIndexPolicy() != null) {
+            payload.put("ragIndexPolicy", request.getRagIndexPolicy());
+        }
         if (request.getRagEnabled()
                 && branchGenerationRepository != null
                 && branchIndexRepository != null
                 && request.getProjectId() != null
                 && request.getTargetBranchName() != null
                 && targetHeadCommitHash != null) {
-            int accessed = branchIndexRepository.markAccessedIfUnclaimed(
-                    request.getProjectId(), request.getTargetBranchName(), OffsetDateTime.now());
-            if (accessed > 0) {
-                branchGenerationRepository.findAvailableExactGeneration(
-                            request.getProjectId(),
-                            request.getTargetBranchName(),
-                            targetHeadCommitHash,
-                            List.of(
-                                    RagBranchIndexGenerationStatus.ACTIVE,
-                                    RagBranchIndexGenerationStatus.SUPERSEDED))
-                    .stream()
-                    .findFirst()
-                    .ifPresent(generation -> {
-                        payload.put("ragCollectionTarget", generation.getCollectionName());
-                        payload.put("ragBaseGenerationManifestSha256",
-                                generation.getManifestDigest());
-                    });
+            List<Map<String, String>> candidates = new ArrayList<>();
+            try {
+                int accessed = branchIndexRepository.markAccessedIfUnclaimed(
+                        request.getProjectId(), request.getTargetBranchName(), OffsetDateTime.now());
+                if (accessed > 0) {
+                    branchGenerationRepository.findAvailableExactGeneration(
+                                    request.getProjectId(), request.getTargetBranchName(), targetHeadCommitHash,
+                                    List.of(RagBranchIndexGenerationStatus.ACTIVE,
+                                            RagBranchIndexGenerationStatus.SUPERSEDED))
+                            .stream().findFirst().ifPresent(generation -> addRagSeedCandidate(candidates,
+                                    generation.getCollectionName(), generation.getManifestDigest(),
+                                    generation.getRevision()));
+                    branchIndexRepository.findActiveGenerationCoordinates(
+                                    request.getProjectId(), request.getTargetBranchName())
+                            .ifPresent(generation -> addRagSeedCandidate(candidates,
+                                    generation.getCollectionName(), generation.getManifestDigest(),
+                                    generation.getRevision()));
+                }
+            } catch (RuntimeException unavailable) {
+                // Reusing a sealed generation is optional. Source review can
+                // continue if repository metadata is temporarily unavailable.
+                log.warn("Review graph seed unavailable: project={}, branch={}, detail={}",
+                        request.getProjectId(), request.getTargetBranchName(), unavailable.getMessage());
+            }
+            if (!candidates.isEmpty()) {
+                var first = candidates.get(0);
+                bindRagSeed(payload, first.get("collection_target"),
+                        first.get("generation_manifest_sha256"), first.get("revision"));
+                payload.put("ragGenerationCandidates", candidates);
             }
         }
         payload.put("previousCodeAnalysisIssues", request.getPreviousCodeAnalysisIssues());
@@ -410,6 +426,27 @@ public class AiAnalysisClient {
             payload.put("projectRules", impl.getProjectRules());
         }
         return payload;
+    }
+
+    private static void addRagSeedCandidate(
+            List<Map<String, String>> candidates, String collection, String manifest, String revision) {
+        if (collection == null || collection.isBlank() || manifest == null || manifest.isBlank()
+                || revision == null || revision.isBlank()) {
+            return;
+        }
+        if (candidates.stream().noneMatch(candidate -> collection.equals(candidate.get("collection_target")))) {
+            candidates.add(Map.of("collection_target", collection,
+                    "generation_manifest_sha256", manifest, "revision", revision));
+        }
+    }
+
+    private static void bindRagSeed(
+            Map<String, Object> payload, String collection, String manifestDigest, String revision) {
+        // Seed coordinates accelerate construction; they never replace the
+        // immutable review target/local-checkout revision in this payload.
+        payload.put("ragCollectionTarget", collection);
+        payload.put("ragBaseGenerationManifestSha256", manifestDigest);
+        payload.put("ragBaseGenerationRevision", revision);
     }
 
     private Map<String, Object> parseAiCustomParameters(String rawParameters) {

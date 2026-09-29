@@ -1,4 +1,5 @@
 """Shared construction and execution lifecycle for prompt-scoped MCP agents."""
+from service.review.execution_scheduler import review_model_slot
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -159,10 +160,11 @@ class AgentModelSession:
         self._invocation_kwargs = dict(invocation_kwargs)
 
     async def ainvoke(self, messages: Sequence[Any]) -> Any:
-        return await self._bound_model.ainvoke(
-            messages,
-            **self._invocation_kwargs,
-        )
+        async with review_model_slot("agent_execution_service"):
+            return await self._bound_model.ainvoke(
+                messages,
+                **self._invocation_kwargs,
+            )
 
 
 class AgentExecutionService(Generic[AgentOutputT]):

@@ -5,6 +5,7 @@ operations through :class:`Stage3McpRuntime`.  Keeping those operations behind
 this narrow adapter lets the verification loop remain independent from Stage
 3 prompt packing and final-report composition.
 """
+from service.review.execution_scheduler import review_model_slot
 
 import json
 import logging
@@ -409,10 +410,11 @@ async def execute_stage_3_mcp_verification(
                 # Binding an empty tool list still serializes a provider tool
                 # parameter in some adapters. A direct call guarantees that
                 # this terminal response has no callable repository tools.
-                response = await llm.ainvoke(
-                    messages,
-                    **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
-                )
+                async with review_model_slot("stage_3_mcp_verification"):
+                    response = await llm.ainvoke(
+                        messages,
+                        **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
+                    )
             messages.append(response)
 
             tool_calls = getattr(response, "tool_calls", None)

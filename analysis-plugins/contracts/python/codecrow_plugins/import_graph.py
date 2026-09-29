@@ -12,6 +12,7 @@ import gzip
 import json
 from dataclasses import dataclass, field
 from typing import Callable, Mapping
+from types import MappingProxyType
 
 from .api import (
     ArchitecturePacket,
@@ -65,9 +66,41 @@ class ImportFileRecord:
             raise ValueError("import record calls must be sorted and unique")
 
 
+class ImportRecordIndex(Mapping[str, ImportFileRecord]):
+    """Immutable lookup projection built once for one repository join.
+
+    Module/export strings remain plugin-owned identifiers; the neutral index
+    applies no namespace, classpath, package-manager, or path semantics.
+    """
+
+    def __init__(self, records: Mapping[str, ImportFileRecord]) -> None:
+        self._records = dict(records)
+        modules: dict[str, list[ImportFileRecord]] = {}
+        exports: dict[tuple[str, str], list[ImportFileRecord]] = {}
+        for record in self._records.values():
+            modules.setdefault(record.module, []).append(record)
+            for name in record.exports:
+                exports.setdefault((record.module, name), []).append(record)
+        self.by_module = MappingProxyType({
+            name: tuple(values) for name, values in modules.items()
+        })
+        self.by_export = MappingProxyType({
+            name: tuple(values) for name, values in exports.items()
+        })
+
+    def __getitem__(self, path: str) -> ImportFileRecord:
+        return self._records[path]
+
+    def __iter__(self):
+        return iter(self._records)
+
+    def __len__(self) -> int:
+        return len(self._records)
+
+
 RecordParser = Callable[[FileArtifact], ImportFileRecord | None]
 ModuleResolver = Callable[
-    [ImportFileRecord, ImportBinding, Mapping[str, ImportFileRecord]],
+    [ImportFileRecord, ImportBinding, ImportRecordIndex],
     str,
 ]
 
@@ -223,12 +256,13 @@ class ImportGraphSession:
     ) -> tuple[ArchitecturePacket, ...]:
         packets: list[ArchitecturePacket] = []
         prefix = self.plugin_id
+        indexed_records = ImportRecordIndex(records)
         for source_path, record in sorted(records.items()):
             facts: set[GraphFact] = set()
             packet_paths: set[str] = {source_path}
             resolved_by_local: dict[str, tuple[ImportBinding, str]] = {}
             for binding in record.imports:
-                target_path = self.resolver(record, binding, records)
+                target_path = self.resolver(record, binding, indexed_records)
                 if not target_path or target_path == source_path:
                     continue
                 target = records.get(target_path)

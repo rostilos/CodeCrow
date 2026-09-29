@@ -186,11 +186,12 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 # SSE exact-branch streams emit heartbeats every 15 seconds; fail a silent
 # transport after one minute while allowing an active stream to run indefinitely.
 #codecrow.rag.api.timeout.stream-idle=60
-# Exact configured-branch builds are serialized by default because architecture
-# finalization shares CPU, memory, and structural-store access in one process.
-# Raise these only after provisioning independent capacity for concurrent builds.
-#codecrow.rag.branch-build.parallelism=1
-#codecrow.rag.branch-build.global-parallelism=1
+# Java repository-index dispatch workers per pipeline-agent process. Independent
+# projects/branches can progress concurrently; same-branch work remains serialized
+# by durable job claims and generation leases. Saturation leaves work in the DB.
+# Compose sets this through deployment/.env RAG_BRANCH_BUILD_PARALLELISM.
+# Python heavy-build capacity is separate: RAG_FULL_INDEX_CONCURRENCY per process.
+#codecrow.rag.branch-build.global-parallelism=16
 # Failed refreshes retry only while the active generation remains incompatible.
 # This cooldown prevents a transient dependency failure from creating a build loop.
 #codecrow.rag.lifecycle.failed-retry-minutes=60
@@ -221,6 +222,15 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 #analysis.branch.pr-wait.poll-interval.millis=1000
 # Lock cleanup interval - how often to clean up expired locks (in milliseconds)
 #analysis.lock.cleanup.interval.ms=300000
+
+# Blocking manual PR/branch actions and their response streams have separate
+# managed executors. Repository maintenance has another executor using the
+# repository-index dispatch parallelism setting above, never the build workers.
+#pipeline.review.concurrency=16
+# Stream writers default to review + index concurrency (16 + 16 = 32), because
+# index and review responses can both remain connected while their work runs.
+#pipeline.streaming.concurrency=32
+# spring.mvc.async.request-timeout above controls stream lifetime; no hidden five-minute limit.
 
 # Durable webhook execution. The executor has no in-memory queue: accepted work
 # beyond max capacity stays QUEUED in PostgreSQL and is recovered later.

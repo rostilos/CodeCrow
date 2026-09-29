@@ -1,4 +1,5 @@
 """Stage 2: Cross-file and architectural analysis."""
+from service.review.execution_scheduler import review_model_slot
 import json
 import hashlib
 import logging
@@ -389,16 +390,17 @@ async def _invoke_stage_2_llm(
         logger.info("Structured output skipped for Stage 2 (%s); using prompt JSON parsing", label)
 
     try:
-        response = await llm.ainvoke(
-            prompt,
-            **output_token_request_kwargs(llm, output_token_limit),
-            **reasoning_request_kwargs(
-                llm,
-                ReasoningEffort.NONE
-                if force_unstructured
-                else ReasoningEffort.LOW,
-            ),
-        )
+        async with review_model_slot("stage_2_cross_file"):
+            response = await llm.ainvoke(
+                prompt,
+                **output_token_request_kwargs(llm, output_token_limit),
+                **reasoning_request_kwargs(
+                    llm,
+                    ReasoningEffort.NONE
+                    if force_unstructured
+                    else ReasoningEffort.LOW,
+                ),
+            )
         content = extract_llm_response_text(response)
         if not content.strip():
             logger.warning(

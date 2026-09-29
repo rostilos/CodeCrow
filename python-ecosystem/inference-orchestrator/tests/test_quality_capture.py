@@ -616,8 +616,7 @@ async def test_review_service_routes_pipeline_events_through_capture_session(
         lambda _request: capture,
     )
     monkeypatch.setattr(ReviewService, "_process_review", fake_review)
-    service = ReviewService.__new__(ReviewService)
-    service._review_semaphore = asyncio.Semaphore(1)
+    service = ReviewService()
 
     response = await service.process_review_request(
         _request(),

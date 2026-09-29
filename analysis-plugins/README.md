@@ -55,6 +55,35 @@ approval. This behavior lives entirely under `languages/javascript`; generic RAG
 and inference hosts only consume neutral snapshots, packets, and validation
 results.
 
+Repository implementation responsibilities are separated behind the existing
+neutral contracts. The runtime capability gateway delegates per-file graph
+composition and streaming repository lifecycle to dedicated services. Magento
+uses an indexed source/symbol lookup and composed DI, event, route, layout,
+frontend, configuration, queue, and data topology services. Shared layout and
+configuration evidence is passed explicitly; domain services do not receive the
+orchestrator. PHP separates AST parsing, declaration extraction, receiver
+resolution, reference extraction, and cross-file relation joining. Hyva separates
+template extraction, dependency lookup, topology resolution, and snapshot state.
+The existing repository snapshot representations are unchanged.
+
+Incremental PHP symbols are indexed by source path so updating one source does
+not scan every symbol. Failed changed-file parsing removes that source's old
+symbols and releases parsing workers; unaffected files remain available. Hyva
+likewise removes old template metadata before replacing a changed source.
+Repository finalization closes every session that offers `close()`, including
+sessions skipped after a deadline; callers can also close an abandoned handle.
+Cleanup failures produce recoverable `plugin-repository-close-exception`
+diagnostics. A malformed optional per-file graph contribution produces
+`plugin-index-invalid-result` and does not remove other plugins' valid evidence.
+
+The neutral `ImportRecordIndex` builds path, module, and exported-name lookups once
+per import-graph join. Java and Python resolve through those lookups while owning
+all namespace and package semantics. Python resolves relative imports from a
+package initializer within that package, prefers a `.py` source over a colocated
+stub, and prefers a package initializer over a same-name source module. Ambiguous
+remaining candidates stay unresolved. These are deterministic architecture
+checks, not evidence of a review precision, recall, or latency improvement.
+
 Framework-owned indexing is also packaged inside this boundary. Django extracts
 AppConfig, installed apps, middleware and root URL configuration, URL paths and
 includes, views, models/relations, middleware hooks, and signal receivers from

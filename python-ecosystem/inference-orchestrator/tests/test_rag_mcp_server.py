@@ -171,6 +171,7 @@ async def test_review_context_tool_uses_host_identity_and_bound_focus_paths(
         "target_repo_path": "/tmp/target-snapshot",
         "review_overlay_path": "/tmp/review-overlay",
         "base_collection_target": "sealed-base-target",
+        "base_generation_revision": None,
         "base_generation_manifest_sha256": "base-manifest",
         "review_collection_target": "sealed-review-target",
         "review_generation_manifest_sha256": "review-manifest",

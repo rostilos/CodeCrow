@@ -256,6 +256,20 @@ public interface JobRepository extends JpaRepository<Job, Long> {
             @Param("jobId") Long jobId,
             @Param("updatedAt") OffsetDateTime updatedAt);
 
+    /**
+     * Report a provider lookup failure without saving the detached candidate.
+     * A concurrent claim or terminal transition always retains its own state.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Job j SET j.currentStep = " +
+            "'Waiting for repository access; branch-head lookup will retry', " +
+            "j.updatedAt = :attemptedAt WHERE j.id = :jobId " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND j.status = org.rostilos.codecrow.core.model.job.JobStatus.PENDING")
+    int recordPendingRepositoryIndexAccessDeferral(
+            @Param("jobId") Long jobId,
+            @Param("attemptedAt") OffsetDateTime attemptedAt);
+
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE Job j SET j.status = org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
             "j.commitHash = :resolvedRevision, " +

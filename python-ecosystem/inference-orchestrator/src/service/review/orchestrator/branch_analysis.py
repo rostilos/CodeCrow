@@ -1,6 +1,7 @@
 """
 Branch analysis and reconciliation execution.
 """
+from service.review.execution_scheduler import review_model_slot
 import logging
 from typing import Any, Callable, Dict, Optional
 
@@ -127,10 +128,11 @@ async def execute_branch_reconciliation_direct(
         logger.info("Structured output skipped for reconciliation; using prompt JSON parsing")
 
     try:
-        response = await llm.ainvoke(
-            prompt,
-            **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
-        )
+        async with review_model_slot("branch_analysis"):
+            response = await llm.ainvoke(
+                prompt,
+                **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
+            )
         content = extract_llm_response_text(response)
 
         if not content.strip():

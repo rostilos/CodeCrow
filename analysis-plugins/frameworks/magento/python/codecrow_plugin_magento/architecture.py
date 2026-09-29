@@ -202,10 +202,10 @@ class PacketGraph:
 
     def packet(self, kind: str, key: str, **attributes: str) -> PacketAccumulator:
         identity = (kind, key)
-        packet = self._packets.setdefault(
-            identity,
-            PacketAccumulator(self.plugin_id, kind, key),
-        )
+        packet = self._packets.get(identity)
+        if packet is None:
+            packet = PacketAccumulator(self.plugin_id, kind, key)
+            self._packets[identity] = packet
         packet.attributes.update({key: value for key, value in attributes.items() if value})
         return packet
 

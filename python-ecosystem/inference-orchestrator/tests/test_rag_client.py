@@ -7,7 +7,7 @@ import httpx
 import pytest
 import respx
 
-import service.rag.rag_client as rag_client_module
+import service.rag.transport as rag_client_module
 from service.rag.rag_client import RagClient
 
 
@@ -555,7 +555,6 @@ async def test_proposed_tree_query_methods_use_review_bound_endpoints():
         max_characters=2048,
         **binding,
     )
-
     for endpoint, route in routes.items():
         assert route.called, endpoint
         payload = json.loads(route.calls.last.request.content)
@@ -678,9 +677,9 @@ async def test_review_query_outer_timeout_keeps_minimal_context_shape(
         await asyncio.sleep(1)
         raise AssertionError("timeout should cancel the stalled query")
 
-    monkeypatch.setattr(client, "_post_structural_query", stalled_query)
+    monkeypatch.setattr(client.transport, "_post_structural_query", stalled_query)
     monkeypatch.setattr(
-        client,
+        client.transport,
         "_review_query_timeout_seconds",
         lambda: 0.001,
     )
@@ -707,8 +706,45 @@ async def test_query_client_is_reused_and_closed():
     client = RagClient(base_url="http://rag:8001", enabled=True)
 
     assert await client.is_healthy() is True
-    query_client = client._client
+    query_client = client.transport._client
     assert await client.is_healthy() is True
-    assert client._client is query_client
+    assert client.transport._client is query_client
     await client.close()
     assert query_client is not None and query_client.is_closed
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("body", [None, [], "unexpected", 7])
+async def test_non_object_success_is_an_observable_optional_failure(body):
+    respx.post("http://rag:8001/query/review-minimal-context").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+    client = RagClient(base_url="http://rag:8001", enabled=True)
+    try:
+        result = await _call_review_operation(client, "minimal")
+        assert result["status"] == "error"
+        assert result["coverage"]["state"] == "unavailable"
+        assert result["nodes"] == []
+        assert result["error"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_preparation_pool_is_distinct_and_both_pools_close():
+    client = RagClient(base_url="http://rag:8001", enabled=True)
+    queries = await client.transport._get_client()
+    preparation = await client.transport._get_client(mutation=True)
+    assert preparation is not queries
+    assert await client.transport._get_client(mutation=True) is preparation
+    await client.close()
+    assert queries.is_closed and preparation.is_closed
+
+
+@pytest.mark.asyncio
+async def test_impact_default_targets_preserve_bound_focus_paths():
+    client = RagClient(enabled=False)
+    result = await client.review_impact_radius(**_review_binding())
+    assert result["status"] == "unavailable"
+    assert result["targets"] == ["src/payment.py"]

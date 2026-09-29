@@ -69,5 +69,6 @@ tools/magento_benchmark/work/
 /deployment/config/java-shared/github-private-key/*.pem
 .ci-logs/
 
-# Generated, local schema-only bootstrap from the preserved database backup
-/deployment/config/database/restore-aug-schema.sql
+
+# Local review capture artifacts contain repository source.
+/review-quality-captures/

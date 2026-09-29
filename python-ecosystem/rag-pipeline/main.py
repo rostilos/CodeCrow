@@ -44,37 +44,41 @@ def validate_environment() -> None:
 validate_environment()
 
 import uvicorn
+from rag_pipeline.models.config import DEFAULT_FULL_INDEX_CONCURRENCY
 
 
 def effective_uvicorn_workers() -> int:
-    """Honor explicit process parallelism without multiplying each process."""
+    """Report process topology without rewriting per-process index capacity."""
 
     raw = os.environ.get("UVICORN_WORKERS", "1")
     try:
         requested = max(1, int(raw))
     except (TypeError, ValueError):
         logger.warning("Invalid UVICORN_WORKERS=%r; using one worker", raw)
-        return 1
-    if requested > 1:
-        raw_capacity = os.environ.get("RAG_FULL_INDEX_CONCURRENCY", "1")
-        try:
-            per_process_capacity = max(1, int(raw_capacity))
-        except (TypeError, ValueError):
-            per_process_capacity = 1
-        if per_process_capacity != 1:
-            os.environ["RAG_FULL_INDEX_CONCURRENCY"] = "1"
-            logger.warning(
-                "UVICORN_WORKERS=%s uses process parallelism; normalizing "
-                "RAG_FULL_INDEX_CONCURRENCY=%s to one per process so index "
-                "capacity is not multiplicative",
-                requested,
-                raw_capacity,
-            )
-        else:
-            logger.info(
-                "UVICORN_WORKERS=%s with one full-index slot per process",
-                requested,
-            )
+        requested = 1
+
+    raw_capacity = os.environ.get("RAG_FULL_INDEX_CONCURRENCY", str(DEFAULT_FULL_INDEX_CONCURRENCY))
+    try:
+        # Match the manager's minimum-one normalization without changing the
+        # value inherited by application workers.
+        per_process_capacity = max(1, int(raw_capacity))
+    except (TypeError, ValueError):
+        # RAGConfig owns validation when each application worker starts. Do
+        # not silently alter the supplied value or advertise a capacity that
+        # those workers cannot use.
+        logger.warning(
+            "Invalid RAG_FULL_INDEX_CONCURRENCY=%r; worker configuration "
+            "requires an integer",
+            raw_capacity,
+        )
+    else:
+        logger.info(
+            "Repository-index capacity: %s slot(s) per process across %s "
+            "Uvicorn worker process(es), %s total slot(s) for full/delta builds",
+            per_process_capacity,
+            requested,
+            requested * per_process_capacity,
+        )
     return requested
 
 

@@ -1,6 +1,7 @@
 """Stage 1 structural-generation binding and relation briefing helpers."""
 
 from __future__ import annotations
+from service.review.execution_scheduler import review_context_slot
 
 from dataclasses import dataclass, field
 import logging
@@ -88,7 +89,7 @@ async def fetch_stage1_relation_briefing(
         logger.info(
             "Optional Stage 1 relation briefing skipped because the request "
             "has no exact tenant, repository, target snapshot, and sealed "
-            "base-generation binding"
+            "review-generation binding"
         )
         return None
 
@@ -106,43 +107,46 @@ async def fetch_stage1_relation_briefing(
         return None
 
     try:
-        return await query(
-            workspace=request.projectWorkspace,
-            project=request.projectNamespace,
-            target_branch=request.targetBranchName,
-            base_revision=base_revision,
-            source_revision=source_revision,
-            target_repo_path=structural_repo_path,
-            review_overlay_path=request.localReviewOverlayPath,
-            focus_paths=normalized_paths,
-            # Both words are selector stop-terms. Path anchors, rather than a
-            # generic prose query, determine this deterministic orientation.
-            question="Review changed",
-            base_collection_target=getattr(
-                request,
-                "ragCollectionTarget",
-                None,
-            ),
-            base_generation_manifest_sha256=getattr(
-                request,
-                "ragBaseGenerationManifestSha256",
-                None,
-            ),
-            review_collection_target=getattr(
-                request,
-                "ragReviewCollectionTarget",
-                None,
-            ),
-            review_generation_manifest_sha256=getattr(
-                request,
-                "ragReviewGenerationManifestSha256",
-                None,
-            ),
-            focus_symbols=[],
-            max_relations=max_relations,
-            max_source_windows=2,
-            max_source_characters=4_000,
-        )
+        async with review_context_slot("stage_1_source"):
+            return await query(
+                workspace=request.projectWorkspace,
+                project=request.projectNamespace,
+                target_branch=request.targetBranchName,
+                base_revision=base_revision,
+                source_revision=source_revision,
+                target_repo_path=structural_repo_path,
+                review_overlay_path=request.localReviewOverlayPath,
+                focus_paths=normalized_paths,
+                # Both words are selector stop-terms. Path anchors, rather than a
+                # generic prose query, determine this deterministic orientation.
+                question="Review changed",
+                base_collection_target=getattr(
+                    request,
+                    "ragCollectionTarget",
+                    None,
+                ),
+                base_generation_manifest_sha256=getattr(
+                    request,
+                    "ragBaseGenerationManifestSha256",
+                    None,
+                ),
+                base_generation_revision=request.ragBaseGenerationRevision,
+                **(request.ragIndexPolicy.model_dump() if request.ragIndexPolicy is not None else {}),
+                review_collection_target=getattr(
+                    request,
+                    "ragReviewCollectionTarget",
+                    None,
+                ),
+                review_generation_manifest_sha256=getattr(
+                    request,
+                    "ragReviewGenerationManifestSha256",
+                    None,
+                ),
+                focus_symbols=[],
+                max_relations=max_relations,
+                max_source_windows=2,
+                max_source_characters=4_000,
+            )
     except Exception as error:
         logger.warning(
             "Optional Stage 1 relation briefing failed for paths=%s: %s",
@@ -184,8 +188,6 @@ def has_exact_proposed_tree_binding(request: ReviewRequestDto) -> bool:
             source_revision,
             structural_repo_path,
             request.localReviewOverlayPath,
-            getattr(request, "ragCollectionTarget", None),
-            getattr(request, "ragBaseGenerationManifestSha256", None),
             getattr(request, "ragReviewCollectionTarget", None),
             getattr(request, "ragReviewGenerationManifestSha256", None),
         )

@@ -160,6 +160,13 @@ public class RepositoryIndexJobQueueService {
     }
 
     @Transactional
+    public boolean recordRepositoryAccessDeferral(
+            long jobId, OffsetDateTime attemptedAt) {
+        return jobRepository.recordPendingRepositoryIndexAccessDeferral(
+                jobId, attemptedAt) == 1;
+    }
+
+    @Transactional
     public boolean claim(
             long jobId,
             String expectedRevision,

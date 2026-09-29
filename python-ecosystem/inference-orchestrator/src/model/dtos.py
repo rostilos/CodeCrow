@@ -1,9 +1,13 @@
 from typing import Optional, Any, List, Dict
-from pydantic import BaseModel, Field, AliasChoices
+from pydantic import BaseModel, Field, AliasChoices, ValidationError, field_validator
+import logging
 from datetime import datetime
 
 from model.enrichment import PrEnrichmentDataDto
 from model.plugins import ProjectCapabilitiesDto
+
+
+logger = logging.getLogger(__name__)
 
 
 class IssueDTO(BaseModel):
@@ -41,6 +45,19 @@ class IssueDTO(BaseModel):
     # Content-based line anchoring — verbatim source line, Java persists it and
     # passes it back so Python reconciliation can carry it forward
     codeSnippet: Optional[str] = None
+
+
+class ReviewIndexPolicyDto(BaseModel):
+    include_patterns: List[str] = Field(default_factory=list)
+    exclude_patterns: List[str] = Field(default_factory=list)
+    project_type: Optional[str] = None
+    source_root: Optional[str] = None
+
+
+class ReviewGenerationCandidateDto(BaseModel):
+    collection_target: str
+    generation_manifest_sha256: str
+    revision: str
 
 
 class ReviewRequestDto(BaseModel):
@@ -239,6 +256,37 @@ class ReviewRequestDto(BaseModel):
     projectRules: Optional[str] = Field(default=None, description="JSON array of enabled custom project review rules")
     # Pre-fetched file contents for MCP-free branch reconciliation (filePath → content)
     reconciliationFileContents: Optional[Dict[str, str]] = Field(default=None, description="Pre-fetched file contents for MCP-free reconciliation. Map of filePath to full file content.")
+
+    ragBaseGenerationRevision: Optional[str] = None
+    ragIndexPolicy: Optional[ReviewIndexPolicyDto] = None
+    ragGenerationCandidates: List[ReviewGenerationCandidateDto] = Field(default_factory=list)
+
+    @field_validator("ragIndexPolicy", mode="before")
+    @classmethod
+    def optional_index_policy(cls, value):
+        if value is None:
+            return None
+        try:
+            return ReviewIndexPolicyDto.model_validate(value)
+        except (ValidationError, TypeError, ValueError):
+            logger.warning("Ignoring malformed optional repository index policy; source review remains available")
+            return None
+
+    @field_validator("ragGenerationCandidates", mode="before")
+    @classmethod
+    def optional_generation_candidates(cls, value):
+        if value is None:
+            return []
+        if not isinstance(value, (list, tuple)):
+            logger.warning("Ignoring malformed optional repository generation candidates")
+            return []
+        candidates = []
+        for position, candidate in enumerate(value):
+            try:
+                candidates.append(ReviewGenerationCandidateDto.model_validate(candidate))
+            except (ValidationError, TypeError, ValueError):
+                logger.warning("Ignoring malformed optional repository generation candidate at position %s", position)
+        return candidates
 
     def get_rag_branch(self) -> Optional[str]:
         # Structural context is always bound to the immutable target head. The

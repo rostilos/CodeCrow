@@ -256,8 +256,25 @@ public class RepositoryIndexLifecycleScheduler {
                 || candidate.getJobType() != JobType.REPOSITORY_INDEX_BUILD) {
             return;
         }
+        final String resolvedRevision;
         try {
-            String resolvedRevision = resolveDispatchRevision(candidate);
+            resolvedRevision = resolveDispatchRevision(candidate);
+        } catch (Exception failure) {
+            try {
+                queueService.recordRepositoryAccessDeferral(jobId, OffsetDateTime.now());
+            } catch (Exception diagnosticFailure) {
+                log.debug(
+                        "Could not update repository-access diagnostic for job {}",
+                        jobId, diagnosticFailure);
+            }
+            jobService.warn(
+                    candidate,
+                    "repository_index_revision_retry",
+                    "Repository-index branch-head reconciliation will retry: "
+                            + diagnostic(failure));
+            return;
+        }
+        try {
             OffsetDateTime claimedAt = OffsetDateTime.now();
             if (!queueService.claim(
                     jobId,
@@ -282,14 +299,12 @@ public class RepositoryIndexLifecycleScheduler {
             }
             executeClaimed(jobId);
         } catch (Exception failure) {
-            // This is a bounded check only for work already present in the
-            // durable queue. Leave it dispatchable and expose why it was
-            // deferred; no project-wide provider polling is introduced.
+            // Keep the immutable claim and execution state intact. Only a
+            // failed pre-claim provider lookup is a repository-access deferral.
             jobService.warn(
                     candidate,
-                    "repository_index_revision_retry",
-                    "Repository-index branch-head reconciliation will retry: "
-                            + diagnostic(failure));
+                    "repository_index_retry",
+                    "Repository-index dispatch will retry: " + diagnostic(failure));
         }
     }
 

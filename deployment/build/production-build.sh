@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+BUILD_ONLY=false
+case "${1:-}" in
+    "") ;;
+    --build-only) BUILD_ONLY=true ;;
+    *) echo "Usage: $0 [--build-only]" >&2; exit 2 ;;
+esac
+
 FRONTEND_DIR="frontend"
 DOCKER_PATH="deployment"
 CONFIG_PATH="deployment/config"
 PYTHON_BOOTSTRAP="${PYTHON_BOOTSTRAP:-python3.11}"
-LOCAL_CI_VENV_ROOT="${CODECROW_CI_VENV_ROOT:-$(cd "$(dirname "$0")/../../" && pwd)/.venv/ci}"
+LOCAL_CI_VENV_ROOT="${CODECROW_CI_VENV_ROOT:-${TMPDIR:-/tmp}/codecrow-ci-python-${UID:-local}}"
 
 cd "$(dirname "$0")/../../"
 
@@ -61,27 +68,20 @@ run_python_ci_group inference
 
 echo "--- 4. Running the shared Java, plugin, and Docker CI build ---"
 CODECROW_DOCKER_OUTPUT=load \
-CODECROW_LOCAL_IMAGE_PREFIX=codecrow-restore-aug \
+CODECROW_LOCAL_IMAGE_PREFIX=codecrow-local \
 CODECROW_DEPLOY_SERVICES=all \
 deployment/ci/ci-build.sh
 
-echo "--- 5. Shutting down only the restored services cleanly ---"
-cd "$DOCKER_PATH"
-docker compose --project-name codecrow-restore-aug down --remove-orphans
-
-echo "--- 6. Preparing the isolated restore database ---"
-docker compose --project-name codecrow-restore-aug up -d --no-build --wait postgres
-AUG_RESTORE_TABLE_COUNT="$(docker compose --project-name codecrow-restore-aug exec -T postgres sh -c \
-  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname = '\''public'\'';"')"
-if [ "$AUG_RESTORE_TABLE_COUNT" = "0" ]; then
-    echo "Loading the historical schema and Flyway history into the empty restore database (no application data)..."
-    docker compose --project-name codecrow-restore-aug exec -T postgres sh -c \
-      'exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" --single-transaction --set ON_ERROR_STOP=1 --quiet' \
-      < config/database/restore-aug-schema.sql
+if [ "$BUILD_ONLY" = true ]; then
+    echo "--- Build complete. Tests passed and images loaded; services were not restarted. ---"
+    exit 0
 fi
 
-echo "--- 7. Starting the locally loaded CI-equivalent images ---"
-docker compose --project-name codecrow-restore-aug up -d --no-build --wait
+echo "--- 5. Starting the locally loaded CI-equivalent images ---"
+cd "$DOCKER_PATH"
+# The local database may contain migrations from another pre-release checkout.
+# Keep migrations enabled while allowing that existing local history.
+docker compose -f docker-compose.yml -f docker-compose.local-build.yml up -d --no-build --wait
 
 echo "--- Deployment Complete! Services are up and healthy. ---"
-docker compose --project-name codecrow-restore-aug ps
+docker compose -f docker-compose.yml -f docker-compose.local-build.yml ps

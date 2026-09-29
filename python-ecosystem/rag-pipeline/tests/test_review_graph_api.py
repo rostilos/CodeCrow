@@ -56,7 +56,7 @@ def test_operation_models_share_normalized_review_binding_and_bounded_defaults()
     assert impact.max_depth == 2
     assert traverse.strategy == "bfs"
     assert traverse.direction == "both"
-    assert traverse.token_budget == 2000
+    assert traverse.token_budget is None
     assert graph.detail_level == "standard"
     assert graph.cursor == 0
     assert unit.offset == 0
@@ -120,6 +120,10 @@ def test_query_router_exposes_all_proposed_tree_operations():
     }.issubset(paths)
 
 
+
+
+
+
 @patch("rag_pipeline.api.routers.query.ProposedTreeReviewContextService")
 @patch("rag_pipeline.api.routers.query._manager")
 def test_minimal_context_router_passes_host_binding_and_operation_arguments(
@@ -150,3 +154,79 @@ def test_minimal_context_router_passes_host_binding_and_operation_arguments(
     assert arguments["question"] == "Review Service.run"
     assert arguments["focus_symbols"] == ["Service.run"]
     assert arguments["include_source"] is True
+
+
+@patch("rag_pipeline.api.routers.query.ProposedTreeReviewContextService")
+@patch("rag_pipeline.api.routers.query._manager")
+def test_traversal_router_preserves_absent_and_explicit_budget(manager_factory, service_class):
+    from rag_pipeline.api.routers.query import review_traverse
+
+    service_class.return_value.traverse_review_graph.return_value = {"status": "ready"}
+    for token_budget in (None, 2000):
+        request = ReviewTraverseRequest(**_binding(), start="unit:changed", token_budget=token_budget, include_source=False)
+        assert review_traverse(request)["status"] == "ready"
+        forwarded = service_class.return_value.traverse_review_graph.call_args.kwargs
+        assert forwarded["token_budget"] == token_budget
+        assert forwarded["review_collection_target"] == "sealed-review"
+        assert forwarded["include_source"] is False
+
+
+@pytest.mark.parametrize("base", [None, "sealed-base"])
+@patch("rag_pipeline.api.routers.query.ProposedTreeReviewContextService")
+@patch("rag_pipeline.api.routers.query._manager")
+def test_prepare_returns_actual_base_provenance_after_full_fallback_or_delta(
+    manager_factory, service_class, base,
+):
+    from types import SimpleNamespace
+    from rag_pipeline.api.models import ProposedTreePrepareRequest
+    from rag_pipeline.api.routers.query import prepare_review_generation
+
+    policy = {"include_patterns": ["src/**"], "exclude_patterns": ["vendor/**"],
+              "project_type": "generic", "source_root": "src"}
+    candidates = [{"collection_target": "active-seed", "generation_manifest_sha256": "c" * 64,
+                   "revision": "active-revision"}]
+    request = ProposedTreePrepareRequest(**_binding(), index_policy=policy,
+                                         base_generation_candidates=candidates)
+    manifest = "a" * 64 if base else None
+    service_class.return_value.prepare_generation_singleflight.return_value = SimpleNamespace(
+        collection_target="sealed-review",
+        receipt={
+            "generation_manifest_sha256": "b" * 64,
+            "index_include_patterns": policy["include_patterns"],
+            "index_exclude_patterns": policy["exclude_patterns"],
+            "snapshot_metadata": {
+                "base_collection_target": base,
+                "project_type": "generic", "source_root": "src",
+                "base_generation_manifest_sha256": manifest,
+            },
+        },
+        proposed_source_tree_sha256="c" * 64, overlay_sha256="d" * 64,
+        representation_identity="representation", changed_paths=("src/changed.py",),
+        deleted_paths=(), cache_hit=False,
+    )
+
+    result = prepare_review_generation(request)
+    assert result["index_policy"] == policy
+    assert result["base_collection_target"] == base
+    assert result["base_generation_manifest_sha256"] == manifest
+    assert result["collection_target"] == "sealed-review"
+    assert result["source_revision"] == "source"
+    forwarded = service_class.return_value.prepare_generation_singleflight.call_args.kwargs
+    assert forwarded["base_collection_target"] == "sealed-base"
+    assert forwarded["index_policy"] == policy
+    assert forwarded["base_generation_candidates"] == candidates
+
+
+@pytest.mark.parametrize("policy,candidates", [
+    ("invalid-policy", "invalid-candidates"),
+    ({"include_patterns": "not-an-array"}, [None, {"revision": "partial"}]),
+    ({"source_root": "../outside"}, [False]),
+])
+def test_optional_prepare_metadata_is_normalized_without_rejecting_core_binding(caplog, policy, candidates):
+    from rag_pipeline.api.models import ProposedTreePrepareRequest
+    request = ProposedTreePrepareRequest(**_binding(), index_policy=policy,
+                                         base_generation_candidates=candidates)
+    assert request.index_policy is None and request.base_generation_candidates == []
+    assert request.workspace == _binding()["workspace"]
+    assert request.target_repo_path == _binding()["target_repo_path"]
+    assert "malformed optional repository" in caplog.text

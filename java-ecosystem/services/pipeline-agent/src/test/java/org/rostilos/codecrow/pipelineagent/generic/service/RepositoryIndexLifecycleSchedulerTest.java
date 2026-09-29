@@ -237,6 +237,108 @@ class RepositoryIndexLifecycleSchedulerTest {
     }
 
     @Test
+    void repositoryLookupFailureHasItsOwnDiagnosticAndTheSameJobRecovers() throws Exception {
+        Project project = mock(Project.class);
+        VcsRepoInfo repository = mock(VcsRepoInfo.class);
+        VcsConnection connection = mock(VcsConnection.class);
+        VcsClient client = mock(VcsClient.class);
+        Job candidate = candidate(77L, project, "main", "revision-old");
+        Job claimed = claimed(project, "main", "revision-new");
+        when(project.getId()).thenReturn(42L);
+        when(project.getEffectiveVcsRepoInfo()).thenReturn(repository);
+        when(repository.getVcsConnection()).thenReturn(connection);
+        when(repository.getRepoWorkspace()).thenReturn("team");
+        when(repository.getRepoSlug()).thenReturn("repo");
+        when(vcsClientProvider.getClient(connection)).thenReturn(client);
+        when(client.getLatestCommitHash("team", "repo", "main"))
+                .thenThrow(new IllegalStateException("Repository credentials unavailable"))
+                .thenReturn("revision-new");
+        when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
+        when(queueService.findDispatchCandidates(any(), eq(10)))
+                .thenReturn(List.of(candidate));
+        when(jobService.findById(77L)).thenReturn(
+                Optional.of(candidate), Optional.of(candidate), Optional.of(claimed));
+        when(projectRepository.findByIdWithFullDetails(42L))
+                .thenReturn(Optional.of(project));
+
+        scheduler.dispatchPersistedJobs();
+
+        verify(queueService).recordRepositoryAccessDeferral(eq(77L), any());
+        verify(jobService).warn(
+                eq(candidate), eq("repository_index_revision_retry"),
+                contains("Repository credentials unavailable"));
+        verify(queueService, never()).claim(anyLong(), any(), any(), any(), any());
+        verify(ragOperationsService, never()).executeQueuedBranchGeneration(
+                any(), any(), any(), any());
+
+        when(queueService.claim(
+                eq(77L), eq("revision-old"), eq("revision-new"), any(), any()))
+                .thenReturn(true);
+
+        scheduler.dispatchPersistedJobs();
+
+        verify(ragOperationsService).executeQueuedBranchGeneration(
+                project, "main", "revision-new", claimed);
+        verify(queueService).claim(
+                eq(77L), eq("revision-old"), eq("revision-new"), any(), any());
+        verify(queueService, times(1)).recordRepositoryAccessDeferral(eq(77L), any());
+    }
+
+    @Test
+    void accessDiagnosticWriteFailurePreservesTheProviderFailureLog() {
+        Job candidate = mock(Job.class);
+        when(candidate.getId()).thenReturn(77L);
+        when(candidate.getJobType()).thenReturn(JobType.REPOSITORY_INDEX_BUILD);
+        when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
+        when(queueService.findDispatchCandidates(any(), eq(10)))
+                .thenReturn(List.of(candidate));
+        when(jobService.findById(77L)).thenReturn(Optional.of(candidate));
+        when(queueService.recordRepositoryAccessDeferral(eq(77L), any()))
+                .thenThrow(new IllegalStateException("Diagnostic write unavailable"));
+
+        scheduler.dispatchPersistedJobs();
+
+        verify(jobService).warn(
+                eq(candidate), eq("repository_index_revision_retry"),
+                contains("Repository-index job has no persisted project"));
+        verify(queueService, never()).claim(anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void failureAfterProviderLookupDoesNotOverwriteClaimStateWithAccessDeferral()
+            throws Exception {
+        Project project = mock(Project.class);
+        VcsRepoInfo repository = mock(VcsRepoInfo.class);
+        VcsConnection connection = mock(VcsConnection.class);
+        VcsClient client = mock(VcsClient.class);
+        Job candidate = candidate(77L, project, "main", "revision-old");
+        when(project.getId()).thenReturn(42L);
+        when(project.getEffectiveVcsRepoInfo()).thenReturn(repository);
+        when(repository.getVcsConnection()).thenReturn(connection);
+        when(repository.getRepoWorkspace()).thenReturn("team");
+        when(repository.getRepoSlug()).thenReturn("repo");
+        when(vcsClientProvider.getClient(connection)).thenReturn(client);
+        when(client.getLatestCommitHash("team", "repo", "main"))
+                .thenReturn("revision-new");
+        when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
+        when(queueService.findDispatchCandidates(any(), eq(10)))
+                .thenReturn(List.of(candidate));
+        when(jobService.findById(77L)).thenReturn(Optional.of(candidate));
+        when(projectRepository.findByIdWithFullDetails(42L))
+                .thenReturn(Optional.of(project));
+        when(queueService.claim(
+                eq(77L), eq("revision-old"), eq("revision-new"), any(), any()))
+                .thenThrow(new IllegalStateException("Claim transaction unavailable"));
+
+        scheduler.dispatchPersistedJobs();
+
+        verify(queueService, never()).recordRepositoryAccessDeferral(anyLong(), any());
+        verify(jobService).warn(
+                eq(candidate), eq("repository_index_retry"),
+                contains("Claim transaction unavailable"));
+    }
+
+    @Test
     void executorSaturationLeavesPersistentCandidateUnclaimed() {
         Executor saturated = command -> {
             throw new java.util.concurrent.RejectedExecutionException("full");

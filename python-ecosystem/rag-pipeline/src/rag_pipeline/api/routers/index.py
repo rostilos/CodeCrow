@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Request
 from fastapi.responses import StreamingResponse
 
 from ...models.config import IndexStats
+from ..heavy_work import get_build_workers, run_heavy_operation
 from ..models import (
     IndexRequest,
     RevisionDiscoveryResponse,
@@ -336,16 +337,39 @@ def _execute_index_request(
 
 
 @router.post("/index/repository", response_model=IndexStats)
-def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
+async def index_repository_http(request: IndexRequest, background_tasks: BackgroundTasks):
+    """Run full and incremental builds outside the API process and query pool."""
+    workers = get_build_workers()
+    if workers is not None:
+        return await workers.run("index", {
+            "request": request.model_dump(mode="json"),
+            "repo_path": request.repo_path,
+            "collection_target": _index_collection_target(request),
+        })
+    # Direct embeddings without the application lifespan retain their injected
+    # manager; normal service startup always owns process workers.
+    return await run_heavy_operation(index_repository, request, background_tasks)
+
+
+def index_repository(
+    request: IndexRequest, background_tasks: BackgroundTasks = None, *,
+    index_manager=None, repo_path=None, collection_target=None,
+    source_tree_exclusively_owned=False, progress_callback=None,
+    cancellation_event=None,
+):
     """Index entire repository."""
-    _, index_manager = _get_singletons()
+    if index_manager is None:
+        _, index_manager = _get_singletons()
     try:
-        collection_target = _index_collection_target(request)
+        collection_target = collection_target or _index_collection_target(request)
         stats = _execute_index_request(
             index_manager,
             request,
-            repo_path=request.repo_path,
+            repo_path=repo_path or request.repo_path,
             collection_target=collection_target,
+            source_tree_exclusively_owned=source_tree_exclusively_owned,
+            progress_callback=progress_callback,
+            cancellation_event=cancellation_event,
         )
         return stats
     except ValueError as e:
@@ -409,20 +433,22 @@ def index_repository_stream(
 
     def run_index() -> None:
         try:
-            stats = _execute_index_request(
-                index_manager,
-                request,
-                repo_path=str(index_repo_path),
-                collection_target=collection_target,
-                progress_callback=progress,
-                cancellation_event=cancellation_event,
-                source_tree_exclusively_owned=(
-                    repository_ownership_transferred
-                ),
-            )
-            terminal_events.put(
-                ("complete", stats.model_dump(mode="json"))
-            )
+            workers = get_build_workers()
+            if workers is not None:
+                result = workers.run_blocking("index", {
+                    "request": request.model_dump(mode="json"),
+                    "repo_path": str(index_repo_path),
+                    "collection_target": collection_target,
+                    "source_tree_exclusively_owned": repository_ownership_transferred,
+                }, progress_callback=progress, cancellation_event=cancellation_event)
+            else:
+                result = _execute_index_request(
+                    index_manager, request, repo_path=str(index_repo_path),
+                    collection_target=collection_target, progress_callback=progress,
+                    cancellation_event=cancellation_event,
+                    source_tree_exclusively_owned=repository_ownership_transferred,
+                ).model_dump(mode="json")
+            terminal_events.put(("complete", result))
         except Exception as exception:
             # The terminal event gives the Java job owner complete context and
             # that owner emits the rate-bounded diagnostic. Avoid logging the

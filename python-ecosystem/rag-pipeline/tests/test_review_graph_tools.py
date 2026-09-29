@@ -9,7 +9,6 @@ from contextlib import contextmanager
 import pytest
 
 from rag_pipeline.core.review_context import (
-    LayeredReviewGraphReader,
     ProposedTreeGeneration,
     ProposedTreeReadSession,
     ProposedTreeReviewContextService,
@@ -504,83 +503,10 @@ def test_impact_radius_follows_dependents_tests_and_custom_plugin_relations():
     assert second_connection["impactScore"] == 0.36
 
 
-def test_deleted_changed_target_is_absent_from_layered_traversal():
-    caller = _unit("caller", "src/caller.py")
-    deleted = _unit("deleted", "src/changed.py")
-    stale_relation = _relation(1, caller, deleted)
-    reader = LayeredReviewGraphReader(
-        _Reader([caller, deleted], [stale_relation]),
-        _Reader([], []),
-        ["src/changed.py"],
-    )
-
-    result = traverse_review_graph(
-        reader,
-        start="unit:caller",
-        direction="outgoing",
-        max_depth=1,
-        max_results=10,
-    )
-
-    assert [node["unitId"] for node in result["nodes"]] == ["unit:caller"]
-    assert result["edges"] == []
-    assert result["frontier"] == []
 
 
-def test_renamed_changed_target_is_absent_from_layered_impact():
-    caller = _unit("caller", "src/caller.py")
-    target_head = _unit("service", "src/changed.py")
-    proposed = _unit("service_v2", "src/changed.py")
-    # Keep the opaque ID stable to prove reconciliation is based on the exact
-    # proposed symbol identity, not merely an ID/path or a fuzzy search hit.
-    proposed["unitId"] = target_head["unitId"]
-    stale_relation = _relation(1, caller, target_head)
-    reader = LayeredReviewGraphReader(
-        _Reader([caller, target_head], [stale_relation]),
-        _Reader([proposed], []),
-        ["src/changed.py"],
-    )
-
-    result = review_impact_radius(
-        reader,
-        targets=[target_head["unitId"]],
-        max_depth=1,
-        max_results=10,
-    )
-
-    assert [node["unitId"] for node in result["nodes"]] == [
-        target_head["unitId"],
-    ]
-    assert result["nodes"][0]["name"] == "service_v2"
-    assert result["edges"] == []
-    assert result["connections"] == []
-    assert result["impactScores"] == {}
 
 
-def test_unchanged_symbol_identity_rebinds_base_relation_to_overlay_unit():
-    caller = _unit("caller", "src/caller.py")
-    target_head = _unit("service", "src/changed.py")
-    proposed = _unit("service", "src/changed.py")
-    proposed["unitId"] = "unit:service-proposed"
-    reader = LayeredReviewGraphReader(
-        _Reader([caller, target_head], [_relation(1, caller, target_head)]),
-        _Reader([proposed], []),
-        ["src/changed.py"],
-    )
-
-    result = traverse_review_graph(
-        reader,
-        start="unit:caller",
-        direction="outgoing",
-        max_depth=1,
-        max_results=10,
-    )
-
-    assert [node["unitId"] for node in result["nodes"]] == [
-        "unit:caller",
-        "unit:service-proposed",
-    ]
-    assert result["edges"][0]["targetUnitId"] == "unit:service-proposed"
 
 
 def test_exact_full_impact_roots_do_not_report_root_truncation():
@@ -1248,3 +1174,42 @@ def test_every_service_operation_uses_the_shared_read_session():
     assert all(arguments["source_revision"] == "source" for arguments in opened)
     assert all(arguments["base_revision"] == "base" for arguments in opened)
     assert [root["unitId"] for root in impact["roots"]] == ["unit:precise"]
+
+
+def test_default_traversal_preserves_large_scoped_metadata_and_entire_frontier():
+    root = _unit("root_" + "identity_" * 40, "src/root.py", content="source should be fetched separately")
+    neighbors = [_unit(f"neighbor_{index}_" + "qualified_" * 30, f"src/neighbor_{index}.py") for index in range(40)]
+    attributes = {"contract": "required-configuration-" * 80, "reachable": True}
+    relations = [_relation(index, root, neighbor, attributes=attributes) for index, neighbor in enumerate(neighbors)]
+    reader = _Reader([root, *neighbors], relations)
+
+    response = traverse_review_graph(reader, start=root["unitId"], direction="outgoing",
+                                    max_depth=1, max_results=100, include_source=False)
+
+    assert response["coverage"]["tokenBudget"] is None
+    assert response["coverage"]["estimatedTokens"] > 2000
+    assert {node["unitId"] for node in response["nodes"]} == {unit["unitId"] for unit in [root, *neighbors]}
+    assert {edge["evidenceId"] for edge in response["edges"]} == {edge["evidenceId"] for edge in relations}
+    assert all(edge["attributes"] == attributes for edge in response["edges"])
+    assert len(response["frontier"]) == len(neighbors) > 25
+    assert response["coverage"]["omittedFrontier"] == 0
+    assert response["coverage"]["omittedNodes"] == 0
+    assert response["coverage"]["omittedRelations"] == 0
+    assert response["targets"] == [root["unitId"]]
+    assert response["roots"][0]["qualifiedName"] == root["qualifiedName"]
+    assert "token_budget" not in response["coverage"]["partialReasons"]
+    assert response["sourceWindows"] == []
+    assert response["coverage"]["sourceIncluded"] is False
+    encoded = json.dumps(response, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    assert response["coverage"]["serializedCharacters"] == len(encoded)
+
+
+def test_explicit_none_traversal_does_not_clip_long_identity_or_plugin_contract():
+    unit = _unit("function_" + "signature_" * 400, "src/large.py")
+    response = traverse_review_graph(_Reader([unit], []), start=unit["unitId"],
+                                    token_budget=None, include_source=False)
+    assert response["targets"] == [unit["unitId"]]
+    assert response["nodes"][0]["unitId"] == unit["unitId"]
+    assert response["nodes"][0]["qualifiedName"] == unit["qualifiedName"]
+    assert response["coverage"]["tokenBudget"] is None
+    assert response["coverage"]["state"] == "complete"

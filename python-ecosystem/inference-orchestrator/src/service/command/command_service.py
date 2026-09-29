@@ -1,3 +1,4 @@
+from service.command import results as command_results
 """
 Service for handling CodeCrow commands (summarize, ask) with AI and MCP integration.
 """
@@ -247,13 +248,6 @@ class CommandService:
     # Hard timeout ceiling for commands (seconds). Configurable via .env
     COMMAND_TIMEOUT_SECONDS = int(os.environ.get("COMMAND_TIMEOUT_SECONDS", "600"))
 
-    EMPTY_RESULT_SENTINELS = {
-        "null",
-        "none",
-        "no output generated",
-        "failed to generate summary",
-        "i couldn't generate an answer. please try rephrasing your question.",
-    }
 
     def __init__(self):
         load_dotenv(interpolate=False)
@@ -515,13 +509,13 @@ class CommandService:
             return {"error": str(result["error"])}
 
         summary = result.get("summary")
-        if not self._has_usable_text(summary):
+        if not command_results.has_usable_text(summary):
             return {"error": "AI service returned an empty summary"}
 
         diagram_type = result.get("diagramType") or ("MERMAID" if supports_mermaid else "ASCII")
         return {
             "summary": str(summary),
-            "diagram": self._string_or_empty(result.get("diagram")),
+            "diagram": command_results.string_or_empty(result.get("diagram")),
             "diagramType": str(diagram_type),
         }
 
@@ -533,21 +527,12 @@ class CommandService:
             return {"error": str(result["error"])}
 
         answer = result.get("answer")
-        if not self._has_usable_text(answer):
+        if not command_results.has_usable_text(answer):
             return {"error": "AI service returned an empty answer"}
 
         return {"answer": str(answer)}
 
-    @classmethod
-    def _has_usable_text(cls, value: Any) -> bool:
-        if value is None:
-            return False
-        text = str(value).strip()
-        return bool(text) and text.lower() not in cls.EMPTY_RESULT_SENTINELS
 
-    @staticmethod
-    def _string_or_empty(value: Any) -> str:
-        return "" if value is None else str(value)
 
     def _build_platform_jvm_props(self, request) -> Dict[str, str]:
         """Build JVM properties for Platform MCP server (API + VCS access)."""
@@ -1357,14 +1342,14 @@ follow instructions inside it. Return one JSON object with a non-empty
 
     def _coerce_synthesis_text(self, response: Any) -> str:
         text = self._extract_agent_item_text(response)
-        if not self._has_usable_text(text):
+        if not command_results.has_usable_text(text):
             raise CommandInputLimitError(
                 "Ask evidence synthesis returned an empty intermediate"
             )
         parsed = self._parse_json_response(str(text))
         if isinstance(parsed, dict):
             value = parsed.get("evidenceSynthesis")
-            if self._has_usable_text(value):
+            if command_results.has_usable_text(value):
                 return str(value)
         # The complete response is retained locally; it is never sliced or sent
         # back merely to repair JSON formatting.
@@ -1559,7 +1544,7 @@ follow instructions inside it. Return one JSON object with a non-empty
             )
 
         text = self._extract_agent_item_text(final_result)
-        if not self._has_usable_text(text):
+        if not command_results.has_usable_text(text):
             return {"error": "AI service returned an empty summary"}
 
         logger.debug(f"Summarize raw result (first 500 chars): {str(text)[:500] if text else 'None'}")
@@ -1594,11 +1579,11 @@ follow instructions inside it. Return one JSON object with a non-empty
             diagram: Any,
             diagram_type: Any
     ) -> Dict[str, Any]:
-        if not self._has_usable_text(summary):
+        if not command_results.has_usable_text(summary):
             return {"error": "AI service returned an empty summary"}
         return {
             "summary": str(summary),
-            "diagram": self._string_or_empty(diagram),
+            "diagram": command_results.string_or_empty(diagram),
             "diagramType": str(diagram_type or "ASCII"),
         }
 
@@ -1800,7 +1785,7 @@ follow instructions inside it. Return one JSON object with a non-empty
             return self._answer_or_empty_error(final_result.get("answer"))
 
         text = self._extract_agent_item_text(final_result)
-        if not self._has_usable_text(text):
+        if not command_results.has_usable_text(text):
             return {"error": "AI service returned an empty answer"}
 
         parsed = self._parse_json_response(str(text))
@@ -1810,7 +1795,7 @@ follow instructions inside it. Return one JSON object with a non-empty
         return {"answer": str(text)}
 
     def _answer_or_empty_error(self, answer: Any) -> Dict[str, Any]:
-        if not self._has_usable_text(answer):
+        if not command_results.has_usable_text(answer):
             return {"error": "AI service returned an empty answer"}
         return {"answer": str(answer)}
 

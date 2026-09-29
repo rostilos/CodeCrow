@@ -237,6 +237,8 @@ class TestReviewServiceRequestRag:
             localRagRepoPath="/tmp/structural-snapshot",
             localRepoRevision="target-head",
             localReviewOverlayPath="/tmp/review-overlay",
+            ragBaseGenerationRevision=None,
+            ragIndexPolicy=None,
             ragBaseGenerationManifestSha256="manifest",
             ragCollectionTarget="collection",
             ragReviewCollectionTarget="review-collection",
@@ -274,6 +276,8 @@ class TestReviewServiceRequestRag:
             localRepoPath="/tmp/target-snapshot",
             localRepoRevision="target-head",
             localReviewOverlayPath="/tmp/review-overlay",
+            ragBaseGenerationRevision=None,
+            ragIndexPolicy=None,
             ragBaseGenerationManifestSha256=None,
             ragCollectionTarget=None,
         )
@@ -298,6 +302,8 @@ class TestReviewServiceRequestRag:
             localRagRepoPath=None,
             localRepoRevision="target-head",
             localReviewOverlayPath="/tmp/review-overlay",
+            ragBaseGenerationRevision=None,
+            ragIndexPolicy=None,
             ragBaseGenerationManifestSha256="manifest",
             ragCollectionTarget="collection",
             ragReviewCollectionTarget="review-collection",
@@ -323,6 +329,8 @@ class TestReviewServiceRequestRag:
             commitHash=None,
             localRepoPath="/tmp/target-snapshot",
             localRepoRevision="target-head",
+            ragBaseGenerationRevision=None,
+            ragIndexPolicy=None,
             ragBaseGenerationManifestSha256="manifest",
             ragCollectionTarget="collection",
             ragReviewCollectionTarget="review-collection",
@@ -597,10 +605,6 @@ class TestReviewServiceCreateLlm:
 class TestReviewServiceConstants:
     def test_max_fix_retries(self, service):
         assert ReviewService.MAX_FIX_RETRIES == 2
-
-    def test_max_concurrent_reviews_is_int(self, service):
-        assert isinstance(ReviewService.MAX_CONCURRENT_REVIEWS, int)
-        assert ReviewService.MAX_CONCURRENT_REVIEWS > 0
 
     def test_review_timeout_is_int(self, service):
         assert isinstance(ReviewService.REVIEW_TIMEOUT_SECONDS, int)

@@ -6,6 +6,7 @@ import org.rostilos.codecrow.ragengine.branch.BranchIndexMaintenanceService;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -17,6 +18,7 @@ import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
 
@@ -33,15 +35,18 @@ public class RagIndexingController {
     private final BranchIndexMaintenanceService branchIndexMaintenanceService;
     private final ProjectRepository projectRepository;
     private final ObjectMapper objectMapper;
+    private final Executor maintenanceExecutor;
 
     public RagIndexingController(
             BranchIndexMaintenanceService branchIndexMaintenanceService,
             ProjectRepository projectRepository,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            @Qualifier("ragExecutor") Executor maintenanceExecutor
     ) {
         this.branchIndexMaintenanceService = branchIndexMaintenanceService;
         this.projectRepository = projectRepository;
         this.objectMapper = objectMapper;
+        this.maintenanceExecutor = maintenanceExecutor;
     }
 
     /**
@@ -84,7 +89,7 @@ public class RagIndexingController {
                 } finally {
                     messageConsumer.accept(Map.of("_eof", true));
                 }
-            });
+            }, maintenanceExecutor);
 
             // Stream messages to client
             try {

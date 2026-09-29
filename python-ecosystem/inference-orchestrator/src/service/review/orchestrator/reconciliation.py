@@ -1,6 +1,7 @@
 """
 Issue reconciliation and deduplication logic for incremental reviews.
 """
+from service.review.execution_scheduler import review_model_slot
 import logging
 import difflib
 import asyncio
@@ -1071,10 +1072,11 @@ async def _dedup_batch_with_llm(
             )
         else:
             logger.info("Structured output skipped for LLM dedup batch; using prompt JSON parsing")
-            response = await llm.ainvoke(
-                prompt,
-                **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
-            )
+            async with review_model_slot("reconciliation"):
+                response = await llm.ainvoke(
+                    prompt,
+                    **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
+                )
             result = await parse_llm_response(
                 extract_llm_response_text(response),
                 SemanticDeduplicationDecision,

@@ -2311,8 +2311,8 @@ async def test_named_server_empty_tool_inventory_is_not_silent():
     })
 
 
-def test_review_local_agent_module_remains_a_compatibility_export():
-    from service.review.orchestrator.agents import (
+def test_review_package_exports_the_canonical_agent():
+    from service.review.orchestrator import (
         RecursiveMCPAgent as ReviewRecursiveMCPAgent,
     )
 

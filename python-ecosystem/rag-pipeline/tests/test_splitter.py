@@ -1,4 +1,4 @@
-"""Focused coverage for the bounded AST source splitter."""
+"""Coverage for complete structural source units and metadata."""
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -32,7 +32,7 @@ def test_chunk_identity_and_file_hash_are_deterministic():
     assert compute_file_hash("value = 1") != compute_file_hash("value = 2")
 
 
-def test_default_splitter_restores_bounded_chunk_configuration():
+def test_existing_splitter_constructor_configuration_remains_accepted():
     splitter = ASTCodeSplitter()
 
     assert splitter.max_chunk_size == 8000
@@ -142,7 +142,7 @@ def _rich_unicode_tree():
     return source.decode("utf-8"), root, expected
 
 
-def test_rich_ast_metadata_is_bounded_in_stable_order_with_diagnostics():
+def test_rich_ast_metadata_preserves_inventories_with_depth_diagnostics():
     source, root, expected = _rich_unicode_tree()
     splitter = ASTCodeSplitter()
     via_capture = ASTChunk(
@@ -160,37 +160,35 @@ def test_rich_ast_metadata_is_bounded_in_stable_order_with_diagnostics():
         symbol_names=["Container_界"],
     )
 
-    splitter._extract_rich_ast_details(
+    splitter.extractor.details._extract_rich_ast_details(
         via_capture,
         SimpleNamespace(root_node=root),
         root,
         "python",
     )
-    splitter._extract_rich_details_from_node(
+    splitter.extractor.details._extract_rich_details_from_node(
         via_node,
         root,
         source.encode("utf-8"),
         "python",
     )
 
+    # The optional traversal's depth diagnostic remains explicit; collected
+    # inventories retain every distinct value, including beyond former caps.
+    expected["calls"] = expected["calls"][:-1]
     for field_name, values in expected.items():
-        limit = splitter.METADATA_LIST_LIMITS[field_name]
-        assert getattr(via_capture, field_name) == values[:limit]
-        assert getattr(via_node, field_name) == values[:limit]
-        assert f"{field_name}_limit" in via_capture.metadata_partial_reasons
-        assert f"{field_name}_limit" in via_node.metadata_partial_reasons
-    assert "ast_depth_limit" in via_capture.metadata_partial_reasons
-    assert "ast_depth_limit" in via_node.metadata_partial_reasons
-    metadata = splitter._build_metadata(via_capture, {}, 0, 1)
+        assert getattr(via_capture, field_name) == values
+        assert getattr(via_node, field_name) == values
+    assert via_capture.metadata_partial_reasons == ["ast_depth_limit"]
+    assert via_node.metadata_partial_reasons == ["ast_depth_limit"]
+    metadata = splitter.emitter._build_metadata(via_capture, {}, 0, 1)
     for field_name, values in expected.items():
-        assert metadata[field_name] == values[
-            :splitter.METADATA_LIST_LIMITS[field_name]
-        ]
+        assert metadata[field_name] == values
     assert metadata["structural_metadata_complete"] is False
     assert "ast_depth_limit" in metadata["structural_metadata_partial_reasons"]
 
 
-def test_query_relationships_and_parent_members_use_inventory_caps():
+def test_query_relationships_and_parent_members_preserve_all_values():
     splitter = ASTCodeSplitter()
     owner = ASTChunk(
         content="class Owner_界: pass",
@@ -224,14 +222,11 @@ def test_query_relationships_and_parent_members_use_inventory_caps():
         )
         ranges.append((index * 10, index * 10 + 5, child))
 
-    splitter._attach_query_parent_context(ranges)
+    splitter.extractor._attach_query_parent_context(ranges)
 
-    assert owner.methods == methods[:50]
-    assert owner.properties == properties[:50]
-    assert owner.metadata_partial_reasons == [
-        "methods_limit",
-        "properties_limit",
-    ]
+    assert owner.methods == methods
+    assert owner.properties == properties
+    assert owner.metadata_partial_reasons == []
 
     def captured(capture_name: str, value: str, offset: int) -> CapturedNode:
         return CapturedNode(
@@ -278,26 +273,20 @@ def test_query_relationships_and_parent_members_use_inventory_caps():
         "call.name": captured("call.name", expected_calls[0], offset),
     }))
 
-    splitter._attach_query_relationship_metadata(
+    splitter.extractor._attach_query_relationship_metadata(
         matches,
         [(0, 10_000, relationship_owner)],
     )
 
-    assert relationship_owner.calls == expected_calls[:80]
-    assert relationship_owner.parameters == expected_parameters[:30]
-    assert relationship_owner.properties == expected_fields[:50]
-    assert relationship_owner.variables == expected_variables[:50]
-    assert relationship_owner.referenced_types == expected_types[:50]
-    assert set(relationship_owner.metadata_partial_reasons) == {
-        "calls_limit",
-        "parameters_limit",
-        "properties_limit",
-        "variables_limit",
-        "referenced_types_limit",
-    }
+    assert relationship_owner.calls == expected_calls
+    assert relationship_owner.parameters == expected_parameters
+    assert relationship_owner.properties == expected_fields
+    assert relationship_owner.variables == expected_variables
+    assert relationship_owner.referenced_types == expected_types
+    assert relationship_owner.metadata_partial_reasons == []
 
 
-def test_symbol_inventory_is_bounded_without_changing_primary_path_identity():
+def test_symbol_inventory_is_complete_without_changing_primary_path_identity():
     symbols = [f"symbol_{index:03d}_界" for index in range(75)]
     chunk = ASTChunk(
         content="class Container_界: pass",
@@ -307,18 +296,16 @@ def test_symbol_inventory_is_bounded_without_changing_primary_path_identity():
         symbol_names=symbols,
         parent_context=["package_界", "Owner_界"],
     )
-    metadata = ASTCodeSplitter()._build_metadata(chunk, {}, 0, 1)
+    metadata = ASTCodeSplitter().emitter._build_metadata(chunk, {}, 0, 1)
 
-    assert metadata["symbol_names"] == symbols[:30]
+    assert metadata["symbol_names"] == symbols
     assert metadata["primary_name"] == symbols[0]
     assert metadata["full_path"] == f"package_界.Owner_界.{symbols[0]}"
-    assert metadata["structural_metadata_complete"] is False
-    assert metadata["structural_metadata_partial_reasons"] == [
-        "symbol_names_limit"
-    ]
+    assert metadata.get("structural_metadata_complete", True) is True
+    assert not metadata.get("structural_metadata_partial_reasons")
 
 
-def test_unknown_source_is_split_into_bounded_raw_chunks():
+def test_unknown_source_remains_one_complete_raw_unit():
     source = "\n".join(
         f"opaque line {index:03d} " + "x" * 30
         for index in range(30)
@@ -333,8 +320,8 @@ def test_unknown_source_is_split_into_bounded_raw_chunks():
         Document(source, {"path": "assets/data.unknown", "language": "text"})
     ])
 
-    assert len(nodes) > 1
-    assert all(0 < len(node.text) <= 160 for node in nodes)
+    assert len(nodes) == 1
+    assert nodes[0].text == source
     assert all(
         node.metadata["content_type"] == ContentType.FALLBACK.value
         for node in nodes
@@ -344,7 +331,7 @@ def test_unknown_source_is_split_into_bounded_raw_chunks():
     assert "".join(node.text for node in nodes) == source
 
 
-def test_fallback_preserves_a_small_trailing_fragment_exactly():
+def test_fallback_preserves_small_tail_in_the_complete_source():
     source = ("A" * 20) + "\n" + "z"
     splitter = ASTCodeSplitter(
         max_chunk_size=21,
@@ -352,18 +339,18 @@ def test_fallback_preserves_a_small_trailing_fragment_exactly():
         chunk_overlap=10,
     )
 
-    nodes = splitter._split_fallback(Document(
+    nodes = splitter.emitter._split_fallback(Document(
         source,
         {"path": "assets/tail.unknown", "language": "text"},
     ))
 
-    assert [node.text for node in nodes] == [("A" * 20) + "\n", "z"]
+    assert [node.text for node in nodes] == [source]
     assert "".join(node.text for node in nodes).encode("utf-8") == source.encode(
         "utf-8"
     )
 
 
-def test_fallback_losslessly_bounds_a_fragment_above_thirty_thousand_chars():
+def test_fallback_preserves_large_source_without_size_fragmentation():
     source = "X" * 35_001
     splitter = ASTCodeSplitter(
         max_chunk_size=50_000,
@@ -371,20 +358,16 @@ def test_fallback_losslessly_bounds_a_fragment_above_thirty_thousand_chars():
         chunk_overlap=200,
     )
 
-    nodes = splitter._split_fallback(Document(
+    nodes = splitter.emitter._split_fallback(Document(
         source,
         {"path": "assets/large.unknown", "language": "text"},
     ))
 
-    assert [len(node.text) for node in nodes] == [8_000, 8_000, 8_000, 8_000, 3_001]
-    assert all(
-        len(node.text) <= ASTCodeSplitter.DEFAULT_MAX_CHUNK_SIZE
-        for node in nodes
-    )
+    assert [node.text for node in nodes] == [source]
     assert "".join(node.text for node in nodes) == source
 
 
-def test_fallback_hard_splits_only_an_indivisible_atom_without_byte_loss():
+def test_fallback_keeps_large_unicode_atom_and_exact_byte_coordinates():
     source = "界" * 25_001
     splitter = ASTCodeSplitter(
         max_chunk_size=10_000,
@@ -392,22 +375,20 @@ def test_fallback_hard_splits_only_an_indivisible_atom_without_byte_loss():
         chunk_overlap=200,
     )
 
-    nodes = splitter._split_fallback(Document(
+    nodes = splitter.emitter._split_fallback(Document(
         source,
         {"path": "assets/atom.unknown", "language": "text"},
     ))
 
-    assert [len(node.text) for node in nodes] == [8_000, 8_000, 8_000, 1_001]
-    assert all(
-        len(node.text) <= ASTCodeSplitter.DEFAULT_MAX_CHUNK_SIZE
-        for node in nodes
-    )
+    assert [node.text for node in nodes] == [source]
+    assert nodes[0].metadata["start_byte"] == 0
+    assert nodes[0].metadata["end_byte"] == len(source.encode("utf-8"))
     assert b"".join(node.text.encode("utf-8") for node in nodes) == source.encode(
         "utf-8"
     )
 
 
-def test_oversized_ast_unit_is_fragmented_without_copying_global_details():
+def test_large_ast_unit_retains_complete_owner_source_and_relation_metadata():
     splitter = ASTCodeSplitter(
         max_chunk_size=120,
         min_chunk_size=1,
@@ -421,8 +402,7 @@ def test_oversized_ast_unit_is_fragmented_without_copying_global_details():
         content_type=ContentType.FUNCTIONS_CLASSES,
         language="python",
         path="src/service.py",
-        # Only the primary owning identity is repeated on each fragment; the
-        # intact semantic unit path retains the complete symbol inventory.
+        # Source size must not remove any owning declaration metadata.
         symbol_names=["run", *[f"nested_{index}_界" for index in range(70)]],
         calls=[f"dependency_{index}" for index in range(20)],
         start_line=1,
@@ -430,48 +410,23 @@ def test_oversized_ast_unit_is_fragmented_without_copying_global_details():
         node_type="function",
     )
 
-    nodes = splitter._process_chunks(
+    nodes = splitter.emitter._process_chunks(
         [chunk],
         Document(chunk.content, {"path": chunk.path}),
         None,
         chunk.path,
     )
 
-    assert len(nodes) > 1
-    assert all(len(node.text) <= 120 for node in nodes)
-    assert all(node.metadata["is_fragment"] is True for node in nodes)
-    assert all(
-        node.metadata["content_type"] == ContentType.OVERSIZED_SPLIT.value
-        for node in nodes
-    )
-    assert all(node.metadata["primary_name"] == "run" for node in nodes)
-    assert all(node.metadata["symbol_names"] == ["run"] for node in nodes)
-    assert all(node.metadata["fragment_of"] == "run" for node in nodes)
-    assert len({node.id_ for node in nodes}) == len(nodes)
-    assert [node.metadata["sub_chunk_index"] for node in nodes] == list(
-        range(len(nodes))
-    )
-    assert all(
-        node.metadata["total_sub_chunks"] == len(nodes) for node in nodes
-    )
-    assert len({node.metadata["parent_chunk_id"] for node in nodes}) == 1
-    assert all("calls" not in node.metadata for node in nodes)
-
-    previous_offset = -1
-    for node in nodes:
-        fragment_offset = chunk.content.find(node.text, previous_offset + 1)
-        assert fragment_offset >= 0
-        previous_offset = fragment_offset
-        expected_start_line = (
-            chunk.start_line
-            + chunk.content[:fragment_offset].count("\n")
-        )
-        assert node.metadata["start_line"] == expected_start_line
-        assert node.metadata["end_line"] == (
-            expected_start_line + node.text.count("\n")
-        )
-        assert chunk.start_line <= node.metadata["start_line"]
-        assert node.metadata["end_line"] <= chunk.end_line
+    assert len(nodes) == 1
+    node = nodes[0]
+    assert node.text == chunk.content
+    assert node.metadata["content_type"] == ContentType.FUNCTIONS_CLASSES.value
+    assert node.metadata["primary_name"] == "run"
+    assert node.metadata["symbol_names"] == chunk.symbol_names
+    assert node.metadata["calls"] == chunk.calls
+    assert node.metadata["start_line"] == 1
+    assert node.metadata["end_line"] == 20
+    assert "is_fragment" not in node.metadata
 
 
 def test_complete_docstring_is_preserved_in_both_metadata_paths():
@@ -491,7 +446,7 @@ def test_complete_docstring_is_preserved_in_both_metadata_paths():
         docstring=docstring,
     )
 
-    assert splitter._build_metadata(ast_chunk, {}, 0, 1)["docstring"] == docstring
+    assert splitter.emitter._build_metadata(ast_chunk, {}, 0, 1)["docstring"] == docstring
     assert MetadataExtractor().build_metadata_dict(extracted, {})["docstring"] == docstring
 
 
@@ -571,3 +526,48 @@ def test_python_ast_chunks_keep_source_and_structural_metadata():
     })
     assert any("validate" in node.metadata.get("calls", []) for node in nodes)
     assert all("structural_record_type" not in node.metadata for node in nodes)
+
+
+def test_chunk_identity_includes_complete_content():
+    prefix = "same prefix" * 100
+    assert generate_deterministic_id("src/a.py", prefix + "return 1") != generate_deterministic_id("src/a.py", prefix + "return 2")
+
+
+def test_large_semantic_unit_keeps_short_final_source_statement():
+    prefix = "def execute():\n" + "    work()\n" * 20
+    tail = "    return False\n"
+    chunk = ASTChunk(
+        content=prefix + tail,
+        content_type=ContentType.FUNCTIONS_CLASSES,
+        language="python", path="worker.py", start_line=1, end_line=22,
+        symbol_names=["execute"], node_type="function",
+    )
+    splitter = ASTCodeSplitter(max_chunk_size=100, min_chunk_size=50, chunk_overlap=10)
+    nodes = splitter.emitter._process_chunks([chunk], Document(chunk.content, {"path": chunk.path}), None, chunk.path)
+    assert [node.text for node in nodes] == [prefix + tail]
+    assert nodes[0].metadata["start_line"] == 1
+    assert nodes[0].metadata["end_line"] == 22
+    assert "total_sub_chunks" not in nodes[0].metadata
+
+
+@pytest.mark.parametrize("source", ["", "plain", "\n", "\r\n", "界\r\nalpha\nβ\n", "é\r終", "a\n\n末尾"])
+def test_query_capture_byte_points_match_prefix_scan_at_every_unicode_and_newline_boundary(monkeypatch, source):
+    from rag_pipeline.core.splitter.query_runner import QueryRunner
+    tree_sitter = pytest.importorskip("tree_sitter")
+
+    raw = source.encode("utf-8")
+    nodes = [SimpleNamespace(start_byte=offset, end_byte=offset, type="identifier")
+             for offset in range(len(raw) + 1)]
+    cursor = SimpleNamespace(matches=lambda _root: [(0, {"function": [node]}) for node in nodes])
+    monkeypatch.setattr(tree_sitter, "QueryCursor", lambda _query: cursor)
+    runner = QueryRunner()
+    monkeypatch.setattr(runner, "_get_compiled_query", lambda *_args: object())
+    matches = runner.run_query(source, "python", tree=SimpleNamespace(root_node=object()))
+    assert len(matches) == len(nodes)
+    for offset, match in enumerate(matches):
+        expected_line = raw.count(b"\n", 0, offset)
+        prior_newline = raw.rfind(b"\n", 0, offset)
+        expected_column = offset if prior_newline < 0 else offset - prior_newline - 1
+        capture = match.get("function")
+        assert capture.start_point == capture.end_point == (expected_line, expected_column)
+        assert capture.start_byte == capture.end_byte == offset

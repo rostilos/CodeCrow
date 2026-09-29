@@ -60,7 +60,7 @@ def _json_string_list(name: str) -> list[str] | None:
         for value in values
         if isinstance(value, str) and value.strip()
     ]
-    return normalized or None
+    return normalized
 
 
 def _review_binding() -> dict[str, Any]:
@@ -73,6 +73,7 @@ def _review_binding() -> dict[str, Any]:
         "target_repo_path": _context("TARGET_REPO_PATH") or "",
         "review_overlay_path": _context("REVIEW_OVERLAY_PATH") or "",
         "base_collection_target": _context("COLLECTION_TARGET"),
+        "base_generation_revision": _context("BASE_GENERATION_REVISION"),
         "base_generation_manifest_sha256": _context("MANIFEST"),
         "review_collection_target": _context("REVIEW_COLLECTION_TARGET"),
         "review_generation_manifest_sha256": _context(

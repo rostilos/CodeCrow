@@ -10,6 +10,7 @@ import java.util.Optional;
 
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.ReviewIndexPolicy;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
@@ -320,6 +321,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             AIConnection aiConnection) throws GeneralSecurityException {
         var effectiveConfig = project.getEffectiveConfig();
         var ragConfig = effectiveConfig.ragConfig();
+        var profile = effectiveConfig.analysisProfile();
         return AiAnalysisRequestImpl.builder()
                 .withProjectId(project.getId())
                 .withProjectAiConnection(aiConnection)
@@ -329,6 +331,11 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withUseLocalMcp(true)
                 .withUseMcpTools(effectiveConfig.useMcpTools())
                 .withRagEnabled(ragConfig != null && ragConfig.enabled())
+                .withRagIndexPolicy(new ReviewIndexPolicy(
+                        ragConfig != null ? ragConfig.includePatterns() : null,
+                        ragConfig != null ? ragConfig.excludePatterns() : null,
+                        profile != null ? profile.projectType() : null,
+                        profile != null ? profile.sourceRoot() : null))
                 .withMaxAllowedTokens(effectiveConfig.maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())

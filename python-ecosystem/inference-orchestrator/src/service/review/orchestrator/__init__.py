@@ -12,7 +12,7 @@ _EXPORTS = {
         "MultiStageReviewOrchestrator",
     ),
     "RecursiveMCPAgent": (
-        "service.review.orchestrator.agents",
+        "service.agent",
         "RecursiveMCPAgent",
     ),
     "extract_llm_response_text": (

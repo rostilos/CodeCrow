@@ -138,6 +138,10 @@ class AbstractVcsAiClientServiceCommitIdentityTest {
 
         ProjectConfig config = new ProjectConfig();
         config.setAnalysisScope(new AnalysisScopeConfig(List.of("src/**"), List.of()));
+        config.setRagConfig(new org.rostilos.codecrow.core.model.project.config.RagConfig(
+                true, "main", List.of("src/**", "docs/**"), List.of("src/generated/**")));
+        config.setAnalysisProfile(new org.rostilos.codecrow.core.model.project.config.AnalysisProfileConfig(
+                "generic", "src"));
         when(project.getId()).thenReturn(7L);
         when(project.getNamespace()).thenReturn("repository");
         when(project.getWorkspace()).thenReturn(workspace);
@@ -197,6 +201,10 @@ class AbstractVcsAiClientServiceCommitIdentityTest {
                 Optional.of(previousAnalysis))
                 .get(0);
 
+        assertThat(review.getRagIndexPolicy().includePatterns()).containsExactly("src/**", "docs/**");
+        assertThat(review.getRagIndexPolicy().excludePatterns()).containsExactly("src/generated/**");
+        assertThat(review.getRagIndexPolicy().projectType()).isEqualTo("generic");
+        assertThat(review.getRagIndexPolicy().sourceRoot()).isEqualTo("src");
         assertThat(review.getAnalysisMode()).isEqualTo(AnalysisMode.INCREMENTAL);
         assertThat(review.getChangedFiles()).containsExactly("src/Delta.java");
         assertThat(review.getDeletedFiles()).isEmpty();

@@ -190,7 +190,7 @@ def test_unexpected_frontend_programming_failure_remains_fatal(monkeypatch):
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     plugin = catalog.implementation("magento")
     repository = importlib.import_module(
-        plugin.__class__.__module__ + ".repository"
+        plugin.__class__.__module__ + ".frontend_topology"
     )
 
     def broken_invariant(_content):

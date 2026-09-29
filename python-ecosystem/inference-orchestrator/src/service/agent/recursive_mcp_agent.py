@@ -1,4 +1,5 @@
 """MCP agent variant with bounded exploration and structured completion."""
+from service.review.execution_scheduler import review_model_slot
 
 import json
 import logging
@@ -353,7 +354,8 @@ class ModelRequestSettingsMiddleware(AgentMiddleware):
             request: ModelRequest,
             handler: Callable[[ModelRequest], Awaitable[Any]],
     ) -> Any:
-        return await handler(self._prepare_request(request))
+        async with review_model_slot("mcp_agent"):
+            return await handler(self._prepare_request(request))
 
 
 class FinalResponseReserveMiddleware(AgentMiddleware):
@@ -937,11 +939,12 @@ class RecursiveMCPAgent(MCPAgent):
         # call for schema conversion. Reject it before it can become fabricated
         # structured output.
         reject_mcp_use_model_call_limit_output(raw_result)
-        return await super()._attempt_structured_output(
-            raw_result,
-            *args,
-            **kwargs,
-        )
+        async with review_model_slot("mcp_agent_attempt_structured_output"):
+            return await super()._attempt_structured_output(
+                raw_result,
+                *args,
+                **kwargs,
+            )
 
     @staticmethod
     def _validated_stream_output(

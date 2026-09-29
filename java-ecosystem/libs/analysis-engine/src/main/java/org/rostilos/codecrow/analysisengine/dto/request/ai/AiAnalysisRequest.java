@@ -52,6 +52,8 @@ public interface AiAnalysisRequest {
 
     default boolean getRagEnabled() { return true; }
 
+    default ReviewIndexPolicy getRagIndexPolicy() { return null; }
+
     AnalysisType getAnalysisType();
 
     String getVcsProvider();
