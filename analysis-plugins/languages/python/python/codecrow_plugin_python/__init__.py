@@ -121,7 +121,6 @@ class PythonPlugin:
             return PluginOutcome.abstained()
         return PluginOutcome.handled(ReviewContribution(
             rules=(
-                "A python-pr-removed-relation is base-to-PR navigation evidence only; require changed-hunk proof of harm.",
                 "For Python dynamic typing or async claims, require exact annotations, guards, await/call sites, or framework wiring evidence rather than inferring from names.",
                 "Resolve Python imports, decorators, inheritance, and call targets before reporting a missing symbol or invalid contract.",
                 "Treat exact python-module-resolution, python-import-binding, and python-call-resolution facts as navigation evidence; relationship presence alone is not proof of a defect.",

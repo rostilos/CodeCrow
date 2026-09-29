@@ -8,16 +8,16 @@ import shutil
 import time
 from queue import Empty, Full, Queue
 from pathlib import Path
-from threading import Lock, Thread, current_thread
+from threading import Event, Lock, Thread, current_thread
 from typing import BinaryIO, Callable
 from uuid import uuid4
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Request
 from fastapi.responses import StreamingResponse
 
 from ...models.config import IndexStats
 from ..models import (
     IndexRequest,
-    EstimateRequest, EstimateResponse,
+    RevisionDiscoveryResponse,
     RevisionPreflightResponse,
 )
 from ...core.exact_index import ExactIndexPreconditionError
@@ -47,13 +47,17 @@ INDEX_STREAM_HEARTBEAT_SECONDS = _stream_heartbeat_interval_seconds()
 
 
 class _IndexStreamWorkerRegistry:
-    """Track synchronous HTTP-stream indexing beyond request cancellation."""
+    """Track and cooperatively cancel synchronous HTTP-stream indexing."""
 
     def __init__(self) -> None:
-        self._workers: set[Thread] = set()
+        self._workers: dict[Thread, Event] = {}
         self._lock = Lock()
 
-    def start(self, target: Callable[[], None]) -> Thread:
+    def start(
+        self,
+        target: Callable[[], None],
+        cancellation_event: Event,
+    ) -> Thread:
         """Admit and start one worker before exposing its response stream."""
 
         def run_tracked() -> None:
@@ -61,7 +65,7 @@ class _IndexStreamWorkerRegistry:
                 target()
             finally:
                 with self._lock:
-                    self._workers.discard(current_thread())
+                    self._workers.pop(current_thread(), None)
 
         worker = Thread(
             target=run_tracked,
@@ -73,36 +77,39 @@ class _IndexStreamWorkerRegistry:
             daemon=False,
         )
         with self._lock:
-            self._workers.add(worker)
+            self._workers[worker] = cancellation_event
         try:
             worker.start()
         except BaseException:
             with self._lock:
-                self._workers.discard(worker)
+                self._workers.pop(worker, None)
             raise
         return worker
 
+    def cancel(self, worker: Thread) -> None:
+        """Signal one admitted worker to stop at its next safe boundary."""
+        with self._lock:
+            cancellation_event = self._workers.get(worker)
+        if cancellation_event is not None:
+            cancellation_event.set()
+
     async def wait_for(self, worker: Thread) -> None:
-        """Wait for a worker, deferring cancellation until it has returned."""
-        cancellation: asyncio.CancelledError | None = None
-        while worker.is_alive():
-            try:
-                await asyncio.sleep(0.05)
-            except asyncio.CancelledError as exception:
-                # A disconnected streaming client must not unwind its server
-                # handler while the admitted worker can still read the
-                # caller-owned repository snapshot.
-                cancellation = cancellation or exception
+        """Wait outside request cleanup and propagate cancellation once."""
+
+        try:
+            while worker.is_alive():
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            self.cancel(worker)
+            raise
         worker.join()
-        if cancellation is not None:
-            raise cancellation
 
     async def drain(self) -> None:
-        """Wait for every currently admitted stream worker."""
+        """Cancel and wait for every currently admitted stream worker."""
         announced = False
         while True:
             with self._lock:
-                active_workers = tuple(self._workers)
+                active_workers = tuple(self._workers.items())
             if not active_workers:
                 return
             if not announced:
@@ -111,7 +118,9 @@ class _IndexStreamWorkerRegistry:
                     len(active_workers),
                 )
                 announced = True
-            for worker in active_workers:
+            for _, cancellation_event in active_workers:
+                cancellation_event.set()
+            for worker, _ in active_workers:
                 await self.wait_for(worker)
 
     @property
@@ -279,61 +288,51 @@ def _index_collection_target(request: IndexRequest) -> str:
     return f"cc_http_g_{uuid4().hex}"
 
 
-@router.get("/limits")
-def get_limits():
-    """Get current RAG indexing limits (for free plan info)."""
-    config, _ = _get_singletons()
-    return {
-        "max_chunks_per_index": config.max_chunks_per_index,
-        "max_files_per_index": config.max_files_per_index,
-        "max_file_size_bytes": config.max_file_size_bytes,
-        "chunk_size": config.chunk_size,
-        "chunk_overlap": config.chunk_overlap
+def _execute_index_request(
+    index_manager,
+    request: IndexRequest,
+    *,
+    repo_path: str,
+    collection_target: str,
+    progress_callback=None,
+    cancellation_event: Event | None = None,
+    source_tree_exclusively_owned: bool = False,
+):
+    common = {
+        "repo_path": repo_path,
+        "workspace": request.workspace,
+        "project": request.project,
+        "branch": request.branch,
+        "commit": request.commit,
+        "source_tree_sha256": request.source_tree_sha256,
+        "collection_target": collection_target,
+        "project_type": request.project_type,
+        "source_root": request.source_root,
     }
-
-
-@router.post("/index/estimate", response_model=EstimateResponse)
-def estimate_repository(request: EstimateRequest):
-    """Estimate repository size before indexing (file and chunk counts)."""
-    config, index_manager = _get_singletons()
-    try:
-        file_count, estimated_chunks = index_manager.estimate_repository_size(
-            repo_path=request.repo_path,
-            include_patterns=request.include_patterns,
-            exclude_patterns=request.exclude_patterns,
+    if progress_callback is not None:
+        common["progress_callback"] = progress_callback
+    if cancellation_event is not None:
+        common["cancellation_event"] = cancellation_event
+    if source_tree_exclusively_owned:
+        # This is derived from the server-side atomic ownership transfer, never
+        # from an independently trusted client assertion.
+        common["source_tree_exclusively_owned"] = True
+    if request.base_collection_target:
+        return index_manager.index_repository_delta(
+            **common,
+            base_revision=request.base_revision,
+            changed_paths=request.changed_paths,
+            deleted_paths=request.deleted_paths,
+            base_collection_target=request.base_collection_target,
+            base_generation_manifest_sha256=(
+                request.base_generation_manifest_sha256
+            ),
         )
-
-        within_limits = True
-        messages = []
-
-        if config.max_files_per_index > 0 and file_count > config.max_files_per_index:
-            within_limits = False
-            messages.append(f"File count ({file_count}) exceeds limit ({config.max_files_per_index})")
-
-        if config.max_chunks_per_index > 0 and estimated_chunks > config.max_chunks_per_index:
-            within_limits = False
-            messages.append(f"Estimated chunks ({estimated_chunks}) exceeds limit ({config.max_chunks_per_index})")
-
-        if within_limits:
-            message = "Repository is within limits"
-        else:
-            message = (
-                ". ".join(messages) +
-                ". Use exclude patterns to skip large directories (node_modules, vendor, dist, generated files). "
-                "This is a free plan limitation - contact support for extended limits."
-            )
-
-        return EstimateResponse(
-            file_count=file_count,
-            estimated_chunks=estimated_chunks,
-            max_files_allowed=config.max_files_per_index,
-            max_chunks_allowed=config.max_chunks_per_index,
-            within_limits=within_limits,
-            message=message
-        )
-    except Exception as e:
-        logger.error(f"Error estimating repository: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return index_manager.index_repository(
+        **common,
+        include_patterns=request.include_patterns,
+        exclude_patterns=request.exclude_patterns,
+    )
 
 
 @router.post("/index/repository", response_model=IndexStats)
@@ -342,17 +341,10 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
     _, index_manager = _get_singletons()
     try:
         collection_target = _index_collection_target(request)
-        stats = index_manager.index_repository(
+        stats = _execute_index_request(
+            index_manager,
+            request,
             repo_path=request.repo_path,
-            workspace=request.workspace,
-            project=request.project,
-            branch=request.branch,
-            commit=request.commit,
-            include_patterns=request.include_patterns,
-            exclude_patterns=request.exclude_patterns,
-            project_type=request.project_type,
-            source_root=request.source_root,
-            source_tree_sha256=request.source_tree_sha256,
             collection_target=collection_target,
         )
         return stats
@@ -361,6 +353,8 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail=str(e))
     except RepositorySourceTreeError as e:
         logger.warning("Repository source identity rejected: %s", e)
+        raise HTTPException(status_code=409, detail=str(e))
+    except ExactIndexPreconditionError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except MutationLeaseUnavailable as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -372,7 +366,10 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
 
 
 @router.post("/index/repository/stream")
-def index_repository_stream(request: IndexRequest):
+def index_repository_stream(
+    request: IndexRequest,
+    http_request: Request = None,
+):
     """Index one repository and stream observable batch progress as SSE.
 
     The ordinary endpoint remains the stable JSON contract.  This endpoint is
@@ -384,6 +381,7 @@ def index_repository_stream(request: IndexRequest):
     collection_target = _index_collection_target(request)
     progress_events: Queue[dict] = Queue(maxsize=1)
     terminal_events: Queue[tuple[str, object]] = Queue(maxsize=1)
+    cancellation_event = Event()
     repository_ownership_transferred = (
         getattr(request, "transfer_repo_ownership", False) is True
     )
@@ -411,19 +409,16 @@ def index_repository_stream(request: IndexRequest):
 
     def run_index() -> None:
         try:
-            stats = index_manager.index_repository(
+            stats = _execute_index_request(
+                index_manager,
+                request,
                 repo_path=str(index_repo_path),
-                workspace=request.workspace,
-                project=request.project,
-                branch=request.branch,
-                commit=request.commit,
-                include_patterns=request.include_patterns,
-                exclude_patterns=request.exclude_patterns,
-                project_type=request.project_type,
-                source_root=request.source_root,
-                progress_callback=progress,
-                source_tree_sha256=request.source_tree_sha256,
                 collection_target=collection_target,
+                progress_callback=progress,
+                cancellation_event=cancellation_event,
+                source_tree_exclusively_owned=(
+                    repository_ownership_transferred
+                ),
             )
             terminal_events.put(
                 ("complete", stats.model_dump(mode="json"))
@@ -448,7 +443,7 @@ def index_repository_stream(request: IndexRequest):
         # Admission happens before successful response headers. Ownership is
         # already represented by an atomic rename, so a lost admission event
         # cannot make the Java caller delete the path this worker is reading.
-        worker = _index_stream_workers.start(run_index)
+        worker = _index_stream_workers.start(run_index, cancellation_event)
     except BaseException:
         if repository_ownership_transferred:
             _remove_owned_stream_repository(
@@ -476,6 +471,22 @@ def index_repository_stream(request: IndexRequest):
                     last_payload_at + INDEX_STREAM_HEARTBEAT_SECONDS
                 )
             while True:
+                # Starlette does not guarantee that a StreamingResponse body
+                # iterator is cancelled immediately when its peer vanishes.
+                # Poll the ASGI receive channel explicitly so a killed harness
+                # cannot leave a full repository build consuming CPU and disk.
+                if (
+                    http_request is not None
+                    and await http_request.is_disconnected()
+                ):
+                    cancellation_event.set()
+                    # Do not wait from the request task itself. Uvicorn may
+                    # keep that task inside a cancelled ASGI receive scope
+                    # after the peer vanishes; repeatedly awaiting there can
+                    # become a hot cancellation loop. Returning enters the
+                    # `finally` block below, which drains the worker from a
+                    # separate shielded task.
+                    return
                 try:
                     payload = progress_events.get_nowait()
                     event_type = "progress"
@@ -536,22 +547,37 @@ def index_repository_stream(request: IndexRequest):
                     break
         finally:
             # StreamingResponse closes this async generator when its client
-            # disconnects. Defer handler teardown until the independently
-            # admitted synchronous operation has returned.
-            worker_drain = asyncio.create_task(
-                _index_stream_workers.wait_for(worker)
-            )
-            try:
-                await asyncio.shield(worker_drain)
-            except asyncio.CancelledError:
-                # Cancellation can be delivered before an awaited coroutine
-                # executes its own cancellation handler. Shield admission
-                # draining as a separate task, then re-raise only after it has
-                # completed.
-                await worker_drain
-                raise
+            # disconnects. Ask the independently registered worker to stop,
+            # then let the request task return without awaiting inside the
+            # possibly cancelled ASGI scope. The worker owns and removes its
+            # transferred snapshot; application shutdown drains the registry.
+            cancellation_event.set()
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.get(
+    "/index/{workspace}/{project}/revisions",
+    response_model=list[RevisionDiscoveryResponse],
+)
+def discover_revision_preflights(
+    workspace: str,
+    project: str,
+    branch: str = Query(min_length=1),
+    commit: str | None = Query(default=None, min_length=1, max_length=200),
+):
+    """Discover verified sealed generations for one tenant-bound branch."""
+    _, index_manager = _get_singletons()
+    try:
+        return index_manager.discover_revision_preflights(
+            workspace,
+            project,
+            branch,
+            commit=commit,
+        )
+    except Exception as e:
+        logger.error("Error discovering exact repository generations: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get(
@@ -590,7 +616,7 @@ def get_revision_preflight(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/index/{workspace}/{project}/branch/{branch}")
+@router.delete("/index/{workspace}/{project}/branch/{branch:path}")
 def delete_branch(
     workspace: str,
     project: str,

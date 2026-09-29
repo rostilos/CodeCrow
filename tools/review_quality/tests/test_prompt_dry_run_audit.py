@@ -41,7 +41,6 @@ def _artifact() -> dict:
         "simulation": {
             "simulatedFindingsProduced": 1,
             "fullPipelineContext": True,
-            "prIndexMutationEnabled": True,
         },
         "promptCount": len(prompts),
         "promptCountsByStage": {stage: 1 for stage in stages},
@@ -49,7 +48,9 @@ def _artifact() -> dict:
         "qualitySignals": {
             "stage1": {
                 "maxEstimatedInputTokens": 25,
-                "ragEvidenceEntries": 2,
+                "structuralEvidenceEntries": 2,
+                "structuralRelationMaps": 1,
+                "boundedStructuralRelationMaps": 0,
             },
         },
         "reviewIdentity": {
@@ -66,8 +67,6 @@ def _artifact() -> dict:
         "pipeline": {
             "completed": True,
             "eventStates": [
-                "pr_context_preflight_started",
-                "pr_context_preflight_completed",
                 "stage_0_started",
                 "stage_1_started",
                 "verification_started",
@@ -103,9 +102,9 @@ def _artifact() -> dict:
                         "promptHunkIds": ["sha256:hunk"],
                         "anchorHunkIds": ["sha256:hunk"],
                         "evidenceRefs": [],
-                        "visibleEvidenceIds": ["RAG-visible"],
+                        "visibleEvidenceIds": ["relation:" + "d" * 64],
                         "visibleEvidenceFactDigests": {
-                            "RAG-visible": [],
+                            "relation:" + "d" * 64: [],
                         },
                         "terminalState": "published",
                         "rejection": None,
@@ -140,7 +139,7 @@ def _artifact() -> dict:
                 "currentSourceChars": 10,
                 "diffChars": 20,
                 "metadataChars": 5,
-                "ragChars": 10,
+                "structuralContextChars": 10,
                 "pluginChars": 5,
                 "projectRulesChars": 0,
                 "taskContextChars": 10,
@@ -193,7 +192,7 @@ def test_audit_accepts_complete_framework_neutral_artifact():
         (
             lambda payload: payload["pipeline"]["evidence"]["candidates"][
                 "records"
-            ][0].update(evidenceRefs=["RAG-not-visible"]),
+            ][0].update(evidenceRefs=["relation:" + "e" * 64]),
             "candidateLedgerComplete",
         ),
         (
@@ -203,12 +202,6 @@ def test_audit_accepts_complete_framework_neutral_artifact():
                 generationPromptDigest="sha256:" + "f" * 64
             ),
             "candidateLedgerComplete",
-        ),
-        (
-            lambda payload: payload["pipeline"]["evidence"][
-                "retrieval"
-            ].update(deterministicStates=["failed"]),
-            "deterministicRetrievalComplete",
         ),
         (
             lambda payload: payload["pluginDiagnostics"].update(
@@ -278,6 +271,25 @@ def test_audit_fails_closed_on_missing_general_pipeline_evidence(
 def test_audit_rejects_nonpositive_token_ceiling():
     with pytest.raises(ValueError, match="positive"):
         audit_prompt_dry_run(_artifact(), max_stage1_estimated_input_tokens=0)
+
+
+@pytest.mark.parametrize(
+    "states",
+    [[], ["complete"], ["bounded"], ["unavailable"]],
+)
+def test_optional_structural_retrieval_states_are_observable_not_blocking(
+    states,
+):
+    artifact = _artifact()
+    artifact["pipeline"]["evidence"]["retrieval"][
+        "deterministicStates"
+    ] = states
+
+    report = audit_prompt_dry_run(artifact)
+
+    assert report["status"] == "passed"
+    assert report["checks"]["structuralRetrievalObservable"] is True
+    assert report["diagnostics"]["structuralRetrieval"]["states"] == states
 
 
 def test_approved_magento_regression_requires_exact_hofmanflowers_identity():

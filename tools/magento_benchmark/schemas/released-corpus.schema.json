@@ -1,0 +1,1838 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "released-corpus.schema.json",
+  "title": "CodeCrow Magento 2 released review corpus",
+  "description": "Interchange schema for a materialized corpus. Structural validity is not paper readiness; run `magento2-benchmark validate --paper-ready` for the semantic and cross-record release gate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "corpusId",
+    "generatedAt",
+    "repository",
+    "defaultBranch",
+    "selectionPolicy",
+    "provenance",
+    "cases",
+    "corpusDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-review-corpus"
+    },
+    "corpusId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repository": {
+      "const": "magento/magento2"
+    },
+    "defaultBranch": {
+      "const": "2.4-develop"
+    },
+    "selectionPolicy": {
+      "$ref": "#/$defs/selectionPolicy"
+    },
+    "provenance": {
+      "$ref": "#/$defs/provenance"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    },
+    "corpusDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "x-codecrow-semantic-gates": {
+    "provisional": "This schema permits accepted or provisional adjudication and nullable later-fix status. Ordinary CLI validation enforces identities, bands, anchors, and the corpus digest.",
+    "paperReady": "Paper-ready selection requires authenticated complete GraphQL thread evidence, source-archive/curation-packet/canonical-thread digest bindings, and at least two independent accept records bound to the exact case, comment body, normalized decision, and evidence digests. CLI corpus validation cross-reconciles embedded GitHub PR/comment/review responses, requires digest-bound B-to-H-to-F/mainline ancestry evidence, accepted adjudication, a complete thread disposed as fixed, an atomic expected issue, and independently evidenced later repair."
+  },
+  "$defs": {
+    "sha1": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "githubUrl": {
+      "type": "string",
+      "pattern": "^https://github\\.com/"
+    },
+    "selectionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requiredCases",
+        "mergedOnly",
+        "reviewCommentsRequired",
+        "snapshotRule",
+        "bands",
+        "requiredBands"
+      ],
+      "properties": {
+        "requiredCases": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "mergedOnly": {
+          "const": true
+        },
+        "reviewCommentsRequired": {
+          "const": true
+        },
+        "snapshotRule": {
+          "const": "exact_original_review_commit"
+        },
+        "bands": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "properties": {
+            "small": {
+              "$ref": "#/$defs/band"
+            },
+            "medium": {
+              "$ref": "#/$defs/band"
+            },
+            "large": {
+              "$ref": "#/$defs/band"
+            }
+          }
+        },
+        "requiredBands": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "properties": {
+            "small": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "medium": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "large": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "selectionSeed": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "partitionPolicy": {
+          "description": "The release partition contract. It is optional for structural compatibility with earlier diagnostic artifacts, but required with these exact values by `validate --paper-ready`.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "developmentCases",
+            "sealedCases"
+          ],
+          "properties": {
+            "method": {
+              "const": "deterministic_label_blind_stratified_by_size_band"
+            },
+            "developmentCases": {
+              "const": 30
+            },
+            "sealedCases": {
+              "const": 20
+            }
+          }
+        },
+        "mainlineCutoffSha": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "band": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minFiles",
+        "maxFiles"
+      ],
+      "properties": {
+        "minFiles": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 80
+        },
+        "maxFiles": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 80
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "collector",
+        "collectedAt",
+        "githubApiVersion",
+        "gitVersion",
+        "diffPolicy",
+        "reviewBodiesRetainedVerbatim",
+        "selectionDigest",
+        "selectionFileSha256"
+      ],
+      "properties": {
+        "collector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "collectedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "githubApiVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "gitVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "diffPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "algorithm",
+            "indentHeuristic",
+            "renameDetection",
+            "externalDiff",
+            "textconv",
+            "forceText",
+            "systemAttributes",
+            "globalAttributes",
+            "replaceObjects",
+            "inheritedGitOverrides",
+            "color",
+            "sourcePrefix",
+            "destinationPrefix",
+            "linePrefix",
+            "defaultContextLines",
+            "interHunkContextLines",
+            "submoduleFormat",
+            "ignoreSubmodules",
+            "outputIndicators",
+            "quotePath",
+            "renameLimit",
+            "hostInfoAttributes",
+            "localDiffConfig",
+            "legacyGrafts",
+            "shallowHistory"
+          ],
+          "properties": {
+            "algorithm": {
+              "const": "myers"
+            },
+            "indentHeuristic": {
+              "const": false
+            },
+            "renameDetection": {
+              "const": "50%"
+            },
+            "externalDiff": {
+              "const": false
+            },
+            "textconv": {
+              "const": false
+            },
+            "forceText": {
+              "const": true
+            },
+            "systemAttributes": {
+              "const": false
+            },
+            "globalAttributes": {
+              "const": false
+            },
+            "replaceObjects": {
+              "const": false
+            },
+            "inheritedGitOverrides": {
+              "const": false
+            },
+            "color": {
+              "const": false
+            },
+            "sourcePrefix": {
+              "const": "a/"
+            },
+            "destinationPrefix": {
+              "const": "b/"
+            },
+            "linePrefix": {
+              "const": ""
+            },
+            "defaultContextLines": {
+              "const": 3
+            },
+            "interHunkContextLines": {
+              "const": 0
+            },
+            "submoduleFormat": {
+              "const": "short"
+            },
+            "ignoreSubmodules": {
+              "const": "none"
+            },
+            "outputIndicators": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "new",
+                "old",
+                "context"
+              ],
+              "properties": {
+                "new": {
+                  "const": "+"
+                },
+                "old": {
+                  "const": "-"
+                },
+                "context": {
+                  "const": " "
+                }
+              }
+            },
+            "quotePath": {
+              "const": true
+            },
+            "renameLimit": {
+              "const": 1000
+            },
+            "hostInfoAttributes": {
+              "const": "reject_nonempty"
+            },
+            "localDiffConfig": {
+              "const": "reject"
+            },
+            "legacyGrafts": {
+              "const": false
+            },
+            "shallowHistory": {
+              "const": false
+            }
+          }
+        },
+        "reviewBodiesRetainedVerbatim": {
+          "description": "True means the materialized corpus retains the body returned by the current source API response without rewriting. It does not assert that GitHub supplied prior edit history or that this was the exact pre-edit wording at the review instant.",
+          "const": true
+        },
+        "sourceArchiveDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threadEvidenceDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selectionDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "selectionFileSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "partition",
+        "sizeBand",
+        "sourcePr",
+        "snapshot",
+        "goldenComments",
+        "replay"
+      ],
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "partition": {
+          "enum": [
+            "development",
+            "sealed"
+          ]
+        },
+        "sizeBand": {
+          "enum": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        "sourcePr": {
+          "$ref": "#/$defs/sourcePr"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/snapshot"
+        },
+        "goldenComments": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/goldenComment"
+          }
+        },
+        "sourceArchiveEvidence": {
+          "$ref": "#/$defs/sourceArchiveEvidence"
+        },
+        "ancestryEvidence": {
+          "$ref": "#/$defs/ancestryEvidence"
+        },
+        "graphqlThreadArchive": {
+          "$ref": "#/$defs/graphqlThreadArchive"
+        },
+        "replay": {
+          "$ref": "#/$defs/replay"
+        }
+      }
+    },
+    "sourceArchiveEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "archiveDigest",
+        "caseEvidenceDigest",
+        "pullResponseSha256",
+        "selectedCommentResponseSha256",
+        "submittedReviewResponseSha256"
+      ],
+      "properties": {
+        "archiveDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "caseEvidenceDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "pullResponseSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "selectedCommentResponseSha256": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/sha256"
+          }
+        },
+        "submittedReviewResponseSha256": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/sha256"
+          }
+        }
+      }
+    },
+    "graphqlThreadArchive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "operationName",
+        "pullRequest",
+        "pageCount",
+        "pages",
+        "archiveDigest"
+      ],
+      "properties": {
+        "kind": {
+          "const": "codecrow-magento2-graphql-thread-page-archive"
+        },
+        "operationName": {
+          "const": "MagentoBenchmarkReviewThreads"
+        },
+        "pullRequest": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pageCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pages": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/graphqlThreadPage"
+          }
+        },
+        "archiveDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "graphqlThreadPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pageIndex",
+        "request",
+        "requestDigest",
+        "response",
+        "responseDigest",
+        "previousPageDigest",
+        "pageDigest"
+      ],
+      "properties": {
+        "pageIndex": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request": {
+          "$ref": "#/$defs/graphqlThreadRequest"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "response": {
+          "type": "object"
+        },
+        "responseDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "previousPageDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pageDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "graphqlThreadRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "endpoint",
+        "payload"
+      ],
+      "properties": {
+        "method": {
+          "const": "POST"
+        },
+        "endpoint": {
+          "const": "https://api.github.com/graphql"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "query",
+            "variables"
+          ],
+          "properties": {
+            "query": {
+              "type": "string",
+              "minLength": 1
+            },
+            "variables": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "owner",
+                "name",
+                "number",
+                "after"
+              ],
+              "properties": {
+                "owner": {
+                  "const": "magento"
+                },
+                "name": {
+                  "const": "magento2"
+                },
+                "number": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "after": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reviewThreadEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "threadEvidenceDigest",
+        "threadDigest",
+        "graphqlArchiveDigest",
+        "graphqlPageDigest",
+        "restThreadEvidence",
+        "thread"
+      ],
+      "properties": {
+        "threadEvidenceDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "threadDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "graphqlArchiveDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "graphqlPageDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "restThreadEvidence": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/restReviewThreadEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thread": {
+          "$ref": "#/$defs/normalizedReviewThread"
+        }
+      }
+    },
+    "restReviewThreadEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "pullRequest",
+        "rootCommentId",
+        "sourceArchiveDigest",
+        "sourceArchiveCaseEvidenceDigest",
+        "comments",
+        "submittedReviews",
+        "evidenceDigest"
+      ],
+      "properties": {
+        "kind": {
+          "const": "codecrow-magento2-rest-review-thread-evidence"
+        },
+        "pullRequest": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rootCommentId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sourceArchiveDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceArchiveCaseEvidenceDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "comments": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object"
+          }
+        },
+        "submittedReviews": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object"
+          }
+        },
+        "evidenceDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "normalizedReviewThread": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rootCommentId",
+        "messages",
+        "complete",
+        "messageIdsReconciledWithRest",
+        "resolutionMetadataAvailable",
+        "isResolved",
+        "isOutdated",
+        "path",
+        "line",
+        "originalLine",
+        "startLine",
+        "originalStartLine",
+        "diffSide",
+        "startDiffSide",
+        "sourceSha256"
+      ],
+      "properties": {
+        "rootCommentId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "messages": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/normalizedReviewThreadMessage"
+          }
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "messageIdsReconciledWithRest": {
+          "type": "boolean"
+        },
+        "resolutionMetadataAvailable": {
+          "type": "boolean"
+        },
+        "isResolved": {
+          "type": "boolean"
+        },
+        "isOutdated": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "originalLine": {
+          "description": "GraphQL originalLine at the frozen H revision.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "startLine": {
+          "description": "GraphQL current startLine; nullable when outdated or single-line.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "originalStartLine": {
+          "description": "GraphQL originalStartLine at H; nullable for a single-line anchor.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "diffSide": {
+          "const": "RIGHT"
+        },
+        "startDiffSide": {
+          "enum": [
+            "LEFT",
+            "RIGHT",
+            null
+          ]
+        },
+        "sourceSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "normalizedReviewThreadMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "url",
+        "author",
+        "authorType",
+        "authorAssociation",
+        "body",
+        "createdAt",
+        "updatedAt",
+        "commitId",
+        "originalCommitId",
+        "inReplyToId"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "url": {
+          "$ref": "#/$defs/githubUrl"
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "authorType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "authorAssociation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "body": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "commitId": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "originalCommitId": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inReplyToId": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        }
+      }
+    },
+    "sourcePr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "number",
+        "url",
+        "title",
+        "author",
+        "baseRef",
+        "mergedAt",
+        "finalHeadSha",
+        "mergeCommitSha",
+        "changedFiles"
+      ],
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "url": {
+          "$ref": "#/$defs/githubUrl"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseRef": {
+          "const": "2.4-develop"
+        },
+        "mergedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finalHeadSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "mergeCommitSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "changedFiles": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 80
+        },
+        "sourceApiResponse": {
+          "type": "object"
+        },
+        "sourceApiResponseSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "ancestryEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "baseSha",
+        "reviewedHeadSha",
+        "finalHeadSha",
+        "mergeCommitSha",
+        "mergeParents",
+        "mergeFirstParentSha",
+        "mergeSecondParentSha",
+        "mainlineCutoffSha",
+        "reviewedMainlineMergeBaseSha",
+        "checks",
+        "evidenceDigest"
+      ],
+      "properties": {
+        "schema": {
+          "const": "codecrow.magento2-review-ancestry"
+        },
+        "baseSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "reviewedHeadSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "finalHeadSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "mergeCommitSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "mergeParents": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/sha1"
+          }
+        },
+        "mergeFirstParentSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "mergeSecondParentSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "mainlineCutoffSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "reviewedMainlineMergeBaseSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "baseAncestorReviewedHead",
+            "reviewedHeadAncestorFinalHead",
+            "finalHeadIsMergeSecondParent",
+            "baseIsReviewedMainlineMergeBase",
+            "mergeCommitAncestorMainlineCutoff"
+          ],
+          "properties": {
+            "baseAncestorReviewedHead": {
+              "const": true
+            },
+            "reviewedHeadAncestorFinalHead": {
+              "const": true
+            },
+            "finalHeadIsMergeSecondParent": {
+              "const": true
+            },
+            "baseIsReviewedMainlineMergeBase": {
+              "const": true
+            },
+            "mergeCommitAncestorMainlineCutoff": {
+              "const": true
+            }
+          }
+        },
+        "evidenceDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseSha",
+        "headSha",
+        "reviewedAt",
+        "fileCount",
+        "changedPaths",
+        "diffSha256",
+        "derivation"
+      ],
+      "properties": {
+        "baseSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "headSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "reviewedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "fileCount": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 80
+        },
+        "changedPaths": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 80,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
+          }
+        },
+        "diffSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "derivation": {
+          "enum": [
+            "merge_base_with_merge_first_parent",
+            "recorded_pull_base"
+          ]
+        }
+      }
+    },
+    "goldenComment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sourceCommentId",
+        "sourceUrl",
+        "reviewId",
+        "reviewer",
+        "reviewerType",
+        "reviewerAssociation",
+        "createdAt",
+        "path",
+        "side",
+        "originalLine",
+        "sourceCurrentCommitId",
+        "sourceCurrentLine",
+        "sourceOriginalLine",
+        "sourceCurrentStartLine",
+        "sourceOriginalStartLine",
+        "sourceStartSide",
+        "originalLineResolution",
+        "originalCommitId",
+        "body",
+        "bodySha256",
+        "diffHunk",
+        "threadRoot",
+        "sourceUpdatedAt",
+        "sourceApiResponse",
+        "sourceApiResponseSha256",
+        "sourceReviewResponse",
+        "sourceReviewResponseSha256",
+        "reviewState",
+        "reviewSubmittedAt",
+        "expectedIssue",
+        "validity",
+        "adjudication"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceCommentId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sourceUrl": {
+          "$ref": "#/$defs/githubUrl"
+        },
+        "reviewId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reviewer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewerType": {
+          "const": "User"
+        },
+        "reviewerAssociation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "side": {
+          "const": "RIGHT"
+        },
+        "originalLine": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sourceCurrentCommitId": {
+          "description": "The raw REST commit_id for the current PR-head projection; this is not the frozen H identity.",
+          "$ref": "#/$defs/sha1"
+        },
+        "sourceCurrentLine": {
+          "description": "The raw REST line at the current PR head. It may be null for an outdated comment and never defines H.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "sourceOriginalLine": {
+          "description": "The raw REST original_line at H before any transparent position-based correction.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "sourceCurrentStartLine": {
+          "description": "The raw REST start_line at the current PR head for a multiline range; null when outdated or single-line.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "sourceOriginalStartLine": {
+          "description": "The raw REST original_start_line at H for a multiline range; null for a single-line anchor.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "sourceStartSide": {
+          "description": "The raw REST start_side for the first line of a multiline range.",
+          "enum": [
+            "LEFT",
+            "RIGHT",
+            null
+          ]
+        },
+        "originalLineResolution": {
+          "description": "Null for an exact GitHub line, or explicit provenance for the one supported adjacent-line correction.",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/originalLineResolution"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "originalCommitId": {
+          "$ref": "#/$defs/sha1"
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bodySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "diffHunk": {
+          "type": "string",
+          "minLength": 1
+        },
+        "threadRoot": {
+          "const": true
+        },
+        "sourceUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sourceApiResponse": {
+          "type": "object"
+        },
+        "sourceApiResponseSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceReviewResponse": {
+          "type": "object"
+        },
+        "sourceReviewResponseSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "reviewThreadEvidence": {
+          "$ref": "#/$defs/reviewThreadEvidence"
+        },
+        "expectedIssue": {
+          "$ref": "#/$defs/expectedIssue"
+        },
+        "validity": {
+          "$ref": "#/$defs/validity"
+        },
+        "adjudication": {
+          "$ref": "#/$defs/adjudication"
+        },
+        "reviewState": {
+          "enum": [
+            "APPROVED",
+            "CHANGES_REQUESTED",
+            "COMMENTED",
+            "DISMISSED"
+          ]
+        },
+        "reviewSubmittedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "expectedIssue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "rootCause",
+        "failureMode",
+        "requiredChange",
+        "category",
+        "severity",
+        "actionable",
+        "atomic"
+      ],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootCause": {
+          "type": "string"
+        },
+        "failureMode": {
+          "type": "string"
+        },
+        "requiredChange": {
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "architecture",
+            "backward_compatibility",
+            "bug",
+            "code_quality",
+            "documentation",
+            "performance",
+            "security",
+            "style",
+            "testing"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "actionable": {
+          "const": true
+        },
+        "atomic": {
+          "type": "boolean"
+        }
+      }
+    },
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "snapshotSha",
+        "method",
+        "anchorValidation",
+        "fixedLater",
+        "fixCommitSha",
+        "disposition",
+        "fixEvidence"
+      ],
+      "properties": {
+        "status": {
+          "const": "present_at_snapshot"
+        },
+        "snapshotSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "method": {
+          "enum": [
+            "exact_original_commit_and_diff_anchor",
+            "exact_original_commit_and_diff_context_anchor",
+            "exact_original_commit_position_resolved_anchor",
+            "human_code_inspection"
+          ]
+        },
+        "anchorValidation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "path",
+            "line",
+            "lineKind",
+            "diffSha256"
+          ],
+          "properties": {
+            "status": {
+              "const": "exact"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "lineKind": {
+              "enum": [
+                "added",
+                "context"
+              ]
+            },
+            "diffSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "fixedLater": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "fixCommitSha": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disposition": {
+          "enum": [
+            "fixed",
+            "unresolved"
+          ]
+        },
+        "fixEvidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fixEvidence"
+          }
+        },
+        "pathTransition": {
+          "$ref": "#/$defs/pathTransition"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "fixedLater": {
+                "const": true
+              }
+            },
+            "required": [
+              "fixedLater"
+            ]
+          },
+          "then": {
+            "properties": {
+              "fixCommitSha": {
+                "$ref": "#/$defs/sha1"
+              },
+              "disposition": {
+                "const": "fixed"
+              },
+              "fixEvidence": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "pathTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "sourcePath",
+        "finalPath",
+        "renameSimilarity",
+        "checkpointBlobOid",
+        "finalBlobOid",
+        "diffSha256"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "modified",
+            "renamed",
+            "deleted"
+          ]
+        },
+        "sourcePath": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
+        },
+        "finalPath": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "renameSimilarity": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 50,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checkpointBlobOid": {
+          "$ref": "#/$defs/sha1"
+        },
+        "finalBlobOid": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diffSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "modified"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "finalPath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "renameSimilarity": {
+                "type": "null"
+              },
+              "finalBlobOid": {
+                "$ref": "#/$defs/sha1"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "renamed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "finalPath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "renameSimilarity": {
+                "type": "integer",
+                "minimum": 50,
+                "maximum": 100
+              },
+              "finalBlobOid": {
+                "$ref": "#/$defs/sha1"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "deleted"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "finalPath": {
+                "type": "null"
+              },
+              "renameSimilarity": {
+                "type": "null"
+              },
+              "finalBlobOid": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "fixEvidence": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "kind",
+        "detail"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "originalLineResolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "sourceOriginalLine",
+        "sourceOriginalPosition",
+        "warning"
+      ],
+      "properties": {
+        "method": {
+          "const": "raw_original_position_hunk_terminal_with_adjacent_checkpoint_line"
+        },
+        "sourceOriginalLine": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sourceOriginalPosition": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "warning": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "adjudication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "annotators",
+        "records",
+        "adjudicator",
+        "at",
+        "notes",
+        "threadComplete",
+        "threadDisposition",
+        "threadEvidenceDigest",
+        "threadDigest",
+        "curationPacketDigest"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "accepted",
+            "provisional"
+          ]
+        },
+        "annotators": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/annotatorRecord"
+          }
+        },
+        "adjudicator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "threadComplete": {
+          "type": "boolean"
+        },
+        "threadDisposition": {
+          "enum": [
+            "fixed",
+            "unresolved",
+            null
+          ]
+        },
+        "threadEvidenceDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threadDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "curationPacketDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decisionDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "annotatorRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "annotator",
+        "verdict",
+        "at",
+        "recordDigest"
+      ],
+      "properties": {
+        "annotator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "const": "accept"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "caseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceCommentId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sourceBodySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "decisionDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceArchiveDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "threadEvidenceDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "threadDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "curationPacketDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "recordDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "replay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseRef",
+        "headRef",
+        "forkPrNumber",
+        "forkPrUrl"
+      ],
+      "properties": {
+        "baseRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "headRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "forkPrNumber": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "forkPrUrl": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/githubUrl"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

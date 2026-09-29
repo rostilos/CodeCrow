@@ -56,6 +56,9 @@ public class RagBranchIndex {
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
+    @Column(name = "last_failed_at")
+    private OffsetDateTime lastFailedAt;
+
     @Column(name = "cleanup_claim_token", length = 64)
     private String cleanupClaimToken;
 
@@ -97,6 +100,7 @@ public class RagBranchIndex {
         this.desiredCommitHash = generation.getRevision();
         this.lifecycleStatus = RagBranchIndexLifecycleStatus.READY;
         this.errorMessage = null;
+        this.lastFailedAt = null;
         this.lastAccessedAt = OffsetDateTime.now();
     }
 
@@ -105,6 +109,7 @@ public class RagBranchIndex {
                 ? RagBranchIndexLifecycleStatus.FAILED
                 : RagBranchIndexLifecycleStatus.READY;
         this.errorMessage = errorMessage;
+        this.lastFailedAt = OffsetDateTime.now();
     }
 
     public void markAccessed() {
@@ -181,6 +186,14 @@ public class RagBranchIndex {
 
     public void setErrorMessage(String errorMessage) {
         this.errorMessage = errorMessage;
+    }
+
+    public OffsetDateTime getLastFailedAt() {
+        return lastFailedAt;
+    }
+
+    public void setLastFailedAt(OffsetDateTime lastFailedAt) {
+        this.lastFailedAt = lastFailedAt;
     }
 
     public String getCleanupClaimToken() {

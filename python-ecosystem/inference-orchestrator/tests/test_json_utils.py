@@ -2,12 +2,15 @@
 Unit tests for service.review.orchestrator.json_utils — clean_json_text.
 (parse_llm_response and repair_json_with_llm are async and need LLM mock — tested separately.)
 """
+import json
+
 import pytest
 from pydantic import BaseModel
 from unittest.mock import AsyncMock, MagicMock
 
 from service.review.orchestrator.json_utils import (
     clean_json_text,
+    load_json_with_local_repairs,
     parse_llm_response,
 )
 
@@ -79,6 +82,48 @@ class TestCleanJsonText:
         text = '```json\n{"incomplete": true}'
         result = clean_json_text(text)
         assert '"incomplete"' in result
+
+
+class TestLoadJsonWithLocalRepairs:
+
+    def test_valid_json_preserves_nested_json_fence(self):
+        payload = {
+            "summary": "Example:\n```json\n{'foo': 1}\n```\nEnd.",
+        }
+        text = json.dumps(payload)
+
+        cleaned, parsed = load_json_with_local_repairs(text)
+
+        assert cleaned == text
+        assert parsed == payload
+
+    def test_valid_json_preserves_nested_diff_fence(self):
+        payload = {
+            "suggestedFixDiff": "```diff\n-old\n+new\n```",
+        }
+        text = json.dumps(payload)
+
+        cleaned, parsed = load_json_with_local_repairs(text)
+
+        assert cleaned == text
+        assert parsed == payload
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        (
+            ('```json\n{"value": 1}\n```', {"value": 1}),
+            ('Result: {"value": 2} done.', {"value": 2}),
+            ('{"value": 3,}', {"value": 3}),
+        ),
+    )
+    def test_existing_cleanup_fallbacks_remain_available(
+            self,
+            text,
+            expected,
+    ):
+        _, parsed = load_json_with_local_repairs(text)
+
+        assert parsed == expected
 
 
 @pytest.mark.asyncio(loop_scope="function")

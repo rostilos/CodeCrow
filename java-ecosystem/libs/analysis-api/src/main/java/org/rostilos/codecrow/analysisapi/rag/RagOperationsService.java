@@ -1,6 +1,8 @@
 package org.rostilos.codecrow.analysisapi.rag;
 
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.job.Job;
+import org.rostilos.codecrow.core.util.BranchPatternMatcher;
 
 import java.util.function.Consumer;
 import java.util.Map;
@@ -50,71 +52,38 @@ public interface RagOperationsService {
             String branchName,
             String revision,
             Consumer<Map<String, Object>> eventConsumer);
-    
-    // ==========================================================================
-    // PR-SPECIFIC RAG OPERATIONS
-    // ==========================================================================
 
-    /**
-     * Delete all RAG-indexed points for a specific PR from the project's collection.
-     * Called after PR analysis completes or when a PR is closed/merged.
-     * This operation is idempotent — safe to call even if no points exist for this PR.
-     *
-     * @param project  The project
-     * @param prNumber The PR number whose indexed data should be cleaned up
-     * @return true if cleanup succeeded or nothing to clean, false on error
-     */
-    default boolean deletePrFiles(Project project, int prNumber) {
-        return true; // Default: no-op
-    }
-    
-    // ==========================================================================
-    // MULTI-BRANCH INDEX OPERATIONS
-    // ==========================================================================
-    
-    /**
-     * Check if multi-branch indexing is enabled for the given project.
-     * 
-     * @param project The project to check
-     * @return true if multi-branch indexing is enabled
-     */
-    default boolean isMultiBranchEnabled(Project project) {
-        var config = project.getConfiguration();
-        if (config == null || config.ragConfig() == null) {
-            return false;
-        }
-        return config.ragConfig().isMultiBranchEnabled();
+    /** Execute one already claimed durable repository-index queue job. */
+    default boolean executeQueuedBranchGeneration(
+            Project project,
+            String branchName,
+            String revision,
+            Job queuedJob) {
+        return false;
     }
     
     /**
-     * Check if a branch is explicitly configured for a retained RAG index.
-     * Branch analysis configuration is a separate concern and never grants RAG
-     * snapshot ownership.
+     * Check whether an observed branch belongs to either configured analysis
+     * surface. Branch snapshots are created lazily from real PR/branch events;
+     * wildcard patterns are never enumerated eagerly.
      *
      * @param project The project to check
      * @param branchName The branch name to evaluate
-     * @return true if the branch is explicitly configured for retained indexed context
+     * @return true if the branch is an eligible PR target or push-analysis branch
      */
     default boolean shouldHaveBranchIndex(Project project, String branchName) {
         var config = project.getConfiguration();
-        if (config == null || config.ragConfig() == null) {
+        if (branchName == null || branchName.isBlank()) {
             return false;
         }
-        return config.ragConfig().shouldHaveBranchIndex(branchName);
-    }
-
-    /**
-     * Whether an eligible PR target that is not retained may receive a temporary,
-     * revision-pinned branch snapshot. This never makes branch pushes retain data.
-     */
-    default boolean shouldCreateTransientBranchIndex(Project project, String branchName) {
-        var config = project.getConfiguration();
-        if (config == null || config.ragConfig() == null || branchName == null) {
-            return false;
+        if (config == null || config.branchAnalysis() == null) {
+            return true;
         }
-        return config.ragConfig().isTransientBranchIndexesEnabled()
-                && !branchName.equals(getBaseBranch(project))
-                && !shouldHaveBranchIndex(project, branchName);
+        var branchConfig = config.branchAnalysis();
+        return BranchPatternMatcher.shouldAnalyze(
+                    branchName, branchConfig.prTargetBranches())
+                || BranchPatternMatcher.shouldAnalyze(
+                    branchName, branchConfig.branchPushPatterns());
     }
     
     /**

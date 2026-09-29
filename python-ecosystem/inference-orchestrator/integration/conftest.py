@@ -27,7 +27,7 @@ from tests.conftest import _ensure_mock  # reuse the mock helper
 # ── Environment variables for test mode ───────────────────────
 os.environ.setdefault("SERVICE_SECRET", "test-secret-token")
 os.environ.setdefault("RAG_ENABLED", "false")
-os.environ.setdefault("RAG_API_URL", "http://rag-pipeline:8001")
+os.environ.setdefault("RAG_API_URL", "http://codecrow-rag-pipeline:8001")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/1")
 
 

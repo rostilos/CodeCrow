@@ -5,8 +5,7 @@ Covers: _filter_diff_for_files, _split_issues_into_batches,
         _deduplicate_previous_issues, _ensure_all_files_planned,
         _count_files, _convert_cross_file_issues
 """
-import logging
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -65,43 +64,6 @@ def test_task_evidence_key_falls_back_to_server_built_history():
     )
 
     assert _task_evidence_key(request) == "SHOP-42"
-
-
-@pytest.mark.asyncio
-async def test_pr_cleanup_does_not_report_success_when_delete_returns_false(
-    caplog,
-):
-    rag_client = MagicMock()
-    rag_client.delete_pr_files = AsyncMock(return_value=False)
-    orchestrator = MultiStageReviewOrchestrator(
-        llm=MagicMock(),
-        mcp_client=None,
-        rag_client=rag_client,
-    )
-    orchestrator._pr_number = 42
-    orchestrator._pr_indexed = True
-    request = MagicMock(
-        projectWorkspace="workspace",
-        projectNamespace="project",
-        ragCollectionTarget="cc_workspace_project_main_generation",
-    )
-
-    with caplog.at_level(
-        logging.INFO,
-        logger="service.review.orchestrator.orchestrator",
-    ):
-        await orchestrator._cleanup_pr_files(request)
-
-    rag_client.delete_pr_files.assert_awaited_once_with(
-        workspace="workspace",
-        project="project",
-        pr_number=42,
-        collection_target="cc_workspace_project_main_generation",
-    )
-    assert "Cleaned up PR #42 indexed data" not in caplog.text
-    assert "PR #42 indexed-data cleanup did not complete" in caplog.text
-    assert orchestrator._pr_number is None
-    assert orchestrator._pr_indexed is False
 
 
 # ── _filter_diff_for_files ──────────────────────────────────────
@@ -598,6 +560,61 @@ class TestRetainPublishedCrossFileIssues:
         assert results.cross_file_issues == []
         assert results.pr_risk_level == "LOW"
         assert results.pr_recommendation == "PASS"
+
+    def test_preserves_degraded_recommendation_when_no_candidate_is_published(self):
+        results = CrossFileAnalysisResult(
+            pr_risk_level="LOW",
+            cross_file_issues=[],
+            pr_recommendation=(
+                "Cross-file synthesis unavailable after response exhaustion; "
+                "validated file-level findings were retained."
+            ),
+            confidence="LOW",
+        )
+
+        removed = _retain_published_cross_file_issues(
+            results,
+            [],
+            preserve_degraded=True,
+        )
+
+        assert removed == 0
+        assert results.pr_recommendation.startswith(
+            "Cross-file synthesis unavailable"
+        )
+        assert results.confidence == "LOW"
+
+    def test_degraded_recommendation_still_reflects_critical_file_issue(self):
+        results = CrossFileAnalysisResult(
+            pr_risk_level="LOW",
+            cross_file_issues=[],
+            pr_recommendation=(
+                "Cross-file synthesis unavailable after response exhaustion; "
+                "validated file-level findings were retained."
+            ),
+            confidence="LOW",
+        )
+        critical = CodeReviewIssue(
+            id="FILE_001",
+            severity="CRITICAL",
+            category="SECURITY",
+            title="Critical file defect",
+            file="src/a.py",
+            line=1,
+            codeSnippet="dangerous();",
+            reason="A concrete critical defect.",
+            suggestedFixDescription="Fix it.",
+        )
+
+        _retain_published_cross_file_issues(
+            results,
+            [critical],
+            preserve_degraded=True,
+        )
+
+        assert results.pr_risk_level == "CRITICAL"
+        assert results.pr_recommendation.startswith("FAIL — Cross-file synthesis")
+        assert results.confidence == "LOW"
 
 
 class TestPartitionIssueLifecycle:

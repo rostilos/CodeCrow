@@ -503,8 +503,8 @@ class TestStage2SemanticPacking:
 
         assert len(prompts) == 4
         assert all(_estimated_prompt_tokens(prompt) <= 6_000 for prompt in prompts)
-        assert all(prompt.omitted_packet_count == 30 for prompt in prompts)
-        assert all(prompt.omitted_unit_count == 31 for prompt in prompts)
+        assert all(prompt.omitted_packet_count == 15 for prompt in prompts)
+        assert all(prompt.omitted_unit_count == 29 for prompt in prompts)
         authority_prompts = [
             prompt for prompt in prompts
             if "OVERSIZED_DEPENDENCY_EDGE" in prompt
@@ -659,8 +659,8 @@ class TestStage2SemanticPacking:
 
         assert len(prompts) == 4
         assert all(_estimated_prompt_tokens(prompt) <= 6_000 for prompt in prompts)
-        assert all(prompt.omitted_packet_count == 6 for prompt in prompts)
-        assert all(prompt.omitted_unit_count == 6 for prompt in prompts)
+        assert all(prompt.omitted_packet_count == 2 for prompt in prompts)
+        assert all(prompt.omitted_unit_count == 4 for prompt in prompts)
         joined = "\n".join(prompts)
         admitted = [record for record in records if record in joined]
         assert admitted == records[:len(admitted)]

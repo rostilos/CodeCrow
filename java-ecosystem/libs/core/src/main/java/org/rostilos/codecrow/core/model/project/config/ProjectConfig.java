@@ -284,11 +284,7 @@ public class ProjectConfig {
                     this.ragConfig.enabled(),
                     mainBranch, // Use main branch for RAG
                     this.ragConfig.includePatterns(),
-                    this.ragConfig.excludePatterns(),
-                    this.ragConfig.multiBranchEnabled(),
-                    this.ragConfig.branchRetentionDays(),
-                    this.ragConfig.indexedBranches(),
-                    this.ragConfig.transientBranchIndexesEnabled());
+                    this.ragConfig.excludePatterns());
         }
     }
 

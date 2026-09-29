@@ -1,5 +1,8 @@
 """Contract tests for the extracted Stage 2 semantic packet boundary."""
 
+from dataclasses import replace
+import json
+
 from service.review.orchestrator import stage_2_cross_file
 from service.review.orchestrator import stage_2_semantic_packets
 from service.review.orchestrator.stage_2_semantic_packets import (
@@ -79,3 +82,33 @@ def test_stage_2_facade_preserves_existing_packet_imports():
         is stage_2_semantic_packets._estimated_prompt_tokens
     )
     assert callable(stage_2_cross_file._build_stage_2_prompts)
+
+
+def test_complete_prompt_records_inherited_stage_1_evidence_ids():
+    packet_input = replace(
+        _packet_input(),
+        stage_1_findings_json=json.dumps([{
+            "id": "stage-1-issue",
+            "file": "src/a.py",
+            "evidenceRefs": ["RAG-search-a", "RAG-search-b"],
+        }]),
+    )
+
+    prompts = build_stage_2_prompts(packet_input)
+
+    assert len(prompts) == 1
+    assert prompts[0].visible_evidence_ids == {
+        "RAG-search-a",
+        "RAG-search-b",
+    }
+
+
+def test_stage_2_example_does_not_invent_optional_provenance():
+    prompt = str(build_stage_2_prompts(_packet_input())[0])
+
+    assert '"evidenceRefs": []' in prompt
+    assert '"claimKind": ""' in prompt
+    assert '"findingScope": "CONCRETE_DEFECT"' in prompt
+    assert '"coverageEvidenceRefs": []' in prompt
+    assert "exact repository-context Evidence ID copied" not in prompt
+    assert "PRF001 or DELTA001 from the PR evidence ledger" not in prompt

@@ -106,7 +106,8 @@ class BranchCommitServiceTest {
         branch.setLastKnownHeadCommit("abc123");
         when(branchRepository.findByProjectIdAndBranchName(1L, "main"))
                 .thenReturn(Optional.of(branch));
-        when(analyzedCommitService.isAnalyzed(1L, "abc123")).thenReturn(true);
+        when(analyzedCommitService.isAnalyzed(1L, "main", "abc123"))
+                .thenReturn(true);
 
         CommitRangeContext ctx = service.resolveCommitRange(
                 project, new VcsConnection(), "main", "abc123");
@@ -124,7 +125,8 @@ class BranchCommitServiceTest {
         branch.setLastKnownHeadCommit("abc123");
         when(branchRepository.findByProjectIdAndBranchName(1L, "main"))
                 .thenReturn(Optional.of(branch));
-        when(analyzedCommitService.isAnalyzed(1L, "abc123")).thenReturn(false);
+        when(analyzedCommitService.isAnalyzed(1L, "main", "abc123"))
+                .thenReturn(false);
 
         CommitRangeContext ctx = service.resolveCommitRange(
                 project, new VcsConnection(), "main", "abc123");
@@ -153,7 +155,8 @@ class BranchCommitServiceTest {
                         commit("new3"), commit("new2"), commit("new1"), commit("old-head")
                 ));
 
-        when(analyzedCommitService.filterUnanalyzed(eq(1L), anyList()))
+        when(analyzedCommitService.filterUnanalyzed(
+                eq(1L), eq("main"), anyList()))
                 .thenReturn(List.of("new1", "new3"));
 
         CommitRangeContext ctx = service.resolveCommitRange(project, conn, "main", "new3");
@@ -178,7 +181,8 @@ class BranchCommitServiceTest {
         when(vcsClient.getCommitHistory("ws", "repo", "main", 1000))
                 .thenReturn(List.of(commit("new1"), commit("old-head")));
 
-        when(analyzedCommitService.filterUnanalyzed(eq(1L), anyList()))
+        when(analyzedCommitService.filterUnanalyzed(
+                eq(1L), eq("main"), anyList()))
                 .thenReturn(List.of());
 
         CommitRangeContext ctx = service.resolveCommitRange(project, conn, "main", "new1");

@@ -454,11 +454,7 @@ public class ProjectController {
                                 request.getEnabled(),
                                 request.getBranch(),
                                 request.getIncludePatterns(),
-                                request.getExcludePatterns(),
-                                request.getMultiBranchEnabled(),
-                                request.getBranchRetentionDays(),
-                                request.getIndexedBranches(),
-                                request.getTransientBranchIndexesEnabled());
+                                request.getExcludePatterns());
                 return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
         }
 
@@ -478,7 +474,6 @@ public class ProjectController {
                         @PathVariable String workspaceSlug,
                         @PathVariable String projectNamespace,
                         @RequestParam(required = false) String branch,
-                        @RequestParam(required = false, defaultValue = "false") boolean allConfiguredBranches,
                         @AuthenticationPrincipal UserDetailsImpl userDetails) {
                 Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
                 Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
@@ -516,7 +511,6 @@ public class ProjectController {
                                 project.getId(),
                                 userDetails.getId(),
                                 branch,
-                                allConfiguredBranches,
                                 emitter);
 
                 return emitter;

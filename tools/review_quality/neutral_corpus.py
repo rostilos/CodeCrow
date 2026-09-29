@@ -3,7 +3,7 @@
 The fixtures in this module are intentionally small, but they are not analyzer
 rules. Each head revision introduces a behavioral regression whose proof lives in
 unchanged related code or tests.  This makes the cases useful for comparing the
-generic fallback with deterministic plugin/RAG context without contacting a
+generic fallback with deterministic plugin/structural context without contacting a
 repository provider or a review model.
 
 Generated inventories are drafts.  An operator must independently certify the

@@ -126,7 +126,6 @@ class TypescriptPlugin:
             return PluginOutcome.abstained()
         return PluginOutcome.handled(ReviewContribution(
             rules=(
-                "A typescript-pr-removed-relation is base-to-PR navigation evidence only; require changed-hunk proof of harm.",
                 "Resolve TypeScript relative imports, exported declarations, and imported call targets before reporting a missing symbol or cross-file contract defect.",
                 "Treat exact typescript-module-resolution, typescript-import-binding, and typescript-call-resolution facts as navigation evidence; relationship presence alone is not proof of a defect.",
                 "Use an exact bracketed typescript-* relationship kind as claimKind only when the claim depends on that relationship and cite its Evidence ID; leave claimKind empty for defects proved entirely by changed source.",

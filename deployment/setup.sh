@@ -180,14 +180,6 @@ EOF
   success "Database credentials (auto-generated in .env)"
   success "pgAdmin credentials  (auto-generated in .env)"
 
-  # Qdrant API key — lives only in deployment/.env
-  # Docker Compose injects it as QDRANT__SERVICE__API_KEY into the Qdrant container
-  # and as QDRANT_API_KEY into the rag-pipeline container.
-  local QDRANT_API_KEY
-  QDRANT_API_KEY=$(generate_hex)
-  echo "QDRANT_API_KEY=${QDRANT_API_KEY}" >> "$ROOT_ENV"
-  success "Qdrant API key       (written to .env — injected into containers by docker-compose)"
-
   # ─── Done ────────────────────────────────────────────────────────────
 
   echo -e "\n${BOLD}${GREEN}╔══════════════════════════════════════════════════╗${NC}"
@@ -195,7 +187,7 @@ EOF
   echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════╝${NC}\n"
 
   echo -e "Generated files:"
-  echo -e "  ${DIM}.env${NC}                                        (DB credentials + INTERNAL_API_SECRET + QDRANT_API_KEY)"
+  echo -e "  ${DIM}.env${NC}                                        (DB credentials + INTERNAL_API_SECRET)"
   echo -e "  ${DIM}config/java-shared/application.properties${NC}"
   echo -e "  ${DIM}config/inference-orchestrator/.env${NC}"
   echo -e "  ${DIM}config/rag-pipeline/.env${NC}"

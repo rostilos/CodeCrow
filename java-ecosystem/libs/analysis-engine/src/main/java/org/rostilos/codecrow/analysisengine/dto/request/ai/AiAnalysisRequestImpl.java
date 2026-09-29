@@ -44,6 +44,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String taskHistoryContext;
     protected final List<String> changedFiles;
     protected final List<String> deletedFiles;
+    protected final List<String> proposedTreeChangedFiles;
+    protected final List<String> proposedTreeDeletedFiles;
     protected final List<String> diffSnippets;
     protected final String targetBranchName;
     protected final String sourceBranchName;
@@ -94,6 +96,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.taskHistoryContext = builder.taskHistoryContext;
         this.changedFiles = builder.changedFiles;
         this.deletedFiles = builder.deletedFiles;
+        this.proposedTreeChangedFiles = builder.proposedTreeChangedFiles;
+        this.proposedTreeDeletedFiles = builder.proposedTreeDeletedFiles;
         this.diffSnippets = builder.diffSnippets;
         this.projectWorkspace = builder.projectWorkspace;
         this.projectNamespace = builder.projectNamespace;
@@ -210,6 +214,16 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return deletedFiles;
     }
 
+    @Override
+    public List<String> getProposedTreeChangedFiles() {
+        return proposedTreeChangedFiles != null ? proposedTreeChangedFiles : changedFiles;
+    }
+
+    @Override
+    public List<String> getProposedTreeDeletedFiles() {
+        return proposedTreeDeletedFiles != null ? proposedTreeDeletedFiles : deletedFiles;
+    }
+
     public List<String> getDiffSnippets() {
         return diffSnippets;
     }
@@ -323,6 +337,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String taskHistoryContext;
         private List<String> changedFiles;
         private List<String> deletedFiles;
+        private List<String> proposedTreeChangedFiles;
+        private List<String> proposedTreeDeletedFiles;
         private List<String> diffSnippets;
         private String targetBranchName;
         private String sourceBranchName;
@@ -590,6 +606,16 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withDeletedFiles(List<String> deletedFiles) {
             this.deletedFiles = deletedFiles;
+            return self();
+        }
+
+        public T withProposedTreeChangedFiles(List<String> proposedTreeChangedFiles) {
+            this.proposedTreeChangedFiles = proposedTreeChangedFiles;
+            return self();
+        }
+
+        public T withProposedTreeDeletedFiles(List<String> proposedTreeDeletedFiles) {
+            this.proposedTreeDeletedFiles = proposedTreeDeletedFiles;
             return self();
         }
 

@@ -38,7 +38,7 @@ class ProjectDTOTest {
             ProjectDTO.DefaultBranchStats stats = new ProjectDTO.DefaultBranchStats(
                     "main", 10, 3, 4, 2, 1);
             ProjectDTO.RagConfigDTO ragConfig = new ProjectDTO.RagConfigDTO(
-                    true, "main", null, List.of("*.log"), true, 30);
+                    true, "main", null, List.of("*.log"));
             ProjectDTO.CommentCommandsConfigDTO commandsConfig = new ProjectDTO.CommentCommandsConfigDTO(
                     true, 10, 60, true, List.of("/review", "/fix"), "ANYONE", true);
 
@@ -211,7 +211,8 @@ class ProjectDTOTest {
             project.setPrAnalysisEnabled(true);
             project.setBranchAnalysisEnabled(false);
 
-            RagConfig ragConfig = new RagConfig(true, "develop", null, List.of("*.log", "build/*"), true, 14);
+            RagConfig ragConfig = new RagConfig(
+                    true, "develop", List.of("src/**"), List.of("*.log", "build/*"));
             CommentCommandsConfig commandsConfig = new CommentCommandsConfig(
                     true, 5, 30, true, List.of("/analyze"),
                     CommandAuthorizationMode.ALLOWED_USERS_ONLY, true);
@@ -229,9 +230,8 @@ class ProjectDTOTest {
             assertThat(dto.ragConfig()).isNotNull();
             assertThat(dto.ragConfig().enabled()).isTrue();
             assertThat(dto.ragConfig().branch()).isEqualTo("develop");
+            assertThat(dto.ragConfig().includePatterns()).containsExactly("src/**");
             assertThat(dto.ragConfig().excludePatterns()).containsExactly("*.log", "build/*");
-            assertThat(dto.ragConfig().multiBranchEnabled()).isTrue();
-            assertThat(dto.ragConfig().branchRetentionDays()).isEqualTo(14);
 
             assertThat(dto.commentCommandsConfig()).isNotNull();
             assertThat(dto.commentCommandsConfig().enabled()).isTrue();
@@ -392,16 +392,15 @@ class ProjectDTOTest {
     class RagConfigDTOTests {
 
         @Test
-        @DisplayName("should create with all fields using full constructor")
+        @DisplayName("should create with current index fields")
         void shouldCreateWithAllFieldsUsingFullConstructor() {
             ProjectDTO.RagConfigDTO config = new ProjectDTO.RagConfigDTO(
-                    true, "main", null, List.of("*.log", "build/*"), true, 30);
+                    true, "main", List.of("src/**"), List.of("*.log", "build/*"));
 
             assertThat(config.enabled()).isTrue();
             assertThat(config.branch()).isEqualTo("main");
+            assertThat(config.includePatterns()).containsExactly("src/**");
             assertThat(config.excludePatterns()).containsExactly("*.log", "build/*");
-            assertThat(config.multiBranchEnabled()).isTrue();
-            assertThat(config.branchRetentionDays()).isEqualTo(30);
         }
 
         @Test
@@ -413,15 +412,14 @@ class ProjectDTOTest {
             assertThat(config.enabled()).isTrue();
             assertThat(config.branch()).isEqualTo("develop");
             assertThat(config.excludePatterns()).containsExactly("*.tmp");
-            assertThat(config.multiBranchEnabled()).isNull();
-            assertThat(config.branchRetentionDays()).isNull();
+            assertThat(config.includePatterns()).isNull();
         }
 
         @Test
         @DisplayName("should handle disabled RAG")
         void shouldHandleDisabledRag() {
             ProjectDTO.RagConfigDTO config = new ProjectDTO.RagConfigDTO(
-                    false, null, null, null, null, null);
+                    false, null, null, null);
 
             assertThat(config.enabled()).isFalse();
             assertThat(config.branch()).isNull();
@@ -432,7 +430,7 @@ class ProjectDTOTest {
         @DisplayName("should handle empty exclude patterns")
         void shouldHandleEmptyExcludePatterns() {
             ProjectDTO.RagConfigDTO config = new ProjectDTO.RagConfigDTO(
-                    true, "main", null, List.of(), true, 7);
+                    true, "main", null, List.of());
 
             assertThat(config.excludePatterns()).isEmpty();
         }

@@ -117,8 +117,6 @@ class TestAppCreation:
         order = []
         manager = MagicMock()
         manager.close.side_effect = lambda: order.append("manager-close")
-        query_service = MagicMock()
-        query_service.close.side_effect = lambda: order.append("query-close")
         drain_workers = AsyncMock(side_effect=lambda: order.append("drain"))
         test_app = SimpleNamespace(state=SimpleNamespace())
 
@@ -128,11 +126,6 @@ class TestAppCreation:
                 api_module,
                 "RAGIndexManager",
                 return_value=manager,
-            ),
-            patch.object(
-                api_module,
-                "RAGQueryService",
-                return_value=query_service,
             ),
             patch(
                 "rag_pipeline.api.routers.index."
@@ -144,11 +137,7 @@ class TestAppCreation:
                 pass
 
         drain_workers.assert_awaited_once()
-        assert order == [
-            "drain",
-            "query-close",
-            "manager-close",
-        ]
+        assert order == ["drain", "manager-close"]
 
 
 class TestPendingCollectionJanitor:
@@ -181,12 +170,42 @@ class TestPendingCollectionJanitor:
         assert "Invalid RAG_PENDING_JANITOR_INTERVAL_SECONDS" in caplog.text
 
     @pytest.mark.asyncio
+    async def test_janitor_runs_pending_and_review_generation_cleanup(self):
+        from rag_pipeline.api.api import _pending_collection_janitor
+
+        manager = MagicMock()
+        manager.cleanup_expired_collections.return_value = {
+            "pending": 1,
+            "proposedTree": 2,
+        }
+        cleanup_attempt = AsyncMock(
+            side_effect=lambda callback: callback(),
+        )
+        with (
+            patch(
+                "rag_pipeline.api.api.asyncio.to_thread",
+                cleanup_attempt,
+            ),
+            patch(
+                "rag_pipeline.api.api.asyncio.sleep",
+                AsyncMock(side_effect=asyncio.CancelledError()),
+            ),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await _pending_collection_janitor(manager)
+
+        cleanup_attempt.assert_awaited_once_with(
+            manager.cleanup_expired_collections,
+        )
+        manager.cleanup_expired_collections.assert_called_once_with()
+
+    @pytest.mark.asyncio
     async def test_outage_logs_once_and_reports_recovery(self, caplog):
         from rag_pipeline.api.api import _pending_collection_janitor
 
         cleanup_attempt = AsyncMock(side_effect=[
-            RuntimeError("qdrant unavailable"),
-            RuntimeError("qdrant unavailable"),
+            RuntimeError("structural store unavailable"),
+            RuntimeError("structural store unavailable"),
             0,
             asyncio.CancelledError(),
         ])

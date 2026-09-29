@@ -73,7 +73,7 @@ class CodeReviewIssue(BaseModel):
     evidenceRefs: List[str] = Field(
         default_factory=list,
         description=(
-            "Stable Evidence ID values copied from retrieved context that the "
+            "Stable structural Evidence IDs visible to the invocation that the "
             "finding relies on. Leave empty when the finding relies only on "
             "the current file/diff."
         ),

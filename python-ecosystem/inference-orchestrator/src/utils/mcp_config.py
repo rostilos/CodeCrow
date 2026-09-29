@@ -1,10 +1,42 @@
-from typing import Dict, Optional
+from typing import Dict, Mapping, Optional, Tuple
 import os
 import sys
 
 
 class MCPConfigBuilder:
     """Builder class for creating MCP server configurations."""
+
+    # mcp-use records stdio command arguments and derives public connector
+    # identifiers from them. Credentials therefore belong in the child-only
+    # environment, never in Java -D arguments.
+    _CREDENTIAL_ENV_BY_JVM_PROPERTY = {
+        "accessToken": "CODECROW_MCP_ACCESS_TOKEN",
+        "oAuthClient": "CODECROW_MCP_OAUTH_CLIENT",
+        "oAuthSecret": "CODECROW_MCP_OAUTH_SECRET",
+        "internal.api.secret": "CODECROW_MCP_INTERNAL_API_SECRET",
+    }
+
+    @classmethod
+    def build_java_launch_options(
+            cls,
+            jvm_props: Optional[Mapping[str, str]] = None,
+    ) -> Tuple[list[str], Dict[str, str]]:
+        """Return nonsecret JVM args and request-scoped child credentials."""
+        jvm_args: list[str] = []
+        server_env: Dict[str, str] = {}
+
+        for key, value in (jvm_props or {}).items():
+            text_value = str(value)
+            credential_env_name = cls._CREDENTIAL_ENV_BY_JVM_PROPERTY.get(key)
+            if credential_env_name is not None:
+                server_env[credential_env_name] = text_value
+                continue
+
+            # Preserve the existing newline handling for loggable command-line
+            # metadata. Credential values are not rewritten.
+            jvm_args.append(f"-D{key}={text_value.replace(chr(10), ' ')}")
+
+        return jvm_args, server_env
 
     @staticmethod
     def build_config(jar_path: str, jvm_props: Optional[Dict[str, str]] = None,
@@ -22,15 +54,22 @@ class MCPConfigBuilder:
             platform_mcp_jar_path: Path to Platform MCP server JAR
             platform_jvm_props: JVM properties for Platform MCP server
             rag_mcp_context: Exact repository-generation binding for the optional
-                repository code-search MCP server.
+                structural graph MCP server.
         """
-        jvm_props = jvm_props or {}
-        jvm_args = []
-
-        for key, value in jvm_props.items():
-            # sanitize: convert to string and replace newlines
-            sanitized_value = str(value).replace("\n", " ")
-            jvm_args.append(f"-D{key}={sanitized_value}")
+        jvm_args, vcs_env = MCPConfigBuilder.build_java_launch_options(jvm_props)
+        local_mcp_only = str(
+            (jvm_props or {}).get("local.mcp.only", "false")
+        ).strip().lower() == "true"
+        if local_mcp_only:
+            # The child environment otherwise inherits service-level values.
+            # Blank every supported VCS credential in addition to the Java
+            # fail-closed property so a local-only request cannot reuse an
+            # ambient provider credential.
+            vcs_env.update({
+                "CODECROW_MCP_ACCESS_TOKEN": "",
+                "CODECROW_MCP_OAUTH_CLIENT": "",
+                "CODECROW_MCP_OAUTH_SECRET": "",
+            })
 
         # Enable JVM debugging if MCP_DEBUG_PORT is set
         debug_port = os.environ.get("MCP_DEBUG_PORT")
@@ -39,28 +78,33 @@ class MCPConfigBuilder:
         
         args = jvm_args + ["-jar", jar_path]
 
+        vcs_server = {
+            "command": "java",
+            "args": args,
+            "type": "stdio"
+        }
+        if vcs_env:
+            vcs_server["env"] = vcs_env
+
         mcp_servers = {
-            "codecrow-vcs-mcp": {
-                "command": "java",
-                "args": args,
-                "type": "stdio"
-            }
+            "codecrow-vcs-mcp": vcs_server
         }
         
         # Add Platform MCP server if requested
         if include_platform_mcp and platform_mcp_jar_path and os.path.exists(platform_mcp_jar_path):
-            platform_jvm_props = platform_jvm_props or {}
-            platform_args = []
-            for key, value in platform_jvm_props.items():
-                sanitized_value = str(value).replace("\n", " ")
-                platform_args.append(f"-D{key}={sanitized_value}")
+            platform_args, platform_env = (
+                MCPConfigBuilder.build_java_launch_options(platform_jvm_props)
+            )
             platform_args.extend(["-jar", platform_mcp_jar_path])
-            
-            mcp_servers["codecrow-platform-mcp"] = {
+
+            platform_server = {
                 "command": "java",
                 "args": platform_args,
                 "type": "stdio"
             }
+            if platform_env:
+                platform_server["env"] = platform_env
+            mcp_servers["codecrow-platform-mcp"] = platform_server
 
         if rag_mcp_context:
             rag_env = {
@@ -69,7 +113,7 @@ class MCPConfigBuilder:
                 if value is not None and str(value).strip()
             }
             rag_env["RAG_API_URL"] = os.environ.get(
-                "RAG_API_URL", "http://rag-pipeline:8001"
+                "RAG_API_URL", "http://codecrow-rag-pipeline:8001"
             )
             service_secret = (
                 os.environ.get("SERVICE_SECRET")
@@ -95,7 +139,9 @@ class MCPConfigBuilder:
          vcs_provider: str = None, vcs_base_url: str = None,
          local_repo_path: str = None,
          local_repo_target_branch: str = None,
-         local_repo_revision: str = None) -> Dict[str, str]:
+         local_repo_revision: str = None,
+         local_review_overlay_path: str = None,
+         local_mcp_only: bool = False) -> Dict[str, str]:
         """
         Build JVM properties dictionary from request parameters.
 
@@ -113,6 +159,8 @@ class MCPConfigBuilder:
             local_repo_path: Shared target-head snapshot directory.
             local_repo_target_branch: Branch name represented by the snapshot.
             local_repo_revision: Immutable revision represented by the snapshot.
+            local_review_overlay_path: Request-scoped proposed-tree overlay root.
+            local_mcp_only: Disable provider tools and provider fallbacks.
 
         Returns:
             Dictionary of JVM properties
@@ -154,5 +202,9 @@ class MCPConfigBuilder:
             jvm_props["local.repo.targetBranch"] = local_repo_target_branch
         if local_repo_revision is not None:
             jvm_props["local.repo.revision"] = local_repo_revision
+        if local_review_overlay_path is not None:
+            jvm_props["local.review.overlay.path"] = local_review_overlay_path
+        if local_mcp_only:
+            jvm_props["local.mcp.only"] = "true"
 
         return jvm_props

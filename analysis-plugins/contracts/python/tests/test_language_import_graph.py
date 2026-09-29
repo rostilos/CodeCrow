@@ -9,7 +9,6 @@ from codecrow_plugins import (
     PluginRuntime,
     ProjectCapabilities,
     ProjectSelector,
-    RepositoryAnalysisMode,
     RepositoryFacts,
     ValidationDecision,
 )
@@ -87,7 +86,6 @@ def test_python_import_and_call_resolve_to_unchanged_policy_path():
         capabilities,
         "fedcba9876543210",
         snapshots=analysis.snapshots,
-        mode=RepositoryAnalysisMode.PR_OVERLAY,
     )
     restored.ingest((FileArtifact(
         "app/export_service.py",
@@ -105,14 +103,11 @@ def test_python_import_and_call_resolve_to_unchanged_policy_path():
         and fact.related_paths == ("app/export_policy.py",)
         for fact in _facts(overlaid)
     )
-    removed_call = next(
-        fact
+    assert not any(
+        fact.kind == "python-call-resolution"
+        and fact.target == "app.export_policy::can_export"
         for fact in _facts(overlaid)
-        if fact.kind == "python-pr-removed-relation"
-        and dict(fact.attributes)["originalKind"] == "python-call-resolution"
     )
-    assert removed_call.target == "app.export_policy::can_export"
-    assert removed_call.related_paths == ("app/export_policy.py",)
 
 
 def test_java_same_package_call_resolves_to_policy_path():
@@ -159,7 +154,6 @@ def test_java_same_package_call_resolves_to_policy_path():
         capabilities,
         "fedcba9876543210",
         snapshots=analysis.snapshots,
-        mode=RepositoryAnalysisMode.PR_OVERLAY,
     )
     restored.ingest((FileArtifact(
         "src/main/java/example/RefundService.java",
@@ -175,14 +169,10 @@ def test_java_same_package_call_resolves_to_policy_path():
     overlaid, diagnostics = restored.finish()
 
     assert diagnostics == ()
-    removed = {
-        dict(fact.attributes)["originalKind"]: fact
+    assert not any(
+        fact.kind == "java-call-resolution"
+        and fact.target == "example::canRefund"
         for fact in _facts(overlaid)
-        if fact.kind == "java-pr-removed-relation"
-    }
-    assert removed["java-call-resolution"].target == "example::canRefund"
-    assert removed["java-call-resolution"].related_paths == (
-        "src/main/java/example/RefundPolicy.java",
     )
 
 
@@ -201,7 +191,6 @@ def test_line_only_movement_does_not_publish_removed_relation():
         capabilities,
         "fedcba9876543210",
         snapshots=analysis.snapshots,
-        mode=RepositoryAnalysisMode.PR_OVERLAY,
     )
     restored.ingest((FileArtifact(
         "app/service.py",
@@ -210,8 +199,9 @@ def test_line_only_movement_does_not_publish_removed_relation():
     overlaid, diagnostics = restored.finish()
 
     assert diagnostics == ()
-    assert not any(
-        fact.kind == "python-pr-removed-relation"
+    assert any(
+        fact.kind == "python-call-resolution"
+        and fact.target == "app.policy::allowed"
         for fact in _facts(overlaid)
     )
 

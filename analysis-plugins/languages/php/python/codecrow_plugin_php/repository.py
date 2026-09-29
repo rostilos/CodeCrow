@@ -62,6 +62,11 @@ def _parse_template_artifact(
     return (template,) if template is not None else ()
 
 
+def php_file_use_facts(artifact: FileArtifact) -> tuple[GraphFact, ...]:
+    """Extract namespace imports and declaration-owned trait composition."""
+    return _thread_parser().file_use_facts(artifact)
+
+
 def _text(node, source: bytes) -> str:
     return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
 
@@ -318,6 +323,105 @@ class PhpAstParser:
                 attributes=tuple(sorted(type_attributes | method_attributes)),
             ))
         return tuple(sorted(symbols))
+
+    def file_use_facts(self, artifact: FileArtifact) -> tuple[GraphFact, ...]:
+        """Return syntax-proven facts for PHP's two distinct ``use`` forms."""
+        source = artifact.content.encode("utf-8")
+        root = self._parser.parse(source).root_node
+        facts: set[GraphFact] = set()
+
+        for node in _walk(root):
+            if node.type == "namespace_use_declaration":
+                namespace = self._namespace_for(node, source)
+                owner = namespace or artifact.path
+                for line_number, target in self._namespace_imports(node, source):
+                    facts.add(GraphFact(
+                        "php-import",
+                        owner,
+                        "imports",
+                        target,
+                        artifact.path,
+                        line_number,
+                    ))
+                continue
+
+            if node.type != "use_declaration":
+                continue
+            declaration = _nearest(node, set(self.DECLARATIONS))
+            if declaration is None:
+                continue
+            name_node = declaration.child_by_field_name("name")
+            if name_node is None:
+                continue
+            namespace = self._namespace_for(declaration, source)
+            name = _text(name_node, source).strip()
+            owner = f"{namespace}\\{name}" if namespace else name
+            for child in node.named_children:
+                if child.type not in {"name", "qualified_name"}:
+                    continue
+                target = _text(child, source).strip()
+                if target:
+                    facts.add(GraphFact(
+                        "php-trait",
+                        owner,
+                        "uses-trait",
+                        target,
+                        artifact.path,
+                        child.start_point[0] + 1,
+                    ))
+
+        return tuple(sorted(facts))
+
+    @staticmethod
+    def _namespace_imports(
+        declaration,
+        source: bytes,
+    ) -> tuple[tuple[int, str], ...]:
+        group = next(
+            (
+                child
+                for child in declaration.named_children
+                if child.type == "namespace_use_group"
+            ),
+            None,
+        )
+        prefix_node = next(
+            (
+                child
+                for child in declaration.named_children
+                if child.type == "namespace_name"
+            ),
+            None,
+        )
+        prefix = (
+            _text(prefix_node, source).strip().rstrip("\\")
+            if group is not None and prefix_node is not None
+            else ""
+        )
+        scope = group if group is not None else declaration
+        imports: list[tuple[int, str]] = []
+        for clause in _walk(scope):
+            if clause.type != "namespace_use_clause":
+                continue
+            value = _text(clause, source).strip()
+            value = re.sub(
+                r"^(?:function|const)\s+",
+                "",
+                value,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            target = re.split(
+                r"\s+as\s+",
+                value,
+                maxsplit=1,
+                flags=re.IGNORECASE,
+            )[0].strip()
+            if prefix and target:
+                target = prefix + "\\" + target.lstrip("\\")
+            if target:
+                imports.append((clause.start_point[0] + 1, target))
+        return tuple(imports)
 
     def parse_template(
         self,

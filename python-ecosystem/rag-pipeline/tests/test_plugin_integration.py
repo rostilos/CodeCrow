@@ -11,50 +11,9 @@ from codecrow_plugins import (
     RepositoryFacts,
 )
 from rag_pipeline.core.splitter import ASTCodeSplitter, ContentType
-from rag_pipeline.core.repository_overlay import build_overlay_capabilities
 
 
 PLUGINS_ROOT = Path(__file__).resolve().parents[3] / "analysis-plugins"
-
-
-def test_overlay_projects_complete_repository_plugins_for_inference():
-    catalog = PluginCatalog.discover(PLUGINS_ROOT)
-    effective_ids = tuple(
-        descriptor.id
-        for descriptor in catalog.registry.resolve(
-            ("data-contracts", "java", "python", "typescript")
-        )
-    )
-    evidence = {
-        plugin_id: (
-            f"indexed-target:main:sha256:target:{plugin_id}",
-        )
-        for plugin_id in effective_ids
-    }
-
-    capabilities = build_overlay_capabilities(
-        catalog.registry,
-        effective_ids,
-        (
-            "backend/Invoice.java",
-            "web/invoice.ts",
-            "worker/invoice.py",
-        ),
-        revision="0123456789abcdef",
-        detection_evidence=evidence,
-    )
-
-    assert ProjectSelector(catalog.registry).validate(
-        capabilities,
-        "0123456789abcdef",
-    ) == capabilities
-    assert capabilities.repository_plugins == effective_ids
-    assert capabilities.file_plugins == {
-        "backend/Invoice.java": ("java",),
-        "web/invoice.ts": ("typescript",),
-        "worker/invoice.py": ("python",),
-    }
-
 
 @pytest.mark.parametrize(
     ("path", "language_id", "source"),

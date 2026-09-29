@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 BRANCH_ANALYSIS_ALLOWED_MCP_TOOLS = frozenset({"getBranchFileContent"})
+BRANCH_ANALYSIS_MAX_OUTPUT_TOKENS = 16_384
 
 
 async def execute_branch_analysis(
@@ -52,6 +53,8 @@ async def execute_branch_analysis(
         prompt=prompt,
         allowed_tool_names=BRANCH_ANALYSIS_ALLOWED_MCP_TOOLS,
         max_steps=15,
+        reasoning_effort=ReasoningEffort.LOW,
+        max_output_tokens=BRANCH_ANALYSIS_MAX_OUTPUT_TOKENS,
         output_schema=CodeReviewOutput,
         additional_instructions=PromptBuilder.get_additional_instructions(),
         metadata={"flow": "review", "stage": "branch_analysis"},

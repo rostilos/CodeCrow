@@ -215,19 +215,23 @@ class TestDocumentLoaderLoadBatch:
         assert "path=big.py bytes=101 max_bytes=100" in caplog.text
         assert [skip.path for skip in skips] == ["big.py"]
 
-    def test_cleans_archive_path(self, tmp_path):
-        archive_dir = tmp_path / "owner-repo-commitabc123"
-        src_dir = archive_dir / "src"
-        src_dir.mkdir(parents=True)
-        (src_dir / "main.py").write_text("x = 1")
+    def test_preserves_repository_relative_top_level_directories(self, tmp_path):
+        paths = (
+            Path("payments-platform-component/src/A.py"),
+            Path("service-platform-v2/src/A.py"),
+        )
+        for path in paths:
+            (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / path).write_text(f"component = {str(path)!r}\n")
 
         config = RAGConfig()
         loader = DocumentLoader(config)
 
         docs = loader.load_file_batch(
-            [Path("owner-repo-commitabc123/src/main.py")],
+            list(paths),
             repo_base=tmp_path,
             workspace="ws", project="proj", branch="main", commit="abc",
         )
-        assert len(docs) == 1
-        assert docs[0].metadata["path"] == "src/main.py"
+        assert {doc.metadata["path"] for doc in docs} == {
+            path.as_posix() for path in paths
+        }

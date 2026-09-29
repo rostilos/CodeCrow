@@ -2,7 +2,9 @@
 Controlled MCP tool executor with per-stage whitelist and call budget.
 
 Stage 1 (context gaps):      getBranchFileContent — max 3 calls/batch
-Stage 3 (issue verification): getBranchFileContent, getPullRequestComments — max 5 calls total
+Stage 3 (issue verification): proposed-tree file read (falling back to the
+reviewed revision), plus provider comments for ordinary requests — max 5 calls
+total. Local-only requests expose only the proposed-tree read.
 """
 import asyncio
 import json
@@ -18,6 +20,9 @@ _MCP_ERROR_PREFIXES = ("Error executing tool:", "Tool call failed:")
 _RELATED_LOCATIONS_RE = re.compile(
     r"(?im)^\s*(?:[*_]{1,2})?also affects\s*:(?:[*_]{1,2})?\s*(.+)$"
 )
+_BRANCH_FILE_TOOL = "getBranchFileContent"
+_REVIEW_FILE_TOOL = "getReviewFileContent"
+_FILE_EVIDENCE_TOOLS = {_BRANCH_FILE_TOOL, _REVIEW_FILE_TOOL}
 
 
 class McpToolExecutor:
@@ -55,12 +60,25 @@ class McpToolExecutor:
         self.client = mcp_client
         self.request = request
         self.stage = stage
-        self.allowed_tools: Set[str] = config["tools"]
+        self.local_only = (
+            getattr(request, "mcpLocalOnly", False) is True
+            if request is not None
+            else False
+        )
+        self.allowed_tools: Set[str] = (
+            {_REVIEW_FILE_TOOL}
+            if stage == "stage_3" and self.local_only
+            else set(config["tools"])
+        )
         self.max_calls: int = config["max_calls"]
         self.call_count: int = 0
         self.call_log: List[Dict[str, Any]] = []
         self.review_revision = str(review_revision or "").strip()
         self.verification_issues = dict(verification_issues or {})
+        self._use_local_review_source = (
+            stage == "stage_3"
+            and self._has_local_review_source(request)
+        )
         self._lock = asyncio.Lock()
         self._vcs_session = None
 
@@ -83,19 +101,42 @@ class McpToolExecutor:
 
             self.call_count += 1
 
-        # Pre-fill workspace/repo from request context so the LLM doesn't
-        # have to guess these values.
+        # Repository identity is host-owned request context, not model input.
+        # Overwrite (rather than default) these fields so a provider-backed
+        # tool can never be redirected to another accessible repository.
+        requested_tool_name = tool_name
+        effective_tool_name = (
+            _REVIEW_FILE_TOOL
+            if (
+                self.stage == "stage_3"
+                and tool_name == _BRANCH_FILE_TOOL
+                and self._use_local_review_source
+            )
+            else tool_name
+        )
         arguments = dict(arguments or {})
-        arguments.setdefault("workspace", self.request.projectVcsWorkspace)
-        arguments.setdefault("repoSlug", self.request.projectVcsRepoSlug)
+        arguments["workspace"] = self.request.projectVcsWorkspace
+        arguments["repoSlug"] = self.request.projectVcsRepoSlug
+        if effective_tool_name == "getPullRequestComments":
+            pull_request_id = getattr(self.request, "pullRequestId", None)
+            if pull_request_id is None or not str(pull_request_id).strip():
+                raise RuntimeError(
+                    "Request-bound pull request ID is unavailable"
+                )
+            arguments["pullRequestId"] = str(pull_request_id)
         if (
             self.stage == "stage_3"
-            and tool_name == "getBranchFileContent"
+            and effective_tool_name in _FILE_EVIDENCE_TOOLS
             and self.review_revision
         ):
             # Post-review evidence must come from the exact reviewed revision.
             # Never let a model accidentally verify new PR code against target.
-            arguments["branch"] = self.review_revision
+            if effective_tool_name == _BRANCH_FILE_TOOL:
+                arguments["branch"] = self.review_revision
+            else:
+                # The proposed-tree tool is request-bound to the staged target
+                # snapshot plus PR overlay and accepts no branch argument.
+                arguments.pop("branch", None)
             verification_id = str(
                 arguments.get("verificationId") or ""
             ).strip()
@@ -116,13 +157,13 @@ class McpToolExecutor:
                 )
 
         logger.info(
-            f"[MCP {self.stage}] Calling {tool_name} "
+            f"[MCP {self.stage}] Calling {effective_tool_name} "
             f"(call {self.call_count}/{self.max_calls}): {arguments}"
         )
 
         try:
             session = await self._get_vcs_session()
-            result = await session.call_tool(tool_name, arguments)
+            result = await session.call_tool(effective_tool_name, arguments)
             # Extract text content from MCP result
             if hasattr(result, "content"):
                 text = "\n".join(
@@ -132,16 +173,16 @@ class McpToolExecutor:
                 )
             else:
                 text = str(result)
-            evidence = self._file_evidence_metadata(tool_name, text)
+            evidence = self._file_evidence_metadata(effective_tool_name, text)
             tool_reported_error = bool(
                 getattr(result, "isError", False)
                 or getattr(result, "is_error", False)
             )
             if tool_reported_error:
-                evidence = self._file_evidence_metadata(tool_name, "")
+                evidence = self._file_evidence_metadata(effective_tool_name, "")
             if (
                 self.stage == "stage_3"
-                and tool_name == "getBranchFileContent"
+                and effective_tool_name in _FILE_EVIDENCE_TOOLS
                 and evidence.get("evidence_valid") is True
                 and evidence.get("evidence_structured") is not True
                 and arguments.get("startLine")
@@ -157,19 +198,37 @@ class McpToolExecutor:
                     arguments["startLine"],
                 )
             log_entry = {
-                "tool": tool_name,
+                "tool": effective_tool_name,
                 "args": dict(arguments),
                 "success": not tool_reported_error,
                 "result_chars": len(text.strip()),
                 **evidence,
             }
+            if effective_tool_name != requested_tool_name:
+                log_entry["requested_tool"] = requested_tool_name
+            if (
+                self.stage == "stage_3"
+                and effective_tool_name in _FILE_EVIDENCE_TOOLS
+            ):
+                log_entry["evidence_revision"] = self.review_revision
+                log_entry["evidence_source_authority"] = (
+                    "proposed_tree"
+                    if effective_tool_name == _REVIEW_FILE_TOOL
+                    else "reviewed_revision"
+                )
             self.call_log.append(log_entry)
             return text
         except Exception as e:
             logger.error(f"[MCP {self.stage}] Tool call failed: {e}")
-            self.call_log.append(
-                {"tool": tool_name, "args": arguments, "success": False, "error": str(e)}
-            )
+            failure_entry = {
+                "tool": effective_tool_name,
+                "args": arguments,
+                "success": False,
+                "error": str(e),
+            }
+            if effective_tool_name != requested_tool_name:
+                failure_entry["requested_tool"] = requested_tool_name
+            self.call_log.append(failure_entry)
             return f"Tool call failed: {e}"
 
     async def _get_vcs_session(self):
@@ -267,6 +326,34 @@ class McpToolExecutor:
                         },
                     },
                 })
+            elif tool_name == _REVIEW_FILE_TOOL:
+                definitions.append({
+                    "type": "function",
+                    "function": {
+                        "name": _REVIEW_FILE_TOOL,
+                        "description": (
+                            "Read an anchor-centred source window from the exact "
+                            "request-staged proposed PR tree."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "filePath": {
+                                    "type": "string",
+                                    "description": "Path to the repository file",
+                                },
+                                "verificationId": {
+                                    "type": "string",
+                                    "description": (
+                                        "Verification ID from the Stage 3 "
+                                        "finding record."
+                                    ),
+                                },
+                            },
+                            "required": ["filePath", "verificationId"],
+                        },
+                    },
+                })
         return definitions
 
     @property
@@ -288,6 +375,20 @@ class McpToolExecutor:
     @staticmethod
     def _normalized_path(value: Any) -> str:
         return str(value or "").strip().replace("\\", "/").lstrip("/")
+
+    @staticmethod
+    def _has_local_review_source(request: Any) -> bool:
+        """Return whether the VCS MCP has a proposed-tree source binding."""
+        local_repo_path = getattr(request, "localRepoPath", None)
+        review_overlay_path = getattr(request, "localReviewOverlayPath", None)
+        target_ref = (
+            getattr(request, "localRepoRevision", None)
+            or getattr(request, "localRepoTargetBranch", None)
+        )
+        return all(
+            isinstance(value, str) and bool(value.strip())
+            for value in (local_repo_path, review_overlay_path, target_ref)
+        )
 
     @staticmethod
     def _location_parts(value: Any) -> tuple[str, int]:
@@ -335,7 +436,7 @@ class McpToolExecutor:
         tool_name: str,
         text: str,
     ) -> Dict[str, Any]:
-        if tool_name != "getBranchFileContent":
+        if tool_name not in _FILE_EVIDENCE_TOOLS:
             return {}
 
         stripped = str(text or "").strip()

@@ -213,6 +213,24 @@ class CandidateEvidenceLedger:
             raise RuntimeError("cannot confirm hunks for an unregistered candidate")
         record.anchor_hunk_ids = _normalized_values(hunk_ids)
 
+    def retain_evidence_refs(
+        self,
+        issue: CodeReviewIssue,
+        evidence_refs: Iterable[str],
+    ) -> None:
+        """Record the subset of generated citations retained by host gates."""
+        record = self.record_for(issue)
+        if record is None:
+            raise RuntimeError(
+                "cannot update evidence refs for an unregistered candidate"
+            )
+        retained = _normalized_values(evidence_refs)
+        if not set(retained).issubset(record.evidence_refs):
+            raise RuntimeError(
+                "candidate evidence refs can only be narrowed after generation"
+            )
+        record.evidence_refs = retained
+
     def reject(self, issue: CodeReviewIssue, *, gate: str, code: str) -> bool:
         record = self.record_for(issue)
         if record is None:

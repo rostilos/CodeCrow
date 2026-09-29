@@ -5,7 +5,7 @@ FRONTEND_DIR="frontend"
 DOCKER_PATH="deployment"
 CONFIG_PATH="deployment/config"
 PYTHON_BOOTSTRAP="${PYTHON_BOOTSTRAP:-python3.11}"
-LOCAL_CI_VENV_ROOT="${CODECROW_CI_VENV_ROOT:-${TMPDIR:-/tmp}/codecrow-ci-python-${UID:-local}}"
+LOCAL_CI_VENV_ROOT="${CODECROW_CI_VENV_ROOT:-$(cd "$(dirname "$0")/../../" && pwd)/.venv/ci}"
 
 cd "$(dirname "$0")/../../"
 
@@ -14,16 +14,14 @@ echo "  CodeCrow local production build"
 echo "  Mirrors the CI/CD verification pipeline"
 echo "=========================================="
 
-echo "--- 1. Synchronizing the frontend submodule with origin/main ---"
-git submodule update --init --recursive --remote -- "$FRONTEND_DIR"
-
-ACTUAL_FRONTEND_COMMIT="$(git -C "$FRONTEND_DIR" rev-parse HEAD)"
-FRONTEND_WORKTREE_STATUS="$(git -C "$FRONTEND_DIR" status --porcelain --untracked-files=normal)"
-if [ -n "$FRONTEND_WORKTREE_STATUS" ]; then
-    echo "Frontend submodule has non-ignored local changes; refusing a non-reproducible production build." >&2
+echo "--- 1. Using the current frontend workspace ---"
+if [ ! -f "$FRONTEND_DIR/package.json" ]; then
+    echo "Frontend submodule is not initialized: $FRONTEND_DIR/package.json is missing." >&2
+    echo "Run: git submodule update --init --recursive -- $FRONTEND_DIR" >&2
     exit 1
 fi
-echo "Frontend at latest origin/main commit: $ACTUAL_FRONTEND_COMMIT"
+ACTUAL_FRONTEND_COMMIT="$(git -C "$FRONTEND_DIR" rev-parse HEAD)"
+echo "Frontend workspace commit: $ACTUAL_FRONTEND_COMMIT"
 
 echo "--- 2. Injecting Environment Configurations ---"
 
@@ -63,16 +61,27 @@ run_python_ci_group inference
 
 echo "--- 4. Running the shared Java, plugin, and Docker CI build ---"
 CODECROW_DOCKER_OUTPUT=load \
-CODECROW_LOCAL_IMAGE_PREFIX=codecrow-local \
+CODECROW_LOCAL_IMAGE_PREFIX=codecrow-restore-aug \
 CODECROW_DEPLOY_SERVICES=all \
 deployment/ci/ci-build.sh
 
-echo "--- 5. Shutting down existing services cleanly ---"
+echo "--- 5. Shutting down only the restored services cleanly ---"
 cd "$DOCKER_PATH"
-docker compose down --remove-orphans
+docker compose --project-name codecrow-restore-aug down --remove-orphans
 
-echo "--- 6. Starting the locally loaded CI-equivalent images ---"
-docker compose up -d --no-build --wait
+echo "--- 6. Preparing the isolated restore database ---"
+docker compose --project-name codecrow-restore-aug up -d --no-build --wait postgres
+AUG_RESTORE_TABLE_COUNT="$(docker compose --project-name codecrow-restore-aug exec -T postgres sh -c \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname = '\''public'\'';"')"
+if [ "$AUG_RESTORE_TABLE_COUNT" = "0" ]; then
+    echo "Loading the historical schema and Flyway history into the empty restore database (no application data)..."
+    docker compose --project-name codecrow-restore-aug exec -T postgres sh -c \
+      'exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" --single-transaction --set ON_ERROR_STOP=1 --quiet' \
+      < config/database/restore-aug-schema.sql
+fi
+
+echo "--- 7. Starting the locally loaded CI-equivalent images ---"
+docker compose --project-name codecrow-restore-aug up -d --no-build --wait
 
 echo "--- Deployment Complete! Services are up and healthy. ---"
-docker compose ps
+docker compose --project-name codecrow-restore-aug ps

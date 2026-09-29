@@ -18,10 +18,14 @@ public class BranchIndexBuildExecutorConfiguration {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(workers);
         executor.setMaxPoolSize(workers);
-        executor.setQueueCapacity(50);
+        // The database Job row is the backlog. Rejection returns ownership to
+        // PENDING instead of accepting work only in process memory.
+        executor.setQueueCapacity(0);
         executor.setThreadNamePrefix("rag-branch-build-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(300);
+        executor.setRejectedExecutionHandler(
+                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
         executor.initialize();
         return executor;
     }

@@ -131,6 +131,7 @@ class TestReviewRequestDto:
         assert req.previousCodeAnalysisIssues == []
         assert req.analysisMode == "FULL"
         assert req.useMcpTools is True
+        assert req.mcpLocalOnly is False
         assert req.ragEnabled is True
 
     def test_project_can_disable_rag_for_one_review(self):
@@ -141,15 +142,23 @@ class TestReviewRequestDto:
         req = _minimal_review_request(useMcpTools=False)
         assert req.useMcpTools is False
 
+    def test_request_can_require_provider_isolated_mcp(self):
+        req = _minimal_review_request(mcpLocalOnly=True)
+        assert req.mcpLocalOnly is True
+
     def test_local_repository_snapshot_metadata(self):
         req = _minimal_review_request(
             localRepoPath="/tmp/review-snapshot",
             localRepoTargetBranch="main",
             localRepoRevision="abc123",
+            localRagRepoPath="/tmp/structural-snapshot",
+            localReviewOverlayPath="/tmp/review-overlay",
         )
         assert req.localRepoPath == "/tmp/review-snapshot"
         assert req.localRepoTargetBranch == "main"
         assert req.localRepoRevision == "abc123"
+        assert req.localRagRepoPath == "/tmp/structural-snapshot"
+        assert req.localReviewOverlayPath == "/tmp/review-overlay"
 
     def test_enrichment_data_none(self):
         req = _minimal_review_request()

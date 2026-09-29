@@ -15,6 +15,7 @@ import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
 import org.rostilos.codecrow.analysisengine.util.AnalysisLimitEnforcer;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestStatusSyncService;
@@ -90,6 +91,7 @@ public class BranchAnalysisProcessor {
 	private final PullRequestService pullRequestService;
 	private final PullRequestStatusSyncService pullRequestStatusSyncService;
 	private final AstScopeEnricher astScopeEnricher;
+	private final LocalRepositorySnapshotService localRepositorySnapshotService;
 
 	/**
 	 * Optional RAG operations service — can be null if RAG module is not deployed.
@@ -118,6 +120,7 @@ public class BranchAnalysisProcessor {
 			PullRequestService pullRequestService,
 			PullRequestStatusSyncService pullRequestStatusSyncService,
 			AstScopeEnricher astScopeEnricher,
+			LocalRepositorySnapshotService localRepositorySnapshotService,
 			@Autowired(required = false) RagOperationsService ragOperationsService) {
 		this.projectService = projectService;
 		this.branchRepository = branchRepository;
@@ -140,6 +143,7 @@ public class BranchAnalysisProcessor {
 		this.pullRequestService = pullRequestService;
 		this.pullRequestStatusSyncService = pullRequestStatusSyncService;
 		this.astScopeEnricher = astScopeEnricher;
+		this.localRepositorySnapshotService = localRepositorySnapshotService;
 		this.ragOperationsService = ragOperationsService;
 	}
 
@@ -413,8 +417,9 @@ public class BranchAnalysisProcessor {
 			// ── Hybrid analysis: AI analysis for uncovered direct pushes ─────
 			// Skip on first analysis — the existing codebase predates CodeCrow
 			// and should not be treated as "uncovered direct pushes".
+			boolean repositoryRefreshHandledEarly = false;
 			if (!isFirstAnalysis && !directPushLimited) {
-				performDirectPushAnalysisIfNeeded(
+				repositoryRefreshHandledEarly = performDirectPushAnalysisIfNeeded(
 						project, request, unanalyzedCommits, rawDiff,
 						changedFiles, provider, consumer, prNumber, isMergeCommit,
 						lockLease);
@@ -489,7 +494,9 @@ public class BranchAnalysisProcessor {
 
 			// ── Post-analysis housekeeping ────────────────────────────────────
 			requireConfirmedLease(lockLease);
-			performRagGenerationRefresh(request, project, consumer);
+			if (!repositoryRefreshHandledEarly) {
+				performRagGenerationRefresh(request, project, consumer);
+			}
 			requireConfirmedLease(lockLease);
 			branchHealthService.markBranchHealthy(project, request);
 			requireConfirmedLease(lockLease);
@@ -767,7 +774,7 @@ public class BranchAnalysisProcessor {
 	 * {@code DetectionSource.DIRECT_PUSH_ANALYSIS}, then map issues to branch</li>
 	 * </ol>
 	 */
-	private void performDirectPushAnalysisIfNeeded(
+	private boolean performDirectPushAnalysisIfNeeded(
 			Project project,
 			BranchProcessRequest request,
 			List<String> unanalyzedCommits,
@@ -781,12 +788,12 @@ public class BranchAnalysisProcessor {
 
 		if (unanalyzedCommits.isEmpty()) {
 			log.debug("No unanalyzed commits — skipping direct push analysis check");
-			return;
+			return false;
 		}
 
 		if (rawDiff == null || rawDiff.isBlank()) {
 			log.debug("No diff available — skipping direct push analysis");
-			return;
+			return false;
 		}
 
 		// ── Fast path: PR merge ──────────────────────────────────────────
@@ -796,7 +803,7 @@ public class BranchAnalysisProcessor {
 		if (mergedPrNumber != null) {
 			log.info("Skipping direct push analysis — branch event originates from PR #{} merge (not a direct push)",
 					mergedPrNumber);
-			return;
+			return false;
 		}
 
 		// ── Safety net: merge commit without PR number ───────────────────
@@ -808,7 +815,7 @@ public class BranchAnalysisProcessor {
 			log.info("Skipping direct push analysis — HEAD commit is a merge commit " +
 					"(detected via parent count) but PR number was not resolved. " +
 					"This is a PR merge, not a direct push.");
-			return;
+			return false;
 		}
 
 		// Check if a PR analysis lock is active for this branch.
@@ -818,22 +825,19 @@ public class BranchAnalysisProcessor {
 		if (prAnalysisInProgress) {
 			log.info("PR analysis in progress for branch {} — skipping direct push analysis (PR will cover it)",
 					request.getTargetBranchName());
-			return;
+			return false;
 		}
 
 		// Check commit coverage by open/merged PRs
-		boolean exactTargetBranchCoverage = project.getConfiguration() != null
-				&& project.getConfiguration().ragConfig() != null
-				&& project.getConfiguration().ragConfig().isMultiBranchEnabled();
 		CommitCoverageService.CoverageResult coverage = commitCoverageService.checkCoverage(
 				project.getId(), request.getTargetBranchName(), unanalyzedCommits,
-				exactTargetBranchCoverage);
+				true);
 
 		switch (coverage.status()) {
 			case FULLY_COVERED:
 				log.info("All {} unanalyzed commits are covered by open PRs — skipping direct push analysis",
 						unanalyzedCommits.size());
-				return;
+				return false;
 			case PARTIALLY_COVERED:
 				log.info("{} of {} unanalyzed commits not covered by open PRs — running direct push analysis",
 						coverage.uncoveredCommits().size(), unanalyzedCommits.size());
@@ -848,18 +852,30 @@ public class BranchAnalysisProcessor {
 				"Analyzing " + coverage.uncoveredCommits().size()
 						+ " uncovered direct push commits via AI");
 
+		boolean repositoryRefreshHandled = false;
 		try {
 			// Build AI analysis request using the VCS-specific service
 			VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
+			List<AiAnalysisRequest> aiRequests = aiClientService.buildDirectPushAnalysisRequests(
+					project, request, rawDiff, Collections.emptyMap(), new ArrayList<>(changedFiles));
+			AiAnalysisRequest aiRequest = aiRequests.get(0);
+
+			// Queue the immutable branch generation as soon as the request builder has
+			// canonicalized the exact provider revision. The durable RAG operation is
+			// asynchronous, so indexing gets a head start without delaying review.
+			requireConfirmedLease(lockLease);
+			repositoryRefreshHandled = performRagGenerationRefresh(
+					request, project, consumer);
+
 			Map<String, String> fileContents = Collections.emptyMap();
+			VcsRepoInfoImpl repository = ProjectVcsInfoRetriever.getVcsInfo(project);
 
 			// Try to extract file contents from the archive for better line-hash
 			// computation
 			try {
-				VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
 				BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
 						branchFileOperationsService.downloadBranchFileSnapshot(
-						vcsRepoInfoImpl, request.getCommitHash(), changedFiles);
+						repository, request.getCommitHash(), changedFiles);
 				if (!branchFileSnapshot.contents().isEmpty()) {
 					fileContents = branchFileSnapshot.contents();
 				}
@@ -868,12 +884,7 @@ public class BranchAnalysisProcessor {
 						e.getMessage());
 			}
 
-			List<AiAnalysisRequest> aiRequests = aiClientService.buildDirectPushAnalysisRequests(
-					project, request, rawDiff, fileContents, new ArrayList<>(changedFiles));
-
-			// Call the inference orchestrator using single request
-			requireConfirmedLease(lockLease);
-			Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiRequests.get(0), event -> {
+			Consumer<Map<String, Object>> aiEventConsumer = event -> {
 				try {
 					if (consumer != null) {
 						consumer.accept(event);
@@ -882,7 +893,31 @@ public class BranchAnalysisProcessor {
 					log.debug("Event consumer failed during direct push analysis: {}",
 							ex.getMessage());
 				}
-			});
+			};
+
+			Optional<LocalRepositorySnapshotService.PreparedSnapshot> localSnapshot = Optional.empty();
+			if (aiRequest.getUseMcpTools()) {
+				localSnapshot = localRepositorySnapshotService.prepare(
+						repository.vcsConnection(),
+						repository.workspace(),
+						repository.repoSlug(),
+						request.getTargetBranchName(),
+						aiRequest.getTargetHeadCommitHash());
+			}
+
+			// Keep the exact local tree alive for the whole agent session and remove it
+			// immediately afterwards. Snapshot preparation is optional enrichment;
+			// failure falls back to the existing provider-backed MCP path.
+			requireConfirmedLease(lockLease);
+			Map<String, Object> aiResponse;
+			if (localSnapshot.isPresent()) {
+				try (LocalRepositorySnapshotService.PreparedSnapshot snapshot = localSnapshot.get()) {
+					aiResponse = aiAnalysisClient.performAnalysis(
+							aiRequest, snapshot.transport(), aiEventConsumer);
+				}
+			} else {
+				aiResponse = aiAnalysisClient.performAnalysis(aiRequest, aiEventConsumer);
+			}
 
 			if (AiAnalysisClient.isPromptDryRunResult(aiResponse)) {
 				log.warn(
@@ -892,7 +927,7 @@ public class BranchAnalysisProcessor {
 						consumer,
 						"prompt_dry_run_completed",
 						"Prompt dry run completed without persisting a direct-push analysis");
-				return;
+				return repositoryRefreshHandled;
 			}
 
 			// Save the analysis with DetectionSource.DIRECT_PUSH_ANALYSIS
@@ -923,6 +958,7 @@ public class BranchAnalysisProcessor {
 
 			EventNotificationEmitter.emitStatus(consumer, "direct_push_analysis_complete",
 					"Direct push analysis found " + issuesFound + " issues");
+			return repositoryRefreshHandled;
 
 		} catch (BranchAnalysisLeaseLostException leaseLost) {
 			throw leaseLost;
@@ -932,17 +968,18 @@ public class BranchAnalysisProcessor {
 					e.getMessage(), e);
 			EventNotificationEmitter.emitStatus(consumer, "direct_push_analysis_failed",
 					"Direct push analysis failed (non-critical): " + e.getMessage());
+			return repositoryRefreshHandled;
 		}
 	}
 
 	// ── Immutable repository generation refresh ─────────────────────────────
-	private void performRagGenerationRefresh(BranchProcessRequest request, Project project,
+	private boolean performRagGenerationRefresh(BranchProcessRequest request, Project project,
 			Consumer<Map<String, Object>> consumer) {
 		if (ragOperationsService == null) {
 			log.info("Skipping repository generation refresh - RagOperationsService not available");
 			EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
 					"Repository index module not deployed — skipping generation refresh");
-			return;
+			return true;
 		}
 		try {
 			if (!ragOperationsService.isRagEnabled(project)) {
@@ -950,59 +987,44 @@ public class BranchAnalysisProcessor {
 						project.getId());
 				EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
 						"Repository index not enabled for this project — skipping generation refresh");
-				return;
+				return true;
 			}
-			if (!ragOperationsService.isRagIndexReady(project)) {
-				log.info("Skipping repository generation refresh - repository index not yet ready for project={}",
-						project.getId());
-				EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
-						"Repository index not yet ready (a full generation build may still be in progress)");
-				return;
-			}
-
 			String targetBranch = request.getTargetBranchName();
 			String baseBranch = ragOperationsService.getBaseBranch(project);
 
 			if (!targetBranch.equals(baseBranch)
 					&& !ragOperationsService.shouldHaveBranchIndex(project, targetBranch)) {
-				log.info("Skipping repository generation refresh for non-retained branch: project={}, branch={}",
+				log.info("Skipping repository generation refresh outside analysis patterns: project={}, branch={}",
 						project.getId(), targetBranch);
 				EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
-						"Branch is analyzed but is not configured for a retained repository index");
-				return;
+						"Branch is outside the configured analysis target/push patterns");
+				return true;
 			}
 
-			// Health check: verify RAG pipeline is reachable before starting
-			if (!ragOperationsService.isRagPipelineHealthy()) {
-				log.warn("Repository index pipeline is not reachable — skipping generation refresh for project={}",
-						project.getId());
-				EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
-						"Repository index pipeline not reachable — skipping generation refresh");
-				return;
-			}
-
-			log.info("Refreshing exact repository generation for project={}, branch={}, commit={}",
+			log.info("Queueing exact repository generation for project={}, branch={}, commit={}",
 					project.getId(), targetBranch, request.getCommitHash());
 			EventNotificationEmitter.emitStatus(consumer, "rag_update",
-					"Building a complete repository generation for branch '" + targetBranch + "'");
+					"Queueing a complete repository generation for branch '" + targetBranch + "'");
 			boolean ragUpdated = ragOperationsService.refreshBranchGeneration(
 					project, targetBranch, request.getCommitHash(), consumer);
 			if (!ragUpdated) {
 				log.info("Repository generation refresh did not complete; retaining the last usable index "
 						+ "for project={}, branch={}, commit={}",
 						project.getId(), targetBranch, request.getCommitHash());
-				return;
+				return false;
 			}
 
 			// RagOperationsService owns the precise terminal event. A boolean true
 			// also covers an already-current revision, so translating it into a
 			// generic "updated" event here would be a false success report.
-			log.info("Repository generation refresh completed for project={}, branch={}, commit={}",
+			log.info("Repository generation refresh queued for project={}, branch={}, commit={}",
 					project.getId(), targetBranch, request.getCommitHash());
+			return true;
 		} catch (Exception e) {
 			log.warn("Repository generation refresh failed (non-critical): {}", e.getMessage());
 			EventNotificationEmitter.emitStatus(consumer, "rag_update_failed",
 					"Repository generation refresh failed (non-critical): " + e.getMessage());
+			return false;
 		}
 	}
 

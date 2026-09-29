@@ -25,6 +25,7 @@ from llm.llm_factory import (
     _anthropic_output_cap,
     _is_cloudflare_base_url,
     _normalize_cloudflare_chat_payload,
+    _normalize_openrouter_chat_payload,
     _normalize_openai_compatible_base_url,
     _parse_google_vertex_config,
     _split_openai_compatible_parameters,
@@ -130,6 +131,7 @@ class TestCreateLlm:
                 ai_api_key="test-key",
             )
         constructor.assert_called_once()
+        assert "model_kwargs" not in constructor.call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_provider_construction_guard_is_task_local(self):
@@ -181,6 +183,15 @@ class TestCreateLlm:
         assert llm is constructor.return_value
         assert "max_tokens" not in constructor.call_args.kwargs
         assert "max_completion_tokens" not in constructor.call_args.kwargs
+        assert "model_kwargs" not in constructor.call_args.kwargs
+
+    def test_openrouter_payload_uses_canonical_max_tokens_field(self):
+        payload = _normalize_openrouter_chat_payload({
+            "model": "deepseek/deepseek-v4-flash-0731",
+            "max_completion_tokens": 16_384,
+        })
+        assert payload["max_tokens"] == 16_384
+        assert "max_completion_tokens" not in payload
 
     def test_openai(self):
         llm = LLMFactory.create_llm(
@@ -202,6 +213,7 @@ class TestCreateLlm:
         assert llm is constructor.return_value
         resolve_cap.assert_called_once_with("claude-3-sonnet", 18_000)
         assert constructor.call_args.kwargs["max_tokens"] == 18_000
+        assert "model_kwargs" not in constructor.call_args.kwargs
 
     def test_google_gemini_2x(self):
         ChatGoogleGenerativeAI.reset_mock()

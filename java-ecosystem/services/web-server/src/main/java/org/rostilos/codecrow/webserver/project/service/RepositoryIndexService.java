@@ -41,7 +41,7 @@ public class RepositoryIndexService {
     public RepositoryIndexService(
             ObjectMapper objectMapper,
             RagBranchIndexRepository branchIndexRepository,
-            @Value("${codecrow.rag.api.url:http://rag-pipeline:8001}") String ragApiUrl,
+            @Value("${codecrow.rag.api.url:http://codecrow-rag-pipeline:8001}") String ragApiUrl,
             @Value("${codecrow.rag.api.enabled:true}") boolean ragEnabled,
             @Value("${codecrow.rag.api.timeout.connect:30}") int connectTimeout,
             @Value("${codecrow.rag.api.timeout.read:120}") int readTimeout,
@@ -155,13 +155,6 @@ public class RepositoryIndexService {
         putIfNotNull(filters, "file_query", sanitizeString(firstPresent(rawFilters, "fileQuery", "file_query"), 500));
         putIfNotNull(filters, "text_query", sanitizeString(firstPresent(rawFilters, "textQuery", "text_query"), 160));
 
-        Integer prNumber = optionalPositiveNumber(firstPresent(rawFilters, "prNumber", "pr_number"));
-        if (prNumber != null) {
-            filters.put("pr_number", prNumber);
-        }
-
-        Object includePr = firstPresent(rawFilters, "includePr", "include_pr");
-        filters.put("include_pr", includePr instanceof Boolean ? includePr : Boolean.TRUE);
         return filters;
     }
 

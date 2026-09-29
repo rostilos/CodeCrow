@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codecrow-magento2-benchmark"
+description = "Reproducible Magento 2 pull-request review benchmark for CodeCrow"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+# PEP 621 requires distribution metadata for editable installation. This fixed
+# sentinel means "not released"; it is not a release, API, or compatibility
+# version and must not be incremented as a release line.
+version = "0+unreleased"
+dependencies = []
+
+[project.scripts]
+magento2-benchmark = "magento2_benchmark.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+magento2_benchmark = ["dashboard_assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

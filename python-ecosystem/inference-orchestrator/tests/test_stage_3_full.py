@@ -948,6 +948,50 @@ class TestExecuteStage3Aggregation:
 
 class TestStage3McpVerification:
     @pytest.mark.asyncio(loop_scope="function")
+    async def test_uses_shared_model_session_constructor(self):
+        request = SimpleNamespace(
+            projectVcsWorkspace="workspace",
+            projectVcsRepoSlug="repo",
+        )
+        llm = MagicMock()
+        mcp_client = MagicMock()
+        final_response = SimpleNamespace(
+            content="shared-session report",
+            tool_calls=[],
+            response_metadata={},
+        )
+        model_session = MagicMock()
+        model_session.ainvoke = AsyncMock(return_value=final_response)
+
+        with patch(
+            "service.review.orchestrator.stage_3_mcp_verification."
+            "AgentExecutionService"
+        ) as service_type:
+            service_type.return_value.create_model_session.return_value = (
+                model_session
+            )
+            result = await _stage_3_with_mcp(
+                llm,
+                request,
+                "prompt",
+                mcp_client,
+                "commit-abc",
+                {},
+            )
+
+        assert result["report"] == "shared-session report"
+        service_type.assert_called_once_with(llm=llm, client=mcp_client)
+        create_call = service_type.return_value.create_model_session
+        create_call.assert_called_once()
+        assert create_call.call_args.kwargs["reasoning_effort"].value == "low"
+        assert {
+            definition["function"]["name"]
+            for definition in create_call.call_args.kwargs["tool_definitions"]
+        } == {"getBranchFileContent", "getPullRequestComments"}
+        model_session.ainvoke.assert_awaited_once()
+        llm.bind_tools.assert_not_called()
+
+    @pytest.mark.asyncio(loop_scope="function")
     async def test_oversized_tool_transcript_fails_open_without_clipping(
         self,
         monkeypatch,
@@ -1069,11 +1113,10 @@ class TestStage3McpVerification:
             response_metadata={},
         )
         bound_llm = MagicMock()
-        bound_llm.ainvoke = AsyncMock(
-            side_effect=[tool_response, final_response]
-        )
+        bound_llm.ainvoke = AsyncMock(return_value=tool_response)
         llm = MagicMock()
         llm.bind_tools.return_value = bound_llm
+        llm.ainvoke = AsyncMock(return_value=final_response)
         mcp_client = MagicMock()
         mcp_client.session.call_tool = AsyncMock(return_value=SimpleNamespace(
             content=[SimpleNamespace(text="current source")]

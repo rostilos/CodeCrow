@@ -102,34 +102,33 @@ parent declaration path and contract. External/ambiguous parents, inherited
 private methods, trait/interface/magic dispatch, and absent return declarations
 stay unknown; the generic host only transports the attributes.
 
-Per-file graph facts remain dedicated neutral payload records. They are not copied
-into every source slice. After deterministic retrieval, the inference host
-renders retained fact lines within the bounded prompt and records only the
-prompt-visible facts as validation evidence. Focused repository
-architecture packets retain their own exact text, attributes, paths, and packet
-keys. This keeps source and graph records separate without moving concrete plugin
-interpretation into the RAG or inference hosts.
+Per-file graph facts remain dedicated neutral records. They are not copied into
+source units. The structural index stores their attributes, paths, and packet
+keys as graph metadata; Stage 1 receives only a bounded relation map and can open
+an exact unit or file through its repository tools. This keeps source and graph
+records separate without moving concrete plugin interpretation into the index or
+inference hosts.
 
 The neutral runtime admits at most 160 framework facts per file, 200 facts for a
 neutral/non-framework per-file contribution, and 200 facts in the final per-file
 artifact. One fact scalar is limited to 4,096 characters and one serialized
 graph artifact to 262,144 bytes. Review contributions retain at most 80 owned
 paths per plugin, 40 rules, and 80 evidence requests. Omitted items emit bounded,
-recoverable diagnostics and are not negative evidence. RAG stores retained graph
-facts in packets of at most 25 facts per point.
+recoverable diagnostics and are not negative evidence. The structural index
+stores retained facts and their resolved edges in the immutable target-head
+generation.
 
 The `data-contracts` domain plugin activates only when a repository contains an
 explicit contract path (`contract/`, `contracts/`, `schema/`, `schemas/`) or a
 GraphQL, Protocol Buffers, or JSON Schema file. It records at most 256 sorted
 field candidates per file and joins a contract declaration to exact quoted-key,
-member-access, or field-declaration references in any language. A PR overlay
-also emits a bounded removed-reference relation when a changed producer,
-consumer, or contract no longer has a base-branch edge. Line-only moves do not
-produce a removal. Both current and removed relations are navigation evidence:
-they retrieve the contract and remaining consumers/tests, but cannot positively
-validate a behavioral defect. Dynamic/computed keys, aliases, informal prose
-outside explicit contract locations, and external schemas remain unresolved
-instead of being guessed.
+member-access, or field-declaration references in any language. Its target-head
+relations are navigation evidence: they locate the contract and consumers/tests,
+but cannot positively validate a behavioral defect. PR changes remain
+authoritative in the supplied diff and current-file evidence; no mutable PR
+overlay is persisted. Dynamic/computed keys, aliases, informal prose outside
+explicit contract locations, and external schemas remain unresolved instead of
+being guessed.
 
 PHP and Magento apply the same proof distinction at their own plugin boundary.
 Namespaces, inheritance, DI preferences, plugins, observers, routes, ACLs,
@@ -171,9 +170,9 @@ exact fact kinds can positively approve a typed claim. Generic hosts contain no
 PHP/Magento fact table and add no model call.
 
 The neutral file-policy capability returns `full`, `architecture-only`,
-`generated`, or `excluded`. Java applies it before changed-file enrichment; RAG
-applies it before full-generation loading and PR overlay construction; and
-inference maps generated/excluded files to explicit non-reviewable hunk
+`generated`, or `excluded`. Java applies it before changed-file enrichment; the
+structural index applies it before immutable generation loading; and inference
+maps generated/excluded files to explicit non-reviewable hunk
 dispositions before Stage 0. Empty registries keep the generic fallback, while a
 failed policy contribution aborts instead of silently changing the disposition.
 

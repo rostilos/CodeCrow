@@ -457,6 +457,22 @@ def test_oversized_ast_unit_is_fragmented_without_copying_global_details():
     assert len({node.metadata["parent_chunk_id"] for node in nodes}) == 1
     assert all("calls" not in node.metadata for node in nodes)
 
+    previous_offset = -1
+    for node in nodes:
+        fragment_offset = chunk.content.find(node.text, previous_offset + 1)
+        assert fragment_offset >= 0
+        previous_offset = fragment_offset
+        expected_start_line = (
+            chunk.start_line
+            + chunk.content[:fragment_offset].count("\n")
+        )
+        assert node.metadata["start_line"] == expected_start_line
+        assert node.metadata["end_line"] == (
+            expected_start_line + node.text.count("\n")
+        )
+        assert chunk.start_line <= node.metadata["start_line"]
+        assert node.metadata["end_line"] <= chunk.end_line
+
 
 def test_complete_docstring_is_preserved_in_both_metadata_paths():
     docstring = "contract evidence " + ("\U0001f9ea" * 2_000)

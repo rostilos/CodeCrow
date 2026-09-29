@@ -17,7 +17,7 @@ from model.output_schemas import CodeReviewIssue
 from service.review.candidate_ledger import CandidateEvidenceLedger
 from model.dtos import ReviewRequestDto
 from utils.llm_response import extract_llm_response_text
-from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
+from llm.reasoning_policy import ReasoningEffort
 from service.review.orchestrator.json_utils import load_json_with_local_repairs
 from utils.diff_processor import (
     DiffFile,
@@ -936,6 +936,94 @@ def reviewable_hunk_ids_for_issue(
     )
 
 
+def _current_source_line_at(hunk: DiffHunk, line_number: int) -> Optional[str]:
+    """Return one exact current-side source line from a parsed diff hunk."""
+    current_line = hunk.new_start
+    lines = hunk.content.splitlines()
+    if lines and lines[0].startswith("@@ "):
+        lines = lines[1:]
+
+    for raw_line in lines:
+        if raw_line.startswith(("-", "\\")):
+            continue
+        if not raw_line.startswith(("+", " ")):
+            continue
+        source_line = raw_line[1:]
+        if current_line == line_number:
+            return source_line
+        current_line += 1
+    return None
+
+
+def _anchor_text_variants(value: str) -> set[str]:
+    """Normalize only transport decoration around a single source line."""
+    stripped = (value or "").strip()
+    if not stripped:
+        return set()
+
+    variants = {stripped}
+    if stripped.startswith("`") and stripped.endswith("`"):
+        unwrapped = stripped.strip("`").strip()
+        if "\n" not in unwrapped and unwrapped:
+            variants.add(unwrapped)
+    for candidate in tuple(variants):
+        if candidate.startswith("+") and not candidate.startswith("+++"):
+            variants.add(candidate[1:].strip())
+    return variants
+
+
+def canonicalize_prompt_visible_line_anchor(
+    issue: CodeReviewIssue,
+    processed_diff: Optional[ProcessedDiff],
+    visible_hunk_ids: set[str],
+) -> tuple[str, ...]:
+    """Canonicalize a Stage 2 line anchor from exact prompt-visible diff data.
+
+    Stage 2 sees unified-diff records, so otherwise correct model output can
+    carry the leading ``+`` marker or Markdown backticks in ``codeSnippet``.
+    When the supplied snippet already identifies any reviewable hunk, it is
+    left untouched. Otherwise, an explicit in-hunk line hint may recover the
+    exact current-source line, but only when the decorated snippet agrees with
+    that line (or the model omitted the snippet entirely).
+    """
+    if processed_diff is None or not visible_hunk_ids:
+        return ()
+
+    existing_hunks = _anchor_reviewable_hunk_ids(issue, processed_diff, {})
+    if existing_hunks:
+        return existing_hunks
+
+    try:
+        line_number = int(getattr(issue, "line", 0) or 0)
+    except (TypeError, ValueError):
+        return ()
+    if line_number <= 0:
+        return ()
+
+    diff_file = _diff_file_for_path(
+        processed_diff,
+        _issue_field(issue, "file"),
+    )
+    if diff_file is None:
+        return ()
+
+    supplied_variants = _anchor_text_variants(
+        _issue_field(issue, "codeSnippet")
+    )
+    for hunk in _reviewable_hunks(diff_file):
+        if hunk.id not in visible_hunk_ids:
+            continue
+        source_line = _current_source_line_at(hunk, line_number)
+        if source_line is None or not source_line.strip():
+            continue
+        if supplied_variants and source_line.strip() not in supplied_variants:
+            continue
+        issue.file = diff_file.path
+        issue.codeSnippet = source_line
+        return (hunk.id,)
+    return ()
+
+
 def _anchor_overlaps_reviewable_hunk(
     issue: CodeReviewIssue,
     processed_diff: ProcessedDiff,
@@ -961,6 +1049,12 @@ def apply_candidate_provenance_gate(
     historical_ids = previous_open_issue_ids(request)
     unit_owners = units_by_hunk or {}
     kept: List[CodeReviewIssue] = []
+    rejection_counts: Dict[str, int] = {}
+
+    def record_rejection(stage: str, code: str) -> None:
+        key = f"{stage}:{code}"
+        rejection_counts[key] = rejection_counts.get(key, 0) + 1
+
     for issue in issues:
         issue_id = _issue_field(issue, "id").strip()
         historical = bool(issue_id) and issue_id in historical_ids
@@ -979,6 +1073,7 @@ def apply_candidate_provenance_gate(
                 gate="candidate_provenance",
                 code="unbound_review_unit",
             )
+            record_rejection(record.stage, "unbound_review_unit")
             continue
         anchor_hunks = reviewable_hunk_ids_for_issue(
             issue,
@@ -994,6 +1089,10 @@ def apply_candidate_provenance_gate(
                 gate="candidate_provenance",
                 code="anchor_outside_generation_unit",
             )
+            record_rejection(
+                record.stage,
+                "anchor_outside_generation_unit",
+            )
             continue
         if unit_owners and not any(
             set(record.review_unit_ids) & unit_owners.get(hunk_id, set())
@@ -1004,18 +1103,64 @@ def apply_candidate_provenance_gate(
                 gate="candidate_provenance",
                 code="review_unit_ownership_mismatch",
             )
-            continue
-        candidate_ledger.confirm_anchor_hunks(issue, matching_hunks)
-        if not set(record.evidence_refs).issubset(
-            record.visible_evidence_by_id
-        ):
-            candidate_ledger.reject(
-                issue,
-                gate="candidate_provenance",
-                code="evidence_outside_generation_prompt",
+            record_rejection(
+                record.stage,
+                "review_unit_ownership_mismatch",
             )
             continue
+        candidate_ledger.confirm_anchor_hunks(issue, matching_hunks)
+        unavailable_evidence_refs = set(record.evidence_refs).difference(
+            record.visible_evidence_by_id
+        )
+        claim_kind = _issue_field(issue, "claimKind").strip()
+        if unavailable_evidence_refs:
+            if claim_kind:
+                candidate_ledger.reject(
+                    issue,
+                    gate="candidate_provenance",
+                    code="evidence_outside_generation_prompt",
+                )
+                record_rejection(
+                    record.stage,
+                    "evidence_outside_generation_prompt",
+                )
+                continue
+
+            logger.info(
+                "Candidate provenance ignored %d unavailable optional "
+                "evidence reference(s) for generic %s candidate",
+                len(unavailable_evidence_refs),
+                record.stage,
+            )
+
+        # Reconciliation may transfer a generated-candidate record to a
+        # canonical issue object and merge fields from a duplicate. Citations
+        # are generation provenance, so they may be narrowed but never gained
+        # from that later merge. Generic findings remain grounded by their
+        # changed-source anchor; typed findings retain the strict rejection
+        # above when any citation they generated was not prompt-visible.
+        current_evidence_refs = set(
+            getattr(issue, "evidenceRefs", None) or ()
+        )
+        retained_evidence_refs = [
+            reference
+            for reference in record.evidence_refs
+            if reference in current_evidence_refs
+            and reference in record.visible_evidence_by_id
+        ]
+        if list(getattr(issue, "evidenceRefs", None) or ()) != retained_evidence_refs:
+            issue.evidenceRefs = retained_evidence_refs
+        candidate_ledger.retain_evidence_refs(
+            issue,
+            retained_evidence_refs,
+        )
         kept.append(issue)
+    if rejection_counts:
+        logger.info(
+            "Candidate provenance gate rejected %d candidate(s): %s",
+            sum(rejection_counts.values()),
+            dict(sorted(rejection_counts.items())),
+        )
     return kept
 
 
@@ -1027,7 +1172,7 @@ def _drop_out_of_hunk_anchors(
 ) -> Tuple[List[CodeReviewIssue], List[str]]:
     """Keep new findings scoped to a reviewable changed hunk.
 
-    Full-file and RAG context are supporting evidence, not permission to report
+    Full-file and structural repository context are supporting evidence, not permission to report
     unrelated pre-existing code. Historical lifecycle records remain exempt.
     """
     if processed_diff is None:
@@ -1295,7 +1440,17 @@ async def _run_verification_tool_loop(
     if not hasattr(llm, "bind_tools"):
         raise RuntimeError("LLM does not support tool binding")
 
-    llm_with_tools = llm.bind_tools([search_file_content])
+    # Keep this module importable by provider-free quality tooling; load the
+    # shared agent implementation only when the optional verifier executes.
+    from service.agent import AgentExecutionService
+
+    model_session = AgentExecutionService(
+        llm=llm,
+        client=None,
+    ).create_model_session(
+        tool_definitions=[search_file_content],
+        reasoning_effort=ReasoningEffort.HIGH,
+    )
     messages: List[Any] = [
         {"role": "system", "content": "You verify code-review findings and return only valid JSON."},
         {"role": "user", "content": prompt},
@@ -1310,10 +1465,7 @@ async def _run_verification_tool_loop(
                 f"{input_token_target}); optional verification stopped without "
                 "slicing tool evidence"
             )
-        response = await llm_with_tools.ainvoke(
-            messages,
-            **reasoning_request_kwargs(llm, ReasoningEffort.HIGH),
-        )
+        response = await model_session.ainvoke(messages)
         messages.append(response)
         tool_calls = getattr(response, "tool_calls", None) or []
 

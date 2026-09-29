@@ -27,35 +27,9 @@ LINE, CODE SNIPPET, AND SCOPE CONTRACT:
 - Do not compute endLine or line ranges.
 """
 
-ISSUE_DEDUPLICATION_INSTRUCTIONS = """
-⚠️ CRITICAL: AVOID DUPLICATE ISSUES
-
-Before reporting an issue, check if you've already reported the SAME root cause:
-
-MERGE THESE INTO ONE ISSUE:
-- Multiple instances of the same hardcoded value (e.g., store ID '6' in 3 places)
-- Same security vulnerability pattern repeated in different methods
-- Same missing validation across multiple endpoints
-- Same deprecated API usage in multiple files
-
-HOW TO REPORT GROUPED ISSUES:
-1. Report ONE issue for the root cause
-2. In the "reason" field, mention: "Found in X locations: [list files/lines]"
-3. Use the FIRST occurrence's line number
-4. In suggestedFixDiff, show the fix for ONE location as example
-
-EXAMPLE - WRONG (duplicate issues):
-Issue 1: title: "Hardcoded timeout value", reason: "Hardcoded timeout of 30s in sendRequest()..."
-Issue 2: title: "Hardcoded timeout value", reason: "Hardcoded timeout of 30s in retryRequest()..."
-Issue 3: title: "Hardcoded timeout value", reason: "Timeout 30s is hardcoded..."
-
-EXAMPLE - CORRECT (merged into one):
-Issue 1: title: "Hardcoded timeout prevents runtime configuration", reason: "Hardcoded timeout value '30' prevents environment-specific tuning. Found in 3 locations:
-  - service/HttpClient:45 (sendRequest)
-  - service/HttpClient:89 (retryRequest)
-  - util/ConnectionHelper:23
-  Recommended: Extract to configuration and inject as a dependency."
-"""
+ISSUE_DEDUPLICATION_INSTRUCTIONS = (
+    "ATOMIC: 1 root/issue. Repeats: relatedLocations."
+)
 
 SUGGESTED_FIX_DIFF_FORMAT = """
 📝 SUGGESTED FIX DIFF FORMAT:

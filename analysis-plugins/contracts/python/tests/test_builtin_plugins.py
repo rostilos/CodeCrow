@@ -935,6 +935,126 @@ final class Save extends Action implements HttpPostActionInterface {
     }
 
 
+def test_php_namespace_import_is_not_misclassified_as_trait_use():
+    artifact = FileArtifact(
+        "app/code/Acme/Checkout/registration.php",
+        """<?php
+use Magento\\Framework\\Component\\ComponentRegistrar;
+
+ComponentRegistrar::register(
+    ComponentRegistrar::MODULE,
+    'Acme_Checkout',
+    __DIR__
+);
+""",
+    )
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    runtime = PluginRuntime(catalog)
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=tuple(sorted((artifact.path, "composer.json"))),
+    ))
+
+    facts, diagnostics = runtime.graph_facts(artifact, capabilities)
+
+    assert diagnostics == ()
+    assert {
+        (fact.kind, fact.source, fact.relation, fact.target)
+        for fact in facts
+        if fact.kind in {"php-import", "php-trait"}
+    } == {
+        (
+            "php-import",
+            artifact.path,
+            "imports",
+            "Magento\\Framework\\Component\\ComponentRegistrar",
+        ),
+    }
+
+
+def test_php_import_groups_and_aliases_remain_namespace_imports():
+    artifact = FileArtifact(
+        "src/GroupedImports.php",
+        """<?php
+namespace Acme\\Feature;
+
+use Vendor\\Package\\Service as LocalService;
+use Vendor\\Package\\{First, Second as LocalSecond};
+use function Vendor\\Package\\helper;
+use const Vendor\\Package\\FLAG;
+
+final class GroupedImports {}
+""",
+    )
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    runtime = PluginRuntime(catalog)
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=tuple(sorted((artifact.path, "composer.json"))),
+    ))
+
+    facts, diagnostics = runtime.graph_facts(artifact, capabilities)
+
+    assert diagnostics == ()
+    assert {
+        (fact.source, fact.target)
+        for fact in facts
+        if fact.kind == "php-import"
+    } == {
+        ("Acme\\Feature", "Vendor\\Package\\Service"),
+        ("Acme\\Feature", "Vendor\\Package\\First"),
+        ("Acme\\Feature", "Vendor\\Package\\Second"),
+        ("Acme\\Feature", "Vendor\\Package\\helper"),
+        ("Acme\\Feature", "Vendor\\Package\\FLAG"),
+    }
+    assert not any(fact.kind == "php-trait" for fact in facts)
+
+
+def test_php_trait_uses_are_owned_by_their_exact_declarations():
+    artifact = FileArtifact(
+        "src/MultipleDeclarations.php",
+        """<?php
+namespace Acme\\Feature;
+
+use Vendor\\Package\\ImportedType;
+
+final class First
+{
+    use FirstTrait;
+}
+
+trait Second
+{
+    use SharedTrait, AuditedTrait {
+        SharedTrait::run insteadof AuditedTrait;
+    }
+}
+""",
+    )
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    runtime = PluginRuntime(catalog)
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=tuple(sorted((artifact.path, "composer.json"))),
+    ))
+
+    facts, diagnostics = runtime.graph_facts(artifact, capabilities)
+
+    assert diagnostics == ()
+    assert {
+        (fact.source, fact.target)
+        for fact in facts
+        if fact.kind == "php-trait"
+    } == {
+        ("Acme\\Feature\\First", "FirstTrait"),
+        ("Acme\\Feature\\Second", "SharedTrait"),
+        ("Acme\\Feature\\Second", "AuditedTrait"),
+    }
+    assert {
+        fact.target for fact in facts if fact.kind == "php-import"
+    } == {"Vendor\\Package\\ImportedType"}
+
+
 def test_magento_emits_effective_di_from_repository_state_only():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)

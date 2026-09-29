@@ -10,6 +10,10 @@ package org.rostilos.codecrow.analysisengine.dto.request.ai;
 public record LocalRepositorySnapshot(
         String path,
         String targetBranch,
-        String revision
+        String revision,
+        String reviewOverlayPath
 ) {
+    public LocalRepositorySnapshot(String path, String targetBranch, String revision) {
+        this(path, targetBranch, revision, null);
+    }
 }

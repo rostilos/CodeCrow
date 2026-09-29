@@ -11,7 +11,6 @@ from service.review.orchestrator.stage_1_local_packing import (
     Stage1PreparedContext,
     Stage1PromptMaterial,
     _allocate_stage1_invocation_quotas,
-    _cap_stage1_core_batches,
     pack_stage1_local_batches,
 )
 
@@ -101,25 +100,6 @@ def test_invocation_quota_allocation_is_stable_and_bounded():
         2,
         1,
     ]
-
-
-def test_core_batch_cap_preserves_dependency_and_priority_order():
-    batches = [
-        [_review_item("src/low.py", priority="LOW")],
-        [_review_item("src/critical.py", priority="CRITICAL")],
-        [_review_item("src/related.py", priority="LOW", related=True)],
-    ]
-
-    selected = _cap_stage1_core_batches(
-        batches,
-        Stage1PreparedContext(),
-        max_batches=2,
-    )
-
-    selected_paths = [batch[0]["file"].path for batch in selected]
-    assert selected_paths == ["src/critical.py", "src/related.py"]
-    assert selected[-1][0]["_omitted_stage1_paths"] == ("src/low.py",)
-    assert "omitted_batches=1" in selected[-1][0]["_stage1_budget_diagnostic"]
 
 
 def test_stage_1_facade_preserves_historical_local_packing_imports():

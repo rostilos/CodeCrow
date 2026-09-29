@@ -31,7 +31,10 @@ from model.output_schemas import (
     ReconciliationOutput,
 )
 from llm.provider_guard import forbid_llm_provider_construction
-from service.review.orchestrator import MultiStageReviewOrchestrator
+from service.review.orchestrator.stage_1_tool_inventory import (
+    STAGE1_AGENT_TOOL_NAMES,
+    STAGE1_VCS_TOOL_NAMES,
+)
 from service.review.plugin_context import (
     capture_plugin_diagnostics,
 )
@@ -51,6 +54,12 @@ _HIDDEN_PLUGIN_EVIDENCE = re.compile(
     r"\[(?P<count>\d+) plugin evidence target\(s\) omitted because "
     r"no matching exact fact is visible"
 )
+_STRUCTURAL_EVIDENCE_ID = re.compile(
+    r'"evidenceId"\s*:\s*"relation:[0-9a-f]{64}"'
+)
+_STRUCTURAL_RELATION_MAP_MARKER = (
+    "This compact target-head graph is navigation metadata"
+)
 
 
 @dataclass
@@ -61,6 +70,14 @@ class CapturedAIMessage:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     response_metadata: dict[str, Any] = field(default_factory=dict)
     type: str = "ai"
+
+
+@dataclass(frozen=True)
+class PromptCaptureAgentExecution:
+    """Agent-shaped result produced without executing repository tools."""
+
+    output: Any
+    tool_events: tuple[Any, ...] = ()
 
 
 def _message_payload(message: Any) -> dict[str, Any]:
@@ -399,8 +416,18 @@ class PromptCaptureSession:
                 ),
                 default=0,
             ),
-            "ragEvidenceEntries": sum(
-                prompt["renderedPrompt"].count("Evidence ID: RAG-")
+            "structuralEvidenceEntries": sum(
+                len(_STRUCTURAL_EVIDENCE_ID.findall(prompt["renderedPrompt"]))
+                for prompt in stage_1_prompts
+            ),
+            "structuralRelationMaps": sum(
+                prompt["renderedPrompt"].count(
+                    _STRUCTURAL_RELATION_MAP_MARKER
+                )
+                for prompt in stage_1_prompts
+            ),
+            "boundedStructuralRelationMaps": sum(
+                prompt["renderedPrompt"].count('"state":"bounded"')
                 for prompt in stage_1_prompts
             ),
             "promptsWithHiddenPluginEvidence": len(
@@ -414,12 +441,6 @@ class PromptCaptureSession:
             ),
             "hiddenPluginEvidenceTargets": sum(
                 hidden_plugin_counts
-            ),
-            "ragContextTruncationMarkers": sum(
-                prompt["renderedPrompt"].count(
-                    "Context chunk truncated by deterministic prompt budget"
-                )
-                for prompt in stage_1_prompts
             ),
             "currentSourceTruncationMarkers": sum(
                 prompt["renderedPrompt"].count(
@@ -454,7 +475,7 @@ class PromptCaptureSession:
             ("currentSourceChars", "currentSourceCharacters"),
             ("diffChars", "diffCharacters"),
             ("metadataChars", "metadataCharacters"),
-            ("ragChars", "ragContextCharacters"),
+            ("structuralContextChars", "structuralContextCharacters"),
             ("pluginChars", "pluginContextCharacters"),
             ("projectRulesChars", "projectRulesCharacters"),
             ("taskContextChars", "taskContextCharacters"),
@@ -469,8 +490,8 @@ class PromptCaptureSession:
             / stage_1_prompt_characters,
             6,
         ) if stage_1_prompt_characters else 0.0
-        stage_1_quality_signals["ragContextShare"] = round(
-            stage_1_quality_signals["ragContextCharacters"]
+        stage_1_quality_signals["structuralContextShare"] = round(
+            stage_1_quality_signals["structuralContextCharacters"]
             / stage_1_prompt_characters,
             6,
         ) if stage_1_prompt_characters else 0.0
@@ -506,17 +527,17 @@ class PromptCaptureSession:
             warnings.insert(
                 0,
                 (
-                    "The review LLM provider was disabled. Deterministic repository "
-                    "retrieval plus PR overlay indexing remained active so the captured "
-                    "prompts contain real assembled project context."
+                    "The review LLM provider was disabled. Read-only structural "
+                    "repository retrieval remained active so the captured prompts "
+                    "contain real assembled project context."
                 ),
             )
         else:
             warnings.insert(
                 0,
                 (
-                    "Provider calls and index mutations were disabled. Deterministic "
-                    "indexed context is included when requested and available."
+                    "Provider calls were disabled. Read-only structural indexed "
+                    "context is included when requested and available."
                 ),
             )
         if self.simulated_findings_per_file == 0:
@@ -527,8 +548,9 @@ class PromptCaptureSession:
             )
         if mcp_requested:
             warnings.append(
-                "useMcpTools was disabled for dry-run safety; iterative tool-call "
-                "prompts cannot be predicted without executing tool responses."
+                "useMcpTools was requested. The dry run captured each agent's "
+                "initial Stage 1 prompt without executing iterative repository tool "
+                "calls or including their responses."
             )
         return {
             "dryRun": True,
@@ -547,8 +569,7 @@ class PromptCaptureSession:
                 "fullPipelineContext": full_pipeline_context,
                 "deterministicRagEnabled": deterministic_rag_enabled,
                 "deterministicRagRequests": deterministic_rag_requests,
-                "prIndexMutationEnabled": full_pipeline_context,
-                "mcpToolsEnabled": False,
+                "mcpToolsEnabled": mcp_requested,
             },
             "promptCount": len(self.prompts),
             "promptCountsByStage": dict(sorted(counts.items())),
@@ -668,75 +689,61 @@ class PromptCaptureLLM:
         return self._session.raw_response_for(record["stage"])
 
 
+class PromptCaptureAgentService:
+    """Capture one agent prompt while deliberately skipping iterative tools."""
+
+    def __init__(
+        self,
+        llm: PromptCaptureLLM,
+        *,
+        structural_tools_available: bool,
+    ):
+        self._llm = llm
+        self.available_tool_names = (
+            STAGE1_AGENT_TOOL_NAMES
+            if structural_tools_available
+            else STAGE1_VCS_TOOL_NAMES
+        )
+
+    async def execute(self, request: Any) -> PromptCaptureAgentExecution:
+        invocation = self._llm.with_structured_output(request.output_schema)
+        output = await invocation.ainvoke(request.prompt)
+        return PromptCaptureAgentExecution(output=output)
+
+
 class DeterministicOnlyRagClient:
     """Read-only RAG facade used by dry runs.
 
-    Exact metadata retrieval is safe and every mutation is replaced locally.
+    Exact target-head metadata retrieval is safe and performs no mutation.
     """
 
     def __init__(
         self,
         delegate: Any,
         enabled: bool,
-        project_capabilities: Any = None,
     ):
         self._delegate = delegate
         self._enabled = enabled
-        self._project_capabilities = project_capabilities
         self.deterministic_requests = 0
 
-    async def get_deterministic_context(self, **kwargs: Any) -> dict[str, Any]:
+    async def get_structural_relations(self, **kwargs: Any) -> dict[str, Any]:
         if not self._enabled or self._delegate is None:
-            return {"context": {"chunks": [], "changed_files": {}, "related_definitions": {}}}
+            return {"anchors": [], "relations": []}
         self.deterministic_requests += 1
-        return await self._delegate.get_deterministic_context(**kwargs)
+        return await self._delegate.get_structural_relations(**kwargs)
+
+    async def query_code_graph(self, **kwargs: Any) -> dict[str, Any]:
+        if not self._enabled or self._delegate is None:
+            return {"results": []}
+        return await self._delegate.query_code_graph(**kwargs)
+
+    async def get_structural_unit(self, **kwargs: Any) -> dict[str, Any]:
+        if not self._enabled or self._delegate is None:
+            return {"unit": None}
+        return await self._delegate.get_structural_unit(**kwargs)
 
     async def search_code(self, **_: Any) -> dict[str, Any]:
         return {"results": []}
-
-    async def index_pr_files(self, **_: Any) -> dict[str, Any]:
-        # Report the shape expected by the orchestrator so it follows the same
-        # post-index prompt path, while keeping the operation entirely local.
-        # When deterministic retrieval is intentionally absent, do not mint
-        # synthetic exact-generation receipts: Stage 1 would correctly require
-        # a complete exact retrieval for receipts that claim such a generation.
-        if not self._enabled:
-            return {
-                "status": "skipped",
-                "reason": "deterministic retrieval disabled for prompt dry run",
-            }
-        effective = None
-        if self._project_capabilities is not None:
-            from service.review.plugin_context import _plugin_host
-
-            host = _plugin_host()
-            if host is None:
-                raise RuntimeError(
-                    "dry-run plugin projection requires the plugin runtime"
-                )
-            catalog, _, _ = host
-            plugin_ids = tuple(
-                self._project_capabilities.repositoryPlugins
-            )
-            effective = self._project_capabilities.model_dump()
-            effective["implementationFingerprint"] = (
-                catalog.implementation_fingerprint(plugin_ids)
-            )
-        return {
-            "status": "indexed",
-            "chunks_indexed": 0,
-            "base_generation_manifest_sha256": "0" * 64,
-            "generation_fingerprint": "sha256:" + "0" * 64,
-            "overlay_generation_manifest_sha256": "0" * 64,
-            "plugin_fingerprint": "sha256:" + "0" * 64,
-            "plugin_descriptor_fingerprint": "sha256:" + "0" * 64,
-            "plugin_implementation_fingerprint": "sha256:" + "0" * 64,
-            "index_representation_fingerprint": "sha256:" + "0" * 64,
-            "effective_project_capabilities": effective,
-        }
-
-    async def delete_pr_files(self, **_: Any) -> dict[str, Any]:
-        return {"status": "dry_run_skipped"}
 
 
 async def capture_review_prompts(
@@ -750,6 +757,11 @@ async def capture_review_prompts(
     event_callback: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> dict[str, Any]:
     """Execute prompt construction with schema-valid synthetic responses."""
+    # Keep importing this module provider-free for quality tooling. The actual
+    # orchestration graph (and its MCP agent runtime) is needed only when a dry
+    # run is executed.
+    from service.review.orchestrator import MultiStageReviewOrchestrator
+
     if simulated_findings_per_file < 0 or simulated_findings_per_file > 10:
         raise ValueError("simulatedFindingsPerFile must be between 0 and 10")
     if simulated_findings_max_total < 1 or simulated_findings_max_total > 200:
@@ -758,14 +770,21 @@ async def capture_review_prompts(
         if not request.reconciliationFileContents:
             raise ValueError(
                 "branch reconciliation dry runs require reconciliationFileContents "
-                "because MCP access is disabled"
+                "because dry-run does not execute repository tools"
             )
 
-    safe_request = request.model_copy(update={"useMcpTools": False})
+    safe_request = request.model_copy(
+        update={"useMcpTools": bool(request.useMcpTools)},
+    )
     full_pipeline_rag_enabled = (
         full_pipeline_context
         and rag_client is not None
         and bool(getattr(rag_client, "enabled", True))
+    )
+    structural_tools_available = (
+        rag_client is not None
+        and bool(getattr(rag_client, "enabled", True))
+        and (full_pipeline_context or include_deterministic_rag)
     )
     session = PromptCaptureSession(
         request=safe_request,
@@ -792,7 +811,6 @@ async def capture_review_prompts(
             else DeterministicOnlyRagClient(
                 rag_client,
                 include_deterministic_rag,
-                safe_request.projectCapabilities,
             )
             if include_deterministic_rag
             else None
@@ -802,6 +820,14 @@ async def capture_review_prompts(
             mcp_client=None,
             rag_client=dry_rag,
             event_callback=capture_event,
+            agent_service=(
+                PromptCaptureAgentService(
+                    llm,
+                    structural_tools_available=structural_tools_available,
+                )
+                if safe_request.useMcpTools
+                else None
+            ),
         )
 
         if (

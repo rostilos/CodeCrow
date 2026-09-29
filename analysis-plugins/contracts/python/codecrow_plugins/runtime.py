@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from typing import Callable
 
 from .api import (
@@ -16,10 +17,10 @@ from .api import (
     PluginKind,
     ProjectCapabilities,
     RepositoryAnalysis,
-    RepositoryAnalysisMode,
     RepositoryContext,
     RepositorySnapshot,
     ReviewContribution,
+    SymbolDefinition,
     SyntaxContribution,
     ValidationResult,
 )
@@ -29,10 +30,14 @@ from .catalog import PluginCatalog
 class PluginRuntime:
     """Host-side composition. Implementations return data; the host owns policy."""
 
-    MAX_FACTS_PER_FILE = 200
-    MAX_FRAMEWORK_FACTS_PER_FILE = 160
+    # Facts are persisted in the structural store and are not admitted to a
+    # model prompt wholesale. Keep pathological output bounded without
+    # discarding ordinary large-file topology (routers, generated registries,
+    # schemas, and framework configuration commonly exceed the old 200 facts).
+    MAX_FACTS_PER_FILE = 5_000
+    MAX_FRAMEWORK_FACTS_PER_FILE = 2_000
     MAX_GRAPH_FACT_STRING_LENGTH = 4_096
-    MAX_GRAPH_FACT_BYTES_PER_ARTIFACT = 262_144
+    MAX_GRAPH_FACT_BYTES_PER_ARTIFACT = 16_777_216
     MAX_REVIEW_PATHS_PER_PLUGIN = 80
     MAX_RULES = 40
     MAX_EVIDENCE_REQUESTS = 80
@@ -62,7 +67,6 @@ class PluginRuntime:
         capabilities: ProjectCapabilities,
         revision: str,
         snapshots: tuple[RepositorySnapshot, ...] = (),
-        mode: RepositoryAnalysisMode = RepositoryAnalysisMode.FULL_INDEX,
         source_root: str | None = None,
     ) -> "RepositoryAnalysisHandle":
         sessions: list[tuple[str, object]] = []
@@ -96,21 +100,6 @@ class PluginRuntime:
             if outcome.status is OutcomeStatus.FAILED:
                 diagnostics.append(outcome.diagnostic)
             elif outcome.status is OutcomeStatus.HANDLED:
-                configure_mode = getattr(
-                    outcome.value,
-                    "set_analysis_mode",
-                    None,
-                )
-                if configure_mode is not None:
-                    try:
-                        configure_mode(mode)
-                    except Exception as exception:
-                        diagnostics.append(PluginDiagnostic(
-                            code="plugin-repository-mode-exception",
-                            message=f"{type(exception).__name__}: {exception}",
-                            plugin_id=plugin_id,
-                        ))
-                        continue
                 configure_root = getattr(outcome.value, "set_source_root", None)
                 if configure_root is not None:
                     try:
@@ -226,7 +215,10 @@ class PluginRuntime:
                         valid_facts.append(fact)
                 if overlong_count:
                     rejected.setdefault(plugin_id, [0, 0, 0])[0] += overlong_count
-                unique_facts = tuple(sorted(set(valid_facts)))
+                unique_facts = self._merge_semantic_facts(
+                    tuple(valid_facts),
+                    plugin_id,
+                )
                 contribution_limit = (
                     self.MAX_FRAMEWORK_FACTS_PER_FILE
                     if descriptor.kind is PluginKind.FRAMEWORK
@@ -245,7 +237,7 @@ class PluginRuntime:
                     plugin_id,
                     selected_facts,
                 ))
-        facts: set[GraphFact] = set()
+        facts: dict[GraphFact, GraphFact] = {}
         serialized_bytes = 2  # Opening and closing brackets of the JSON array.
         for _, plugin_id, contribution in sorted(
             contributions,
@@ -256,6 +248,23 @@ class PluginRuntime:
         ):
             for fact in contribution:
                 if fact in facts:
+                    current = facts[fact]
+                    merged = self._merge_fact_contributors(
+                        current,
+                        fact.contributing_plugin_ids,
+                    )
+                    added_bytes = (
+                        self._serialized_fact_bytes(merged)
+                        - self._serialized_fact_bytes(current)
+                    )
+                    if (
+                        serialized_bytes + added_bytes
+                        > self.MAX_GRAPH_FACT_BYTES_PER_ARTIFACT
+                    ):
+                        rejected.setdefault(plugin_id, [0, 0, 0])[1] += 1
+                        continue
+                    facts[fact] = merged
+                    serialized_bytes += added_bytes
                     continue
                 if len(facts) >= self.MAX_FACTS_PER_FILE:
                     rejected.setdefault(plugin_id, [0, 0, 0])[2] += 1
@@ -268,7 +277,7 @@ class PluginRuntime:
                 ):
                     rejected.setdefault(plugin_id, [0, 0, 0])[1] += 1
                     continue
-                facts.add(fact)
+                facts[fact] = fact
                 serialized_bytes += added_bytes
         for plugin_id, (overlong_count, byte_count, count_limit) in sorted(
             rejected.items()
@@ -296,7 +305,7 @@ class PluginRuntime:
                 path=artifact.path,
                 recoverable=True,
             ))
-        return tuple(sorted(facts)), tuple(diagnostics)
+        return tuple(sorted(facts.values())), tuple(diagnostics)
 
     def _fact_has_overlong_string(self, fact: GraphFact) -> bool:
         strings = (
@@ -307,6 +316,7 @@ class PluginRuntime:
             fact.path,
             *(value for attribute in fact.attributes for value in attribute),
             *fact.related_paths,
+            *fact.contributing_plugin_ids,
         )
         return any(
             len(value) > self.MAX_GRAPH_FACT_STRING_LENGTH
@@ -321,6 +331,42 @@ class PluginRuntime:
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8"))
+
+    @classmethod
+    def _merge_semantic_facts(
+        cls,
+        facts: tuple[GraphFact, ...],
+        contributing_plugin_id: str,
+    ) -> tuple[GraphFact, ...]:
+        merged: dict[GraphFact, GraphFact] = {}
+        for fact in facts:
+            attributed = cls._merge_fact_contributors(
+                fact,
+                (contributing_plugin_id,),
+            )
+            current = merged.get(attributed)
+            merged[attributed] = (
+                attributed
+                if current is None
+                else cls._merge_fact_contributors(
+                    current,
+                    attributed.contributing_plugin_ids,
+                )
+            )
+        return tuple(sorted(merged.values()))
+
+    @staticmethod
+    def _merge_fact_contributors(
+        fact: GraphFact,
+        contributing_plugin_ids: tuple[str, ...],
+    ) -> GraphFact:
+        merged = tuple(sorted({
+            *fact.contributing_plugin_ids,
+            *contributing_plugin_ids,
+        }))
+        if merged == fact.contributing_plugin_ids:
+            return fact
+        return replace(fact, contributing_plugin_ids=merged)
 
     @staticmethod
     def _balanced_facts(
@@ -614,6 +660,7 @@ class PluginRuntime:
             fact.line,
             fact.attributes,
             tuple(f"{root}/{path}" for path in fact.related_paths),
+            fact.contributing_plugin_ids,
         )
 
     @staticmethod
@@ -725,7 +772,7 @@ class RepositoryAnalysisHandle:
         if self._finished:
             raise RuntimeError("repository analysis is already finished")
         self._finished = True
-        symbols = set()
+        symbols: dict[SymbolDefinition, SymbolDefinition] = {}
         packets: dict[tuple[str, str, str], ArchitecturePacket] = {}
         snapshots: dict[tuple[str, str], RepositorySnapshot] = {}
         contexts: dict[tuple[str, str, str], RepositoryContext] = {}
@@ -861,7 +908,21 @@ class RepositoryAnalysisHandle:
                 ))
                 continue
             self._diagnostics.extend(contribution.diagnostics)
-            candidate_symbols = {*symbols, *contribution.symbols}
+            candidate_symbols = dict(symbols)
+            for symbol in contribution.symbols:
+                attributed = self._merge_symbol_contributors(
+                    symbol,
+                    (plugin_id,),
+                )
+                current_symbol = candidate_symbols.get(attributed)
+                candidate_symbols[attributed] = (
+                    attributed
+                    if current_symbol is None
+                    else self._merge_symbol_contributors(
+                        current_symbol,
+                        attributed.contributing_plugin_ids,
+                    )
+                )
             if len(candidate_symbols) > self._runtime.MAX_REPOSITORY_SYMBOLS:
                 self._diagnostics.append(PluginDiagnostic(
                     code="plugin-repository-symbol-limit",
@@ -920,9 +981,22 @@ class RepositoryAnalysisHandle:
             snapshots = candidate_snapshots
             contexts = candidate_contexts
             current = RepositoryAnalysis(
-                symbols=tuple(sorted(symbols)),
+                symbols=tuple(sorted(symbols.values())),
                 packets=tuple(sorted(packets.values())),
                 snapshots=tuple(sorted(snapshots.values())),
                 contexts=tuple(sorted(contexts.values())),
             )
         return current, tuple(self._diagnostics)
+
+    @staticmethod
+    def _merge_symbol_contributors(
+        symbol: SymbolDefinition,
+        contributing_plugin_ids: tuple[str, ...],
+    ) -> SymbolDefinition:
+        merged = tuple(sorted({
+            *symbol.contributing_plugin_ids,
+            *contributing_plugin_ids,
+        }))
+        if merged == symbol.contributing_plugin_ids:
+            return symbol
+        return replace(symbol, contributing_plugin_ids=merged)

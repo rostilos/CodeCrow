@@ -21,6 +21,8 @@ public class McpTools {
     static final String LOCAL_REPO_PATH_PROPERTY = "local.repo.path";
     static final String LOCAL_REPO_TARGET_BRANCH_PROPERTY = "local.repo.targetBranch";
     static final String LOCAL_REPO_REVISION_PROPERTY = "local.repo.revision";
+    static final String LOCAL_REVIEW_OVERLAY_PATH_PROPERTY = "local.review.overlay.path";
+    static final String LOCAL_MCP_ONLY_PROPERTY = "local.mcp.only";
     static final String WORKSPACE_PROPERTY = "workspace";
     static final String REPO_SLUG_PROPERTY = "repo.slug";
     private final VcsMcpClientFactory vcsMcpClientFactory;
@@ -180,6 +182,15 @@ public class McpTools {
                         integerArgument(arguments.get("startLine")),
                         integerArgument(arguments.get("endLine"))
                 );
+            case "getReviewFileContent":
+                return getReviewFileContent(
+                        (String) arguments.get("workspace"),
+                        (String) arguments.get("repoSlug"),
+                        (String) arguments.get("filePath"),
+                        integerArgument(arguments.get("startLine")),
+                        integerArgument(arguments.get("endLine")),
+                        (List<String>) arguments.get("contextSuppliedPaths")
+                );
             case "getRootDirectory":
                 return getRootDirectory(
                         (String) arguments.get("workspace"),
@@ -198,17 +209,22 @@ public class McpTools {
         }
     }
 
-    private VcsMcpClient getVcsClient() throws IOException {
+    private synchronized VcsMcpClient getVcsClient() throws IOException {
+        if (localMcpOnly()) {
+            throw new IOException(
+                    "Provider-backed VCS tools are disabled for this local-only MCP request");
+        }
         if (vcsClient == null) {
             vcsClient = vcsMcpClientFactory.createClient();
         }
         return vcsClient;
     }
 
-    private VcsMcpClient getVcsClient(boolean callerToolLocalModeSupported) throws IOException {
-        VcsMcpClient remoteClient = getVcsClient();
+    private synchronized VcsMcpClient getVcsClient(
+            boolean callerToolLocalModeSupported
+    ) throws IOException {
         if (!callerToolLocalModeSupported) {
-            return remoteClient;
+            return getVcsClient();
         }
         if (!localVcsClientResolved) {
             localVcsClientResolved = true;
@@ -221,25 +237,44 @@ public class McpTools {
                     || (targetRevision != null && !targetRevision.isBlank()))) {
                 try {
                     localVcsClient = new LocalRepoClient(
-                            remoteClient,
+                            this::getVcsClient,
                             localRepoPath,
                             System.getProperty(WORKSPACE_PROPERTY),
                             System.getProperty(REPO_SLUG_PROPERTY),
                             targetBranch,
-                            targetRevision);
+                            targetRevision,
+                            System.getProperty(LOCAL_REVIEW_OVERLAY_PATH_PROPERTY));
                     LOGGER.info(
                             "Local repository MCP reads enabled for target branch={} revision={} path={}",
                             targetBranch,
                             targetRevision,
                             localRepoPath);
                 } catch (IOException | RuntimeException localRepositoryFailure) {
-                    LOGGER.warn(
-                            "Local repository MCP reads unavailable; using provider-backed VCS tools: {}",
-                            localRepositoryFailure.getMessage());
+                    if (localMcpOnly()) {
+                        LOGGER.warn(
+                                "Local repository MCP reads unavailable and provider fallback is disabled: {}",
+                                localRepositoryFailure.getMessage());
+                    } else {
+                        LOGGER.warn(
+                                "Local repository MCP reads unavailable; using provider-backed VCS tools: {}",
+                                localRepositoryFailure.getMessage());
+                    }
                 }
             }
         }
-        return localVcsClient != null ? localVcsClient : remoteClient;
+        if (localVcsClient != null) {
+            return localVcsClient;
+        }
+        if (localMcpOnly()) {
+            throw new IOException(
+                    "Local repository MCP reads are unavailable and provider fallback is disabled");
+        }
+        return getVcsClient();
+    }
+
+    private static boolean localMcpOnly() {
+        return Boolean.parseBoolean(
+                System.getProperty(LOCAL_MCP_ONLY_PROPERTY, "false"));
     }
 
     private void requireRequestRepository(String workspace, String repoSlug) throws IOException {
@@ -397,27 +432,106 @@ public class McpTools {
         try {
             requireRequestRepository(workspace, repoSlug);
             String fileContent = getVcsClient(true).getBranchFileContent(workspace, repoSlug, branch, filePath);
-            if (startLine != null && startLine > 0) {
-                return sourceWindow(fileContent, startLine, endLine);
-            }
-
-            // Exploratory callers without an anchor retain the existing large-file
-            // safeguard. Review verification supplies an issue line and receives
-            // a bounded source window instead of this generic placeholder.
-            String filteredContent = largeContentFilter.filterFileContent(fileContent, filePath);
-            boolean completeFile = filteredContent != null
-                    && !filteredContent.contains(LargeContentFilter.FILTERED_PLACEHOLDER);
-            int totalLines = lineCount(fileContent);
-            Map<String, Object> response = new LinkedHashMap<>();
-            response.put("fileContent", filteredContent != null ? filteredContent : "");
-            response.put("startLine", completeFile && totalLines > 0 ? 1 : 0);
-            response.put("endLine", completeFile ? totalLines : 0);
-            response.put("totalLines", totalLines);
-            response.put("completeFile", completeFile);
-            return response;
+            return formatFileContent(fileContent, filePath, startLine, endLine);
         } catch (IOException e) {
             return Map.of("error", "Failed to get branch file content: " + e.getMessage());
         }
+    }
+
+    public Map<String, Object> getReviewFileContent(
+            String workspace,
+            String repoSlug,
+            String filePath,
+            Integer startLine,
+            Integer endLine
+    ) {
+        return getReviewFileContent(
+                workspace,
+                repoSlug,
+                filePath,
+                startLine,
+                endLine,
+                List.of());
+    }
+
+    public Map<String, Object> getReviewFileContent(
+            String workspace,
+            String repoSlug,
+            String filePath,
+            Integer startLine,
+            Integer endLine,
+            List<String> contextSuppliedPaths
+    ) {
+        try {
+            requireRequestRepository(workspace, repoSlug);
+            if (startLine == null
+                    && contextSuppliedPaths != null
+                    && contextSuppliedPaths.stream().anyMatch(filePath::equals)) {
+                return Map.of(
+                        "error", "Complete current source is already supplied in the Stage 1 prompt; request a concrete bounded line range only when omitted or truncated context must be recovered",
+                        "errorCode", "current_source_already_supplied",
+                        "filePath", filePath);
+            }
+            VcsMcpClient client = getVcsClient(true);
+            if (!(client instanceof LocalRepoClient localRepoClient)) {
+                return Map.of("error", "Request-scoped proposed tree is unavailable");
+            }
+
+            LocalRepoClient.ReviewFileContent reviewFile =
+                    localRepoClient.getReviewFileContent(workspace, repoSlug, filePath);
+            Map<String, Object> response = new LinkedHashMap<>();
+            if (reviewFile.exists()) {
+                response.putAll(formatFileContent(
+                        reviewFile.content(),
+                        reviewFile.filePath(),
+                        startLine,
+                        endLine));
+            } else {
+                response.put("fileContent", "");
+                response.put("startLine", 0);
+                response.put("endLine", 0);
+                response.put("totalLines", 0);
+                response.put("completeFile", false);
+            }
+            response.put("filePath", reviewFile.filePath());
+            response.put("exists", reviewFile.exists());
+            response.put("changed", reviewFile.changed());
+            response.put("deleted", reviewFile.deleted());
+            response.put("unavailable", reviewFile.unavailable());
+            response.put("source", reviewFile.source());
+            if (reviewFile.reason() != null) {
+                response.put("reason", reviewFile.reason());
+            }
+            return response;
+        } catch (IOException e) {
+            return Map.of("error", "Failed to get review file content: " + e.getMessage());
+        }
+    }
+
+    private Map<String, Object> formatFileContent(
+            String fileContent,
+            String filePath,
+            Integer startLine,
+            Integer endLine
+    ) {
+        if (startLine != null && startLine > 0) {
+            return sourceWindow(fileContent, startLine, endLine);
+        }
+
+        // Exploratory callers without an anchor retain the existing large-file
+        // safeguard. Review verification supplies an issue line and receives
+        // a bounded source window instead of this generic placeholder.
+        String filteredContent = largeContentFilter.filterFileContent(fileContent, filePath);
+        boolean completeFile = filteredContent != null
+                && !filteredContent.contains(LargeContentFilter.FILTERED_PLACEHOLDER);
+        int totalLines = lineCount(fileContent);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("fileContent", filteredContent != null ? filteredContent : "");
+        response.put("startLine", completeFile && totalLines > 0 ? 1 : 0);
+        response.put("endLine", completeFile ? totalLines : 0);
+        response.put("totalLines", totalLines);
+        response.put("completeFile", completeFile);
+        return response;
     }
 
     static Map<String, Object> sourceWindow(

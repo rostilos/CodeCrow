@@ -30,7 +30,6 @@ from .capture_pair_evaluation import (
     create_template,
 )
 from .isolated_deployed_replay import (
-    ISOLATED_PR_NUMBER,
     ISOLATED_PROJECT_ID,
     ISOLATED_REDIS_DB,
     ISOLATED_WORKSPACE,
@@ -40,10 +39,10 @@ from .isolated_deployed_replay import (
     _assert_no_connected_identity,
     _exclusive_isolated_state_lock,
     _env_values,
-    _qdrant_collections_for_project,
     _queue_review,
     _redis,
     _run,
+    _structural_generation_cleanup_paths,
     _wait_for_consumer,
     build_java_review_request,
 )
@@ -147,8 +146,10 @@ def load_review_provider_config(path: Path) -> ReviewProviderConfig:
             "review provider config contains unknown fields: "
             + ", ".join(unknown)
         )
-    if payload.get("useMcpTools") not in (None, False):
-        raise ValueError("isolated paired capture forbids MCP/agent tools")
+    if payload.get("useMcpTools") not in (None, True):
+        raise ValueError(
+            "isolated paired structural capture requires MCP/agent tools"
+        )
     custom_parameters = payload.get("customParameters")
     if custom_parameters is not None and not isinstance(custom_parameters, dict):
         raise ValueError("customParameters must be an object or null")
@@ -478,7 +479,7 @@ def _apply_review_provider(
         "maxAllowedTokens": config.max_allowed_tokens,
         "promptDryRun": False,
         "promptDryRunId": None,
-        "useMcpTools": False,
+        "useMcpTools": True,
         "accessToken": None,
         "oAuthClient": None,
         "oAuthSecret": None,
@@ -612,6 +613,8 @@ def _start_inference_container(
     rag_container_name: str,
     service_secret: str,
     empty_plugins: Path | None,
+    target_repository: Path,
+    target_repository_path: str,
 ) -> None:
     environment = dict(os.environ)
     environment["SERVICE_SECRET"] = service_secret
@@ -630,6 +633,8 @@ def _start_inference_container(
         "codecrow.quality-scope=isolated-paid-pair",
         "--volume",
         f"{inference_env_file.resolve()}:/app/.env:ro",
+        "--volume",
+        f"{target_repository.resolve()}:{target_repository_path}:ro",
         "--env",
         "SERVICE_SECRET",
         "--env",
@@ -719,13 +724,7 @@ def _run_capture_mode(
     repository_path = f"/tmp/codecrow-quality-capture-{suffix}"
     job_id = f"{case.case_id}-{mode}-{suffix}"
     event_key = f"codecrow:analysis:events:{job_id}"
-    project_path = (
-        f"/index/{ISOLATED_WORKSPACE}/{request.projectNamespace}/*"
-    )
-    pr_path = (
-        f"/index/pr-files/{ISOLATED_WORKSPACE}/"
-        f"{request.projectNamespace}/{ISOLATED_PR_NUMBER}"
-    )
+    project_path: str | None = None
     baseline = mode == "fallback"
     rag_started = False
     inference_started = False
@@ -765,6 +764,20 @@ def _run_capture_mode(
         )
         if int(index_result.get("document_count") or 0) < 1:
             raise RuntimeError("isolated base index contains no documents")
+        project_path = _structural_generation_cleanup_paths(
+            workspace=ISOLATED_WORKSPACE,
+            project=request.projectNamespace,
+            branch="main",
+            revision=case.repository.base_revision,
+            index_result=index_result,
+        )
+
+        target_repository_path = f"/tmp/codecrow-quality-target-{suffix}"
+        request = request.model_copy(update={
+            "localRepoPath": target_repository_path,
+            "localRepoTargetBranch": "main",
+            "localRepoRevision": case.repository.base_revision,
+        })
 
         _start_inference_container(
             container_name=inference_container,
@@ -774,6 +787,8 @@ def _run_capture_mode(
             rag_container_name=rag_container,
             service_secret=service_secret,
             empty_plugins=empty_plugins if baseline else None,
+            target_repository=case.repository.base_tree,
+            target_repository_path=target_repository_path,
         )
         inference_started = True
         try:
@@ -825,37 +840,33 @@ def _run_capture_mode(
             _run(("docker", "stop", inference_container), check=False)
         _redis(args.redis_container, "DEL", JOB_QUEUE_KEY, event_key)
         if rag_started:
-            for cleanup_path in (pr_path, project_path):
-                try:
-                    _container_json_request(
+            cleanup_error: Exception | None = None
+            try:
+                for cleanup_path in (project_path,):
+                    if cleanup_path is None:
+                        continue
+                    cleanup_result = _container_json_request(
                         rag_container,
                         method="DELETE",
                         path=cleanup_path,
                         timeout=120,
                     )
-                except Exception:
-                    pass
-            remaining: list[str] = []
-            cleanup_error: Exception | None = None
-            try:
-                remaining = _qdrant_collections_for_project(
-                    rag_container,
-                    workspace=ISOLATED_WORKSPACE,
-                    project=request.projectNamespace,
-                )
+                    if (
+                        cleanup_path == project_path
+                        and cleanup_result.get("status")
+                        not in {"success", "not_found"}
+                    ):
+                        raise RuntimeError(
+                            "structural generation cleanup was not acknowledged"
+                        )
             except Exception as exception:
                 cleanup_error = exception
             finally:
                 _run(("docker", "stop", rag_container), check=False)
             if cleanup_error is not None:
                 raise RuntimeError(
-                    "could not verify isolated Qdrant cleanup"
+                    "could not verify isolated structural-index cleanup"
                 ) from cleanup_error
-            if remaining:
-                raise RuntimeError(
-                    "isolated capture cleanup left Qdrant collections: "
-                    + ", ".join(remaining)
-                )
         if not capture_copied and output_path.exists():
             output_path.unlink()
 

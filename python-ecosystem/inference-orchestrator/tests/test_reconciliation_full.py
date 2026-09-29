@@ -173,6 +173,114 @@ class TestDedupBatchWithLlm:
         assert result[0].relatedLocations == ["a.py:40"]
 
     @pytest.mark.asyncio(loop_scope="function")
+    async def test_merges_transitive_high_confidence_root_inside_host_group(self):
+        issues = [
+            _real_issue(
+                line=10,
+                title="Async forEach cleanup not awaited",
+                reason=(
+                    "The async forEach cleanup is not awaited so deletion runs "
+                    "after the function returns."
+                ),
+            ),
+            _real_issue(
+                line=13,
+                title="Async cleanup rejection not awaited",
+                reason=(
+                    "The async cleanup is not awaited, deletion runs after "
+                    "return, and rejection escapes error handling."
+                ),
+            ),
+            _real_issue(
+                line=16,
+                title="Cleanup rejection escapes error handling",
+                reason=(
+                    "The cleanup rejection escapes the error handler and "
+                    "leaves the old event undeleted."
+                ),
+            ),
+        ]
+        assert issues_are_semantic_dedup_candidates(issues[0], issues[1])
+        assert issues_are_semantic_dedup_candidates(issues[1], issues[2])
+        assert not issues_are_semantic_dedup_candidates(issues[0], issues[2])
+        assert _semantic_candidate_groups(issues) == [issues]
+
+        llm = MagicMock()
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(
+            return_value=SemanticDeduplicationDecision(duplicate_groups=[
+                SemanticDuplicateGroup(
+                    keeper_index=0,
+                    duplicate_indices=[1, 2],
+                    confidence="HIGH",
+                    rationale="One async cleanup root manifests three ways.",
+                )
+            ])
+        )
+        llm.with_structured_output.return_value = structured
+
+        result = await _dedup_batch_with_llm(
+            llm,
+            issues,
+            {0: "candidate_0", 1: "candidate_0", 2: "candidate_0"},
+        )
+
+        assert len(result) == 1
+        assert result[0].relatedLocations == ["a.py:13", "a.py:16"]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_rejects_high_confidence_merge_across_host_groups(self):
+        llm = MagicMock()
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(
+            return_value=SemanticDeduplicationDecision(duplicate_groups=[
+                SemanticDuplicateGroup(
+                    keeper_index=0,
+                    duplicate_indices=[1],
+                    confidence="HIGH",
+                    rationale="Model incorrectly crosses host groups.",
+                )
+            ])
+        )
+        llm.with_structured_output.return_value = structured
+        issues = [
+            _real_issue(line=10, reason="First root defect."),
+            _real_issue(line=20, reason="Independent root defect."),
+        ]
+
+        result = await _dedup_batch_with_llm(
+            llm,
+            issues,
+            {0: "candidate_0", 1: "candidate_1"},
+        )
+
+        assert result == issues
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_missing_host_group_mapping_grants_no_merge_scope(self):
+        llm = MagicMock()
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(
+            return_value=SemanticDeduplicationDecision(duplicate_groups=[
+                SemanticDuplicateGroup(
+                    keeper_index=0,
+                    duplicate_indices=[1],
+                    confidence="HIGH",
+                    rationale="No host group was supplied.",
+                )
+            ])
+        )
+        llm.with_structured_output.return_value = structured
+        issues = [
+            _real_issue(line=10, reason="First root defect."),
+            _real_issue(line=20, reason="Second root defect."),
+        ]
+
+        result = await _dedup_batch_with_llm(llm, issues)
+
+        assert result == issues
+
+    @pytest.mark.asyncio(loop_scope="function")
     async def test_invalid_indices_keeps_all(self):
         llm = MagicMock()
         structured = MagicMock()

@@ -9,6 +9,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 
 import java.util.List;
@@ -16,12 +17,16 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
 class ProjectServiceRagConfigTest {
 
     @Mock
     private ProjectRepository projectRepository;
+
+    @Mock
+    private RepositoryIndexBootstrapService repositoryIndexBootstrapService;
 
     @InjectMocks
     private ProjectService projectService;
@@ -39,32 +44,30 @@ class ProjectServiceRagConfigTest {
                         true,
                         "main",
                         List.of("src/**"),
-                        List.of("target/**"),
-                        true,
-                        30,
-                        List.of("develop", "release"),
-                        true)));
+                        List.of("target/**"))));
+        project.setVcsRepoBinding(new VcsRepoBinding());
         when(projectRepository.findByWorkspaceIdAndId(10L, 20L))
                 .thenReturn(Optional.of(project));
         when(projectRepository.save(project)).thenReturn(project);
     }
 
     @Test
-    void eightArgumentCompatibilityUpdatePreservesNewerBranchSettings() {
+    void updatePersistsOnlyMaterialIndexInputs() {
         Project updated = projectService.updateRagConfig(
                 10L, 20L, true, "main",
-                List.of("app/**"), List.of("build/**"), false, 14);
+                List.of("app/**"), List.of("build/**"));
 
         RagConfig rag = updated.getConfiguration().ragConfig();
-        assertThat(rag.multiBranchEnabled()).isFalse();
-        assertThat(rag.branchRetentionDays()).isEqualTo(14);
-        assertThat(rag.indexedBranches()).containsExactly("develop", "release");
-        assertThat(rag.transientBranchIndexesEnabled()).isTrue();
+        assertThat(rag.enabled()).isTrue();
+        assertThat(rag.branch()).isEqualTo("main");
+        assertThat(rag.includePatterns()).containsExactly("app/**");
+        assertThat(rag.excludePatterns()).containsExactly("build/**");
         assertThat(updated.getConfiguration().useMcpTools()).isTrue();
+        verify(repositoryIndexBootstrapService).enqueueAfterCommit(project);
     }
 
     @Test
-    void sixArgumentCompatibilityUpdatePreservesAllMultiBranchSettings() {
+    void updateCanDisableRagAndChangeScope() {
         Project updated = projectService.updateRagConfig(
                 10L, 20L, false, "develop",
                 List.of("service/**"), List.of("generated/**"));
@@ -72,10 +75,8 @@ class ProjectServiceRagConfigTest {
         RagConfig rag = updated.getConfiguration().ragConfig();
         assertThat(rag.enabled()).isFalse();
         assertThat(rag.branch()).isEqualTo("develop");
-        assertThat(rag.multiBranchEnabled()).isTrue();
-        assertThat(rag.branchRetentionDays()).isEqualTo(30);
-        assertThat(rag.indexedBranches()).containsExactly("develop", "release");
-        assertThat(rag.transientBranchIndexesEnabled()).isTrue();
+        assertThat(rag.includePatterns()).containsExactly("service/**");
+        assertThat(rag.excludePatterns()).containsExactly("generated/**");
     }
 
     @Test

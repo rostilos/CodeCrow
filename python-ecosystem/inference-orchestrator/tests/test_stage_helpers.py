@@ -98,6 +98,3 @@ class TestFormatProjectRulesDigest:
         result = format_project_rules_digest(json.dumps(rules))
         assert "[ENFORCE] Rule1" in result
         assert "[SUPPRESS] Rule2" in result
-
-
-# ── filter_rag_chunks_for_batch ──────────────────────────────

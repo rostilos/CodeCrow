@@ -198,6 +198,29 @@ public class JobService {
             String branchName,
             String revision
     ) {
+        return createRepositoryIndexBuildJob(
+                project,
+                triggerSource,
+                triggeredBy,
+                branchName,
+                revision,
+                defaultRepositoryIndexReason(triggerSource));
+    }
+
+    /**
+     * Create accepted repository-index work with an operator-visible reason.
+     * The database row is the backlog, so PENDING is a real waiting state and
+     * must be understandable before executor capacity becomes available.
+     */
+    @Transactional
+    public Job createRepositoryIndexBuildJob(
+            Project project,
+            JobTriggerSource triggerSource,
+            User triggeredBy,
+            String branchName,
+            String revision,
+            String reason
+    ) {
         Job job = new Job();
         job.setProject(project);
         job.setJobType(JobType.REPOSITORY_INDEX_BUILD);
@@ -210,14 +233,37 @@ public class JobService {
                 ? operation
                 : operation + ": " + branchName);
         job.setStatus(JobStatus.PENDING);
+        job.setCurrentStep("Waiting for repository-index capacity");
 
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "init",
                 branchName == null || branchName.isBlank()
                         ? "Repository index build job created"
                         : "Repository index build job created for branch: " + branchName);
+        addLog(job, JobLogLevel.INFO, "queued",
+                "Repository-index work persisted and waiting for capacity; reason: "
+                        + normalizeRepositoryIndexReason(reason, triggerSource));
 
         return job;
+    }
+
+    private static String defaultRepositoryIndexReason(
+            JobTriggerSource triggerSource) {
+        if (triggerSource == JobTriggerSource.UI) {
+            return "operator requested a full rebuild";
+        }
+        if (triggerSource == JobTriggerSource.WEBHOOK) {
+            return "a branch revision event requested an index refresh";
+        }
+        return "scheduled repository-state reconciliation requested a build";
+    }
+
+    private static String normalizeRepositoryIndexReason(
+            String reason,
+            JobTriggerSource triggerSource) {
+        return reason == null || reason.isBlank()
+                ? defaultRepositoryIndexReason(triggerSource)
+                : reason.trim();
     }
 
     /**

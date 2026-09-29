@@ -56,5 +56,18 @@ java-ecosystem/services/pipeline-agent/runtime-plugins/
 **/newrelic.yml
 
 tools/environment/dumps/
-tools/environment/qdrant-dumps/*
-!tools/environment/qdrant-dumps/.gitkeep
+tools/magento_benchmark/.cache/
+tools/magento_benchmark/config.toml
+tools/magento_benchmark/reports/
+tools/magento_benchmark/runs/
+tools/magento_benchmark/site/
+tools/magento_benchmark/work/
+
+# Private local deployment configuration and CI output
+.env
+/deployment/config/java-shared/application.properties
+/deployment/config/java-shared/github-private-key/*.pem
+.ci-logs/
+
+# Generated, local schema-only bootstrap from the preserved database backup
+/deployment/config/database/restore-aug-schema.sql

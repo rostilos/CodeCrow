@@ -4,6 +4,7 @@ from model.dtos import IssueDTO
 from utils.prompts.prompt_constants import (
     ADDITIONAL_INSTRUCTIONS,
     CODE_SNIPPET_AND_SCOPE_INSTRUCTIONS,
+    ISSUE_DEDUPLICATION_INSTRUCTIONS,
     BRANCH_REVIEW_PROMPT_TEMPLATE,
     BRANCH_RECONCILIATION_DIRECT_PROMPT_TEMPLATE,
     STAGE_0_PLANNING_PROMPT_TEMPLATE,
@@ -11,6 +12,7 @@ from utils.prompts.prompt_constants import (
     STAGE_2_CROSS_FILE_PROMPT_TEMPLATE,
     STAGE_3_AGGREGATION_PROMPT_TEMPLATE,
     STAGE_1_MCP_TOOL_SECTION,
+    STAGE_1_VCS_TOOL_SECTION,
     STAGE_3_MCP_VERIFICATION_SECTION,
 )
 
@@ -168,13 +170,15 @@ class PromptBuilder:
         priority: str,
         project_rules: str = "",
         file_outlines: str = "",
-        rag_context: str = "",
+        structural_context: str = "",
         is_incremental: bool = False,
         previous_issues: str = "",
         all_pr_files: List[str] = None,  # All files in this PR for cross-file awareness
         deleted_files: List[str] = None,  # Files being deleted in this PR
         task_context: str = "No task context available.",
         use_mcp_tools: bool = False,
+        structural_tools_available: bool = True,
+        review_file_tool_available: bool = False,
         target_branch: str = "",
         vcs_workspace: str = "",
         vcs_repo_slug: str = "",
@@ -231,7 +235,8 @@ Consider potential interactions with these files when reviewing.
         if deleted_files:
             deleted_files_context = f"""
 ## FILES BEING DELETED IN THIS PR
-The following files are being DELETED/REMOVED in this PR. Any RAG context referencing these files is STALE.
+The following files are being DELETED/REMOVED in this PR. Exact proposed-tree
+context must omit them; any older target-head reference to them is stale.
 Do NOT flag duplication or conflicts with code from these files — the code is being intentionally removed:
 {chr(10).join('- ' + fp for fp in deleted_files[:30])}
 {'... and ' + str(len(deleted_files) - 30) + ' more' if len(deleted_files) > 30 else ''}
@@ -244,12 +249,49 @@ Do NOT flag duplication or conflicts with code from these files — the code is 
 These rules refine evidence collection only. Report a finding only when supplied code or configuration proves it.
 """
 
+        if structural_context.startswith(
+            "RELATION-FIRST PROPOSED-TREE BRIEFING"
+        ):
+            structural_context_section = f"""RELATION-FIRST STRUCTURAL REVIEW CONTEXT:
+{structural_context}
+
+CONTEXT CITATION RULES:
+- This bounded capsule is an exact proposed-tree relation map that the host
+  loaded before the first model turn. It may include a small number of exact
+  related-source windows selected by those relations.
+- Use its typed edges and unit IDs to identify precise graph follow-ups. Do not
+  repeat the orientation call merely to rediscover the same batch neighborhood.
+- A relation is navigation/impact evidence, not proof of a source-level defect;
+  verify reportable behavior against supplied or retrieved exact source. Use a
+  complete included source window directly instead of rereading the same range.
+- Cite a relation only by its exact canonical evidenceId. Bounded absence is not
+  proof that code or a relationship is absent."""
+        elif structural_context and not use_mcp_tools:
+            structural_context_section = f"""RETRIEVED STRUCTURAL REVIEW CONTEXT:
+{structural_context}
+
+CONTEXT CITATION RULES:
+- The context contains bounded AST/plugin relationships and may contain exact
+  related-source windows retrieved before an agent fallback.
+- Absence from a bounded context or graph result is not proof that code or a
+  relationship is absent.
+- Cite actual file paths and lines from exact source when using it.
+- If a relationship is unavailable, unrelated, or inconclusive, do not use it
+  as proof."""
+        elif use_mcp_tools and structural_tools_available:
+            structural_context_section = """STRUCTURAL REPOSITORY CONTEXT:
+(No structural context is preloaded in agentic mode. Request-bound proposed-tree
+tools are available below; begin with the required minimal-context call.)"""
+        else:
+            structural_context_section = """STRUCTURAL REPOSITORY CONTEXT:
+(No structural relation metadata or graph tools are available for this batch.)"""
+
         prompt = STAGE_1_BATCH_PROMPT_TEMPLATE.format(
             project_rules=project_rules,
             file_outlines=file_outlines if file_outlines else "(No structured parser metadata available for this batch)",
             priority=priority,
             files_context=files_context,
-            rag_context=rag_context or "(No additional codebase context available)",
+            structural_context_section=structural_context_section,
             incremental_instructions=incremental_instructions,
             previous_issues=previous_issues,
             pr_files_context=pr_files_context,
@@ -259,15 +301,61 @@ These rules refine evidence collection only. Report a finding only when supplied
                 batch_boundary_context
                 or "No dependency edge crosses this Stage 1 batch boundary."
             ),
-            line_number_instructions=CODE_SNIPPET_AND_SCOPE_INSTRUCTIONS
+            line_number_instructions=CODE_SNIPPET_AND_SCOPE_INSTRUCTIONS,
+            issue_deduplication_instructions=ISSUE_DEDUPLICATION_INSTRUCTIONS,
         )
 
         # Conditionally append MCP tool instructions
         if use_mcp_tools and target_branch:
-            prompt += STAGE_1_MCP_TOOL_SECTION.format(
+            if review_file_tool_available:
+                branch_file_tool_section = ""
+                review_file_tool_section = """
+- **getReviewFileContent(workspace, repoSlug, filePath, startLine?, endLine?)**
+  — Read the request-bound review tree. It returns authoritative post-change
+  source for PR-modified paths, reports deleted paths as absent, and reads
+  unchanged paths from the pinned target-head snapshot."""
+                review_source_authority = (
+                    "Exact proposed-tree source returned by a structural unit or "
+                    "source window can be used directly. Use "
+                    "getReviewFileContent for code unrepresented by the graph, "
+                    "or a concrete source range that was omitted or truncated, "
+                    "including a path assigned to "
+                    "another Stage 1 batch. It selects proposed source for "
+                    "PR-modified paths and the pinned target snapshot for "
+                    "unchanged paths. The supplied diff/Current File Content "
+                    "and exact proposed-tree source are post-change authority."
+                )
+            else:
+                branch_file_tool_section = """
+- **getBranchFileContent(workspace, repoSlug, branch, filePath, startLine?,
+  endLine?)** — Read an unchanged file or bounded line window from the pinned
+  target head when the changed code raises a concrete context question."""
+                review_file_tool_section = """
+(This VCS server does not expose a request-scoped proposed-tree file tool.)"""
+                review_source_authority = (
+                    "For every PR-modified path, the supplied diff and Current "
+                    "File Content are the post-change authority available. "
+                    "Do not use an older target-head copy to contradict them or "
+                    "to infer the current content of a changed path from another "
+                    "batch."
+                )
+            tool_section = (
+                STAGE_1_MCP_TOOL_SECTION
+                if structural_tools_available
+                else STAGE_1_VCS_TOOL_SECTION
+            )
+            prompt += tool_section.format(
                 target_branch=target_branch,
                 workspace=vcs_workspace,
                 repo_slug=vcs_repo_slug,
+                branch_file_tool_section=branch_file_tool_section,
+                review_file_tool_section=review_file_tool_section,
+                review_source_authority=review_source_authority,
+                batch_paths=json.dumps(
+                    [str(file.get("path") or "") for file in files],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
             )
 
         return prompt
@@ -337,6 +425,7 @@ These rules refine evidence collection only. Report a finding only when supplied
         task_context: str = "No task context available.",
         use_mcp_tools: bool = False,
         review_revision: str = "",
+        mcp_local_only: bool = False,
     ) -> str:
         """
         Build prompt for Stage 3: Aggregation & Final Report.
@@ -365,7 +454,27 @@ These rules refine evidence collection only. Report a finding only when supplied
             prompt += STAGE_3_MCP_VERIFICATION_SECTION.format(
                 max_calls=max_calls,
                 review_revision=review_revision,
-                pr_id=pr_id
+                pr_id=pr_id,
+                stage_3_file_tool=(
+                    "- **getReviewFileContent(filePath, verificationId)** — "
+                    "Read an anchor-centred source window from the exact "
+                    "request-staged proposed PR tree"
+                    if mcp_local_only
+                    else (
+                        "- **getBranchFileContent(filePath, verificationId)** — "
+                        "Read an anchor-centred source window; the host supplies "
+                        "the exact reviewed commit"
+                    )
+                ),
+                stage_3_provider_tools=(
+                    "Provider pull-request tools are disabled for this "
+                    "local-only review."
+                    if mcp_local_only
+                    else (
+                        "- **getPullRequestComments(pullRequestId)** — Read PR "
+                        "comments for additional context"
+                    )
+                ),
             )
 
         return prompt

@@ -37,7 +37,7 @@ rag-pipeline/integration/
 ├── test_health.py              # GET /, GET /health
 ├── test_auth_middleware.py      # X-Service-Secret middleware
 ├── test_parse_endpoints.py     # POST /parse, /parse/batch
-├── test_query_endpoints.py     # POST /query/code-search and /query/deterministic
+├── test_query_endpoints.py     # Revision-bound structural query endpoints
 └── test_index_endpoints.py     # POST /index/repository, branches, cleanup, stats
 ```
 

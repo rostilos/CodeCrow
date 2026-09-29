@@ -17,6 +17,9 @@ from service.review.orchestrator.json_utils import parse_llm_response
 from service.review.orchestrator.stage_0_planning import execute_stage_0_planning
 from service.review.orchestrator.stage_1_file_review import _invoke_stage_1_batch_llm
 from service.review.orchestrator.stage_2_cross_file import _invoke_stage_2_llm
+from service.review.orchestrator.stage_2_cross_file import (
+    STAGE2_MAX_OUTPUT_TOKENS,
+)
 from service.review.orchestrator.stage_3_aggregation import _invoke_stage_3_report
 from service.review.orchestrator.verification_agent import _run_verification_tool_loop
 
@@ -24,9 +27,10 @@ from service.review.orchestrator.verification_agent import _run_verification_too
 class ChatOpenRouter:
     """Small provider-shaped test double that records invocation kwargs."""
 
-    def __init__(self, responses, *, extra_body=None):
+    def __init__(self, responses, *, extra_body=None, max_tokens=None):
         self.responses = list(responses)
         self.extra_body = extra_body
+        self.max_tokens = max_tokens
         self.calls = []
 
     def with_structured_output(self, _schema):
@@ -123,7 +127,7 @@ async def test_stage_0_and_stage_1_use_low_reasoning_for_structured_analysis():
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_cross_file_and_focused_verification_use_high_reasoning():
+async def test_cross_file_is_bounded_low_reasoning_and_verification_stays_high():
     cross_file = CrossFileAnalysisResult(
         pr_risk_level="LOW",
         cross_file_issues=[],
@@ -133,7 +137,10 @@ async def test_cross_file_and_focused_verification_use_high_reasoning():
     stage_2_llm = ChatOpenRouter([cross_file])
 
     assert await _invoke_stage_2_llm(stage_2_llm, "cross-file prompt", "test") == cross_file
-    assert _effort(stage_2_llm.calls[0]) == "high"
+    assert _effort(stage_2_llm.calls[0]) == "low"
+    assert stage_2_llm.calls[0][1]["max_tokens"] == (
+        STAGE2_MAX_OUTPUT_TOKENS
+    )
 
     verification_llm = ChatOpenRouter([
         SimpleNamespace(content='{"issue_ids_to_drop": []}', tool_calls=[]),
@@ -144,6 +151,67 @@ async def test_cross_file_and_focused_verification_use_high_reasoning():
     )
     assert result.issue_ids_to_drop == []
     assert _effort(verification_llm.calls[0]) == "high"
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_cross_file_respects_lower_provider_output_cap():
+    result = CrossFileAnalysisResult(
+        pr_risk_level="LOW",
+        cross_file_issues=[],
+        pr_recommendation="PASS",
+        confidence="HIGH",
+    )
+    structured_llm = ChatOpenRouter([result], max_tokens=4096)
+
+    assert await _invoke_stage_2_llm(
+        structured_llm,
+        "cross-file prompt",
+        "provider-cap",
+    ) == result
+    assert structured_llm.calls[0][1]["max_tokens"] == 4096
+
+    raw_llm = ChatOpenRouter([
+        SimpleNamespace(content=result.model_dump_json()),
+    ], max_tokens=4096)
+    assert await _invoke_stage_2_llm(
+        raw_llm,
+        "cross-file prompt",
+        "provider-cap-recovery",
+        force_unstructured=True,
+    ) == result
+    assert raw_llm.calls[0][1]["max_tokens"] == 4096
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_cross_file_google_recovery_uses_canonical_lower_output_cap():
+    result = CrossFileAnalysisResult(
+        pr_risk_level="LOW",
+        cross_file_issues=[],
+        pr_recommendation="PASS",
+        confidence="HIGH",
+    )
+
+    class ChatGoogleGenerativeAI:
+        def __init__(self):
+            self.max_output_tokens = 2048
+            self.calls = []
+
+        async def ainvoke(self, prompt, **kwargs):
+            self.calls.append((prompt, kwargs))
+            return SimpleNamespace(content=result.model_dump_json())
+
+    llm = ChatGoogleGenerativeAI()
+
+    assert await _invoke_stage_2_llm(
+        llm,
+        "cross-file prompt",
+        "google-recovery",
+        force_unstructured=True,
+    ) == result
+    assert llm.calls == [(
+        "cross-file prompt",
+        {"max_output_tokens": 2048},
+    )]
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -202,6 +270,9 @@ async def test_direct_output_recoveries_disable_reasoning():
     )
     assert stage_2_result is not None
     assert _effort(stage_2_llm.calls[0]) == "none"
+    assert stage_2_llm.calls[0][1]["max_tokens"] == (
+        STAGE2_MAX_OUTPUT_TOKENS
+    )
 
     report_llm = ChatOpenRouter([
         SimpleNamespace(

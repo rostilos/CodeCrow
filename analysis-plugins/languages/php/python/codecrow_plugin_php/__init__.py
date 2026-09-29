@@ -16,11 +16,11 @@ from codecrow_plugins import (
     ValidationResult,
 )
 
-from .repository import PhpRepositorySession
+from .repository import PhpRepositorySession, php_file_use_facts
 
 
 _NAMESPACE = re.compile(r"^\s*namespace\s+([^;{]+)", re.MULTILINE)
-_USE = re.compile(r"^\s*use\s+([^;]+);", re.MULTILINE)
+_USE_KEYWORD = re.compile(r"\buse\b", re.IGNORECASE)
 _TYPE = re.compile(
     r"(?P<prefix>abstract\s+|final\s+)?(?P<kind>class|interface|trait|enum)\s+"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
@@ -32,7 +32,6 @@ _FUNCTION = re.compile(
     r"function\s+&?\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(",
     re.MULTILINE,
 )
-_TRAIT_USE = re.compile(r"^\s*use\s+([A-Za-z_\\][A-Za-z0-9_\\]*(?:\s*,\s*[A-Za-z_\\][A-Za-z0-9_\\]*)*)\s*[;{]", re.MULTILINE)
 _NEW = re.compile(r"\bnew\s+([A-Za-z_\\][A-Za-z0-9_\\]*)")
 _PHP_REPOSITORY_CLAIM_KINDS = {
     "php-constructor-dependency",
@@ -86,13 +85,12 @@ class PhpPlugin:
         if namespace_match:
             facts.add(GraphFact("php-namespace", artifact.path, "declares", namespace, artifact.path, _line(content, namespace_match.start())))
 
-        for match in _USE.finditer(content):
-            raw = match.group(1).strip()
-            if raw.lower().startswith(("function ", "const ")):
-                raw = raw.split(None, 1)[1]
-            imported = raw.split(" as ", 1)[0].strip()
-            if "{" not in imported:
-                facts.add(GraphFact("php-import", file_source, "imports", imported, artifact.path, _line(content, match.start())))
+        # PHP uses the same keyword for namespace imports and trait
+        # composition. Tree-sitter distinguishes those constructs; a regex
+        # cannot do so reliably because both may be indented and terminated by
+        # either a semicolon or an adaptation block.
+        if _USE_KEYWORD.search(content):
+            facts.update(php_file_use_facts(artifact))
 
         declared_types: list[str] = []
         for match in _TYPE.finditer(content):
@@ -106,9 +104,6 @@ class PhpPlugin:
                     facts.add(GraphFact("php-inheritance", declared, "implements", target, artifact.path, _line(content, match.start())))
 
         owner = declared_types[0] if declared_types else file_source
-        for match in _TRAIT_USE.finditer(content):
-            for trait in sorted(value.strip() for value in match.group(1).split(",")):
-                facts.add(GraphFact("php-trait", owner, "uses-trait", trait, artifact.path, _line(content, match.start())))
         for match in _FUNCTION.finditer(content):
             facts.add(GraphFact("php-callable", owner, "declares-method", match.group("name"), artifact.path, _line(content, match.start())))
         for match in _NEW.finditer(content):

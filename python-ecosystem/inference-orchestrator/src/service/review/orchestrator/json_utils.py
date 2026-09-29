@@ -302,6 +302,15 @@ async def repair_json_with_llm(
 
 def load_json_with_local_repairs(text: str) -> tuple[str, Any]:
     """Parse JSON after cheap deterministic cleanup, before asking an LLM to repair it."""
+    stripped = text.strip()
+    try:
+        return stripped, json.loads(stripped)
+    except Exception:
+        # Cleanup is intentionally a fallback: valid JSON strings may contain
+        # markdown fences as field content and must not be reinterpreted as an
+        # outer response wrapper.
+        pass
+
     cleaned = clean_json_text(text)
     candidates = [
         cleaned,

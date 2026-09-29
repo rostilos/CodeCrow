@@ -2,167 +2,97 @@ package org.rostilos.codecrow.ragengine.branch;
 
 import org.junit.jupiter.api.Test;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
-import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.core.model.job.Job;
+import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
-import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
-import org.rostilos.codecrow.core.model.vcs.VcsConnection;
-import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
-import org.rostilos.codecrow.core.service.AnalysisJobService;
-import org.rostilos.codecrow.ragengine.service.RagIndexTrackingService;
-import org.rostilos.codecrow.vcsclient.VcsClient;
-import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.rostilos.codecrow.core.service.RepositoryIndexJobQueueService;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.*;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
 class BranchIndexMaintenanceServiceTest {
 
     @Test
-    void omittedBranchUsesPrimaryWithEmptyOptionalFilters() throws Exception {
+    void omittedBranchDurablyQueuesPrimaryWithoutExecutingInline() {
         RagOperationsService ragOperations = mock(RagOperationsService.class);
-        VcsClientProvider vcsClients = mock(VcsClientProvider.class);
-        BranchIndexGenerationBuildService builds = mock(
-                BranchIndexGenerationBuildService.class);
-        BranchIndexBuildAdmissionService admissions = mock(
-                BranchIndexBuildAdmissionService.class);
-        RagIndexTrackingService tracking = mock(RagIndexTrackingService.class);
-        AnalysisLockService locks = mock(AnalysisLockService.class);
-        AnalysisJobService jobs = mock(AnalysisJobService.class);
+        RepositoryIndexJobQueueService queue = mock(
+                RepositoryIndexJobQueueService.class);
         BranchIndexMaintenanceService service = new BranchIndexMaintenanceService(
-                ragOperations, vcsClients, builds, admissions, tracking, locks, jobs,
-                Runnable::run, 1);
-
-        Project project = mock(Project.class);
-        when(project.getId()).thenReturn(42L);
-        when(project.getConfiguration()).thenReturn(new ProjectConfig(
-                false, "main", null, new RagConfig(true, "main")));
-        VcsRepoBinding binding = mock(VcsRepoBinding.class);
-        VcsConnection connection = new VcsConnection();
-        when(project.getVcsRepoBinding()).thenReturn(binding);
-        when(binding.getVcsConnection()).thenReturn(connection);
-        when(binding.getExternalNamespace()).thenReturn("workspace");
-        when(binding.getExternalRepoSlug()).thenReturn("repository");
-        VcsClient vcs = mock(VcsClient.class);
-        when(vcsClients.getClient(connection)).thenReturn(vcs);
-        when(vcs.getLatestCommitHash("workspace", "repository", "main"))
-                .thenReturn("revision-a");
-        when(ragOperations.getBaseBranch(project)).thenReturn("main");
-        when(locks.acquireLock(eq(project), eq("main"), any(), eq("revision-a"), isNull()))
-                .thenReturn(Optional.of("rag-lock"));
-
+                ragOperations, queue);
+        Project project = enabledProject();
         Job job = mock(Job.class);
-        when(job.getId()).thenReturn(91L);
-        var prepared = new BranchIndexGenerationBuildService.PreparedBuild(
-                81L, "physical-generation", false, null, "rag-lock");
-        when(admissions.admit(
-                eq(project), eq("main"), eq("revision-a"),
-                eq(RagBranchIndexKind.PRIMARY), any(), eq("rag-lock"), any()))
-                .thenReturn(new BranchIndexBuildAdmissionService.AdmittedBuild(
-                        job, prepared,
-                        BranchIndexBuildAdmissionService.ProjectStatusAdmission.INDEXING));
-        when(builds.execute(
-                eq(project), eq(connection), eq("workspace"), eq("repository"),
-                eq("main"), eq("revision-a"), eq(RagBranchIndexKind.PRIMARY),
-                eq(List.of()), eq(List.of()), eq(prepared), any()))
-                .thenReturn(Map.of("document_count", 12, "chunk_count", 34));
+        when(job.getExternalId()).thenReturn("job-91");
+        when(ragOperations.getBaseBranch(project)).thenReturn("main");
+        when(queue.enqueue(project, "main", null, JobTriggerSource.UI))
+                .thenReturn(job);
+        List<Map<String, Object>> events = new ArrayList<>();
 
-        Map<String, Object> outcome = service.rebuild(
-                project, null, false, ignored -> { });
+        Map<String, Object> outcome = service.rebuild(project, null, events::add);
 
+        assertThat(outcome.get("status")).isEqualTo("queued");
         assertThat(outcome.get("branches")).isEqualTo(List.of("main"));
         assertThat(outcome.get("failedBranches")).isEqualTo(Map.of());
-        verify(builds).execute(
-                eq(project), eq(connection), eq("workspace"), eq("repository"),
-                eq("main"), eq("revision-a"), eq(RagBranchIndexKind.PRIMARY),
-                eq(List.of()), eq(List.of()), eq(prepared), any());
-        verify(tracking).reconcilePublishedGeneration(
-                project, "main", "revision-a", 12, 34, 91L);
-        verify(jobs).completeJob(job, Map.of("branch", "main", "revision", "revision-a"));
-        verify(jobs, never()).failJob(any(), anyString());
-        verify(locks).releaseLock("rag-lock");
+        assertThat(events).singleElement().satisfies(event -> {
+            assertThat(event.get("stage")).isEqualTo("branch_queued");
+            assertThat(event.get("jobId")).isEqualTo("job-91");
+        });
+        verify(queue).enqueue(project, "main", null, JobTriggerSource.UI);
     }
 
     @Test
-    void observerAndLockCleanupFailuresCannotReverseAPublishedBuild() throws Exception {
+    void requestedObservedBranchUsesAnalysisPatternEligibility() {
         RagOperationsService ragOperations = mock(RagOperationsService.class);
-        VcsClientProvider vcsClients = mock(VcsClientProvider.class);
-        BranchIndexGenerationBuildService builds = mock(
-                BranchIndexGenerationBuildService.class);
-        BranchIndexBuildAdmissionService admissions = mock(
-                BranchIndexBuildAdmissionService.class);
-        RagIndexTrackingService tracking = mock(RagIndexTrackingService.class);
-        AnalysisLockService locks = mock(AnalysisLockService.class);
-        AnalysisJobService jobs = mock(AnalysisJobService.class);
+        RepositoryIndexJobQueueService queue = mock(
+                RepositoryIndexJobQueueService.class);
         BranchIndexMaintenanceService service = new BranchIndexMaintenanceService(
-                ragOperations, vcsClients, builds, admissions, tracking, locks, jobs,
-                Runnable::run, 1);
-
-        Project project = mock(Project.class);
-        when(project.getId()).thenReturn(42L);
-        when(project.getConfiguration()).thenReturn(new ProjectConfig(
-                false, "main", null,
-                new RagConfig(true, "main", List.of(), List.of())));
-        VcsRepoBinding binding = mock(VcsRepoBinding.class);
-        VcsConnection connection = new VcsConnection();
-        when(project.getVcsRepoBinding()).thenReturn(binding);
-        when(binding.getVcsConnection()).thenReturn(connection);
-        when(binding.getExternalNamespace()).thenReturn("workspace");
-        when(binding.getExternalRepoSlug()).thenReturn("repository");
-        VcsClient vcs = mock(VcsClient.class);
-        when(vcsClients.getClient(connection)).thenReturn(vcs);
-        when(vcs.getLatestCommitHash("workspace", "repository", "main"))
-                .thenReturn("revision-a");
-        when(ragOperations.getBaseBranch(project)).thenReturn("main");
-        when(locks.acquireLock(eq(project), eq("main"), any(), eq("revision-a"), isNull()))
-                .thenReturn(Optional.of("rag-lock"));
-
+                ragOperations, queue);
+        Project project = enabledProject();
         Job job = mock(Job.class);
-        when(job.getId()).thenReturn(91L);
-        var prepared = new BranchIndexGenerationBuildService.PreparedBuild(
-                81L, "physical-generation", false, null, "rag-lock");
-        when(admissions.admit(
-                eq(project), eq("main"), eq("revision-a"),
-                eq(RagBranchIndexKind.PRIMARY), any(), eq("rag-lock"), any()))
-                .thenReturn(new BranchIndexBuildAdmissionService.AdmittedBuild(
-                        job, prepared,
-                        BranchIndexBuildAdmissionService.ProjectStatusAdmission.INDEXING));
-        when(builds.execute(
-                eq(project), eq(connection), eq("workspace"), eq("repository"),
-                eq("main"), eq("revision-a"), eq(RagBranchIndexKind.PRIMARY),
-                eq(List.of()), eq(List.of()), eq(prepared), any()))
-                .thenAnswer(invocation -> {
-                    @SuppressWarnings("unchecked")
-                    Consumer<Map<String, Object>> progress = invocation.getArgument(10);
-                    progress.accept(Map.of("stage", "indexing", "message", "halfway"));
-                    return Map.of("document_count", 12, "chunk_count", 34);
-                });
-        doThrow(new IllegalStateException("lock database unavailable"))
-                .when(locks).releaseLock("rag-lock");
+        when(job.getExternalId()).thenReturn("job-92");
+        when(ragOperations.getBaseBranch(project)).thenReturn("main");
+        when(ragOperations.shouldHaveBranchIndex(project, "release/preview"))
+                .thenReturn(true);
+        when(queue.enqueue(
+                project, "release/preview", null, JobTriggerSource.UI))
+                .thenReturn(job);
 
         Map<String, Object> outcome = service.rebuild(
-                project,
-                "main",
-                false,
-                ignored -> {
-                    throw new IllegalStateException("observer disconnected");
-                });
+                project, " release/preview ", ignored -> { });
 
-        assertThat(outcome.get("branches")).isEqualTo(List.of("main"));
-        assertThat(outcome.get("failedBranches")).isEqualTo(Map.of());
-        verify(tracking).reconcilePublishedGeneration(
-                project, "main", "revision-a", 12, 34, 91L);
-        verify(jobs).completeJob(job, Map.of("branch", "main", "revision", "revision-a"));
-        verify(jobs, never()).failJob(any(), anyString());
-        verify(tracking, never()).markIndexingFailed(any(), anyString(), any());
-        verify(locks).releaseLock("rag-lock");
+        assertThat(outcome.get("branches"))
+                .isEqualTo(List.of("release/preview"));
+        verify(queue).enqueue(
+                project, "release/preview", null, JobTriggerSource.UI);
+    }
+
+    @Test
+    void branchOutsideAnalysisPatternsIsRejectedBeforeQueueing() {
+        RagOperationsService ragOperations = mock(RagOperationsService.class);
+        RepositoryIndexJobQueueService queue = mock(
+                RepositoryIndexJobQueueService.class);
+        BranchIndexMaintenanceService service = new BranchIndexMaintenanceService(
+                ragOperations, queue);
+        Project project = enabledProject();
+        when(ragOperations.getBaseBranch(project)).thenReturn("main");
+
+        assertThatThrownBy(() -> service.rebuild(
+                project, "private/experiment", ignored -> { }))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("analysis target/push patterns");
+        verifyNoInteractions(queue);
+    }
+
+    private static Project enabledProject() {
+        Project project = new Project();
+        project.setConfiguration(new ProjectConfig(
+                false, "main", null, new RagConfig(true, "main")));
+        return project;
     }
 }

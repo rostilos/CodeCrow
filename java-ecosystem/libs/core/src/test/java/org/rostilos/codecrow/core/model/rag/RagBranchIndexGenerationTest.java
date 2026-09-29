@@ -45,14 +45,15 @@ class RagBranchIndexGenerationTest {
         RagBranchIndexGeneration replacement = new RagBranchIndexGeneration(
                 branchIndex, "master-101", "master-generation-101", active,
                 "master-100", "representation-digest");
-        replacement.fail("Qdrant unavailable");
+        replacement.fail("Repository index unavailable");
         branchIndex.failUpdate(replacement.getErrorMessage());
 
         assertThat(branchIndex.getActiveGeneration()).isSameAs(active);
         assertThat(branchIndex.getActiveGeneration().getRevision()).isEqualTo("master-100");
         assertThat(branchIndex.getDesiredCommitHash()).isEqualTo("master-101");
         assertThat(branchIndex.getLifecycleStatus()).isEqualTo(RagBranchIndexLifecycleStatus.READY);
-        assertThat(branchIndex.getErrorMessage()).isEqualTo("Qdrant unavailable");
+        assertThat(branchIndex.getErrorMessage()).isEqualTo("Repository index unavailable");
+        assertThat(branchIndex.getLastFailedAt()).isNotNull();
         assertThat(replacement.getStatus()).isEqualTo(RagBranchIndexGenerationStatus.FAILED);
     }
 

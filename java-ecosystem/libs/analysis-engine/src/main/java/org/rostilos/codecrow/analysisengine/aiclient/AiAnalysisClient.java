@@ -350,12 +350,12 @@ public class AiAnalysisClient {
         payload.put("oAuthSecret", request.getOAuthSecret());
         payload.put("accessToken", request.getAccessToken());
         payload.put("maxAllowedTokens", request.getMaxAllowedTokens());
-        payload.put("useLocalMcp", request.getUseLocalMcp());
         payload.put("useMcpTools", request.getUseMcpTools());
         if (localRepositorySnapshot != null) {
             payload.put("localRepoPath", localRepositorySnapshot.path());
             payload.put("localRepoTargetBranch", localRepositorySnapshot.targetBranch());
             payload.put("localRepoRevision", localRepositorySnapshot.revision());
+            payload.put("localReviewOverlayPath", localRepositorySnapshot.reviewOverlayPath());
         }
         payload.put("ragEnabled", request.getRagEnabled());
         payload.put("analysisType", request.getAnalysisType());
@@ -367,7 +367,6 @@ public class AiAnalysisClient {
         payload.put("taskHistoryContext", request.getTaskHistoryContext());
         payload.put("changedFiles", request.getChangedFiles());
         payload.put("deletedFiles", request.getDeletedFiles());
-        payload.put("diffSnippets", request.getDiffSnippets());
         payload.put("targetBranchName", request.getTargetBranchName());
         payload.put("sourceBranchName", request.getSourceBranchName());
         payload.put("rawDiff", request.getRawDiff());

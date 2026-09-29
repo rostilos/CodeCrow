@@ -10,29 +10,42 @@ from rag_pipeline.models.config import IndexStats, RAGConfig
 
 class TestRAGConfig:
     def test_default_values(self):
-        config = RAGConfig()
-        assert config.qdrant_timeout_seconds == 30
-        assert config.qdrant_upsert_max_payload_bytes == 8 * 1024 * 1024
+        # Other test modules import ``main`` during collection, which loads the
+        # deployment .env. Defaults must be asserted independently of that
+        # process-wide production configuration.
+        with patch.dict(os.environ, {}, clear=True):
+            config = RAGConfig()
+        assert config.structural_index_root == "/var/lib/codecrow/structural-index"
         assert config.full_index_concurrency == 1
         assert config.architecture_finalization_timeout_seconds == 600
+        assert config.review_generation_ttl_seconds == 21600
         assert config.max_file_size_bytes == 512 * 1024
         assert config.max_files_per_index == 50000
         assert config.chunk_size == 8000
         assert config.chunk_overlap == 200
         assert config.max_chunks_per_index == 1_000_000
 
-    def test_qdrant_timeout_is_configurable(self):
-        with patch.dict(os.environ, {"QDRANT_TIMEOUT_SECONDS": "45"}):
-            assert RAGConfig().qdrant_timeout_seconds == 45
+    def test_structural_index_root_is_configurable(self):
+        with patch.dict(
+            os.environ,
+            {"STRUCTURAL_INDEX_ROOT": "/tmp/codecrow-structural-test"},
+        ):
+            assert (
+                RAGConfig().structural_index_root
+                == "/tmp/codecrow-structural-test"
+            )
 
-    def test_write_limits_are_configurable(self):
-        with patch.dict(os.environ, {
-            "QDRANT_UPSERT_MAX_PAYLOAD_BYTES": "4194304",
-            "RAG_FULL_INDEX_CONCURRENCY": "2",
-        }):
+    def test_index_concurrency_is_configurable(self):
+        with patch.dict(os.environ, {"RAG_FULL_INDEX_CONCURRENCY": "2"}):
             config = RAGConfig()
-            assert config.qdrant_upsert_max_payload_bytes == 4194304
             assert config.full_index_concurrency == 2
+
+    def test_review_generation_ttl_is_configurable(self):
+        with patch.dict(
+            os.environ,
+            {"RAG_REVIEW_GENERATION_TTL_SECONDS": "7200"},
+        ):
+            assert RAGConfig().review_generation_ttl_seconds == 7200
 
     def test_max_file_size_is_configurable(self):
         with patch.dict(os.environ, {"RAG_MAX_FILE_SIZE_BYTES": "262144"}):

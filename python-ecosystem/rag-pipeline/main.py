@@ -31,22 +31,55 @@ logger = logging.getLogger(__name__)
 def validate_environment() -> None:
     """Report the only external store required by the structural index."""
     logger.info("Repository Index starting")
-    logger.info("QDRANT_URL: %s", os.getenv("QDRANT_URL", "http://qdrant:6333"))
     logger.info(
-        "QDRANT_COLLECTION_PREFIX: %s",
-        os.getenv("QDRANT_COLLECTION_PREFIX", "codecrow"),
+        "STRUCTURAL_INDEX_ROOT: %s",
+        os.getenv(
+            "STRUCTURAL_INDEX_ROOT",
+            "/var/lib/codecrow/structural-index",
+        ),
     )
-    logger.info("Qdrant payload storage configured")
+    logger.info("SQLite structural generation storage configured")
 
 
 validate_environment()
 
 import uvicorn
-from rag_pipeline.api.api import app
+
+
+def effective_uvicorn_workers() -> int:
+    """Honor explicit process parallelism without multiplying each process."""
+
+    raw = os.environ.get("UVICORN_WORKERS", "1")
+    try:
+        requested = max(1, int(raw))
+    except (TypeError, ValueError):
+        logger.warning("Invalid UVICORN_WORKERS=%r; using one worker", raw)
+        return 1
+    if requested > 1:
+        raw_capacity = os.environ.get("RAG_FULL_INDEX_CONCURRENCY", "1")
+        try:
+            per_process_capacity = max(1, int(raw_capacity))
+        except (TypeError, ValueError):
+            per_process_capacity = 1
+        if per_process_capacity != 1:
+            os.environ["RAG_FULL_INDEX_CONCURRENCY"] = "1"
+            logger.warning(
+                "UVICORN_WORKERS=%s uses process parallelism; normalizing "
+                "RAG_FULL_INDEX_CONCURRENCY=%s to one per process so index "
+                "capacity is not multiplicative",
+                requested,
+                raw_capacity,
+            )
+        else:
+            logger.info(
+                "UVICORN_WORKERS=%s with one full-index slot per process",
+                requested,
+            )
+    return requested
 
 
 if __name__ == "__main__":
-    workers = int(os.environ.get("UVICORN_WORKERS", "1"))
+    workers = effective_uvicorn_workers()
     logger.info("Starting Uvicorn with %s worker process(es)", workers)
     uvicorn.run(
         "rag_pipeline.api.api:app",

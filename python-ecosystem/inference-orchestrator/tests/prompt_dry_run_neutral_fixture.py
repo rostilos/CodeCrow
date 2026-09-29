@@ -10,66 +10,44 @@ SECRET_API_KEY = "dry-run-provider-key-must-never-be-used-or-returned"
 HEAD_REVISION = "1" * 40
 BASE_REVISION = "2" * 40
 BASE_GENERATION_MANIFEST = "3" * 64
-PR_GENERATION_FINGERPRINT = "sha256:" + "4" * 64
-PR_OVERLAY_GENERATION_MANIFEST = "5" * 64
-BASE_PLUGIN_FINGERPRINT = "sha256:" + "6" * 64
-BASE_PLUGIN_DESCRIPTOR_FINGERPRINT = "sha256:" + "7" * 64
-BASE_PLUGIN_IMPLEMENTATION_FINGERPRINT = "sha256:" + "8" * 64
-BASE_INDEX_REPRESENTATION_FINGERPRINT = "sha256:" + "9" * 64
 
 
 class DeterministicRagSpy:
     def __init__(self):
         self.requests: list[dict] = []
         self.code_search_requests: list[dict] = []
-        self.index_requests: list[dict] = []
-        self.delete_requests: list[dict] = []
-
-    async def get_deterministic_context(self, **kwargs):
-        self.requests.append(kwargs)
-        return {
-            "context": {
-                "chunks": [{
-                    "path": "src/shared.py",
-                    "content": "SHARED_CONTEXT_SENTINEL = True",
-                    "relationship": "imports",
-                    "_match_type": "architecture_relation",
-                }],
-                "changed_files": {},
-                "related_definitions": {},
-                "_metadata": {"retrieval_state": "complete"},
-            }
-        }
 
     async def search_code(self, **kwargs):
         self.code_search_requests.append(kwargs)
         return {"results": []}
 
-    async def index_pr_files(self, **kwargs):
-        self.index_requests.append(kwargs)
+    async def get_structural_relations(self, **kwargs):
+        self.requests.append(kwargs)
+        paths = list(kwargs.get("paths") or ())
+        anchor_path = paths[0] if paths else "src/file_0.py"
         return {
-            "status": "indexed",
-            "chunks_indexed": 0,
-            "base_generation_manifest_sha256": BASE_GENERATION_MANIFEST,
-            "generation_fingerprint": PR_GENERATION_FINGERPRINT,
-            "overlay_generation_manifest_sha256": (
-                PR_OVERLAY_GENERATION_MANIFEST
-            ),
-            "plugin_fingerprint": BASE_PLUGIN_FINGERPRINT,
-            "plugin_descriptor_fingerprint": (
-                BASE_PLUGIN_DESCRIPTOR_FINGERPRINT
-            ),
-            "plugin_implementation_fingerprint": (
-                BASE_PLUGIN_IMPLEMENTATION_FINGERPRINT
-            ),
-            "index_representation_fingerprint": (
-                BASE_INDEX_REPRESENTATION_FINGERPRINT
-            ),
+            "anchors": [{"path": anchor_path, "symbols": []}],
+            "relations": [{
+                "evidenceId": "relation:" + "a" * 64,
+                "kind": "IMPORTS",
+                "source": anchor_path,
+                "relation": "imports",
+                "target": "src.shared",
+                "origin": {
+                    "path": anchor_path,
+                    "line": 1,
+                    "extractor": "tree-sitter",
+                    "plugin": None,
+                },
+                "relatedPaths": [anchor_path, "src/shared.py"],
+                "attributes": {},
+            }],
+            "coverage": {
+                "state": "complete",
+                "totalRelations": 1,
+                "omittedRelations": 0,
+            },
         }
-
-    async def delete_pr_files(self, **kwargs):
-        self.delete_requests.append(kwargs)
-        return {"status": "deleted"}
 
 
 def neutral_request(

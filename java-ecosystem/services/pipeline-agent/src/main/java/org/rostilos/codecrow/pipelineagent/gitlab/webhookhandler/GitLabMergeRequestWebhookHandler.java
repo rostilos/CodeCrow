@@ -110,11 +110,10 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
         }
         
         if (action == null || !TRIGGERING_ACTIONS.contains(action)) {
-            // Close/merge events update PR state and clean up PR RAG data.
+            // Close/merge events update persisted MR state.
             if (action != null && CLOSE_ACTIONS.contains(action)) {
                 markMergeRequestClosed(payload, project, "merge".equals(action));
-                cleanupPrRagData(payload, project);
-                return WebhookResult.ignored("MR " + action + " event: cleaned up PR RAG data");
+                return WebhookResult.ignored("MR " + action + " event: state updated");
             }
             log.info("Ignoring GitLab MR event with action: {}", action);
             return WebhookResult.ignored("MR action '" + action + "' does not trigger analysis");
@@ -291,29 +290,6 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
             log.info("Updated placeholder comment {} with error message", commentId);
         } catch (Exception e) {
             log.error("Failed to update placeholder with error: {}", e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Best-effort cleanup of PR RAG data when a merge request is closed or merged.
-     * This is a best-effort, non-blocking operation — failure does not affect the webhook result.
-     */
-    private void cleanupPrRagData(WebhookPayload payload, Project project) {
-        try {
-            String prIdStr = payload.pullRequestId();
-            if (prIdStr == null) {
-                return;
-            }
-            int prNumber = Integer.parseInt(prIdStr);
-            boolean deleted = ragOperationsService.deletePrFiles(project, prNumber);
-            if (deleted) {
-                log.info("Cleaned up MR !{} RAG data for project {} on close/merge", prNumber, project.getId());
-            } else {
-                log.info("MR !{} RAG cleanup did not complete for project {}; "
-                        + "the cleanup operation recorded the failure detail", prNumber, project.getId());
-            }
-        } catch (Exception e) {
-            log.warn("Error cleaning up MR RAG data for project {}: {}", project.getId(), e.getMessage());
         }
     }
 

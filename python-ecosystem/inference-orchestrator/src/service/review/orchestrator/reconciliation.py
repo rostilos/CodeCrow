@@ -1035,7 +1035,13 @@ async def _dedup_batch_with_llm(
     input_token_target: int = _DEDUP_INPUT_TOKEN_TARGET,
 ) -> List[CodeReviewIssue]:
     """Merge only validated high-confidence duplicate groups from one batch."""
-    groups = group_by_index or {index: "candidate_0" for index in range(len(batch))}
+    # Merge authority exists only when the caller supplies the host-selected
+    # connected components. A direct/internal caller that omits the mapping gets
+    # singleton groups, so an LLM response cannot manufacture merge scope.
+    groups = group_by_index or {
+        index: f"candidate_{index}"
+        for index in range(len(batch))
+    }
     issues_text = _format_semantic_batch(batch, groups)
     prompt = _dedup_prompt(issues_text)
     estimated_tokens = _estimate_dedup_input_tokens(prompt)
@@ -1104,18 +1110,10 @@ async def _dedup_batch_with_llm(
                 )
                 continue
             keeper = replacements.get(keeper_index, batch[keeper_index])
-            if not all(
-                issues_are_semantic_dedup_candidates(
-                    keeper,
-                    batch[duplicate_index],
-                )
-                for duplicate_index in duplicate_indices
-            ):
-                logger.warning(
-                    "LLM dedup rejected decision without host candidate evidence: %s",
-                    decision.model_dump(),
-                )
-                continue
+            # The shared candidate_group is already a host-selected connected
+            # component. Do not repeat a pairwise keeper-to-every-duplicate
+            # check here: connected components are intentionally transitive, so
+            # their endpoints need not themselves satisfy the candidate edge.
             for duplicate_index in duplicate_indices:
                 keeper = _merge_duplicate_issues(
                     keeper,

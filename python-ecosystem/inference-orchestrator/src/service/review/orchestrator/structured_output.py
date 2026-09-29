@@ -14,7 +14,11 @@ import json
 import logging
 from typing import Any, Optional
 
-from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
+from llm.reasoning_policy import (
+    ReasoningEffort,
+    output_token_request_kwargs,
+    reasoning_request_kwargs,
+)
 from utils.llm_delegate import llm_class_names, unwrap_llm_delegate
 from utils.llm_response import extract_llm_response_text
 
@@ -88,6 +92,35 @@ def structured_request_kwargs(
     return kwargs
 
 
+def _structured_output_model_and_token_kwargs(
+    llm: Any,
+    max_tokens: Optional[int],
+) -> tuple[Any, dict[str, int]]:
+    """Apply caps where each structured-output adapter actually consumes them.
+
+    Google rejects extra ``with_structured_output`` kwargs and Anthropic accepts
+    but ignores them. Their cap therefore has to live on a request-scoped model
+    copy before either adapter constructs its structured runnable. OpenAI-family
+    adapters forward kwargs into their bound model and keep the established path.
+    """
+
+    token_kwargs = output_token_request_kwargs(llm, max_tokens)
+    class_names = llm_class_names(llm)
+    if not token_kwargs or not class_names.intersection({
+        "ChatAnthropic",
+        "ChatGoogleGenerativeAI",
+    }):
+        return llm, token_kwargs
+
+    model_copy = getattr(llm, "model_copy", None)
+    if not callable(model_copy):
+        # A legacy/provider test double may not support request-scoped model
+        # copies. Keep structured output usable; the direct recovery still gets
+        # the canonical per-request cap.
+        return llm, {}
+    return model_copy(update=token_kwargs), {}
+
+
 def _supported_binding_options(binding: Any, options: dict[str, Any]) -> dict[str, Any]:
     """Pass new LangChain options only when a legacy double accepts them."""
 
@@ -117,19 +150,35 @@ def _compatible_binding_options(llm: Any, options: dict[str, Any]) -> dict[str, 
 def bind_structured_output(
     llm: Any,
     schema: Any,
-) -> tuple[Any, Optional[str], bool]:
-    """Bind a schema while preserving old one-argument implementations."""
+    *,
+    request_kwargs: Optional[Mapping[str, Any]] = None,
+) -> tuple[Any, Optional[str], bool, frozenset[str]]:
+    """Bind a schema and provider options before LangChain wraps the model.
+
+    ``include_raw=True`` returns a ``RunnableParallel`` in current LangChain.
+    That runnable does not forward call-time kwargs to its model branch, so
+    provider controls such as completion and reasoning limits must be bound by
+    ``with_structured_output``.  Options unsupported by legacy implementations
+    remain invocation kwargs for backwards compatibility.
+    """
 
     method = structured_output_method(llm)
     requested_options: dict[str, Any] = {"include_raw": True}
     if method is not None:
         requested_options["method"] = method
+    requested_options.update(dict(request_kwargs or {}))
 
     binding = llm.with_structured_output
     options = _compatible_binding_options(llm, requested_options)
     structured_llm = binding(schema, **options)
     applied_method = method if options.get("method") == method else None
-    return structured_llm, applied_method, options.get("include_raw") is True
+    bound_request_keys = frozenset(request_kwargs or {}).intersection(options)
+    return (
+        structured_llm,
+        applied_method,
+        options.get("include_raw") is True,
+        bound_request_keys,
+    )
 
 
 async def invoke_structured_output(
@@ -139,13 +188,34 @@ async def invoke_structured_output(
     *,
     effort: ReasoningEffort,
     label: str,
+    max_tokens: Optional[int] = None,
 ) -> StructuredOutputInvocation:
     """Invoke one structured call and retain its raw response on parse errors."""
 
-    structured_llm, method, raw_requested = bind_structured_output(llm, schema)
+    request_kwargs = structured_request_kwargs(llm, effort)
+    structured_source, token_kwargs = _structured_output_model_and_token_kwargs(
+        llm,
+        max_tokens,
+    )
+    request_kwargs.update(token_kwargs)
+    (
+        structured_llm,
+        method,
+        raw_requested,
+        bound_request_keys,
+    ) = bind_structured_output(
+        structured_source,
+        schema,
+        request_kwargs=request_kwargs,
+    )
+    invocation_kwargs = {
+        key: value
+        for key, value in request_kwargs.items()
+        if key not in bound_request_keys
+    }
     response = await structured_llm.ainvoke(
         prompt,
-        **structured_request_kwargs(llm, effort),
+        **invocation_kwargs,
     )
 
     if (

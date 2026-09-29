@@ -1,8 +1,8 @@
 """
 Metadata extraction from AST chunks.
 
-Extracts semantic metadata like docstrings, signatures, inheritance info
-from parsed code chunks for improved RAG retrieval.
+Extracts structural metadata such as docstrings, signatures, and inheritance
+from parsed source units for exact graph indexing.
 
 Extraction strategy:
 - For languages with .scm query files (python, java, javascript, typescript,
