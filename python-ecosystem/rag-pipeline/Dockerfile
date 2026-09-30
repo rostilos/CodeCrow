@@ -17,6 +17,7 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
     curl \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed Python packages from builder
@@ -37,9 +38,8 @@ RUN groupadd --gid 1001 appgroup && \
 
 # Prepare the shared temporary workspace.
 RUN chmod -R 777 /tmp && \
-    chown -R appuser:appgroup /app
-
-USER appuser
+    chown -R appuser:appgroup /app && \
+    mkdir -p /run/codecrow-config
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src:/app/plugins/contracts/python
@@ -50,4 +50,8 @@ ENV UVICORN_WORKERS=1
 
 EXPOSE 8001
 
+COPY python-ecosystem/rag-pipeline/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "main.py"]

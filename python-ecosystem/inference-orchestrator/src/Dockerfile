@@ -51,7 +51,7 @@ ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    curl && \
+    curl gosu && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -61,7 +61,7 @@ RUN apt-get update && \
 RUN groupadd --gid 1001 appuser && \
     useradd --uid 1001 --gid appuser --no-create-home \
         --shell /usr/sbin/nologin appuser
-RUN mkdir -p /app/logs/prompt-dry-runs && chown -R appuser:appuser /app
+RUN mkdir -p /app/logs/prompt-dry-runs /run/codecrow-config && chown -R appuser:appuser /app
 
 WORKDIR /app
 
@@ -86,8 +86,11 @@ COPY --chown=appuser:appuser --from=builder /app/codecrow-platform-mcp-1.0.jar* 
 ENV PYTHONPATH=/app:/app/plugins/contracts/python
 ENV CODECROW_PLUGINS_ROOT=/app/plugins
 
-# Switch to non-root user
-USER appuser
+COPY python-ecosystem/inference-orchestrator/src/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+USER root
+ENTRYPOINT ["/entrypoint.sh"]
 
 # Expose port (default for FastAPI/Uvicorn)
 EXPOSE 8000

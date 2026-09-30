@@ -116,8 +116,8 @@ services:
     volumes:
       - source_code_tmp:/tmp
       - web_logs:/app/logs
-      - ./config/java-shared/application.properties:/app/config/application.properties
-      - ./config/java-shared/github-private-key/github-app-private-key.pem:/app/config/github-app-private-key.pem
+      - ./config/java-shared/application.properties:/run/codecrow-config/application.properties:ro
+      - ./config/java-shared/github-private-key/github-app-private-key.pem:/run/codecrow-config/github-app-private-key.pem:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8081/actuator/health"]
       interval: 30s
@@ -192,8 +192,8 @@ services:
     volumes:
       - source_code_tmp:/tmp
       - pipeline_agent_logs:/app/logs
-      - ./config/java-shared/application.properties:/app/config/application.properties
-      - ./config/java-shared/github-private-key/github-app-private-key.pem:/app/config/github-app-private-key.pem
+      - ./config/java-shared/application.properties:/run/codecrow-config/application.properties:ro
+      - ./config/java-shared/github-private-key/github-app-private-key.pem:/run/codecrow-config/github-app-private-key.pem:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8082/actuator/health"]
       interval: 30s
@@ -243,7 +243,7 @@ services:
       - codecrow-network
     volumes:
       - source_code_tmp:/tmp
-      - ./config/inference-orchestrator/.env:/app/.env
+      - ./config/inference-orchestrator/.env:/run/codecrow-config/inference-orchestrator.env:ro
       - inference_orchestrator_logs:/app/logs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
@@ -289,7 +289,7 @@ services:
       - source_code_tmp:/tmp
       - structural_index_data:/var/lib/codecrow/structural-index
       - rag_logs:/app/logs
-      - ./config/rag-pipeline/.env:/app/.env
+      - ./config/rag-pipeline/.env:/run/codecrow-config/rag-pipeline.env:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8001/health"]
       interval: 30s
