@@ -37,10 +37,17 @@ DOCKER_BUILD_PROGRESS="${DOCKER_BUILD_PROGRESS:-auto}"
 DOCKER_BUILD_RETRIES="${DOCKER_BUILD_RETRIES:-3}"
 DOCKER_BUILD_OUTPUT="${CODECROW_DOCKER_OUTPUT:-push}"
 LOCAL_IMAGE_PREFIX="${CODECROW_LOCAL_IMAGE_PREFIX:-codecrow-local}"
+DOCKER_OBSERVABILITY="${CODECROW_DOCKER_OBSERVABILITY:-enabled}"
 # GITHUB_REPOSITORY_OWNER is assumed to be provided for ghcr.io paths
 REPO_OWNER=${GITHUB_REPOSITORY_OWNER:-codecrow}
 REPO_OWNER=$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
 REQUESTED_SERVICES="${CODECROW_DEPLOY_SERVICES:-${CODECROW_BUILD_SERVICES:-all}}"
+
+case "$DOCKER_OBSERVABILITY" in
+  enabled) DOCKERFILE_SUFFIX=".observable" ;;
+  disabled) DOCKERFILE_SUFFIX="" ;;
+  *) echo "ERROR: CODECROW_DOCKER_OBSERVABILITY must be enabled or disabled." >&2; exit 2 ;;
+esac
 
 case "$DOCKER_BUILD_OUTPUT" in
   push|load)
@@ -167,22 +174,22 @@ set_image_definition() {
     web-server)
       IMAGE_NAME="codecrow/web-server"
       CONTEXT="java-ecosystem/services/web-server"
-      DOCKERFILE="java-ecosystem/services/web-server/Dockerfile.observable"
+      DOCKERFILE="java-ecosystem/services/web-server/Dockerfile${DOCKERFILE_SUFFIX}"
       ;;
     pipeline-agent)
       IMAGE_NAME="codecrow/pipeline-agent"
       CONTEXT="."
-      DOCKERFILE="java-ecosystem/services/pipeline-agent/Dockerfile.observable"
+      DOCKERFILE="java-ecosystem/services/pipeline-agent/Dockerfile${DOCKERFILE_SUFFIX}"
       ;;
     inference-orchestrator)
       IMAGE_NAME="codecrow/inference-orchestrator"
       CONTEXT="."
-      DOCKERFILE="python-ecosystem/inference-orchestrator/src/Dockerfile.observable"
+      DOCKERFILE="python-ecosystem/inference-orchestrator/src/Dockerfile${DOCKERFILE_SUFFIX}"
       ;;
     rag-pipeline)
       IMAGE_NAME="codecrow/rag-pipeline"
       CONTEXT="."
-      DOCKERFILE="python-ecosystem/rag-pipeline/Dockerfile.observable"
+      DOCKERFILE="python-ecosystem/rag-pipeline/Dockerfile${DOCKERFILE_SUFFIX}"
       ;;
     web-frontend)
       IMAGE_NAME="codecrow/web-frontend"
@@ -268,7 +275,11 @@ for SERVICE in "${SELECTED_SERVICES[@]}"; do
     FULL_IMAGE_NAME="${LOCAL_IMAGE_PREFIX}-${SERVICE_NAME}:latest"
   fi
 
-  echo "  Building $FULL_IMAGE_NAME from $CONTEXT (output=$DOCKER_BUILD_OUTPUT) ..."
+  if [ -n "$DOCKERFILE" ]; then
+    echo "  Building $FULL_IMAGE_NAME with $DOCKERFILE (output=$DOCKER_BUILD_OUTPUT) ..."
+  else
+    echo "  Building $FULL_IMAGE_NAME from $CONTEXT (output=$DOCKER_BUILD_OUTPUT) ..."
+  fi
   BUILD_LOG="$CI_LOG_DIR/docker-$SCOPE.log"
   BUILD_ARGS=(
     docker buildx build

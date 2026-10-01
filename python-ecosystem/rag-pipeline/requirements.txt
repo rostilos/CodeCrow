@@ -36,6 +36,3 @@ pytest-cov>=5.0.0,<7.0.0
 
 # System monitoring
 psutil>=5.9.0,<6.0.0
-
-# Application performance monitoring
-newrelic==11.5.0

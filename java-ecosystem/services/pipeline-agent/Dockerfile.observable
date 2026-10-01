@@ -2,7 +2,7 @@ FROM eclipse-temurin:17-jre-alpine
 
 RUN apk add --no-cache curl git unzip su-exec && \
     addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup && \
-    mkdir -p /app/logs /app/config /run/codecrow-config && chown -R appuser:appgroup /app
+    mkdir -p /app/logs /app/config /app/codecrow-config /run/codecrow-config && chown -R appuser:appgroup /app
 
 WORKDIR /app
 

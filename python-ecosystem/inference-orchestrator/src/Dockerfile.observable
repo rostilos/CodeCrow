@@ -20,6 +20,7 @@ RUN printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debia
 # Install Python dependencies and fail the production image build before deploy
 # when the MCP client or a runtime plugin parser cannot be imported.
 RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir newrelic==11.5.0 && \
     pip check && \
     python -c "from mcp.shared.context import RequestContext; from mcp_use import MCPClient; import tree_sitter_python; import tree_sitter_ruby; import tree_sitter_typescript"
 
@@ -63,7 +64,7 @@ RUN printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debia
 RUN groupadd --gid 1001 appuser && \
     useradd --uid 1001 --gid appuser --no-create-home \
         --shell /usr/sbin/nologin appuser
-RUN mkdir -p /app/logs/prompt-dry-runs /run/codecrow-config && chown -R appuser:appuser /app
+RUN mkdir -p /app/logs/prompt-dry-runs /app/codecrow-config /run/codecrow-config && chown -R appuser:appuser /app
 
 WORKDIR /app
 

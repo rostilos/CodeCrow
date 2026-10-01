@@ -8,7 +8,8 @@ RUN apt-get update && apt-get install -y \
 
 COPY python-ecosystem/rag-pipeline/requirements.txt python-ecosystem/rag-pipeline/requirements.lock ./
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir newrelic==11.5.0
 
 # --- Production stage (no build-essential, saves ~340MB) ---
 FROM python:3.11-slim
@@ -39,7 +40,7 @@ RUN groupadd --gid 1001 appgroup && \
 # Prepare the shared temporary workspace.
 RUN chmod -R 777 /tmp && \
     chown -R appuser:appgroup /app && \
-    mkdir -p /run/codecrow-config
+    mkdir -p /app/codecrow-config /run/codecrow-config
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src:/app/plugins/contracts/python

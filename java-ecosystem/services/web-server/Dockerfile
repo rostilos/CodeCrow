@@ -2,14 +2,14 @@ FROM eclipse-temurin:17-jre-alpine
 
 RUN apk add --no-cache curl su-exec && \
     addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup && \
-    mkdir -p /app/logs && chown -R appuser:appgroup /app
+    mkdir -p /app/logs /app/config /app/codecrow-config /run/codecrow-config && chown -R appuser:appgroup /app
 
 WORKDIR /app
 
 COPY --chown=appuser:appgroup ./target/codecrow-web-server-1.0-exec.jar app.jar
 
-# Entrypoint: fix volume ownership, then drop to appuser
-RUN printf '#!/bin/sh\nchown -R appuser:appgroup /app/logs 2>/dev/null || true\nexec su-exec appuser "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 8081
 

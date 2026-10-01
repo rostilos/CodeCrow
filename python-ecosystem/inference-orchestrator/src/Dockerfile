@@ -9,7 +9,8 @@ WORKDIR /app
 COPY python-ecosystem/inference-orchestrator/src/requirements.txt .
 
 # Install build dependencies required by some Python packages
-RUN apt-get update && \
+RUN printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260830T000000Z/ bullseye main\ndeb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260830T000000Z/ bullseye-updates main\ndeb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260830T000000Z/ bullseye-security main\n' > /etc/apt/sources.list && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
     gcc \
     libc-dev \
@@ -49,7 +50,8 @@ COPY --from=eclipse-temurin:17-jre /opt/java/openjdk /opt/java/openjdk
 ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
-RUN apt-get update && \
+RUN printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260830T000000Z/ bullseye main\ndeb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260830T000000Z/ bullseye-updates main\ndeb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260830T000000Z/ bullseye-security main\n' > /etc/apt/sources.list && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
     curl gosu && \
     apt-get clean && \
@@ -61,7 +63,7 @@ RUN apt-get update && \
 RUN groupadd --gid 1001 appuser && \
     useradd --uid 1001 --gid appuser --no-create-home \
         --shell /usr/sbin/nologin appuser
-RUN mkdir -p /app/logs/prompt-dry-runs /run/codecrow-config && chown -R appuser:appuser /app
+RUN mkdir -p /app/logs/prompt-dry-runs /app/codecrow-config /run/codecrow-config && chown -R appuser:appuser /app
 
 WORKDIR /app
 

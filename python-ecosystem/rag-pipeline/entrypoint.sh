@@ -3,6 +3,9 @@ set -eu
 
 for name in rag-pipeline.env rag-pipeline-newrelic.ini; do
     source="/run/codecrow-config/$name"
+    if [ ! -f "$source" ]; then
+        source="/app/codecrow-config/$name"
+    fi
     case "$name" in
         rag-pipeline.env) target="/app/.env" ;;
         rag-pipeline-newrelic.ini) target="/app/newrelic.ini" ;;

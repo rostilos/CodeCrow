@@ -18,7 +18,7 @@ cd "$(dirname "$0")/../../"
 
 echo "=========================================="
 echo "  CodeCrow local production build"
-echo "  Mirrors the CI/CD verification pipeline"
+echo "  CI verification with local observability disabled"
 echo "=========================================="
 
 echo "--- 1. Using the current frontend workspace ---"
@@ -68,6 +68,7 @@ run_python_ci_group inference
 
 echo "--- 4. Running the shared Java, plugin, and Docker CI build ---"
 CODECROW_DOCKER_OUTPUT=load \
+CODECROW_DOCKER_OBSERVABILITY=disabled \
 CODECROW_LOCAL_IMAGE_PREFIX=codecrow-local \
 CODECROW_DEPLOY_SERVICES=all \
 deployment/ci/ci-build.sh

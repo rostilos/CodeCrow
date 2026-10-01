@@ -65,7 +65,7 @@ services:
     image: codecrow-local-web-server:latest
     build:
       context: ../java-ecosystem/services/web-server
-      dockerfile: Dockerfile.observable
+      dockerfile: Dockerfile
     container_name: codecrow-web-application
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-codecrow_ai}
@@ -130,7 +130,7 @@ services:
     image: codecrow-local-pipeline-agent:latest
     build:
       context: ..
-      dockerfile: java-ecosystem/services/pipeline-agent/Dockerfile.observable
+      dockerfile: java-ecosystem/services/pipeline-agent/Dockerfile
     container_name: codecrow-pipeline-agent
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-codecrow_ai}
@@ -208,7 +208,7 @@ services:
     image: codecrow-local-inference-orchestrator:latest
     build:
       context: ..
-      dockerfile: python-ecosystem/inference-orchestrator/src/Dockerfile.observable
+      dockerfile: python-ecosystem/inference-orchestrator/src/Dockerfile
     container_name: codecrow-inference-orchestrator
     ports:
       - "127.0.0.1:${INFERENCE_ORCHESTRATOR_HOST_PORT:-8015}:8000"
@@ -267,7 +267,7 @@ services:
     image: codecrow-local-rag-pipeline:latest
     build:
       context: ..
-      dockerfile: python-ecosystem/rag-pipeline/Dockerfile.observable
+      dockerfile: python-ecosystem/rag-pipeline/Dockerfile
     container_name: codecrow-rag-pipeline
     environment:
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}

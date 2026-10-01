@@ -39,7 +39,7 @@ RUN groupadd --gid 1001 appgroup && \
 # Prepare the shared temporary workspace.
 RUN chmod -R 777 /tmp && \
     chown -R appuser:appgroup /app && \
-    mkdir -p /run/codecrow-config
+    mkdir -p /app/codecrow-config /run/codecrow-config
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src:/app/plugins/contracts/python
