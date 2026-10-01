@@ -1,705 +1,501 @@
-"""Query endpoints — semantic search, PR context, deterministic context."""
-import logging
-from typing import Dict, List, Optional
-from fastapi import APIRouter, HTTPException
-from qdrant_client.models import Filter, FieldCondition, MatchAny, MatchValue
+"""Revision-bound structural graph endpoints."""
 
-from ..models import QueryRequest, PRContextRequest, DeterministicContextRequest
-from ...core.revision_binding import (
-    require_repository_generation,
-    require_same_repository_generation,
+from __future__ import annotations
+
+import logging
+import re
+
+from fastapi import APIRouter, HTTPException
+
+from ...core.coordination import MutationLeaseUnavailable
+from ...core.exact_index import ExactIndexPreconditionError
+from ...core.review_context import (
+    ProposedTreeReviewContextService,
+    ProposedTreeUnavailableError,
 )
-from ...core.repository_overlay import IncrementalIndexPreconditionError
-from ...core.pr_overlay_manifest import (
-    PR_OVERLAY_MANIFEST_PAYLOAD_KEY,
-    read_pr_overlay_generation,
+from ...core.source_tree import RepositorySourceTreeError
+from ..heavy_work import get_build_workers, run_heavy_operation
+from ..models import (
+    CodeSearchRequest,
+    ReviewContextRequest,
+    ReviewContextResponse,
+    ReviewGraphQueryRequest,
+    ReviewImpactRadiusRequest,
+    ReviewMinimalContextRequest,
+    ProposedTreePrepareRequest,
+    ReviewTraverseRequest,
+    ReviewUnitRequest,
+    StructuralGraphQueryRequest,
+    StructuralRelationsRequest,
+    StructuralUnitRequest,
 )
+
+
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["query"])
+_SEARCH_TERM = re.compile(r"[A-Za-z_][A-Za-z0-9_:$\\.\-/]*")
+_PROPOSED_TREE_BINDING_FIELDS = (
+    "target_repo_path",
+    "review_overlay_path",
+    "workspace",
+    "project",
+    "target_branch",
+    "base_revision",
+    "source_revision",
+    "focus_paths",
+    "base_collection_target",
+    "base_generation_manifest_sha256",
+    "base_generation_revision",
+    "review_collection_target",
+    "review_generation_manifest_sha256",
+    "include_patterns",
+    "exclude_patterns",
+    "project_type",
+    "source_root",
+)
+
+_PROPOSED_TREE_PREPARATION_FIELDS = tuple(
+    field
+    for field in _PROPOSED_TREE_BINDING_FIELDS
+    if field not in {
+        "focus_paths",
+        "review_collection_target",
+        "review_generation_manifest_sha256",
+    }
+)
 
 
-def _get_singletons():
-    """Get lifecycle-managed singletons from the api module."""
-    from ..api import index_manager, query_service
-    return index_manager, query_service
+def _normalize_search_terms(query: str) -> list[str]:
+    return list(dict.fromkeys(
+        match.group(0).casefold()
+        for match in _SEARCH_TERM.finditer(str(query or ""))
+        if match.group(0).strip()
+    ))
 
 
-def _optional_string(value) -> Optional[str]:
-    """Ignore absent/loose legacy DTO attributes instead of binding them."""
-    return value if isinstance(value, str) and value else None
+def _manager():
+    from ..api import index_manager
+
+    return index_manager
 
 
-def _authoritative_pr_branch(request: PRContextRequest) -> Optional[str]:
-    """Return target-branch truth for hybrid PR retrieval.
-
-    Older inference clients sent the PR source as ``branch`` and the target as
-    ``base_branch``. Once a PR number is present, the overlay already represents
-    source changes, so querying source-branch repository vectors would mix a
-    second, potentially stale representation into the review.
-    """
-    if request.pr_number and request.base_branch:
-        return request.base_branch
-    return request.branch
-
-
-def _require_complete_pr_overlay_binding(
-    *,
-    pr_number: Optional[int],
-    target_branch: Optional[str],
-    source_revision: Optional[str],
-    base_revision: Optional[str],
-    base_generation_manifest: Optional[str],
-    pr_generation_fingerprint: Optional[str],
-    pr_overlay_manifest: Optional[str],
-) -> bool:
-    """Reject a claimed exact overlay whose identity is incomplete."""
-    overlay_binding_requested = bool(
-        pr_generation_fingerprint or pr_overlay_manifest
-    )
-    if not overlay_binding_requested:
-        return False
-    if not all((
-        pr_number,
-        target_branch,
-        source_revision,
-        base_revision,
-        base_generation_manifest,
-        pr_generation_fingerprint,
-        pr_overlay_manifest,
-    )):
-        raise IncrementalIndexPreconditionError(
-            "revision-bound PR overlay requires PR number, one authoritative "
-            "branch, source/base revisions, and both generation receipts"
-        )
-    return True
-
-
-@router.post("/query/search")
-def semantic_search(request: QueryRequest):
-    """Perform semantic search."""
-    index_manager, query_service = _get_singletons()
-    try:
-        repository_revision = _optional_string(
-            request.repository_revision
-        )
-        generation_manifest = _optional_string(
+def _open_reader(manager, request):
+    return manager.open_reader(
+        workspace=request.workspace,
+        project=request.project,
+        branch=request.branch,
+        revision=request.repository_revision,
+        generation_manifest_sha256=(
             request.repository_generation_manifest_sha256
+        ),
+        collection_target=request.collection_target,
+    )
+
+
+def _proposed_tree_operation(request, method: str, **operation_arguments):
+    service = ProposedTreeReviewContextService(_manager())
+    arguments = {
+        field: getattr(request, field)
+        for field in _PROPOSED_TREE_BINDING_FIELDS
+    }
+    arguments.update(operation_arguments)
+    try:
+        return getattr(service, method)(**arguments)
+    except MutationLeaseUnavailable as exception:
+        logger.warning(
+            "Proposed-tree graph operation mutation conflict: "
+            "operation=%s workspace=%s project=%s detail=%s",
+            method,
+            request.workspace,
+            request.project,
+            exception,
         )
-        collection_target = _optional_string(request.collection_target)
-        receipt = None
-        if repository_revision:
-            receipt = require_repository_generation(
-                index_manager=index_manager,
-                workspace=request.workspace,
-                project=request.project,
-                branch=request.branch,
-                revision=repository_revision,
-                generation_manifest_sha256=generation_manifest,
-                collection_target=collection_target,
+        raise HTTPException(status_code=409, detail=str(exception))
+    except (
+        ExactIndexPreconditionError,
+        ProposedTreeUnavailableError,
+        RepositorySourceTreeError,
+    ) as exception:
+        raise HTTPException(status_code=409, detail=str(exception))
+    except ValueError as exception:
+        raise HTTPException(status_code=400, detail=str(exception))
+    except Exception as exception:
+        logger.error(
+            "Proposed-tree graph operation failed: operation=%s detail=%s",
+            method,
+            exception,
+        )
+        raise HTTPException(status_code=500, detail=str(exception))
+
+
+@router.post("/query/relations")
+def structural_relations(request: StructuralRelationsRequest):
+    """Return compact one-hop AST and plugin relation metadata."""
+    manager = _manager()
+    try:
+        with _open_reader(manager, request) as reader:
+            return reader.relations_for_paths(
+                request.paths,
+                max_relations=request.max_relations,
             )
-        results = query_service.semantic_search(
-            query=request.query,
+    except (ExactIndexPreconditionError, ValueError) as exception:
+        raise HTTPException(status_code=409, detail=str(exception))
+    except Exception as exception:
+        logger.error("Structural relation query failed: %s", exception)
+        raise HTTPException(status_code=500, detail=str(exception))
+
+
+@router.post("/query/graph")
+def structural_graph_query(request: StructuralGraphQueryRequest):
+    """Run one exact, directional graph query over a sealed generation."""
+    manager = _manager()
+    try:
+        with _open_reader(manager, request) as reader:
+            return reader.query_graph(
+                request.pattern,
+                request.target,
+                max_results=request.max_results,
+            )
+    except (ExactIndexPreconditionError, ValueError) as exception:
+        raise HTTPException(status_code=409, detail=str(exception))
+    except Exception as exception:
+        logger.error("Structural graph query failed: %s", exception)
+        raise HTTPException(status_code=500, detail=str(exception))
+
+
+@router.post("/query/unit")
+def structural_unit(request: StructuralUnitRequest):
+    """Return one exact AST/plugin source unit selected by its opaque ID."""
+    manager = _manager()
+    try:
+        with _open_reader(manager, request) as reader:
+            result = reader.get_unit(request.unit_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Structural unit was not found")
+        return result
+    except HTTPException:
+        raise
+    except ExactIndexPreconditionError as exception:
+        raise HTTPException(status_code=409, detail=str(exception))
+    except Exception as exception:
+        logger.error("Structural unit query failed: %s", exception)
+        raise HTTPException(status_code=500, detail=str(exception))
+
+
+@router.post("/query/review-context", response_model=ReviewContextResponse)
+def review_context(request: ReviewContextRequest):
+    """Return bounded evidence from an exact request-bound proposed tree."""
+    manager = _manager()
+    try:
+        return ProposedTreeReviewContextService(manager).review_context(
+            target_repo_path=request.target_repo_path,
+            review_overlay_path=request.review_overlay_path,
             workspace=request.workspace,
             project=request.project,
-            branch=request.branch,
-            top_k=request.top_k,
-            filter_language=request.filter_language,
-            expected_revision=repository_revision,
-            collection_target=(
-                receipt["_collection_target"] if receipt else collection_target
+            target_branch=request.target_branch,
+            base_revision=request.base_revision,
+            source_revision=request.source_revision,
+            base_collection_target=request.base_collection_target,
+            base_generation_revision=request.base_generation_revision,
+            base_generation_manifest_sha256=(
+                request.base_generation_manifest_sha256
             ),
-        )
-        if receipt:
-            require_same_repository_generation(
-                index_manager,
-                workspace=request.workspace,
-                project=request.project,
-                branch=request.branch,
-                revision=repository_revision,
-                receipt=receipt,
-            )
-        return {"results": results}
-    except IncrementalIndexPreconditionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error performing search: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/query/pr-context")
-def get_pr_context(request: PRContextRequest):
-    """
-    Get context for PR review with multi-branch support and optional hybrid mode.
-
-    When pr_number is provided, uses HYBRID query:
-    1. Query PR-indexed chunks (pr=true, pr_number=X)
-    2. Query branch data, excluding files that are in the PR
-    3. Merge results with PR data taking priority
-    """
-    index_manager, query_service = _get_singletons()
-    try:
-        authoritative_branch = _authoritative_pr_branch(request)
-        if not authoritative_branch:
-            logger.warning("Branch not provided in PR context request, returning empty context")
-            return {
-                "context": {
-                    "relevant_code": [],
-                    "related_files": [],
-                    "changed_files": request.changed_files,
-                    "_metadata": {
-                        "skipped_reason": "branch_not_provided",
-                        "changed_files_count": len(request.changed_files),
-                        "result_count": 0
-                    }
-                }
-            }
-
-        source_revision = _optional_string(request.source_revision)
-        base_revision = _optional_string(request.base_revision)
-        base_generation_manifest = _optional_string(
-            request.base_generation_manifest_sha256
-        )
-        pr_generation_fingerprint = _optional_string(
-            request.pr_generation_fingerprint
-        )
-        pr_overlay_manifest = _optional_string(
-            request.pr_overlay_generation_manifest_sha256
-        )
-        collection_target = _optional_string(request.collection_target)
-        exact_overlay_binding = _require_complete_pr_overlay_binding(
-            pr_number=request.pr_number,
-            target_branch=authoritative_branch,
-            source_revision=source_revision,
-            base_revision=base_revision,
-            base_generation_manifest=base_generation_manifest,
-            pr_generation_fingerprint=pr_generation_fingerprint,
-            pr_overlay_manifest=pr_overlay_manifest,
-        )
-        receipt = None
-        overlay_receipt = None
-        if base_revision:
-            receipt = require_repository_generation(
-                index_manager,
-                workspace=request.workspace,
-                project=request.project,
-                branch=authoritative_branch,
-                revision=base_revision,
-                generation_manifest_sha256=base_generation_manifest,
-                collection_target=collection_target,
-            )
-        pr_results = []
-        collection_name = (
-            receipt["_collection_target"]
-            if receipt
-            else collection_target
-            or index_manager._get_project_collection_name(
-                request.workspace,
-                request.project,
-            )
-        )
-        preflight_branches = [authoritative_branch]
-        if query_service._collection_or_alias_exists(collection_name):
-            query_service._observe_branches(
-                collection_name,
-                preflight_branches,
-            )
-
-        # HYBRID MODE: Query PR-indexed data first if pr_number is provided
-        if request.pr_number:
-            if exact_overlay_binding:
-                overlay_receipt = read_pr_overlay_generation(
-                    index_manager.qdrant_client,
-                    collection_name,
-                    workspace=request.workspace,
-                    project=request.project,
-                    pr_number=request.pr_number,
-                    branch=request.branch or authoritative_branch,
-                    base_branch=authoritative_branch,
-                    source_revision=source_revision,
-                    base_revision=base_revision,
-                    base_generation_manifest_sha256=base_generation_manifest,
-                    generation_fingerprint=pr_generation_fingerprint,
-                    overlay_representation_fingerprint=(
-                        index_manager.pr_overlay_representation_fingerprint
-                    ),
-                    expected_manifest_sha256=(
-                        pr_overlay_manifest
-                    ),
-                )
-                if overlay_receipt is None:
-                    raise IncrementalIndexPreconditionError(
-                        "requested PR overlay generation is unavailable"
-                    )
-            pr_results = _query_pr_indexed_data(
-                index_manager=index_manager,
-                query_service=query_service,
-                workspace=request.workspace,
-                project=request.project,
-                pr_number=request.pr_number,
-                changed_files=request.changed_files,
-                query_texts=request.diff_snippets or [],
-                pr_title=request.pr_title,
-                top_k=request.top_k or 15,
-                collection_target=collection_name,
-                source_revision=source_revision,
-                base_revision=base_revision,
-                base_generation_manifest_sha256=base_generation_manifest,
-                pr_generation_fingerprint=pr_generation_fingerprint,
-            )
-            logger.info(f"Hybrid mode: Found {len(pr_results)} PR-specific chunks for PR #{request.pr_number}")
-
-        # Get branch context
-        context = query_service.get_context_for_pr(
-            workspace=request.workspace,
-            project=request.project,
-            branch=authoritative_branch,
-            changed_files=request.changed_files,
-            diff_snippets=request.diff_snippets or [],
-            pr_title=request.pr_title,
-            pr_description=request.pr_description,
-            top_k=request.top_k,
-            enable_priority_reranking=request.enable_priority_reranking,
-            min_relevance_score=request.min_relevance_score,
-            # Hybrid PR retrieval is target branch + PR overlay. The source
-            # branch must not enter the repository branch query a second time.
-            base_branch=None if request.pr_number else request.base_branch,
-            deleted_files=request.deleted_files or [],
-            exclude_pr_files=(request.all_pr_changed_files or []) if request.pr_number else [],
-            expected_revisions=(
-                {authoritative_branch: base_revision}
-                if base_revision else None
+            review_collection_target=request.review_collection_target,
+            review_generation_manifest_sha256=(
+                request.review_generation_manifest_sha256
             ),
-            collection_target=collection_name,
+            focus_paths=request.focus_paths,
+            question=request.question,
+            focus_symbols=request.focus_symbols,
+            include_patterns=request.include_patterns,
+            exclude_patterns=request.exclude_patterns,
+            project_type=request.project_type,
+            source_root=request.source_root,
+            max_relations=request.max_relations,
+            max_source_windows=request.max_source_windows,
+            max_source_characters=request.max_source_characters,
         )
-
-        # Merge PR results with branch results (PR first, then branch)
-        if pr_results:
-            pr_paths = set()
-            merged_code = []
-
-            for pr_chunk in pr_results:
-                merged_code.append(pr_chunk)
-                path = pr_chunk.get("path", "")
-                if path:
-                    pr_paths.add(path)
-
-            for branch_chunk in context.get("relevant_code", []):
-                metadata = branch_chunk.get("metadata")
-                path = branch_chunk.get("path", "") or (
-                    metadata.get("path", "")
-                    if isinstance(metadata, dict)
-                    else ""
-                )
-                if path not in pr_paths:
-                    merged_code.append(branch_chunk)
-
-            context["relevant_code"] = merged_code
-            context["_pr_chunks_count"] = len(pr_results)
-
-        context["_metadata"] = {
-            "priority_reranking_enabled": request.enable_priority_reranking,
-            "min_relevance_score": request.min_relevance_score,
-            "changed_files_count": len(request.changed_files),
-            "result_count": len(context.get("relevant_code", [])),
-            "branches_searched": context.get("_branches_searched", [request.branch]),
-            "hybrid_mode": request.pr_number is not None,
-            "pr_number": request.pr_number
-        }
-
-        if receipt:
-            require_same_repository_generation(
-                index_manager,
-                workspace=request.workspace,
-                project=request.project,
-                branch=authoritative_branch,
-                revision=base_revision,
-                receipt=receipt,
-            )
-        if request.pr_number and overlay_receipt:
-            current_overlay = read_pr_overlay_generation(
-                index_manager.qdrant_client,
-                collection_name,
-                workspace=request.workspace,
-                project=request.project,
-                pr_number=request.pr_number,
-                branch=request.branch or authoritative_branch,
-                base_branch=authoritative_branch,
-                source_revision=source_revision,
-                base_revision=base_revision,
-                base_generation_manifest_sha256=base_generation_manifest,
-                generation_fingerprint=pr_generation_fingerprint,
-                overlay_representation_fingerprint=(
-                    index_manager.pr_overlay_representation_fingerprint
-                ),
-                expected_manifest_sha256=None,
-            )
-            if current_overlay != overlay_receipt:
-                raise IncrementalIndexPreconditionError(
-                    "PR overlay generation changed while context was retrieved"
-                )
-
-        return {"context": context}
-    except IncrementalIndexPreconditionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error getting PR context: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except MutationLeaseUnavailable as exception:
+        logger.warning(
+            "Proposed-tree review context mutation conflict: "
+            "workspace=%s project=%s detail=%s",
+            request.workspace,
+            request.project,
+            exception,
+        )
+        raise HTTPException(status_code=409, detail=str(exception))
+    except (
+        ExactIndexPreconditionError,
+        ProposedTreeUnavailableError,
+        RepositorySourceTreeError,
+    ) as exception:
+        # Review enrichment is optional to its caller. A conflict response makes
+        # exact unavailability observable without presenting target-head data as
+        # proposed or failing the core review path.
+        raise HTTPException(status_code=409, detail=str(exception))
+    except ValueError as exception:
+        raise HTTPException(status_code=400, detail=str(exception))
+    except Exception as exception:
+        logger.error("Proposed-tree review context failed: %s", exception)
+        raise HTTPException(status_code=500, detail=str(exception))
 
 
-def _query_pr_indexed_data(
-    index_manager,
-    query_service,
-    workspace: str,
-    project: str,
-    pr_number: int,
-    changed_files: List[str],
-    query_texts: List[str],
-    pr_title: Optional[str],
-    top_k: int = 15,
-    collection_target: Optional[str] = None,
-    source_revision: Optional[str] = None,
-    base_revision: Optional[str] = None,
-    base_generation_manifest_sha256: Optional[str] = None,
-    pr_generation_fingerprint: Optional[str] = None,
-) -> List[Dict]:
-    """
-    Query PR-indexed chunks from the main collection.
-
-    Filters by pr=true and pr_number to get only PR-specific data.
-    When no meaningful query text exists, uses scroll() instead of
-    wasting an embedding call on a fabricated query.
-    """
+@router.post("/query/review-generation", name="prepare_review_generation")
+async def prepare_review_generation_endpoint(request: ProposedTreePrepareRequest):
+    workers = get_build_workers()
+    if workers is None:
+        return await run_heavy_operation(prepare_review_generation, request)
+    from ...core.review_generation import ReviewGenerationService
+    service = ReviewGenerationService(_manager())
     try:
-        collection_name = (
-            collection_target
-            or index_manager._get_project_collection_name(workspace, project)
-        )
-
-        exact_binding = all((
-            source_revision,
-            base_revision,
-            base_generation_manifest_sha256,
-            pr_generation_fingerprint,
-        ))
-        if not index_manager._collection_manager.collection_exists(collection_name):
-            if exact_binding:
-                raise IncrementalIndexPreconditionError(
-                    "revision-bound PR overlay collection is unavailable"
-                )
-            return []
-
-        query_parts = []
-        if pr_title:
-            query_parts.append(pr_title)
-        if query_texts:
-            query_parts.extend(query_texts)
-
-        pr_filter = Filter(
-            must=[
-                FieldCondition(key="pr", match=MatchValue(value=True)),
-                FieldCondition(key="pr_number", match=MatchValue(value=pr_number)),
-                *(
-                    [
-                        FieldCondition(key="pr_source_revision", match=MatchValue(value=source_revision)),
-                        FieldCondition(key="pr_base_revision", match=MatchValue(value=base_revision)),
-                        FieldCondition(key="pr_base_generation_manifest_sha256", match=MatchValue(value=base_generation_manifest_sha256)),
-                        FieldCondition(key="pr_generation_fingerprint", match=MatchValue(value=pr_generation_fingerprint)),
-                    ]
-                    if exact_binding else []
-                ),
-            ],
-            must_not=[FieldCondition(
-                key=PR_OVERLAY_MANIFEST_PAYLOAD_KEY,
-                match=MatchValue(value=True),
-            )],
-        )
-
-        direct_file_results = _fetch_direct_pr_file_chunks(
-            index_manager=index_manager,
-            query_service=query_service,
-            collection_name=collection_name,
-            pr_filter=pr_filter,
-            changed_files=changed_files,
-        )
-
-        if not query_parts:
-            results, _ = index_manager.qdrant_client.scroll(
-                collection_name=collection_name,
-                scroll_filter=pr_filter,
-                limit=max(top_k * 4, top_k),
-                with_payload=True,
-                with_vectors=False
-            )
-            if exact_binding:
-                for point in results:
-                    payload = point.payload or {}
-                    if any(payload.get(key) != value for key, value in (
-                        ("pr_source_revision", source_revision),
-                        ("pr_base_revision", base_revision),
-                        ("pr_base_generation_manifest_sha256", base_generation_manifest_sha256),
-                        ("pr_generation_fingerprint", pr_generation_fingerprint),
-                    )):
-                        raise IncrementalIndexPreconditionError(
-                            "PR point is outside the requested overlay generation"
-                        )
-            accepted = query_service._accept_stored_points(results)
-            if not isinstance(accepted, list):
-                accepted = results
-            formatted = _format_pr_results(accepted[:top_k])
-            return _merge_pr_results(direct_file_results, formatted)
-
-        query_text = " ".join(query_parts)
-
-        query_embedding = index_manager.embed_model.get_text_embedding(query_text)
-
-        response = index_manager.qdrant_client.query_points(
-            collection_name=collection_name,
-            query=query_embedding,
-            query_filter=pr_filter,
-            limit=max(top_k * 4, top_k),
-            with_payload=True,
-        )
-        results = query_service._accept_stored_points(
-            response.points
-        )[:top_k]
-
-        formatted = _format_pr_results(results)
-
-        return _merge_pr_results(direct_file_results, formatted)
-
-    except Exception as e:
-        if exact_binding:
-            raise
-        logger.warning(f"Error querying PR-indexed data: {e}")
-        return []
+        key = await run_heavy_operation(service.preparation_key, **_preparation_arguments(request))
+    except (ExactIndexPreconditionError, ProposedTreeUnavailableError, RepositorySourceTreeError) as exception:
+        raise HTTPException(status_code=409, detail=str(exception))
+    except ValueError as exception:
+        raise HTTPException(status_code=400, detail=str(exception))
+    except Exception as exception:
+        raise HTTPException(status_code=500, detail=str(exception))
+    return await workers.run_coalesced(key, "prepare_review", {
+        "request": request.model_dump(mode="json"),
+    })
 
 
-def _normalize_changed_file_candidates(changed_files: List[str]) -> List[str]:
-    candidates = []
-    seen = set()
-
-    for path in changed_files or []:
-        if not path:
-            continue
-
-        for candidate in (path, path.lstrip("/")):
-            if candidate and candidate not in seen:
-                seen.add(candidate)
-                candidates.append(candidate)
-
-    return candidates
-
-
-def _fetch_direct_pr_file_chunks(
-    index_manager,
-    query_service,
-    collection_name: str,
-    pr_filter: Filter,
-    changed_files: List[str],
-) -> List[Dict]:
-    path_candidates = _normalize_changed_file_candidates(changed_files)
-    if not path_candidates:
-        return []
-
-    direct_filter = Filter(
-        must=[
-            *pr_filter.must,
-            FieldCondition(key="path", match=MatchAny(any=path_candidates)),
+def _preparation_arguments(request):
+    arguments = {
+        field: getattr(request, field)
+        for field in _PROPOSED_TREE_PREPARATION_FIELDS
+    }
+    if request.index_policy is not None:
+        arguments["index_policy"] = request.index_policy.model_dump()
+    if request.base_generation_candidates:
+        arguments["base_generation_candidates"] = [
+            candidate.model_dump() for candidate in request.base_generation_candidates
         ]
-    )
-
-    result_limit = max(32, len(path_candidates) * 8)
-    results, _ = index_manager.qdrant_client.scroll(
-        collection_name=collection_name,
-        scroll_filter=direct_filter,
-        limit=result_limit * 4,
-        with_payload=True,
-        with_vectors=False,
-    )
-
-    accepted = query_service._accept_stored_points(results)
-    formatted = _format_pr_results(
-        accepted[:result_limit],
-        forced_match_type="changed_file",
-        forced_score=1.0,
-    )
-    if formatted:
-        logger.info("Hybrid mode: force-including %d PR-indexed chunk(s) for %d changed file(s)", len(formatted), len(path_candidates))
-    return formatted
+    return arguments
 
 
-def _format_pr_results(results, forced_match_type: Optional[str] = None, forced_score: Optional[float] = None) -> List[Dict]:
-    formatted = []
-    for r in results:
-        payload = getattr(r, "payload", None) or {}
-        path = payload.get("path", "")
-        text = payload.get("text", "")
-        if not path or path == "unknown" or not text or not text.strip():
-            continue
-
-        item = {
-            "path": path,
-            "text": text,
-            "semantic_name": payload.get("semantic_name", ""),
-            "semantic_type": payload.get("semantic_type", ""),
-            "branch": payload.get("pr_branch", ""),
-            "_source": "pr_indexed",
-        }
-
-        score = getattr(r, "score", None)
-        if forced_score is not None:
-            item["score"] = forced_score
-        elif score is not None:
-            item["score"] = score
-
-        if forced_match_type:
-            item["_match_type"] = forced_match_type
-
-        formatted.append(item)
-
-    return formatted
-
-
-def _merge_pr_results(priority_results: List[Dict], semantic_results: List[Dict]) -> List[Dict]:
-    merged = []
-    seen = set()
-
-    for chunk in [*(priority_results or []), *(semantic_results or [])]:
-        key = (chunk.get("path", ""), chunk.get("text", "")[:200])
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(chunk)
-
-    return merged
-
-
-@router.post("/query/deterministic")
-def get_deterministic_context(request: DeterministicContextRequest):
-    """
-    Get context using DETERMINISTIC metadata-based retrieval.
-
-    No language-specific parsing needed - tree-sitter already did it during indexing.
-    Predictable: same input = same output.
-    """
-    index_manager, query_service = _get_singletons()
+def prepare_review_generation(request: ProposedTreePrepareRequest, *, manager=None, cancellation_event=None):
+    """Prepare one sealed proposed-tree generation before Stage 1 fan-out."""
+    service = ProposedTreeReviewContextService(manager if manager is not None else _manager())
+    arguments = _preparation_arguments(request)
+    if cancellation_event is not None:
+        arguments["cancellation_event"] = cancellation_event
     try:
-        target_branch = request.branches[0] if request.branches else None
-        source_revision = _optional_string(request.source_revision)
-        base_revision = _optional_string(request.base_revision)
-        base_generation_manifest = _optional_string(
-            request.base_generation_manifest_sha256
+        generation = service.prepare_generation_singleflight(**arguments)
+        metadata = generation.receipt["snapshot_metadata"]
+        return {
+            "status": "ready",
+            "index_policy": {
+                "include_patterns": generation.receipt.get("index_include_patterns") or [],
+                "exclude_patterns": generation.receipt.get("index_exclude_patterns") or [],
+                "project_type": metadata.get("project_type"),
+                "source_root": metadata.get("source_root"),
+            },
+            # Preparation may rebuild without an unusable base receipt. Query
+            # callers must bind to the provenance actually sealed in that tree.
+            "base_collection_target": metadata.get("base_collection_target"),
+            "base_generation_revision": metadata.get("base_generation_revision"),
+            "base_generation_manifest_sha256": metadata.get("base_generation_manifest_sha256"),
+            "collection_target": generation.collection_target,
+            "generation_manifest_sha256": generation.receipt[
+                "generation_manifest_sha256"
+            ],
+            "source_revision": request.source_revision,
+            "source_tree_sha256": generation.proposed_source_tree_sha256,
+            "overlay_sha256": generation.overlay_sha256,
+            "representation_identity": generation.representation_identity,
+            "changed_paths": list(generation.changed_paths),
+            "deleted_paths": list(generation.deleted_paths),
+            "cache_hit": generation.cache_hit,
+        }
+    except MutationLeaseUnavailable as exception:
+        logger.warning(
+            "Proposed-tree generation mutation conflict: workspace=%s "
+            "project=%s detail=%s",
+            request.workspace,
+            request.project,
+            exception,
         )
-        pr_generation_fingerprint = _optional_string(
-            request.pr_generation_fingerprint
+        raise HTTPException(status_code=409, detail=str(exception))
+    except (
+        ExactIndexPreconditionError,
+        ProposedTreeUnavailableError,
+        RepositorySourceTreeError,
+    ) as exception:
+        raise HTTPException(status_code=409, detail=str(exception))
+    except ValueError as exception:
+        raise HTTPException(status_code=400, detail=str(exception))
+    except Exception as exception:
+        logger.error("Proposed-tree generation preparation failed: %s", exception)
+        raise HTTPException(status_code=500, detail=str(exception))
+
+
+@router.post("/query/review-minimal-context")
+def review_minimal_context(request: ReviewMinimalContextRequest):
+    """Return a compact starting map from the exact proposed-tree graph."""
+
+    return _proposed_tree_operation(
+        request,
+        "minimal_review_context",
+        question=request.question,
+        focus_symbols=request.focus_symbols,
+        max_relations=request.max_relations,
+        detail_level=request.detail_level,
+        include_source=request.include_source,
+        max_source_windows=request.max_source_windows,
+        max_source_characters=request.max_source_characters,
+    )
+
+
+@router.post("/query/review-impact-radius")
+def review_impact_radius(request: ReviewImpactRadiusRequest):
+    """Return weighted best-score impact traversal over the proposed tree."""
+
+    return _proposed_tree_operation(
+        request,
+        "review_impact_radius",
+        targets=request.targets,
+        max_depth=request.max_depth,
+        max_results=request.max_results,
+        detail_level=request.detail_level,
+        include_source=request.include_source,
+        max_source_windows=request.max_source_windows,
+        max_source_characters=request.max_source_characters,
+    )
+
+
+@router.post("/query/review-traverse")
+def review_traverse(request: ReviewTraverseRequest):
+    """Traverse proposed-tree facts with deterministic BFS or DFS."""
+
+    return _proposed_tree_operation(
+        request,
+        "traverse_review_graph",
+        start=request.start,
+        strategy=request.strategy,
+        direction=request.direction,
+        relation_kinds=request.relation_kinds,
+        max_depth=request.max_depth,
+        max_results=request.max_results,
+        token_budget=request.token_budget,
+        detail_level=request.detail_level,
+        include_source=request.include_source,
+        max_source_windows=request.max_source_windows,
+        max_source_characters=request.max_source_characters,
+    )
+
+
+@router.post("/query/review-graph")
+def review_graph(request: ReviewGraphQueryRequest):
+    """Run one exact directional query over the proposed-tree graph."""
+
+    return _proposed_tree_operation(
+        request,
+        "query_review_graph",
+        pattern=request.pattern,
+        target=request.target,
+        max_results=request.max_results,
+        cursor=request.cursor,
+        detail_level=request.detail_level,
+        include_source=request.include_source,
+        max_source_windows=request.max_source_windows,
+        max_source_characters=request.max_source_characters,
+    )
+
+
+@router.post("/query/review-unit")
+def review_unit(request: ReviewUnitRequest):
+    """Return one exact AST/plugin unit from the proposed-tree graph."""
+
+    result = _proposed_tree_operation(
+        request,
+        "get_review_structural_unit",
+        unit_id=request.unit_id,
+        offset=request.offset,
+        max_characters=request.max_characters,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Review structural unit was not found",
         )
-        pr_overlay_manifest = _optional_string(
-            request.pr_overlay_generation_manifest_sha256
-        )
-        collection_target = _optional_string(request.collection_target)
-        receipt = None
-        overlay_receipt = None
-        exact_overlay_binding = _require_complete_pr_overlay_binding(
-            pr_number=request.pr_number,
-            target_branch=target_branch,
-            source_revision=source_revision,
-            base_revision=base_revision,
-            base_generation_manifest=base_generation_manifest,
-            pr_generation_fingerprint=pr_generation_fingerprint,
-            pr_overlay_manifest=pr_overlay_manifest,
-        )
-        if base_revision and target_branch:
-            if len(request.branches) != 1:
-                raise IncrementalIndexPreconditionError(
-                    "revision-bound deterministic context requires exactly one authoritative branch"
-                )
-            receipt = require_repository_generation(
-                index_manager,
-                workspace=request.workspace,
-                project=request.project,
-                branch=target_branch,
-                revision=base_revision,
-                generation_manifest_sha256=base_generation_manifest,
-                collection_target=collection_target,
+    return result
+
+
+
+
+
+
+@router.post("/query/code-search")
+def code_search(request: CodeSearchRequest):
+    """Compatibility endpoint for exact lexical path/symbol navigation."""
+    manager = _manager()
+    try:
+        result_limit = request.limit or 25
+        with _open_reader(manager, request) as reader:
+            units = reader.search_units(
+                request.query,
+                max_results=result_limit + 1,
             )
-        if exact_overlay_binding:
-            overlay_receipt = read_pr_overlay_generation(
-                index_manager.qdrant_client,
-                receipt["_collection_target"],
-                workspace=request.workspace,
-                project=request.project,
-                pr_number=request.pr_number,
-                branch=target_branch,
-                base_branch=target_branch,
-                source_revision=source_revision,
-                base_revision=base_revision,
-                base_generation_manifest_sha256=base_generation_manifest,
-                generation_fingerprint=pr_generation_fingerprint,
-                overlay_representation_fingerprint=(
-                    index_manager.pr_overlay_representation_fingerprint
-                ),
-                expected_manifest_sha256=(
-                    pr_overlay_manifest
-                ),
-            )
-            if overlay_receipt is None:
-                raise IncrementalIndexPreconditionError(
-                    "requested PR overlay generation is unavailable"
-                )
-        context = query_service.get_deterministic_context(
-            workspace=request.workspace,
-            project=request.project,
-            branches=request.branches,
-            file_paths=request.file_paths,
-            limit_per_file=request.limit_per_file or 10,
-            pr_number=request.pr_number,
-            pr_changed_files=request.pr_changed_files,
-            additional_identifiers=request.additional_identifiers,
-            expected_revisions=(
-                {target_branch: base_revision}
-                if base_revision and target_branch else None
-            ),
-            pr_source_revision=source_revision,
-            pr_base_revision=base_revision,
-            pr_base_generation_manifest_sha256=base_generation_manifest,
-            pr_generation_fingerprint=pr_generation_fingerprint,
-            collection_target=(
-                receipt["_collection_target"] if receipt else collection_target
-            ),
-        )
-        if receipt:
-            require_same_repository_generation(
-                index_manager,
-                workspace=request.workspace,
-                project=request.project,
-                branch=target_branch,
-                revision=base_revision,
-                receipt=receipt,
-            )
-        if overlay_receipt:
-            second_overlay = read_pr_overlay_generation(
-                index_manager.qdrant_client,
-                receipt["_collection_target"],
-                workspace=request.workspace,
-                project=request.project,
-                pr_number=request.pr_number,
-                branch=target_branch,
-                base_branch=target_branch,
-                source_revision=source_revision,
-                base_revision=base_revision,
-                base_generation_manifest_sha256=base_generation_manifest,
-                generation_fingerprint=pr_generation_fingerprint,
-                overlay_representation_fingerprint=(
-                    index_manager.pr_overlay_representation_fingerprint
-                ),
-            )
-            if second_overlay != overlay_receipt:
-                raise IncrementalIndexPreconditionError(
-                    "PR overlay generation changed while context was retrieved"
-                )
-        return {"context": context}
-    except IncrementalIndexPreconditionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error getting deterministic context: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+            snapshot = reader.snapshot()
+            results = []
+            terms = _normalize_search_terms(request.query)
+            for unit in units[:result_limit]:
+                detail = reader.get_unit(unit["unitId"]) or {}
+                source = detail.get("unit") or {}
+                text = str(source.get("content") or "")
+                path_text = str(unit.get("path") or "").casefold()
+                symbol_text = " ".join((
+                    str(unit.get("name") or ""),
+                    str(unit.get("qualifiedName") or ""),
+                )).casefold()
+                source_text = text.casefold()
+                match_reasons = []
+                if any(term in path_text for term in terms):
+                    match_reasons.append("path")
+                if any(term in symbol_text for term in terms):
+                    match_reasons.append("symbol")
+                if any(term in source_text for term in terms):
+                    match_reasons.append("source")
+                results.append({
+                    "id": unit["unitId"],
+                    "path": unit.get("path"),
+                    "text": text,
+                    "record_type": unit.get("recordType"),
+                    "metadata": {
+                        "start_line": unit.get("startLine"),
+                        "end_line": unit.get("endLine"),
+                        "language": unit.get("language"),
+                        "kind": unit.get("kind"),
+                        "name": unit.get("name"),
+                        "qualified_name": unit.get("qualifiedName"),
+                        "snapshot": snapshot,
+                        "source_evidence": detail.get("sourceEvidence", False),
+                    },
+                    "matched_terms": [
+                        term
+                        for term in terms
+                        if term in " ".join((
+                            path_text,
+                            symbol_text,
+                            source_text,
+                        ))
+                    ],
+                    "match_reasons": match_reasons,
+                })
+        truncated = len(units) > result_limit
+        return {
+            "snapshot": snapshot,
+            "results": results,
+            "coverage": {
+                "complete": not truncated,
+                "partial_reasons": [] if not truncated else ["result_limit"],
+                "matching_results": len(results),
+                "returned_results": len(results),
+            },
+        }
+    except ExactIndexPreconditionError as exception:
+        raise HTTPException(status_code=409, detail=str(exception))
+    except Exception as exception:
+        logger.error("Structural code search failed: %s", exception)
+        raise HTTPException(status_code=500, detail=str(exception))

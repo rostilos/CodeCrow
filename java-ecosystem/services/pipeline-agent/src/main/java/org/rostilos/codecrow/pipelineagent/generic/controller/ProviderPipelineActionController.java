@@ -13,6 +13,7 @@ import org.rostilos.codecrow.pipelineagent.generic.service.PipelineJobService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -20,14 +21,13 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.Map;
 import java.nio.charset.StandardCharsets;
@@ -48,17 +48,20 @@ public class ProviderPipelineActionController {
     private final PipelineJobService pipelineJobService;
     private final ObjectMapper objectMapper;
     private final boolean streamingResponseEnabled;
+    private final Executor actionExecutor;
 
     public ProviderPipelineActionController(
             PipelineActionProcessor pipelineActionProcessor,
             PipelineJobService pipelineJobService,
             ObjectMapper objectMapper,
-            @Value("${codecrow.pipeline.streaming-response.enabled:true}") boolean streamingResponseEnabled
+            @Value("${codecrow.pipeline.streaming-response.enabled:true}") boolean streamingResponseEnabled,
+            @Qualifier("pipelineActionExecutor") Executor actionExecutor
     ) {
         this.pipelineActionProcessor = pipelineActionProcessor;
         this.pipelineJobService = pipelineJobService;
         this.objectMapper = objectMapper;
         this.streamingResponseEnabled = streamingResponseEnabled;
+        this.actionExecutor = actionExecutor;
     }
 
     @PostMapping("/webhook/pr")
@@ -100,67 +103,45 @@ public class ProviderPipelineActionController {
         );
     }
 
-    @PostMapping(value = "/webhook/branch", consumes = {MediaType.APPLICATION_JSON_VALUE, MediaType.MULTIPART_FORM_DATA_VALUE})
+    @PostMapping(value = "/webhook/branch", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> handleBranchWebhook(
             @AuthenticationPrincipal ProjectDTO authenticationPrincipal,
-            @RequestPart(value = "request", required = false) String requestJson,
-            @RequestBody(required = false) String bodyJson,
-            @RequestPart(value = "archive", required = false) MultipartFile archive
+            @Valid @RequestBody BranchProcessRequest payload
     ) {
-        try {
-            BranchProcessRequest payload;
-            if (requestJson != null) {
-                payload = objectMapper.readValue(requestJson, BranchProcessRequest.class);
-            } else if (bodyJson != null) {
-                payload = objectMapper.readValue(bodyJson, BranchProcessRequest.class);
-            } else {
-                throw new IllegalArgumentException("Request payload is required");
-            }
+        Job job = pipelineJobService.createPipelineBranchJob(payload);
 
-            if (archive != null && !archive.isEmpty()) {
-                payload.setArchive(archive.getBytes());
-                log.info("Archive received: {} bytes", archive.getSize());
-            }
-
-            Job job = pipelineJobService.createPipelineBranchJob(payload);
-
-            return processWebhookWithJob(
-                    authenticationPrincipal,
-                    payload,
-                    job,
-                    (consumer, jobRef) -> {
-                        PipelineActionProcessor.EventConsumer dualConsumer =
-                                pipelineJobService.createDualConsumer(jobRef, consumer);
-                        try {
-                            return pipelineActionProcessor.processPipelineActionWithConsumer(
-                                    payload, dualConsumer, jobRef);
-                        } catch (org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException e) {
-                            log.warn("Analysis locked: {}", e.getMessage());
-                            dualConsumer.accept(Map.of(
-                                    "type", "lock_wait",
-                                    "message", e.getMessage(),
-                                    "lockType", e.getLockType(),
-                                    "branchName", e.getBranchName(),
-                                    "projectId", e.getProjectId()
-                            ));
-                            return Map.of("status", "locked", "message", e.getMessage());
-                        } catch (Exception e) {
-                            log.error("Error in webhook processing", e);
-                            dualConsumer.accept(Map.of(
-                                    "type", "error",
-                                    "message", "Processing failed: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
-                            ));
-                            return Map.of("status", "error", "message", e.getMessage());
-                        }
+        return processWebhookWithJob(
+                authenticationPrincipal,
+                payload,
+                job,
+                (consumer, jobRef) -> {
+                    PipelineActionProcessor.EventConsumer dualConsumer =
+                            pipelineJobService.createDualConsumer(jobRef, consumer);
+                    try {
+                        return pipelineActionProcessor.processPipelineActionWithConsumer(
+                                payload, dualConsumer, jobRef);
+                    } catch (org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException e) {
+                        log.warn("Analysis locked: {}", e.getMessage());
+                        dualConsumer.accept(Map.of(
+                                "type", "lock_wait",
+                                "message", e.getMessage(),
+                                "lockType", e.getLockType(),
+                                "branchName", e.getBranchName(),
+                                "projectId", e.getProjectId()
+                        ));
+                        return Map.of("status", "locked", "message", e.getMessage());
+                    } catch (Exception e) {
+                        log.error("Error in webhook processing", e);
+                        dualConsumer.accept(Map.of(
+                                "type", "error",
+                                "message", "Processing failed: " + (e.getMessage() != null
+                                        ? e.getMessage()
+                                        : e.getClass().getSimpleName())
+                        ));
+                        return Map.of("status", "error", "message", e.getMessage());
                     }
-            );
-        } catch (IOException e) {
-            log.error("Failed to parse request or read archive", e);
-            throw createErrorResponse(HttpServletResponse.SC_BAD_REQUEST, "invalid_request", e.getMessage());
-        } catch (IllegalArgumentException e) {
-            log.error("Invalid webhook request: {}", e.getMessage());
-            throw createErrorResponse(HttpServletResponse.SC_BAD_REQUEST, "invalid_request", e.getMessage());
-        }
+                }
+        );
     }
 
     @FunctionalInterface
@@ -202,7 +183,7 @@ public class ProviderPipelineActionController {
                     log.error("Error in webhook processing", e);
                     return Map.of("status", "error", "message", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
                 }
-            });
+            }, actionExecutor);
 
             try {
                 Map<String, Object> quickResult = processingFuture.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);

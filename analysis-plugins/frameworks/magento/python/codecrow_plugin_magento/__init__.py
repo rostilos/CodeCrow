@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from codecrow_plugins import (
     CandidateClaim,
@@ -11,7 +12,11 @@ from codecrow_plugins import (
     ValidationResult,
 )
 
-from .architecture import is_magento_config_xml
+from .architecture import (
+    MAGENTO_VIEW_SOURCE_SUFFIXES,
+    is_magento_config_xml,
+    is_magento_view_xml,
+)
 from .repository import MagentoRepositorySession
 
 
@@ -26,7 +31,10 @@ _CLAIM_KINDS = (
         "magento-di-plugin-priority",
         "magento-interceptor-inapplicable",
     )),
-    ("observer", ("magento-effective-observer",)),
+    ("observer", (
+        "magento-effective-observer",
+        "magento-event-dispatch-observer",
+    )),
     ("webapi", ("magento-webapi-route",)),
     ("acl", ("magento-acl-resource", "magento-webapi-acl")),
     ("route", (
@@ -102,9 +110,7 @@ class MagentoPlugin:
         ):
             return PluginOutcome.handled(FileDisposition.ARCHITECTURE_ONLY)
         if normalized.endswith(".xml") and (
-            is_magento_config_xml(path)
-            or "/layout/" in normalized
-            or "/ui_component/" in normalized
+            is_magento_config_xml(path) or is_magento_view_xml(path)
         ):
             return PluginOutcome.handled(FileDisposition.ARCHITECTURE_ONLY)
         if normalized.startswith("/vendor/"):
@@ -114,11 +120,11 @@ class MagentoPlugin:
                 "requirejs-config.js",
             }:
                 return PluginOutcome.handled(FileDisposition.ARCHITECTURE_ONLY)
-            suffix = normalized.rsplit(".", 1)[-1] if "." in normalized else ""
-            if suffix in {"php", "inc"}:
+            suffix = PurePosixPath(normalized).suffix
+            if suffix in {".php", ".inc"}:
                 return PluginOutcome.handled(FileDisposition.FULL)
             if (
-                suffix in {"phtml", "js", "mjs", "ts", "css", "less", "html"}
+                suffix in MAGENTO_VIEW_SOURCE_SUFFIXES
                 and ("/view/" in normalized or "/web/" in normalized)
             ):
                 return PluginOutcome.handled(FileDisposition.ARCHITECTURE_ONLY)
@@ -232,7 +238,11 @@ class MagentoPlugin:
         # references Magento. This avoids treating a generic application event
         # finding as an observer-configuration claim.
         if "event" in message and "magento" in message:
-            return ("magento-effective-observer",)
+            return (
+                "magento-effective-observer",
+                "magento-event-dispatch",
+                "magento-event-dispatch-observer",
+            )
         if (
             "route" in message
             and "webapi" not in message

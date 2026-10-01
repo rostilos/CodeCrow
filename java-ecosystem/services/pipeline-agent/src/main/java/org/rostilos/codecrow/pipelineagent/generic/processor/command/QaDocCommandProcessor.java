@@ -2,7 +2,6 @@ package org.rostilos.codecrow.pipelineagent.generic.processor.command;
 
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
-import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
@@ -333,12 +332,11 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             if (pendingHandoffDocument.isEmpty()
                     && isSamePrRerun && state.getLastCommitHash() != null
                     && commitHash != null && vcsClient != null) {
-                DiffContentFilter contentFilter = new DiffContentFilter();
                 final VcsClient clientForDiff = vcsClient;
                 deltaDiff = VcsDiffUtils.fetchDeltaDiff(
                         clientForDiff::getCommitRangeDiff,
                         workspace, repoSlug,
-                        state.getLastCommitHash(), commitHash, contentFilter);
+                        state.getLastCommitHash(), commitHash);
                 if (deltaDiff != null) {
                     log.info("qa-doc command: computed delta diff ({} chars) for same-PR re-run",
                             deltaDiff.length());

@@ -5,7 +5,6 @@ from model.dtos import ReviewRequestDto
 from model.multi_stage import ReviewPlan
 from model.output_schemas import CodeReviewIssue
 from service.review.orchestrator.inference_policy import (
-    DEFAULT_STAGE_OUTPUT_CAPS,
     ReviewInferenceProfile,
     build_review_inference_profile,
     should_run_stage_2,
@@ -37,7 +36,6 @@ def _fast_profile():
         size_class="small",
         fast_check_enabled=True,
         fast_check_reason="test",
-        caps={},
     )
 
 
@@ -49,8 +47,15 @@ def _full_profile():
         size_class="large",
         fast_check_enabled=False,
         fast_check_reason="test",
-        caps={},
     )
+
+
+def test_review_profile_limits_invocation_fanout_not_generated_output():
+    profile = _fast_profile()
+
+    assert profile.invocation_cap("stage_1_total") == 4
+    assert not hasattr(profile, "output_cap")
+    assert not hasattr(profile, "caps")
 
 
 def test_grouped_llm_dedup_is_enabled_by_default():
@@ -121,20 +126,3 @@ def test_high_severity_issue_forces_stage_2_without_category_allowlist():
 
     assert run is True
     assert "high-severity" in reason
-
-
-def test_default_output_caps_are_not_tiny_for_structured_json():
-    assert DEFAULT_STAGE_OUTPUT_CAPS["stage_0"]["large"] >= 12_000
-    assert DEFAULT_STAGE_OUTPUT_CAPS["stage_1"]["large"] >= 40_000
-    assert DEFAULT_STAGE_OUTPUT_CAPS["stage_2"]["large"] >= 25_000
-    assert DEFAULT_STAGE_OUTPUT_CAPS["stage_3"]["large"] >= 18_000
-
-
-def test_stage_output_cap_env_override(monkeypatch):
-    monkeypatch.setenv("REVIEW_STAGE_0_MAX_OUTPUT_TOKENS", "16000")
-    request = _request(changedFiles=[f"src/file_{i}.py" for i in range(20)])
-
-    profile = build_review_inference_profile(request, processed_diff=None)
-
-    assert profile.size_class == "large"
-    assert profile.output_cap("stage_0") == 16_000

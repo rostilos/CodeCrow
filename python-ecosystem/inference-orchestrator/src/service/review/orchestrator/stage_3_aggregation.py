@@ -1,22 +1,177 @@
 """
 Stage 3: Aggregation & final report — executive summary, optional MCP verification.
 """
+from service.review.execution_scheduler import review_model_slot
 import json
 import logging
-import re
+import os
 from typing import Any, Dict, List, Optional
 
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from model.multi_stage import ReviewPlan, CrossFileAnalysisResult
-from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import ProcessedDiff
 from utils.task_context_builder import build_task_context
 
 from utils.llm_response import extract_llm_response_text
-from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
+from service.review.orchestrator.inference_policy import (
+    ReviewInferenceProfile,
+    build_review_inference_profile,
+)
+from service.review.orchestrator.stage_3_mcp_verification import (
+    Stage3McpRuntime,
+    _location_line,
+    execute_stage_3_mcp_verification,
+    extract_dismissed_issues as _extract_dismissed_issues,
+    issue_reason_brief as _stage_3_reason_brief,
+    location_file_path as _location_file_path,
+    mcp_read_covers_location as _mcp_read_covers_location,
+    normalized_related_locations as _normalized_related_locations,
+    required_verification_locations as _required_verification_locations,
+    safe_issue_field as _safe_issue_field,
+    validated_mcp_dismissals as _validated_mcp_dismissals,
+    verification_issue_map as _stage_3_verification_issue_map,
+    verification_record as _stage_3_verification_record,
+)
+from service.review.orchestrator.stage_3_semantic_packing import (
+    _FREE_TEXT_BOUNDARY_RE,
+    _FREE_TEXT_SEQUENCE_PLACEHOLDER,
+    _PATH_TOKEN_RE,
+    _PATH_VALUE_KEYS,
+    _SEMANTIC_SHARD_NOTICE,
+    _SEMANTIC_TERM_RE,
+    _STAGE3_ESTIMATOR_SAFETY_TOKENS,
+    _STAGE3_OMISSION_NOTICE_RESERVE_TOKENS,
+    _Stage3PromptContext,
+    _Stage3PromptShard,
+    _Stage3SemanticRecord,
+    _build_stage_3_prompt_shards,
+    _complete_review_plan_payload,
+    _dependency_aware_stage_3_units,
+    _estimated_prompt_tokens,
+    _estimated_stage_3_messages_tokens,
+    _expand_oversized_stage_3_unit,
+    _json_record_section,
+    _plan_semantic_records,
+    _render_complete_stage_3_prompt,
+    _render_stage_3_semantic_shard,
+    _split_oversized_stage_3_free_text_records,
+    _split_stage_3_free_text_record,
+    _stage_2_semantic_records,
+    _stage_3_component_authority_records,
+    _stage_3_component_boundary_anchor,
+    _stage_3_declaration_bytes,
+    _stage_3_free_text_probe_anchor,
+    _stage_3_issue_inventory,
+    _stage_3_mcp_continuation_messages,
+    _stage_3_message_payload,
+    _stage_3_object_value,
+    _stage_3_record_paths,
+    _stage_3_record_terms,
+    _stage_3_splittable_text,
+    _stage_3_text_segment_record,
+    _stage_3_tool_definitions,
+    _task_semantic_records,
+)
+from service.review.orchestrator.stage_3_synthesis import (
+    Stage3SynthesisRuntime,
+    _build_stage_3_synthesis_shards,
+    _merge_stage_3_results,
+    _render_stage_3_synthesis_shard,
+    _stable_result_union,
+    _stage_3_shard_provenance,
+    synthesize_stage_3_results,
+)
+from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
 
 logger = logging.getLogger(__name__)
+
+# Compatibility exports for callers that historically imported Stage 3
+# packing, synthesis, or verification helpers from this coordinator module.
+__all__ = [
+    "STAGE3_INPUT_TOKEN_TARGET",
+    "execute_stage_3_aggregation",
+    "_FREE_TEXT_BOUNDARY_RE",
+    "_FREE_TEXT_SEQUENCE_PLACEHOLDER",
+    "_PATH_TOKEN_RE",
+    "_PATH_VALUE_KEYS",
+    "_SEMANTIC_SHARD_NOTICE",
+    "_SEMANTIC_TERM_RE",
+    "_STAGE3_ESTIMATOR_SAFETY_TOKENS",
+    "_STAGE3_OMISSION_NOTICE_RESERVE_TOKENS",
+    "_Stage3PromptContext",
+    "_Stage3PromptShard",
+    "_Stage3SemanticRecord",
+    "_build_stage_3_prompt_shards",
+    "_build_stage_3_synthesis_shards",
+    "_complete_review_plan_payload",
+    "_dependency_aware_stage_3_units",
+    "_estimated_prompt_tokens",
+    "_estimated_stage_3_messages_tokens",
+    "_expand_oversized_stage_3_unit",
+    "_extract_dismissed_issues",
+    "_json_record_section",
+    "_location_file_path",
+    "_location_line",
+    "_merge_stage_3_results",
+    "_mcp_read_covers_location",
+    "_normalized_related_locations",
+    "_plan_semantic_records",
+    "_render_complete_stage_3_prompt",
+    "_render_stage_3_semantic_shard",
+    "_render_stage_3_synthesis_shard",
+    "_required_verification_locations",
+    "_safe_issue_field",
+    "_split_oversized_stage_3_free_text_records",
+    "_split_stage_3_free_text_record",
+    "_stable_result_union",
+    "_stage_2_semantic_records",
+    "_stage_3_component_authority_records",
+    "_stage_3_component_boundary_anchor",
+    "_stage_3_declaration_bytes",
+    "_stage_3_free_text_probe_anchor",
+    "_stage_3_issue_inventory",
+    "_stage_3_mcp_continuation_messages",
+    "_stage_3_message_payload",
+    "_stage_3_object_value",
+    "_stage_3_reason_brief",
+    "_stage_3_record_paths",
+    "_stage_3_record_terms",
+    "_stage_3_shard_provenance",
+    "_stage_3_splittable_text",
+    "_stage_3_text_segment_record",
+    "_stage_3_tool_definitions",
+    "_stage_3_verification_issue_map",
+    "_stage_3_verification_record",
+    "_stage_3_with_mcp",
+    "_synthesize_stage_3_results",
+    "_task_semantic_records",
+    "_validated_mcp_dismissals",
+]
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Invalid integer for %s=%r; using %s", name, value, default)
+        return default
+
+
+def _request_mcp_local_only(request: Any) -> bool:
+    """Match the request DTO's false default for compatible legacy callers."""
+    return getattr(request, "mcpLocalOnly", False) is True
+
+
+# This is an input packing target, not a provider or output-token cap. Stage 3
+# shares the rendered-prompt target used by the earlier review stages.
+STAGE3_INPUT_TOKEN_TARGET = max(
+    10_000,
+    _env_int("REVIEW_STAGE1_BATCH_TOKEN_BUDGET", 60_000),
+)
 
 
 async def execute_stage_3_aggregation(
@@ -30,11 +185,31 @@ async def execute_stage_3_aggregation(
     mcp_client=None,
     use_mcp_tools: bool = False,
     fallback_llm=None,
+    inference_profile: Optional[ReviewInferenceProfile] = None,
 ) -> Dict[str, Any]:
+    inference_profile = inference_profile or build_review_inference_profile(
+        request,
+        processed_diff,
+    )
     stage_1_json = _summarize_issues_for_stage_3(stage_1_issues)
     verification_issues = _stage_3_verification_issue_map(stage_1_issues)
     stage_2_json = stage_2_results.model_dump_json(indent=2)
     plan_summary = _summarize_plan_for_stage_3(plan)
+    try:
+        task_context = (
+            build_task_context(request.taskContext)
+            or "No task context available."
+        )
+    except Exception as exception:
+        logger.warning(
+            "Optional Stage 3 task context could not be rendered; "
+            "continuing without it: %s",
+            exception,
+        )
+        task_context = (
+            "Task context is unavailable because optional enrichment could "
+            "not be rendered."
+        )
 
     incremental_context = ""
     if is_incremental:
@@ -52,8 +227,7 @@ async def execute_stage_3_aggregation(
     additions = processed_diff.total_additions if processed_diff else 0
     deletions = processed_diff.total_deletions if processed_diff else 0
     review_revision = _review_revision(request)
-
-    prompt = PromptBuilder.build_stage_3_aggregation_prompt(
+    context = _Stage3PromptContext(
         repo_slug=request.projectVcsRepoSlug,
         pr_id=str(request.pullRequestId),
         author=request.prAuthor or "Unknown",
@@ -61,29 +235,26 @@ async def execute_stage_3_aggregation(
         total_files=len(request.changedFiles or []),
         additions=additions,
         deletions=deletions,
-        stage_0_plan=plan_summary,
-        stage_1_issues_json=stage_1_json,
-        stage_2_findings_json=stage_2_json,
         recommendation=stage_2_results.pr_recommendation,
         incremental_context=incremental_context,
-        task_context=(
-            build_task_context(request.taskContext, max_description_length=4000)
-            or "No task context available."
-        ),
         use_mcp_tools=use_mcp_tools,
         review_revision=review_revision,
+        issue_inventory=_stage_3_issue_inventory(verification_issues),
+        mcp_local_only=_request_mcp_local_only(request),
     )
+    token_target = _stage_3_input_token_target(request)
 
-    if use_mcp_tools and mcp_client and review_revision:
-        return await _stage_3_with_mcp(
-            llm,
-            request,
-            prompt,
-            mcp_client,
-            review_revision,
-            verification_issues,
-            fallback_llm=fallback_llm,
-        )
+    shards = _build_stage_3_prompt_shards(
+        context=context,
+        complete_plan_summary=plan_summary,
+        complete_stage_1_json=stage_1_json,
+        complete_stage_2_json=stage_2_json,
+        complete_task_context=task_context,
+        plan=plan,
+        issue_by_verification_id=verification_issues,
+        token_budget=token_target,
+        max_children=inference_profile.invocation_cap("stage_3_children"),
+    )
 
     if use_mcp_tools and mcp_client and not review_revision:
         logger.warning(
@@ -91,7 +262,123 @@ async def execute_stage_3_aggregation(
             "hash was supplied"
         )
 
-    return await _invoke_stage_3_report(llm, prompt, fallback_llm=fallback_llm)
+    results: List[Dict[str, Any]] = []
+    for index, shard in enumerate(shards, start=1):
+        estimated_tokens = _estimated_prompt_tokens(
+            shard.prompt,
+            use_mcp_tools=bool(
+                shard.use_mcp_tools and review_revision
+            ),
+            mcp_local_only=context.mcp_local_only,
+        )
+        logger.info(
+            "Stage 3 prompt assembled: shard=%d/%d chars=%d "
+            "estimated_tokens=%d target_tokens=%d records=%d",
+            index,
+            len(shards),
+            len(shard.prompt),
+            estimated_tokens,
+            token_target,
+            len(shard.record_keys),
+        )
+        shard_issues = {
+            verification_id: verification_issues[verification_id]
+            for verification_id in shard.verification_ids
+        }
+        if (
+            shard.use_mcp_tools
+            and mcp_client
+            and review_revision
+        ):
+            result = await _stage_3_with_mcp(
+                llm,
+                request,
+                shard.prompt,
+                mcp_client,
+                review_revision,
+                shard_issues,
+                fallback_llm=fallback_llm,
+            )
+        else:
+            result = await _invoke_stage_3_report(
+                llm,
+                shard.prompt,
+                fallback_llm=fallback_llm,
+            )
+        results.append(result)
+
+    merged = await _synthesize_stage_3_results(
+        llm,
+        context=context,
+        input_results=results,
+        input_shards=shards,
+        token_budget=token_target,
+        fallback_llm=fallback_llm,
+    )
+    merged["stage_3_prompt_provenance"] = {
+        "inputShards": [
+            _stage_3_shard_provenance(
+                shard,
+                phase="analysis",
+                level=0,
+                index=index,
+            )
+            for index, shard in enumerate(shards, start=1)
+        ],
+        "synthesisShards": merged.pop("_synthesis_provenance", []),
+    }
+    return merged
+
+
+def _positive_int_or_default(value: Any, default: int) -> int:
+    if (
+        value is None
+        or isinstance(value, bool)
+        or value.__class__.__module__.startswith("unittest.mock")
+    ):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _stage_3_input_token_target(request: ReviewRequestDto) -> int:
+    """Honor the request's model-context hint while reserving response room."""
+    model_context_tokens = _positive_int_or_default(
+        getattr(request, "maxAllowedTokens", None),
+        200_000,
+    )
+    if model_context_tokens > 20_000:
+        model_safe_target = model_context_tokens - 20_000
+    else:
+        # Preserve generation room even for an unusually small provider hint.
+        model_safe_target = max(1, model_context_tokens // 2)
+    return min(STAGE3_INPUT_TOKEN_TARGET, model_safe_target)
+
+
+async def _synthesize_stage_3_results(
+    llm,
+    *,
+    context: _Stage3PromptContext,
+    input_results: List[Dict[str, Any]],
+    input_shards: List[_Stage3PromptShard],
+    token_budget: int,
+    fallback_llm=None,
+) -> Dict[str, Any]:
+    """Compatibility facade over the isolated synthesis subsystem."""
+    return await synthesize_stage_3_results(
+        llm,
+        context=context,
+        input_results=input_results,
+        input_shards=input_shards,
+        token_budget=token_budget,
+        runtime=Stage3SynthesisRuntime(
+            report_invoker=_invoke_stage_3_report,
+        ),
+        fallback_llm=fallback_llm,
+    )
 
 
 def _review_revision(request: ReviewRequestDto) -> str:
@@ -103,11 +390,35 @@ def _review_revision(request: ReviewRequestDto) -> str:
     return ""
 
 
-async def _invoke_stage_3_report(llm, prompt: str, fallback_llm=None) -> Dict[str, Any]:
-    response = await llm.ainvoke(prompt)
-    if _response_finished_by_length(response) and fallback_llm is not None and fallback_llm is not llm:
-        logger.info("Stage 3 report hit output cap; retrying without output cap")
-        response = await fallback_llm.ainvoke(prompt)
+async def _invoke_stage_3_report(
+    llm,
+    prompt: str,
+    fallback_llm=None,
+    allow_retry: bool = True,
+    reasoning_effort: ReasoningEffort = ReasoningEffort.LOW,
+) -> Dict[str, Any]:
+    async with review_model_slot("stage_3_aggregation"):
+        response = await llm.ainvoke(
+            prompt,
+            **reasoning_request_kwargs(llm, reasoning_effort),
+        )
+    if (
+        _response_finished_by_length(response)
+        and allow_retry
+        and fallback_llm is not None
+    ):
+        logger.info(
+            "Stage 3 report exhausted its output; retrying once as a "
+            "reasoning-free direct output request"
+        )
+        async with review_model_slot("stage_3_aggregation"):
+            response = await fallback_llm.ainvoke(
+                prompt,
+                **reasoning_request_kwargs(
+                    fallback_llm,
+                    ReasoningEffort.NONE,
+                ),
+            )
     return {"report": extract_llm_response_text(response), "dismissed_issue_ids": []}
 
 
@@ -118,9 +429,17 @@ def _response_finished_by_length(response) -> bool:
         metadata.get("finish_reason"),
         metadata.get("stop_reason"),
         metadata.get("finishReason"),
-        generation_info.get("finish_reason") if isinstance(generation_info, dict) else None,
+        (
+            generation_info.get("finish_reason")
+            if isinstance(generation_info, dict)
+            else None
+        ),
     ]
-    return any(str(value).lower() in {"length", "max_tokens", "max_output_tokens"} for value in candidates if value)
+    return any(
+        str(value).lower() in {"length", "max_tokens", "max_output_tokens"}
+        for value in candidates
+        if value
+    )
 
 
 # ── Summary builders ──────────────────────────────────────────
@@ -164,259 +483,49 @@ def _summarize_issues_for_stage_3(issues: List[CodeReviewIssue]) -> str:
     return "\n".join(lines)
 
 
-def _safe_issue_field(issue: CodeReviewIssue, name: str) -> Any:
-    value = getattr(issue, name, "")
-    if value is None:
-        return ""
-    if value.__class__.__module__.startswith("unittest.mock"):
-        return ""
-    return value
-
-
-def _stage_3_verification_issue_map(
-    issues: List[CodeReviewIssue],
-) -> Dict[str, CodeReviewIssue]:
-    active = [
-        issue
-        for issue in issues
-        if getattr(issue, "isResolved", False) is not True
-    ]
-    return {
-        f"issue_{index}": issue
-        for index, issue in enumerate(active)
-    }
-
-
-_RELATED_LOCATIONS_RE = re.compile(
-    r"(?im)^\s*(?:[*_]{1,2})?also affects\s*:(?:[*_]{1,2})?\s*(.+)$"
-)
-
-
-def _stage_3_reason_brief(issue: CodeReviewIssue) -> str:
-    """Remove exact repetition while preserving every substantive paragraph."""
-    reason = str(_safe_issue_field(issue, "reason") or "").strip()
-    if not reason:
-        return ""
-    paragraphs = [
-        paragraph.strip()
-        for paragraph in re.split(r"\n\s*\n", reason)
-        if paragraph.strip()
-    ]
-    title = str(_safe_issue_field(issue, "title") or "").strip().casefold()
-    selected: List[str] = []
-    seen: set[str] = set()
-    for paragraph in paragraphs:
-        normalized = " ".join(paragraph.strip("*_# ").casefold().split())
-        if normalized == title:
-            continue
-        if normalized in seen:
-            continue
-        selected.append(paragraph)
-        seen.add(normalized)
-    return "\n\n".join(selected) if selected else reason
-
-
-def _normalized_related_locations(issue: CodeReviewIssue) -> List[str]:
-    values = _safe_issue_field(issue, "relatedLocations") or []
-    locations = list(values) if isinstance(values, (list, tuple, set)) else []
-    reason = str(_safe_issue_field(issue, "reason") or "")
-    for match in _RELATED_LOCATIONS_RE.finditer(reason):
-        locations.extend(match.group(1).split(","))
-    return sorted({
-        str(value).strip()
-        for value in locations
-        if str(value).strip()
-    })
-
-
-def _stage_3_verification_record(
-    verification_id: str,
-    issue: CodeReviewIssue,
-) -> Dict[str, Any]:
-    return {
-        "verification_id": verification_id,
-        "original_id": str(_safe_issue_field(issue, "id") or ""),
-        "severity": str(_safe_issue_field(issue, "severity") or ""),
-        "category": str(_safe_issue_field(issue, "category") or ""),
-        "file": str(_safe_issue_field(issue, "file") or ""),
-        "line": _safe_issue_field(issue, "line") or 0,
-        "title": str(_safe_issue_field(issue, "title") or ""),
-        "reason": _stage_3_reason_brief(issue),
-        "exact_source_anchor": str(
-            _safe_issue_field(issue, "codeSnippet") or ""
-        ),
-        "related_locations": _normalized_related_locations(issue),
-    }
-
-
 def _summarize_plan_for_stage_3(plan: ReviewPlan) -> str:
+    complete_payload = _complete_review_plan_payload(plan)
     lines = []
-    total_files = sum(len(g.files) for g in plan.file_groups)
+    total_files = sum(
+        len(group["files"])
+        for group in complete_payload["file_groups"]
+    )
     lines.append(f"Total files planned for review: {total_files}")
 
     priority_counts: Dict[str, int] = {}
-    for group in plan.file_groups:
-        p = group.priority.upper()
-        priority_counts[p] = priority_counts.get(p, 0) + len(group.files)
+    for group in complete_payload["file_groups"]:
+        priority = str(group["priority"] or "").upper()
+        priority_counts[priority] = (
+            priority_counts.get(priority, 0) + len(group["files"])
+        )
     if priority_counts:
         lines.append("By priority: " + ", ".join(
             f"{k}: {v} files" for k, v in sorted(priority_counts.items())
         ))
 
-    if plan.cross_file_concerns:
-        lines.append(f"\nCross-file concerns ({len(plan.cross_file_concerns)}):")
-        for concern in plan.cross_file_concerns[:5]:
-            lines.append(f"  - {concern[:150]}")
+    if complete_payload["cross_file_concerns"]:
+        lines.append(
+            "Cross-file concern count: "
+            f"{len(complete_payload['cross_file_concerns'])}"
+        )
+    if complete_payload["files_to_skip"]:
+        lines.append(
+            "Files skipped from deep review: "
+            f"{len(complete_payload['files_to_skip'])}"
+        )
 
-    all_paths = [f.path for g in plan.file_groups for f in g.files]
-    if all_paths:
-        lines.append(f"\nFiles reviewed: {', '.join(all_paths[:20])}")
-        if len(all_paths) > 20:
-            lines.append(f"  ... and {len(all_paths) - 20} more")
-
+    lines.extend((
+        "\nComplete ReviewPlan record (JSON):",
+        json.dumps(
+            complete_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+    ))
     return "\n".join(lines)
 
 
 # ── MCP verification ─────────────────────────────────────────
-
-
-def _extract_dismissed_issues(content: str) -> tuple:
-    import re as _re
-    pattern = r'<!--\s*DISMISSED_ISSUES:\s*(\[.*?\])\s*-->'
-    match = _re.search(pattern, content, _re.DOTALL)
-    if not match:
-        return content, []
-
-    try:
-        dismissed = json.loads(match.group(1))
-        if not isinstance(dismissed, list):
-            logger.warning(
-                "[Stage 3] DISMISSED_ISSUES was not a list: %s",
-                match.group(1),
-            )
-            return content, []
-        dismissed = [str(d) for d in dismissed if d]
-        logger.info(
-            "[Stage 3] MCP verification requested dismissal of %d issues: %s",
-            len(dismissed),
-            dismissed,
-        )
-        clean_report = content[:match.start()].rstrip() + content[match.end():]
-        return clean_report.strip(), dismissed
-    except (json.JSONDecodeError, TypeError) as exc:
-        logger.warning("[Stage 3] Failed to parse DISMISSED_ISSUES: %s", exc)
-        return content, []
-
-
-def _location_file_path(location: str) -> str:
-    normalized = str(location or "").strip().replace("\\", "/").lstrip("/")
-    if not normalized:
-        return ""
-    path, separator, possible_line = normalized.rpartition(":")
-    if separator and possible_line.isdigit():
-        return path
-    return normalized
-
-
-def _location_line(location: str) -> int:
-    normalized = str(location or "").strip().replace("\\", "/")
-    _, separator, possible_line = normalized.rpartition(":")
-    if separator and possible_line.isdigit():
-        return int(possible_line)
-    return 0
-
-
-def _required_verification_locations(
-    issue: CodeReviewIssue,
-) -> set[tuple[str, int]]:
-    primary_path = _location_file_path(
-        str(_safe_issue_field(issue, "file") or "")
-    )
-    try:
-        primary_line = int(_safe_issue_field(issue, "line") or 0)
-    except (TypeError, ValueError):
-        primary_line = 0
-    locations = {(primary_path, max(0, primary_line))}
-    locations.update(
-        (_location_file_path(location), _location_line(location))
-        for location in _normalized_related_locations(issue)
-    )
-    return {(path, line) for path, line in locations if path}
-
-
-def _mcp_read_covers_location(
-    entry: Dict[str, Any],
-    verification_id: str,
-    file_path: str,
-    line: int,
-    review_revision: str,
-) -> bool:
-    args = entry.get("args", {})
-    if not (
-        entry.get("tool") == "getBranchFileContent"
-        and entry.get("success") is True
-        and entry.get("evidence_valid") is True
-        and str(args.get("verificationId") or "") == verification_id
-        and _location_file_path(str(args.get("filePath") or "")) == file_path
-        and str(args.get("branch") or "") == review_revision
-    ):
-        return False
-    if entry.get("evidence_complete_file") is True:
-        return True
-    if line <= 0:
-        return False
-    try:
-        start_line = int(entry.get("evidence_start_line") or 0)
-        end_line = int(entry.get("evidence_end_line") or 0)
-    except (TypeError, ValueError):
-        return False
-    return start_line > 0 and start_line <= line <= end_line
-
-
-def _validated_mcp_dismissals(
-    requested_ids: List[str],
-    issue_by_verification_id: Dict[str, CodeReviewIssue],
-    executor: McpToolExecutor,
-    review_revision: str,
-) -> List[str]:
-    """Accept dismissals only when every affected anchor has bound evidence."""
-    validated: List[str] = []
-    for verification_id in requested_ids:
-        issue = issue_by_verification_id.get(verification_id)
-        if issue is None:
-            logger.warning(
-                "[Stage 3] Ignoring dismissal for unknown verification ID %s",
-                verification_id,
-            )
-            continue
-        required_locations = _required_verification_locations(issue)
-        missing_locations = {
-            location
-            for location in required_locations
-            if not any(
-                _mcp_read_covers_location(
-                    entry,
-                    verification_id,
-                    location[0],
-                    location[1],
-                    review_revision,
-                )
-                for entry in executor.call_log
-            )
-        }
-        if not required_locations or missing_locations:
-            logger.warning(
-                "[Stage 3] Keeping %s: dismissal lacks successful reviewed-revision "
-                "evidence for %s",
-                verification_id,
-                sorted(
-                    f"{path}:{line}" if line > 0 else path
-                    for path, line in missing_locations
-                ),
-            )
-            continue
-        validated.append(verification_id)
-    return validated
 
 
 async def _stage_3_with_mcp(
@@ -428,72 +537,26 @@ async def _stage_3_with_mcp(
     issue_by_verification_id: Dict[str, CodeReviewIssue],
     fallback_llm=None,
 ) -> Dict[str, Any]:
-    executor = McpToolExecutor(
-        mcp_client,
-        request,
-        stage="stage_3",
-        review_revision=review_revision,
-        verification_issues=issue_by_verification_id,
+    runtime = Stage3McpRuntime(
+        input_token_target=_stage_3_input_token_target,
+        estimate_messages_tokens=lambda messages, *, use_mcp_tools: (
+            _estimated_stage_3_messages_tokens(
+                messages,
+                use_mcp_tools=use_mcp_tools,
+                mcp_local_only=_request_mcp_local_only(request),
+            )
+        ),
+        continuation_messages=_stage_3_mcp_continuation_messages,
+        invoke_report=_invoke_stage_3_report,
+        response_finished_by_length=_response_finished_by_length,
     )
-    tool_defs = executor.get_tool_definitions()
-    max_iterations = 15
-
-    messages = [{"role": "user", "content": prompt}]
-
-    for iteration in range(max_iterations):
-        try:
-            llm_with_tools = llm.bind_tools(tool_defs)
-            response = await llm_with_tools.ainvoke(messages)
-            messages.append(response)
-
-            tool_calls = getattr(response, 'tool_calls', None)
-            if not tool_calls:
-                if _response_finished_by_length(response) and fallback_llm is not None and fallback_llm is not llm:
-                    logger.info("MCP Stage 3 report hit output cap; retrying without output cap")
-                    return await _stage_3_with_mcp(
-                        fallback_llm,
-                        request,
-                        prompt,
-                        mcp_client,
-                        review_revision,
-                        issue_by_verification_id,
-                    )
-                content = extract_llm_response_text(response)
-                logger.info(
-                    f"[MCP Stage 3] Completed in {iteration + 1} iterations, "
-                    f"{executor.call_count} verification calls"
-                )
-                report, dismissed = _extract_dismissed_issues(content)
-                validated = _validated_mcp_dismissals(
-                    dismissed,
-                    issue_by_verification_id,
-                    executor,
-                    review_revision,
-                )
-                return {
-                    "report": report,
-                    "dismissed_issue_ids": [
-                        str(_safe_issue_field(issue_by_verification_id[key], "id") or "")
-                        for key in validated
-                        if str(_safe_issue_field(issue_by_verification_id[key], "id") or "")
-                    ],
-                    "dismissed_issue_keys": validated,
-                    "dismissed_issue_object_ids": [
-                        id(issue_by_verification_id[key]) for key in validated
-                    ],
-                }
-
-            for tc in tool_calls:
-                tool_result = await executor.execute_tool(tc["name"], tc["args"])
-                messages.append({
-                    "role": "tool",
-                    "content": str(tool_result),
-                    "tool_call_id": tc["id"],
-                })
-
-        except Exception as e:
-            logger.info(f"[MCP Stage 3] Iteration {iteration + 1} failed: {e}")
-            break
-
-    logger.info("[MCP Stage 3] Agentic loop exhausted, falling back to plain call")
-    return await _invoke_stage_3_report(llm, prompt, fallback_llm=fallback_llm)
+    return await execute_stage_3_mcp_verification(
+        llm,
+        request,
+        prompt,
+        mcp_client,
+        review_revision,
+        issue_by_verification_id,
+        runtime,
+        fallback_llm=fallback_llm,
+    )

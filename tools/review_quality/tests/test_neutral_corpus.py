@@ -33,7 +33,6 @@ def test_materializes_four_remote_free_candidate_blind_profiles(tmp_path):
 
     assert report["status"] == "drafts-created"
     assert report["providerCalls"] == 0
-    assert report["embeddingCalls"] == 0
     assert report["connectedRepositories"] == 0
     assert report["candidateOutputsInspected"] is False
     assert {tuple(case["languages"]) for case in report["cases"]} == {

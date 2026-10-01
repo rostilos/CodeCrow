@@ -1,9 +1,9 @@
 package org.rostilos.codecrow.webserver.internal.controller;
 
+import org.rostilos.codecrow.core.dto.analysis.issue.IssueDTO;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
-import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.webserver.project.service.ProjectService;
@@ -218,57 +218,26 @@ public class InternalAnalysisController {
         // Add comment if available (used as summary/description)
         dto.put("comment", analysis.getComment());
         
-        // Add issues summary (not full list to keep response size reasonable)
+        // Detailed analysis responses are lossless at the issue-record boundary:
+        // every persisted issue is returned using the complete IssueDTO contract.
+        // Callers must not mistake a top-N preview for the complete analysis result.
         List<CodeAnalysisIssue> issues = analysis.getIssues();
-        if (issues != null && !issues.isEmpty()) {
-            // Include top issues by severity
-            List<Map<String, Object>> topIssues = issues.stream()
-                    .sorted(Comparator.comparing((CodeAnalysisIssue i) -> severityOrder(i.getSeverity())))
-                    .limit(20)
-                    .map(this::toIssuePreview)
-                    .toList();
-            dto.put("topIssues", topIssues);
-            
-            // Group by category
-            Map<String, Long> categoryBreakdown = issues.stream()
-                    .filter(i -> i.getIssueCategory() != null)
-                    .collect(java.util.stream.Collectors.groupingBy(
-                            i -> i.getIssueCategory().name(),
-                            java.util.stream.Collectors.counting()
-                    ));
-            dto.put("categoryBreakdown", categoryBreakdown);
-        }
+        List<CodeAnalysisIssue> completeIssues = issues != null ? issues : List.of();
+        List<IssueDTO> issueDTOs = completeIssues.stream()
+                .map(IssueDTO::fromEntity)
+                .toList();
+        dto.put("issues", issueDTOs);
+        dto.put("issueCount", issueDTOs.size());
+        dto.put("issuesComplete", true);
+
+        Map<String, Long> categoryBreakdown = completeIssues.stream()
+                .filter(i -> i.getIssueCategory() != null)
+                .collect(java.util.stream.Collectors.groupingBy(
+                        i -> i.getIssueCategory().name(),
+                        java.util.stream.Collectors.counting()
+                ));
+        dto.put("categoryBreakdown", categoryBreakdown);
         
         return dto;
-    }
-
-    /**
-     * Create a preview of an issue (minimal fields).
-     */
-    private Map<String, Object> toIssuePreview(CodeAnalysisIssue issue) {
-        Map<String, Object> preview = new LinkedHashMap<>();
-        preview.put("id", issue.getId());
-        preview.put("severity", issue.getSeverity() != null ? issue.getSeverity().name() : null);
-        preview.put("category", issue.getIssueCategory() != null ? issue.getIssueCategory().name() : null);
-        preview.put("title", issue.getTitle());
-        preview.put("reason", issue.getReason());
-        preview.put("filePath", issue.getFilePath());
-        preview.put("lineNumber", issue.getLineNumber());
-        preview.put("isResolved", issue.isResolved());
-        return preview;
-    }
-
-    /**
-     * Get severity order for sorting (HIGH = 0, MEDIUM = 1, LOW = 2).
-     */
-    private int severityOrder(IssueSeverity severity) {
-        if (severity == null) return 4;
-        return switch (severity) {
-            case HIGH -> 0;
-            case MEDIUM -> 1;
-            case LOW -> 2;
-            case INFO -> 3;
-            case RESOLVED -> 4;
-        };
     }
 }

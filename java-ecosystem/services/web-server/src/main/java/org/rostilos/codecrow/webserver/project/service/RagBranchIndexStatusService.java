@@ -1,36 +1,27 @@
 package org.rostilos.codecrow.webserver.project.service;
 
-import org.rostilos.codecrow.core.model.analysis.RagIndexStatus;
-import org.rostilos.codecrow.core.model.analysis.RagIndexingStatus;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndex;
-import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
 import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepository;
 import org.rostilos.codecrow.webserver.project.dto.response.RagBranchIndexStatusDTO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Read-only projection of the primary and explicitly retained RAG branches.
- * It intentionally excludes transient PR-only snapshots from the configuration
- * view, while retaining a compatible primary status for pre-generation projects.
+ * Read-only projection of lazily observed RAG branches. State and counts come
+ * only from the exact branch-generation registry.
  */
 @Service
 public class RagBranchIndexStatusService {
     private final RagBranchIndexRepository branchIndexRepository;
-    private final RagIndexStatusService projectStatusService;
 
-    public RagBranchIndexStatusService(
-            RagBranchIndexRepository branchIndexRepository,
-            RagIndexStatusService projectStatusService) {
+    public RagBranchIndexStatusService(RagBranchIndexRepository branchIndexRepository) {
         this.branchIndexRepository = branchIndexRepository;
-        this.projectStatusService = projectStatusService;
     }
 
     @Transactional(readOnly = true)
@@ -48,13 +39,11 @@ public class RagBranchIndexStatusService {
         for (RagBranchIndex index : branchIndexRepository.findByProjectId(project.getId())) {
             persisted.put(index.getBranchName(), index);
         }
-        RagIndexStatus projectStatus = projectStatusService.getIndexStatus(project).orElse(null);
-
         List<RagBranchIndexStatusDTO> result = new ArrayList<>();
-        result.add(toDto(primary, "PRIMARY", persisted.get(primary), projectStatus));
-        for (String branch : config.getEffectiveIndexedBranches()) {
-            if (!primary.equals(branch)) {
-                result.add(toDto(branch, "RETAINED", persisted.get(branch), null));
+        result.add(toDto(primary, "PRIMARY", persisted.get(primary)));
+        for (RagBranchIndex index : persisted.values()) {
+            if (!primary.equals(index.getBranchName())) {
+                result.add(toDto(index.getBranchName(), "TARGET", index));
             }
         }
         return result;
@@ -63,13 +52,10 @@ public class RagBranchIndexStatusService {
     private RagBranchIndexStatusDTO toDto(
             String branch,
             String role,
-            RagBranchIndex index,
-            RagIndexStatus legacyPrimaryStatus) {
+            RagBranchIndex index) {
         if (index == null) {
-            return legacyPrimaryStatus == null
-                    ? new RagBranchIndexStatusDTO(branch, role, "NOT_INDEXED", null, null,
-                            null, null, null, null)
-                    : legacyPrimaryDto(branch, role, legacyPrimaryStatus);
+            return new RagBranchIndexStatusDTO(branch, role, "NOT_INDEXED", null, null,
+                    null, null, null, null);
         }
 
         var generation = index.getActiveGeneration();
@@ -83,32 +69,13 @@ public class RagBranchIndexStatusService {
                 branch,
                 role,
                 status,
-                generation != null ? generation.getRevision() : index.getCommitHash(),
+                generation != null ? generation.getRevision() : null,
                 index.getDesiredCommitHash(),
                 generation != null ? generation.getFileCount() : null,
-                generation != null ? generation.getChunkCount() : index.getChunkCount(),
+                generation != null ? generation.getChunkCount() : null,
                 generation != null && generation.getActivatedAt() != null
                         ? generation.getActivatedAt() : index.getUpdatedAt(),
                 index.getErrorMessage());
-    }
-
-    private RagBranchIndexStatusDTO legacyPrimaryDto(
-            String branch,
-            String role,
-            RagIndexStatus status) {
-        String displayStatus = switch (status.getStatus()) {
-            case INDEXING -> "BUILDING";
-            case UPDATING -> "BUILDING";
-            case INDEXED -> "READY";
-            case FAILED -> "FAILED";
-            default -> "NOT_INDEXED";
-        };
-        OffsetDateTime updated = status.getLastIndexedAt() != null
-                ? status.getLastIndexedAt() : status.getUpdatedAt();
-        return new RagBranchIndexStatusDTO(
-                branch, role, displayStatus, status.getIndexedCommitHash(), null,
-                status.getTotalFilesIndexed(), status.getChunkCount(), updated,
-                status.getErrorMessage());
     }
 
     private String resolvePrimary(Project project, String configuredBranch) {

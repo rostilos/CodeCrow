@@ -5,6 +5,7 @@ from pathlib import Path
 from codecrow_plugins import (
     CandidateClaim,
     FileArtifact,
+    GraphFact,
     PluginCatalog,
     PluginRuntime,
     ProjectSelector,
@@ -272,6 +273,49 @@ def test_hyva_template_runtime_links_layout_sibling_to_exact_webapi_call_graph()
         "prepareOnlineOrders",
         "process",
     }
+
+
+def test_hyva_call_graph_context_bounds_a_long_chain_with_diagnostics():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    import importlib
+
+    plugin = catalog.implementation("hyva")
+    topology = importlib.import_module(plugin.__class__.__module__ + ".topology")
+    resolver = topology.HyvaTopologyResolver("hyva", {})
+    edges = {}
+    for index in range(65):
+        owner = f"Vendor\\Model\\Owner{index:03d}"
+        method = f"method{index:03d}"
+        target_owner = f"Vendor\\Model\\Owner{index + 1:03d}"
+        target_method = f"method{index + 1:03d}"
+        fact = GraphFact(
+            "php-method-call",
+            owner,
+            "calls",
+            target_owner,
+            f"app/code/Vendor/Module/Model/Owner{index:03d}.php",
+            index + 1,
+            (
+                ("callerMethod", method),
+                ("targetMethod", target_method),
+                ("targetMethodDeclared", "true"),
+            ),
+        )
+        edges[(owner.casefold(), method.casefold())] = (fact,)
+
+    paths, identifiers = resolver._call_graph_context(
+        "Vendor\\Model\\Owner000",
+        "method000",
+        edges,
+    )
+
+    assert "app/code/Vendor/Module/Model/Owner063.php" in paths
+    assert "app/code/Vendor/Module/Model/Owner064.php" not in paths
+    assert "method064" in identifiers
+    assert "method065" not in identifiers
+    assert len(resolver.diagnostics) == 1
+    assert resolver.diagnostics[0].code == "hyva-call-graph-state-limit"
+    assert resolver.diagnostics[0].recoverable is True
 
 
 def test_hyva_repository_snapshot_restores_identical_packets():

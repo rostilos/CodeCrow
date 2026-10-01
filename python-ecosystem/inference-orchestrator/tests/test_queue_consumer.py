@@ -167,9 +167,8 @@ async def test_neutral_mixed_language_dry_run_traverses_queue_handler(
         "promptDryRun": True,
         "promptDryRunId": "neutral-queued-replay",
     })
-    review_service = ReviewService.__new__(ReviewService)
+    review_service = ReviewService()
     review_service.rag_client = DeterministicRagSpy()
-    review_service._review_semaphore = asyncio.Semaphore(1)
 
     consumer = RedisQueueConsumer(review_service)
     consumer._redis = FakeRedis()
@@ -189,8 +188,6 @@ async def test_neutral_mixed_language_dry_run_traverses_queue_handler(
     assert {
         "acknowledged",
         "prompt_dry_run_started",
-        "pr_context_enrichment_started",
-        "pr_context_enrichment_completed",
         "stage_0_started",
         "stage_1_started",
         "verification_started",
@@ -224,7 +221,7 @@ async def test_start_uses_blocking_read_safe_redis_timeouts():
     consumer._consume_loop = AsyncMock()
 
     with patch(
-        "server.queue_consumer.redis.from_url",
+        "server.redis_job_consumer.redis.from_url",
         return_value=redis_client,
     ) as from_url:
         await consumer.start()
@@ -345,6 +342,7 @@ async def test_stop_waits_for_admitted_review_before_closing_redis():
     job_task.add_done_callback(consumer._job_tasks.discard)
     await started.wait()
 
+    redis_client = consumer._redis
     stop_task = asyncio.create_task(consumer.stop())
     await asyncio.sleep(0)
 
@@ -355,7 +353,7 @@ async def test_stop_waits_for_admitted_review_before_closing_redis():
     await asyncio.wait_for(stop_task, timeout=1)
 
     assert job_task.done()
-    consumer._redis.aclose.assert_awaited_once_with()
+    redis_client.aclose.assert_awaited_once_with()
 
 
 def test_redis_outage_diagnostic_is_bounded_until_recovery():
@@ -377,3 +375,55 @@ def test_redis_outage_diagnostic_is_bounded_until_recovery():
         "Redis connectivity restored during %s",
         "review consumer heartbeat",
     )
+
+
+@pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("issues", [[], [{"file": "totals.php", "line": 1, "title": "Division by zero"}]])
+async def test_partial_review_is_a_final_result_with_findings_and_coverage_preserved(issues):
+    result = {
+        "status": "partial", "comment": "Reviewed with unresolved vendor source",
+        "issues": issues, "reviewedHunkIds": ["changed-part"],
+        "unresolvedScopes": {"vendor-class": "Vendor declaration unavailable"},
+        "diagnostics": ["Search did not cover all requested source; absence is not evidence."],
+    }
+    service = MagicMock()
+    service.process_review_request = AsyncMock(return_value={"result": result})
+    consumer = RedisQueueConsumer(service)
+    consumer._redis = FakeRedis()
+
+    with patch("server.queue_consumer.ReviewRequestDto", return_value=MagicMock()):
+        await consumer._handle_job(_payload())
+
+    events = [event for _, event in consumer._redis.events]
+    assert events[-1] == {"type": "final", "result": result}
+    assert sum(event["type"] in {"error", "final"} for event in events) == 1
+    assert all(event["type"] != "error" for event in events)
+
+
+
+@pytest.mark.asyncio
+async def test_cancelled_review_handler_joins_its_processing_task_before_returning_capacity(monkeypatch):
+    from types import SimpleNamespace
+
+    started = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def process(request, callback):
+        try:
+            started.set()
+            await asyncio.Event().wait()
+        finally:
+            finished.set()
+
+    consumer = RedisQueueConsumer(SimpleNamespace(process_review_request=process))
+    consumer._redis = FakeRedis()
+    monkeypatch.setattr("server.queue_consumer.ReviewRequestDto", lambda **values: SimpleNamespace(
+        **values, pullRequestId="42", sourceBranchName="feature", targetBranchName="main",
+    ))
+    task = asyncio.create_task(consumer._bounded_handle_job(_payload()))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert finished.is_set()
+    assert consumer._job_semaphore._value == consumer.max_concurrent

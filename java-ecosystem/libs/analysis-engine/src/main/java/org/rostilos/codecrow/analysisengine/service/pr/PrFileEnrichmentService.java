@@ -43,7 +43,7 @@ public class PrFileEnrichmentService {
     @Value("${pr.enrichment.max-total-size-bytes:20971520}") // 20MB default
     private long maxTotalSizeBytes;
 
-    @Value("${pr.enrichment.rag-pipeline-url:${codecrow.rag.api.url:http://rag-pipeline:8001}}")
+    @Value("${pr.enrichment.rag-pipeline-url:${codecrow.rag.api.url:http://codecrow-rag-pipeline:8001}}")
     private String ragPipelineUrl;
 
     @Value("${pr.enrichment.rag-api-secret:${codecrow.rag.api.secret:}}")
@@ -380,8 +380,9 @@ public class PrFileEnrichmentService {
             List<String> changedFiles) {
         List<FileRelationshipDto> relationships = new ArrayList<>();
 
-        // Build a map of possible file matches for quick lookup
-        Map<String, String> nameToPath = buildNameToPathMap(changedFiles);
+        // Preserve every candidate for a name. A single-value map silently
+        // turned duplicate basenames into arbitrary relationships.
+        Map<String, Set<String>> nameToPaths = buildNameToPathMap(changedFiles);
 
         for (ParsedFileMetadataDto file : metadata) {
             if (file.error() != null)
@@ -390,7 +391,7 @@ public class PrFileEnrichmentService {
             // Process imports
             if (file.imports() != null) {
                 for (String importStmt : file.imports()) {
-                    String targetPath = findMatchingFile(importStmt, nameToPath, changedFiles);
+                    String targetPath = findMatchingFile(importStmt, nameToPaths, changedFiles);
                     if (targetPath != null && !targetPath.equals(file.path())) {
                         relationships.add(FileRelationshipDto.imports(
                                 file.path(), targetPath, importStmt));
@@ -401,7 +402,7 @@ public class PrFileEnrichmentService {
             // Process extends
             if (file.extendsClasses() != null) {
                 for (String className : file.extendsClasses()) {
-                    String targetPath = findMatchingFile(className, nameToPath, changedFiles);
+                    String targetPath = findMatchingFile(className, nameToPaths, changedFiles);
                     if (targetPath != null && !targetPath.equals(file.path())) {
                         relationships.add(FileRelationshipDto.extendsClass(
                                 file.path(), targetPath, className));
@@ -412,7 +413,7 @@ public class PrFileEnrichmentService {
             // Process implements
             if (file.implementsInterfaces() != null) {
                 for (String interfaceName : file.implementsInterfaces()) {
-                    String targetPath = findMatchingFile(interfaceName, nameToPath, changedFiles);
+                    String targetPath = findMatchingFile(interfaceName, nameToPaths, changedFiles);
                     if (targetPath != null && !targetPath.equals(file.path())) {
                         relationships.add(FileRelationshipDto.implementsInterface(
                                 file.path(), targetPath, interfaceName));
@@ -423,7 +424,7 @@ public class PrFileEnrichmentService {
             // Process calls
             if (file.calls() != null) {
                 for (String call : file.calls()) {
-                    String targetPath = findMatchingFile(call, nameToPath, changedFiles);
+                    String targetPath = findMatchingFile(call, nameToPaths, changedFiles);
                     if (targetPath != null && !targetPath.equals(file.path())) {
                         relationships.add(FileRelationshipDto.calls(
                                 file.path(), targetPath, call));
@@ -431,9 +432,6 @@ public class PrFileEnrichmentService {
                 }
             }
         }
-
-        // Add same-package relationships
-        addSamePackageRelationships(changedFiles, relationships);
 
         // Deduplicate relationships
         return relationships.stream()
@@ -446,32 +444,21 @@ public class PrFileEnrichmentService {
      * Language-agnostic: maps both the bare filename (without extension)
      * and the dot-separated directory path for ALL file types.
      */
-    private Map<String, String> buildNameToPathMap(List<String> filePaths) {
-        Map<String, String> map = new HashMap<>();
+    private Map<String, Set<String>> buildNameToPathMap(List<String> filePaths) {
+        Map<String, Set<String>> map = new HashMap<>();
 
         for (String path : filePaths) {
-            // Extract filename without extension
-            String fileName = path.contains("/")
-                    ? path.substring(path.lastIndexOf('/') + 1)
-                    : path;
-            String nameWithoutExt = fileName.contains(".")
-                    ? fileName.substring(0, fileName.lastIndexOf('.'))
-                    : fileName;
+            String normalizedPath = normalizePath(path);
+            String pathWithoutExt = stripFileExtension(normalizedPath);
+            String nameWithoutExt = baseName(pathWithoutExt);
 
-            // Map bare name (case-sensitive and lowercase)
-            map.put(nameWithoutExt, path);
-            map.put(nameWithoutExt.toLowerCase(), path);
+            addCandidate(map, normalizedPath, path);
+            addCandidate(map, pathWithoutExt, path);
+            addCandidate(map, pathWithoutExt.replace('/', '.'), path);
 
-            // Map dot-separated directory path (universal for all languages).
-            // e.g., src/main/java/com/example/MyClass.java ->
-            // src.main.java.com.example.MyClass
-            // e.g., app/services/user_service.py -> app.services.user_service
-            // e.g., pkg/handlers/auth.go -> pkg.handlers.auth
-            String pathWithoutExt = path.contains(".")
-                    ? path.substring(0, path.lastIndexOf('.'))
-                    : path;
-            String dotPath = pathWithoutExt.replace('/', '.');
-            map.put(dotPath, path);
+            // Bare names are only usable when the candidate set is unique.
+            addCandidate(map, nameWithoutExt, path);
+            addCandidate(map, nameWithoutExt.toLowerCase(Locale.ROOT), path);
         }
 
         return map;
@@ -483,86 +470,93 @@ public class PrFileEnrichmentService {
      */
     private String findMatchingFile(
             String reference,
-            Map<String, String> nameToPath,
+            Map<String, Set<String>> nameToPaths,
             List<String> changedFiles) {
-        if (reference == null || reference.isEmpty())
+        if (reference == null || reference.isBlank())
             return null;
 
-        // Try direct match
-        if (nameToPath.containsKey(reference)) {
-            return nameToPath.get(reference);
+        String trimmedReference = reference.trim();
+        String directMatch = uniqueCandidate(nameToPaths.get(trimmedReference));
+        if (directMatch != null) {
+            return directMatch;
         }
 
-        // Extract last component (class name from qualified name)
-        // Works for: com.example.Foo, com\example\Foo, com/example/Foo
-        String simpleName = reference;
-        for (String sep : new String[] { ".", "\\", "/", "::" }) {
-            int idx = reference.lastIndexOf(sep);
-            if (idx >= 0) {
-                simpleName = reference.substring(idx + sep.length());
-                break;
-            }
+        String normalizedReference = normalizeReference(trimmedReference);
+        directMatch = uniqueCandidate(nameToPaths.get(normalizedReference));
+        if (directMatch != null) {
+            return directMatch;
         }
 
-        if (nameToPath.containsKey(simpleName)) {
-            return nameToPath.get(simpleName);
-        }
-
-        // Try case-insensitive
-        String lowerName = simpleName.toLowerCase();
-        if (nameToPath.containsKey(lowerName)) {
-            return nameToPath.get(lowerName);
-        }
-
-        // Try partial path matching (language-agnostic)
-        String normalizedRef = reference.replace('.', '/').replace('\\', '/');
-        for (String path : changedFiles) {
-            // Check if path contains the normalized reference
-            if (path.contains(normalizedRef)) {
-                return path;
-            }
-            // Check if the base filename (without extension) matches
-            String pathFileName = path.contains("/")
-                    ? path.substring(path.lastIndexOf('/') + 1)
-                    : path;
-            String pathBaseName = pathFileName.contains(".")
-                    ? pathFileName.substring(0, pathFileName.lastIndexOf('.'))
-                    : pathFileName;
-            if (pathBaseName.equalsIgnoreCase(simpleName)) {
-                return path;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Add implicit relationships for files in the same package/directory.
-     */
-    private void addSamePackageRelationships(
-            List<String> changedFiles,
-            List<FileRelationshipDto> relationships) {
-        // Group files by directory
-        Map<String, List<String>> filesByDir = changedFiles.stream()
-                .collect(Collectors.groupingBy(path -> {
-                    int lastSlash = path.lastIndexOf('/');
-                    return lastSlash > 0 ? path.substring(0, lastSlash) : "";
-                }));
-
-        // Add relationships within each directory
-        for (Map.Entry<String, List<String>> entry : filesByDir.entrySet()) {
-            List<String> filesInDir = entry.getValue();
-            String packageName = entry.getKey();
-
-            if (filesInDir.size() > 1) {
-                for (int i = 0; i < filesInDir.size(); i++) {
-                    for (int j = i + 1; j < filesInDir.size(); j++) {
-                        relationships.add(FileRelationshipDto.samePackage(
-                                filesInDir.get(i), filesInDir.get(j), packageName));
-                    }
+        // A qualified reference may match a path suffix, but only on a full
+        // path-segment boundary and only when exactly one changed file matches.
+        // This supports source-root prefixes without accepting substrings.
+        if (isQualifiedReference(trimmedReference)) {
+            Set<String> qualifiedMatches = new LinkedHashSet<>();
+            for (String path : changedFiles) {
+                String candidate = stripFileExtension(normalizePath(path));
+                if (candidate.equals(normalizedReference)
+                        || candidate.endsWith("/" + normalizedReference)) {
+                    qualifiedMatches.add(path);
                 }
             }
+            // Qualification is evidence, not decoration. If it does not
+            // identify exactly one changed path, do not discard it and guess
+            // from a coincidentally unique basename.
+            return uniqueCandidate(qualifiedMatches);
         }
+
+        String simpleName = baseName(normalizedReference);
+        String basenameMatch = uniqueCandidate(nameToPaths.get(simpleName));
+        if (basenameMatch != null) {
+            return basenameMatch;
+        }
+
+        return uniqueCandidate(nameToPaths.get(simpleName.toLowerCase(Locale.ROOT)));
+    }
+
+    private static void addCandidate(
+            Map<String, Set<String>> candidates,
+            String key,
+            String path) {
+        if (key != null && !key.isBlank()) {
+            candidates.computeIfAbsent(key, ignored -> new LinkedHashSet<>()).add(path);
+        }
+    }
+
+    private static String uniqueCandidate(Set<String> candidates) {
+        return candidates != null && candidates.size() == 1
+                ? candidates.iterator().next()
+                : null;
+    }
+
+    private static boolean isQualifiedReference(String reference) {
+        return reference.contains(".")
+                || reference.contains("/")
+                || reference.contains("\\")
+                || reference.contains("::");
+    }
+
+    private static String normalizeReference(String reference) {
+        String normalized = normalizePath(reference.replace("::", "/"));
+        while (normalized.startsWith("./")) {
+            normalized = normalized.substring(2);
+        }
+        return normalized.replace('.', '/');
+    }
+
+    private static String normalizePath(String value) {
+        return value.replace('\\', '/');
+    }
+
+    private static String stripFileExtension(String path) {
+        int lastSlash = path.lastIndexOf('/');
+        int lastDot = path.lastIndexOf('.');
+        return lastDot > lastSlash ? path.substring(0, lastDot) : path;
+    }
+
+    private static String baseName(String path) {
+        int lastSlash = path.lastIndexOf('/');
+        return lastSlash >= 0 ? path.substring(lastSlash + 1) : path;
     }
 
     private PrEnrichmentDataDto createEmptyResultWithStats(

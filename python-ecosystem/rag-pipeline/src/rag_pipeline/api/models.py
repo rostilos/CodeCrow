@@ -1,34 +1,25 @@
 """
-Pydantic request/response models for the RAG Pipeline API.
+Pydantic request/response models for the repository-index API.
 
 All models are defined here to avoid circular imports between routers
 and to keep the router files focused on endpoint logic.
 """
 import os
-from typing import Dict, List, Literal, Optional
-from pydantic import BaseModel, Field, field_validator
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_repo_path(path: str) -> str:
     """Validate that a repo path is within the allowed root and contains no traversal."""
-    allowed_root = os.environ.get("ALLOWED_REPO_ROOT", "/tmp")
-    resolved = os.path.realpath(path)
-    if not resolved.startswith(os.path.realpath(allowed_root)):
+    allowed_root = Path(os.environ.get("ALLOWED_REPO_ROOT", "/tmp")).resolve()
+    resolved = Path(path).resolve()
+    if not resolved.is_relative_to(allowed_root):
         raise ValueError(f"Path must be under {allowed_root}, got: {path}")
     return path
-
-
-def _validate_file_paths(paths: List[str]) -> List[str]:
-    for original in paths:
-        path = original.replace("\\", "/") if isinstance(original, str) else ""
-        if (
-            not path
-            or path.startswith("/")
-            or path.endswith("/")
-            or any(segment in {"", ".", ".."} for segment in path.split("/"))
-        ):
-            raise ValueError(f"Invalid repository-relative file path: {original!r}")
-    return paths
 
 
 def _validate_source_root(path: Optional[str]) -> Optional[str]:
@@ -41,6 +32,18 @@ def _validate_source_root(path: Optional[str]) -> Optional[str]:
         or any(segment in {"", ".", ".."} for segment in normalized.split("/"))
     ):
         raise ValueError("source_root must be a normalized repository-relative directory")
+    return normalized
+
+
+def _validate_repository_relative_path(path: str) -> str:
+    normalized = str(path or "").strip().replace("\\", "/")
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or normalized.endswith("/")
+        or any(segment in {"", ".", ".."} for segment in normalized.split("/"))
+    ):
+        raise ValueError("path must be a normalized repository-relative file path")
     return normalized
 
 
@@ -57,11 +60,6 @@ class IndexRequest(BaseModel):
         pattern=r"^[0-9a-f]{64}$",
     )
     collection_target: Optional[str] = Field(default=None, min_length=1)
-    reuse_collection_target: Optional[str] = Field(default=None, min_length=1)
-    publish_branch_alias: bool = False
-    publish_legacy_project_alias: bool = False
-    preserve_other_branches: bool = False
-    cleanup_repo_path: bool = False
     transfer_repo_ownership: bool = False
     include_patterns: Optional[List[str]] = None
     exclude_patterns: Optional[List[str]] = None
@@ -70,6 +68,14 @@ class IndexRequest(BaseModel):
         pattern=r"^[a-z][a-z0-9-]{0,63}$",
     )
     source_root: Optional[str] = None
+    base_revision: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    base_collection_target: Optional[str] = Field(default=None, min_length=1)
+    base_generation_manifest_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    changed_paths: List[str] = Field(default_factory=list, max_length=50000)
+    deleted_paths: List[str] = Field(default_factory=list, max_length=50000)
 
     @field_validator("repo_path")
     @classmethod
@@ -88,122 +94,41 @@ class IndexRequest(BaseModel):
     def validate_source_root(cls, v: Optional[str]) -> Optional[str]:
         return _validate_source_root(v)
 
-
-class UpdateFilesRequest(BaseModel):
-    file_paths: List[str]
-    repo_base: str
-    workspace: str
-    project: str
-    branch: str
-    commit: str
-
-    @field_validator("repo_base")
+    @field_validator("changed_paths", "deleted_paths")
     @classmethod
-    def validate_repo_base(cls, v: str) -> str:
-        return _validate_repo_path(v)
+    def validate_delta_paths(cls, value: List[str]) -> List[str]:
+        return list(dict.fromkeys(
+            _validate_repository_relative_path(path) for path in value
+        ))
 
-    @field_validator("file_paths")
-    @classmethod
-    def validate_file_paths(cls, v: List[str]) -> List[str]:
-        return _validate_file_paths(v)
-
-
-class DeleteFilesRequest(BaseModel):
-    file_paths: List[str]
-    workspace: str
-    project: str
-    branch: str
-    commit: Optional[str] = None
-
-    @field_validator("file_paths")
-    @classmethod
-    def validate_file_paths(cls, v: List[str]) -> List[str]:
-        return _validate_file_paths(v)
-
-
-class ApplyChangesRequest(BaseModel):
-    updated_file_paths: List[str] = Field(default_factory=list)
-    deleted_file_paths: List[str] = Field(default_factory=list)
-    repo_base: Optional[str] = None
-    workspace: str
-    project: str
-    branch: str
-    commit: str
-
-    @field_validator("repo_base")
-    @classmethod
-    def validate_repo_base(cls, v: Optional[str]) -> Optional[str]:
-        return _validate_repo_path(v) if v is not None else None
-
-    @field_validator("updated_file_paths", "deleted_file_paths")
-    @classmethod
-    def validate_file_paths(cls, v: List[str]) -> List[str]:
-        return _validate_file_paths(v)
-
-
-class AdvanceGenerationRequest(BaseModel):
-    updated_file_paths: List[str] = Field(default_factory=list)
-    deleted_file_paths: List[str] = Field(default_factory=list)
-    repo_base: Optional[str] = None
-    workspace: str
-    project: str
-    branch: str
-    source_commit: str
-    commit: str
-    source_tree_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    source_collection_target: str = Field(min_length=1)
-    collection_target: str = Field(min_length=1)
-    publish_branch_alias: bool = False
-    publish_legacy_project_alias: bool = False
-
-    @field_validator("repo_base")
-    @classmethod
-    def validate_repo_base(cls, v: Optional[str]) -> Optional[str]:
-        return _validate_repo_path(v) if v is not None else None
-
-    @field_validator("updated_file_paths", "deleted_file_paths")
-    @classmethod
-    def validate_file_paths(cls, v: List[str]) -> List[str]:
-        return _validate_file_paths(v)
-
-
-class GenerationAliasPublicationRequest(BaseModel):
-    """Repair the readable aliases of one already sealed generation."""
-    workspace: str
-    project: str
-    branch: str
-    commit: str
-    collection_target: str = Field(min_length=1)
-    generation_manifest_sha256: Optional[str] = Field(
-        default=None,
-        pattern=r"^[0-9a-f]{64}$",
-    )
-    publish_branch_alias: bool = True
-    publish_legacy_project_alias: bool = False
-
-
-class DeleteBranchRequest(BaseModel):
-    workspace: str
-    project: str
-    branch: str
-
-
-class CleanupStaleBranchesRequest(BaseModel):
-    workspace: str
-    project: str
-    protected_branches: List[str] = Field(min_length=1)
-    branches_to_keep: Optional[List[str]] = None
-
-    @field_validator("protected_branches", "branches_to_keep")
-    @classmethod
-    def validate_branch_names(cls, value: Optional[List[str]]) -> Optional[List[str]]:
-        if value is None:
-            return value
-        if any(not branch or branch != branch.strip() for branch in value):
-            raise ValueError("Branch names must be non-blank exact repository identities")
-        if len(set(value)) != len(value):
-            raise ValueError("Branch names must be unique")
-        return value
+    @model_validator(mode="after")
+    def validate_delta_binding(self):
+        binding = (
+            self.base_revision,
+            self.base_collection_target,
+            self.base_generation_manifest_sha256,
+        )
+        if any(value is not None for value in binding) and not all(
+            value is not None for value in binding
+        ):
+            raise ValueError(
+                "repository delta requires base_revision, "
+                "base_collection_target, and "
+                "base_generation_manifest_sha256 together"
+            )
+        if not self.base_collection_target and (
+            self.changed_paths or self.deleted_paths
+        ):
+            raise ValueError(
+                "changed_paths/deleted_paths require an exact base generation"
+            )
+        overlap = set(self.changed_paths).intersection(self.deleted_paths)
+        if overlap:
+            raise ValueError(
+                "changed_paths and deleted_paths must be disjoint: "
+                + ", ".join(sorted(overlap)[:5])
+            )
+        return self
 
 
 class RevisionPreflightResponse(BaseModel):
@@ -219,6 +144,7 @@ class RevisionPreflightResponse(BaseModel):
     plugin_descriptor_fingerprint: str
     plugin_implementation_fingerprint: str
     index_representation_fingerprint: str
+    current_index_representation_fingerprint: str
     generation_schema: str
     generation_member_count: int = Field(gt=0)
     generation_members_sha256: str
@@ -229,141 +155,338 @@ class RevisionPreflightResponse(BaseModel):
     index_selection_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-class EstimateRequest(BaseModel):
-    repo_path: str
-    include_patterns: Optional[List[str]] = None
-    exclude_patterns: Optional[List[str]] = None
+class RevisionDiscoveryResponse(RevisionPreflightResponse):
+    """One discoverable sealed repository generation."""
 
-    @field_validator("repo_path")
-    @classmethod
-    def validate_repo_path(cls, v: str) -> str:
-        return _validate_repo_path(v)
+    collection_target: str = Field(min_length=1)
+    document_count: int = Field(ge=0)
 
 
-class EstimateResponse(BaseModel):
-    file_count: int
-    estimated_chunks: int
-    max_files_allowed: int
-    max_chunks_allowed: int
-    within_limits: bool
-    message: str
+class RepresentationIdentityResponse(BaseModel):
+    representation_identity: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    index_representation_fingerprint: str = Field(
+        pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    plugin_descriptor_fingerprint: str = Field(
+        pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    plugin_implementation_fingerprint: str = Field(
+        pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    plugin_ids: List[str]
 
 
 # ── Query models ──
 
-class QueryRequest(BaseModel):
-    query: str
+class CodeSearchRequest(BaseModel):
+    """Exact revision-bound structural code search."""
+    query: str = Field(min_length=1, max_length=1000)
     workspace: str
     project: str
     branch: str
-    top_k: Optional[int] = 10
-    filter_language: Optional[str] = None
-    repository_revision: Optional[str] = Field(
-        default=None,
+    repository_revision: str = Field(
         min_length=1,
         max_length=200,
     )
-    repository_generation_manifest_sha256: Optional[str] = Field(
-        default=None,
+    repository_generation_manifest_sha256: str = Field(
         pattern=r"^[0-9a-f]{64}$",
     )
-    collection_target: Optional[str] = Field(default=None, min_length=1)
+    collection_target: str = Field(min_length=1)
+    limit: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=5000,
+        description=(
+            "Optional explicit result limit. Omit for complete matching up to "
+            "the observable global matching-point safety limit."
+        ),
+    )
 
 
-class PRContextRequest(BaseModel):
+class StructuralQueryBinding(BaseModel):
+    """Exact server-authorized structural generation binding."""
+
     workspace: str
     project: str
-    branch: Optional[str] = None
-    base_branch: Optional[str] = None
-    changed_files: List[str]
-    diff_snippets: Optional[List[str]] = Field(default_factory=list)
-    pr_title: Optional[str] = None
-    pr_description: Optional[str] = None
-    top_k: Optional[int] = 15
-    enable_priority_reranking: Optional[bool] = True
-    min_relevance_score: Optional[float] = 0.7
-    deleted_files: Optional[List[str]] = Field(default_factory=list)
-    pr_number: Optional[int] = None
-    all_pr_changed_files: Optional[List[str]] = Field(default_factory=list)
-    source_revision: Optional[str] = Field(
-        default=None,
-        min_length=1,
-        max_length=200,
+    branch: str
+    repository_revision: str = Field(min_length=1, max_length=200)
+    repository_generation_manifest_sha256: str = Field(
+        pattern=r"^[0-9a-f]{64}$",
     )
-    base_revision: Optional[str] = Field(
-        default=None,
-        min_length=1,
-        max_length=200,
-    )
+    collection_target: str = Field(min_length=1)
+
+
+class StructuralRelationsRequest(StructuralQueryBinding):
+    """Compact one-hop relation metadata for changed repository paths."""
+
+    paths: List[str] = Field(min_length=1, max_length=100)
+    max_relations: int = Field(default=80, ge=1, le=500)
+
+
+class StructuralGraphQueryRequest(StructuralQueryBinding):
+    """One exact directional graph query."""
+
+    pattern: str = Field(min_length=1, max_length=100)
+    target: str = Field(min_length=1, max_length=1000)
+    max_results: int = Field(default=25, ge=1, le=100)
+
+
+class StructuralUnitRequest(StructuralQueryBinding):
+    """Read one exact AST/plugin unit returned by a graph query."""
+
+    unit_id: str = Field(min_length=1, max_length=200)
+
+
+class ProposedTreeGenerationBinding(BaseModel):
+    """Host-owned inputs that identify one exact proposed-tree generation."""
+
+    workspace: str = Field(min_length=1, max_length=200)
+    project: str = Field(min_length=1, max_length=300)
+    target_branch: str = Field(min_length=1, max_length=500)
+    base_revision: str = Field(min_length=1, max_length=200)
+    source_revision: str = Field(min_length=1, max_length=200)
+    target_repo_path: str
+    review_overlay_path: str
+    base_collection_target: Optional[str] = Field(default=None, min_length=1)
+    base_generation_revision: Optional[str] = Field(default=None, min_length=1)
     base_generation_manifest_sha256: Optional[str] = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
-    pr_generation_fingerprint: Optional[str] = Field(
+    include_patterns: Optional[List[str]] = None
+    exclude_patterns: Optional[List[str]] = None
+    project_type: Optional[str] = Field(
         default=None,
-        pattern=r"^sha256:[0-9a-f]{64}$",
+        pattern=r"^[a-z][a-z0-9-]{0,63}$",
     )
-    pr_overlay_generation_manifest_sha256: Optional[str] = Field(
-        default=None,
-        pattern=r"^[0-9a-f]{64}$",
-    )
-    collection_target: Optional[str] = Field(default=None, min_length=1)
+    source_root: Optional[str] = None
 
-    @field_validator('changed_files')
+    @field_validator("target_repo_path", "review_overlay_path")
     @classmethod
-    def validate_changed_files(cls, v):
-        max_files = int(os.getenv('RAG_MAX_FILES_PER_REQUEST', '500'))
-        if len(v) > max_files:
-            raise ValueError(f'Too many changed files: {len(v)} > {max_files}')
-        return v
+    def validate_local_path(cls, value: str) -> str:
+        return _validate_repo_path(value)
 
-    @field_validator('diff_snippets')
+    @field_validator("project_type", mode="before")
     @classmethod
-    def validate_snippets(cls, v):
-        if v is not None:
-            max_snippets = int(os.getenv('RAG_MAX_SNIPPETS_PER_REQUEST', '50'))
-            if len(v) > max_snippets:
-                raise ValueError(f'Too many diff snippets: {len(v)} > {max_snippets}')
-        return v
+    def validate_project_type(cls, value: Optional[str]) -> Optional[str]:
+        if (
+            value is None
+            or not str(value).strip()
+            or str(value).strip().casefold() == "auto"
+        ):
+            return None
+        return str(value).strip().casefold()
+
+    @field_validator("source_root")
+    @classmethod
+    def validate_source_root(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_source_root(value)
 
 
-class DeterministicContextRequest(BaseModel):
-    """Request for deterministic metadata-based context retrieval."""
-    workspace: str
-    project: str
-    branches: List[str]
-    file_paths: List[str]
-    limit_per_file: Optional[int] = 10
-    pr_number: Optional[int] = None
-    pr_changed_files: Optional[List[str]] = None
-    additional_identifiers: Optional[List[str]] = Field(
-        default=None,
-        description="Extra type/function names to look up (from AST enrichment: extends, implements, calls). "
-                    "Injected directly into Step 2 definition lookup alongside Qdrant-extracted identifiers."
-    )
-    source_revision: Optional[str] = Field(
-        default=None,
-        min_length=1,
-        max_length=200,
-    )
-    base_revision: Optional[str] = Field(
-        default=None,
-        min_length=1,
-        max_length=200,
-    )
-    base_generation_manifest_sha256: Optional[str] = Field(
-        default=None,
+class ReviewIndexPolicy(BaseModel):
+    """Authoritative project scope, independent of graph seed availability."""
+
+    include_patterns: List[str] = Field(default_factory=list)
+    exclude_patterns: List[str] = Field(default_factory=list)
+    project_type: Optional[str] = None
+    source_root: Optional[str] = None
+
+
+    @field_validator("source_root")
+    @classmethod
+    def validate_source_root(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_source_root(value)
+
+
+class ReviewGenerationCandidate(BaseModel):
+    collection_target: str
+    generation_manifest_sha256: str
+    revision: str
+
+
+class ProposedTreePrepareRequest(ProposedTreeGenerationBinding):
+    """Prepare and seal one review generation before Stage 1 fans out."""
+
+    index_policy: Optional[ReviewIndexPolicy] = None
+    base_generation_candidates: List[ReviewGenerationCandidate] = Field(default_factory=list)
+
+    @field_validator("index_policy", mode="before")
+    @classmethod
+    def optional_index_policy(cls, value):
+        if value is None:
+            return None
+        try:
+            return ReviewIndexPolicy.model_validate(value)
+        except (ValidationError, TypeError, ValueError):
+            logger.warning("Ignoring malformed optional repository index policy")
+            return None
+
+    @field_validator("base_generation_candidates", mode="before")
+    @classmethod
+    def optional_generation_candidates(cls, value):
+        if value is None:
+            return []
+        if not isinstance(value, (list, tuple)):
+            logger.warning("Ignoring malformed optional repository generation candidates")
+            return []
+        candidates = []
+        for position, candidate in enumerate(value):
+            try:
+                candidates.append(ReviewGenerationCandidate.model_validate(candidate))
+            except (ValidationError, TypeError, ValueError):
+                logger.warning("Ignoring malformed optional repository generation candidate at position %s", position)
+        return candidates
+
+
+class ProposedTreeQueryBinding(ProposedTreeGenerationBinding):
+    """Read-only binding shared by every proposed-tree graph operation."""
+
+    review_collection_target: str = Field(min_length=1)
+    review_generation_manifest_sha256: str = Field(
         pattern=r"^[0-9a-f]{64}$",
     )
-    pr_generation_fingerprint: Optional[str] = Field(
-        default=None,
-        pattern=r"^sha256:[0-9a-f]{64}$",
-    )
-    pr_overlay_generation_manifest_sha256: Optional[str] = Field(
-        default=None,
-        pattern=r"^[0-9a-f]{64}$",
-    )
-    collection_target: Optional[str] = Field(default=None, min_length=1)
+    focus_paths: List[str] = Field(min_length=1, max_length=100)
+
+    @field_validator("focus_paths")
+    @classmethod
+    def validate_focus_paths(cls, value: List[str]) -> List[str]:
+        return list(dict.fromkeys(
+            _validate_repository_relative_path(path) for path in value
+        ))
+
+
+class ReviewContextRequest(ProposedTreeQueryBinding):
+    """Build/query one exact proposed-tree graph for an active PR review.
+
+    Repository and overlay paths are injected by the review host. The model-facing
+    MCP tool only supplies the review question and optional symbol focus.
+    """
+
+    question: str = Field(min_length=1, max_length=4000)
+    focus_symbols: List[str] = Field(default_factory=list, max_length=50)
+    max_relations: int = Field(default=32, ge=1, le=200)
+    max_source_windows: int = Field(default=6, ge=1, le=20)
+    max_source_characters: int = Field(default=12000, ge=1000, le=60000)
+
+    @field_validator("focus_symbols")
+    @classmethod
+    def validate_focus_symbols(cls, value: List[str]) -> List[str]:
+        return list(dict.fromkeys(
+            symbol.strip()
+            for symbol in value
+            if isinstance(symbol, str) and symbol.strip()
+        ))
+
+
+class ReviewMinimalContextRequest(ProposedTreeQueryBinding):
+    """Ultra-compact starting topology for one proposed-tree review task."""
+
+    question: str = Field(min_length=1, max_length=4000)
+    focus_symbols: List[str] = Field(default_factory=list, max_length=50)
+    max_relations: int = Field(default=25, ge=1, le=200)
+    detail_level: Literal["minimal", "standard"] = "minimal"
+    include_source: bool = True
+    max_source_windows: int = Field(default=4, ge=1, le=20)
+    max_source_characters: int = Field(default=8000, ge=1000, le=60000)
+
+    @field_validator("focus_symbols")
+    @classmethod
+    def validate_focus_symbols(cls, value: List[str]) -> List[str]:
+        return list(dict.fromkeys(
+            symbol.strip()
+            for symbol in value
+            if isinstance(symbol, str) and symbol.strip()
+        ))
+
+
+class ReviewImpactRadiusRequest(ProposedTreeQueryBinding):
+    """Weighted best-score impact traversal from changed or precise targets."""
+
+    targets: List[str] = Field(default_factory=list, max_length=100)
+    max_depth: int = Field(default=2, ge=0, le=6)
+    max_results: int = Field(default=100, ge=1, le=500)
+    detail_level: Literal["minimal", "standard"] = "standard"
+    include_source: bool = True
+    max_source_windows: int = Field(default=6, ge=1, le=20)
+    max_source_characters: int = Field(default=12000, ge=1000, le=60000)
+
+    @field_validator("targets")
+    @classmethod
+    def validate_targets(cls, value: List[str]) -> List[str]:
+        return list(dict.fromkeys(
+            target.strip()
+            for target in value
+            if isinstance(target, str) and target.strip()
+        ))
+
+
+class ReviewTraverseRequest(ProposedTreeQueryBinding):
+    """BFS/DFS over proposed-tree facts, with an optional response token budget."""
+
+    start: str = Field(min_length=1, max_length=1000)
+    strategy: Literal["bfs", "dfs"] = "bfs"
+    direction: Literal["incoming", "outgoing", "both"] = "both"
+    relation_kinds: List[str] = Field(default_factory=list, max_length=50)
+    max_depth: int = Field(default=3, ge=0, le=6)
+    max_results: int = Field(default=100, ge=1, le=500)
+    token_budget: int | None = Field(default=None, ge=512, le=16000)
+    detail_level: Literal["minimal", "standard"] = "standard"
+    include_source: bool = True
+    max_source_windows: int = Field(default=6, ge=1, le=20)
+    max_source_characters: int = Field(default=12000, ge=1000, le=60000)
+
+    @field_validator("relation_kinds")
+    @classmethod
+    def validate_relation_kinds(cls, value: List[str]) -> List[str]:
+        if any(
+            isinstance(kind, str) and len(kind.strip()) > 128
+            for kind in value
+        ):
+            raise ValueError("relation kind must be at most 128 characters")
+        return list(dict.fromkeys(
+            kind.strip()
+            for kind in value
+            if isinstance(kind, str) and kind.strip()
+        ))
+
+
+class ReviewGraphQueryRequest(ProposedTreeQueryBinding):
+    """One exact proposed-tree query with optional bounded source windows."""
+
+    pattern: str = Field(min_length=1, max_length=100)
+    target: str = Field(min_length=1, max_length=1000)
+    max_results: int = Field(default=25, ge=1, le=100)
+    cursor: int = Field(default=0, ge=0)
+    detail_level: Literal["minimal", "standard"] = "standard"
+    include_source: bool = True
+    max_source_windows: int = Field(default=6, ge=1, le=20)
+    max_source_characters: int = Field(default=12000, ge=1000, le=60000)
+
+
+class ReviewUnitRequest(ProposedTreeQueryBinding):
+    """Read one exact AST/plugin unit from the proposed-tree graph."""
+
+    unit_id: str = Field(min_length=1, max_length=200)
+    offset: int = Field(default=0, ge=0)
+    max_characters: int = Field(default=12000, ge=1, le=60000)
+
+
+
+
+
+
+class ReviewContextResponse(BaseModel):
+    """Bounded source-backed structural evidence for one PR review question."""
+
+    status: str
+    snapshot: Dict[str, Any]
+    freshness: Dict[str, Any]
+    changed: Dict[str, Any]
+    evidence: Dict[str, Any]
+    sourceWindows: List[Dict[str, Any]]
+    coverage: Dict[str, Any]
+    provenance: Dict[str, Any]
+    omittedFollowups: List[Dict[str, Any]]
 
 
 # ── Parse models ──
@@ -387,7 +510,7 @@ class ParsedFileMetadata(BaseModel):
     imports: List[str] = []
     extends: List[str] = []
     implements: List[str] = []
-    semantic_names: List[str] = []
+    symbol_names: List[str] = []
     parent_class: Optional[str] = None
     namespace: Optional[str] = None
     calls: List[str] = []
@@ -395,59 +518,10 @@ class ParsedFileMetadata(BaseModel):
     error: Optional[str] = None
 
 
-# ── PR indexing models ──
+# ── Repository index inspection models ──
 
-class PRFileInfo(BaseModel):
-    """Info about a single PR file.
-
-    ``partial_diff`` content is review evidence, not a complete repository
-    artifact. It must never be parsed or embedded as source code.
-    """
-    path: str
-    content: str
-    change_type: str  # ADDED, MODIFIED, DELETED
-    content_state: Literal["complete", "partial_diff"] = "complete"
-
-    @field_validator("change_type")
-    @classmethod
-    def normalize_change_type(cls, value: str) -> str:
-        normalized = str(value or "").strip().upper()
-        if normalized not in {
-            "ADDED",
-            "MODIFIED",
-            "DELETED",
-            "RENAMED",
-            "BINARY",
-        }:
-            raise ValueError(f"Unsupported PR change type: {value!r}")
-        return normalized
-
-
-class PRIndexRequest(BaseModel):
-    """Request to index PR files into main collection with PR metadata."""
-    workspace: str
-    project: str
-    pr_number: int
-    branch: str
-    base_branch: Optional[str] = None
-    source_revision: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    base_revision: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    repository_plugins: List[str] = Field(default_factory=list)
-    plugin_detection_evidence: Dict[str, List[str]] = Field(default_factory=dict)
-    plugin_fingerprint: str = "sha256:" + "0" * 64
-    plugin_descriptor_fingerprint: str = "sha256:" + "0" * 64
-    files: List[PRFileInfo]
-    base_generation_manifest_sha256: Optional[str] = Field(
-        default=None,
-        pattern=r"^[0-9a-f]{64}$",
-    )
-    collection_target: Optional[str] = Field(default=None, min_length=1)
-
-
-# ── Vector storage inspection models ──
-
-class VectorInspectFilters(BaseModel):
-    """Bounded filters for vector storage inspection.
+class RepositoryIndexFilters(BaseModel):
+    """Bounded filters for structural repository-index inspection.
 
     These are internal service-to-service filters. The public web app must
     resolve workspace/project access on the Java side before forwarding them.
@@ -456,20 +530,20 @@ class VectorInspectFilters(BaseModel):
     languages: List[str] = Field(default_factory=list, max_length=20)
     path: Optional[str] = Field(default=None, max_length=500)
     file_query: Optional[str] = Field(default=None, max_length=500)
-    semantic_query: Optional[str] = Field(default=None, max_length=160)
-    pr_number: Optional[int] = Field(default=None, ge=1)
-    include_pr: bool = True
+    text_query: Optional[str] = Field(default=None, max_length=160)
 
 
-class VectorGraphRequest(BaseModel):
-    """Request a bounded graph slice from a project vector collection."""
-    filters: VectorInspectFilters = Field(default_factory=VectorInspectFilters)
+class RepositoryIndexGraphRequest(BaseModel):
+    """Request a bounded graph slice from a project structural collection."""
+    collection_target: str = Field(min_length=1)
+    filters: RepositoryIndexFilters = Field(default_factory=RepositoryIndexFilters)
     limit: int = Field(default=160, ge=20, le=5000)
     cursor: Optional[str] = Field(default=None, max_length=256)
     scan_limit: int = Field(default=2500, ge=100, le=100000)
 
 
-class VectorNodeRequest(BaseModel):
+class RepositoryIndexNodeRequest(BaseModel):
     """Request a point detail and bounded neighborhood."""
-    filters: VectorInspectFilters = Field(default_factory=VectorInspectFilters)
+    collection_target: str = Field(min_length=1)
+    filters: RepositoryIndexFilters = Field(default_factory=RepositoryIndexFilters)
     neighbor_limit: int = Field(default=80, ge=10, le=160)

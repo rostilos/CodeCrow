@@ -1,6 +1,7 @@
 import os
 import logging
 import json
+import math
 from typing import Any, Optional
 from urllib.parse import urlparse, urlunparse
 from pydantic import SecretStr
@@ -19,6 +20,69 @@ logger = logging.getLogger(__name__)
 
 # Default temperature from env or 0.0 for deterministic results
 DEFAULT_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.0"))
+DEFAULT_ANTHROPIC_MAX_OUTPUT_TOKENS = 40_000
+DEFAULT_LLM_PROVIDER_TIMEOUT_SECONDS = 120.0
+DEFAULT_LLM_PROVIDER_MAX_RETRIES = 1
+
+
+def _finite_provider_float(name: str, default: float) -> float:
+    """Read a positive finite provider setting without restoring SDK infinity."""
+    configured = os.environ.get(name)
+    if configured is None or not configured.strip():
+        return default
+    try:
+        value = float(configured)
+    except ValueError:
+        logger.warning("Invalid number for %s=%r; using %s", name, configured, default)
+        return default
+    if not math.isfinite(value) or value <= 0:
+        logger.warning("Non-positive or non-finite %s=%r; using %s", name, configured, default)
+        return default
+    return value
+
+
+def _finite_provider_retries(name: str, default: int) -> int:
+    """Read the OpenAI-protocol client's finite additional retry count."""
+    configured = os.environ.get(name)
+    if configured is None or not configured.strip():
+        return default
+    try:
+        value = int(configured)
+    except ValueError:
+        logger.warning("Invalid integer for %s=%r; using %s", name, configured, default)
+        return default
+    if value < 0:
+        logger.warning("Negative %s=%r; using %s", name, configured, default)
+        return default
+    return value
+
+
+def _openai_protocol_transport_settings() -> dict[str, Any]:
+    """Bound each OpenAI-protocol request and its SDK retry amplification.
+
+    The OpenAI SDK otherwise defaults to a 600-second read timeout and two
+    additional attempts. A single stalled Stage 1 turn can therefore occupy a
+    worker for about 30 minutes before the review's own recovery path runs.
+    """
+    return {
+        "timeout": _finite_provider_float(
+            "LLM_PROVIDER_TIMEOUT_SECONDS",
+            DEFAULT_LLM_PROVIDER_TIMEOUT_SECONDS,
+        ),
+        "max_retries": _finite_provider_retries(
+            "LLM_PROVIDER_MAX_RETRIES",
+            DEFAULT_LLM_PROVIDER_MAX_RETRIES,
+        ),
+    }
+
+
+def _normalize_openrouter_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Use parameter names advertised by OpenRouter Chat Completions."""
+
+    normalized = dict(payload)
+    if "max_completion_tokens" in normalized:
+        normalized["max_tokens"] = normalized.pop("max_completion_tokens")
+    return normalized
 
 OPENAI_COMPATIBLE_RESERVED_DIRECT_PARAMS = {
     "api_key",
@@ -46,6 +110,29 @@ OPENAI_COMPATIBLE_DIRECT_REQUEST_PARAM_KEYS = {
     "presence_penalty",
     "reasoning_effort",
     "top_p",
+}
+
+OUTPUT_TOKEN_LIMIT_KEYS = {
+    "generationmaxlength",
+    "maxgeneratedtokens",
+    "maxgenerationtokens",
+    "maxgenlen",
+    "maxlength",
+    "maxcompletiontokens",
+    "maxnewtokens",
+    "maxoutputchars",
+    "maxoutputcharacters",
+    "maxoutputlength",
+    "maxoutputtokens",
+    "maxresponselength",
+    "maxresponsetokens",
+    "maxtokencount",
+    "maxtokens",
+    "maxtokenstosample",
+    "numpredict",
+    "outputlimit",
+    "outputtokenlimit",
+    "responsetokenlimit",
 }
 
 # Gemini thinking/reasoning models that DON'T work with tool calls
@@ -96,6 +183,46 @@ class UnsupportedProviderError(Exception):
     pass
 
 
+def _anthropic_profile_max_output_tokens(ai_model: str) -> Optional[int]:
+    """Read a local LangChain capability profile without provider I/O."""
+    try:
+        from langchain_anthropic.chat_models import _get_default_model_profile
+
+        profile = _get_default_model_profile(ai_model)
+    except (ImportError, AttributeError, TypeError):
+        return None
+    value = profile.get("max_output_tokens") if isinstance(profile, dict) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _anthropic_output_cap(ai_model: str, requested: Optional[int]) -> int:
+    """Resolve a finite request cap without a network lookup or fail-closed gate."""
+    configured = (
+        requested
+        if isinstance(requested, int) and not isinstance(requested, bool) and requested > 0
+        else DEFAULT_ANTHROPIC_MAX_OUTPUT_TOKENS
+    )
+    profile_max = _anthropic_profile_max_output_tokens(ai_model)
+    if profile_max is None:
+        logger.warning(
+            "Anthropic model %s is absent from the local LangChain capability "
+            "profile; using the finite configured output cap max_tokens=%d",
+            ai_model,
+            configured,
+        )
+        return configured
+    if configured > profile_max:
+        logger.warning(
+            "Configured Anthropic output cap max_tokens=%d exceeds the local "
+            "model capability %d for %s; using the provider-supported boundary",
+            configured,
+            profile_max,
+            ai_model,
+        )
+        return profile_max
+    return configured
+
+
 class ChatOpenRouter(ChatOpenAI):
     """
     Small wrapper to support OpenRouter-style configuration via api_key.
@@ -118,6 +245,26 @@ class ChatOpenRouter(ChatOpenAI):
             api_key=api_key,
             **kwargs
         )
+
+    def _get_request_payload(
+        self,
+        input_: Any,
+        *,
+        stop: Optional[list[str]] = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Keep OpenRouter's canonical Chat Completions token field.
+
+        ``ChatOpenAI`` rewrites ``max_tokens`` to the OpenAI-specific
+        ``max_completion_tokens`` alias. OpenRouter accepts that alias for some
+        routes, but its ``require_parameters`` capability filter matches the
+        canonical ``max_tokens`` parameter advertised by model endpoints. The
+        alias therefore produced a false "no compatible endpoint" 404 for
+        bounded structured-output requests.
+        """
+
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        return _normalize_openrouter_chat_payload(payload)
 
 
 def _parse_json_object(value: Optional[str], source_name: str) -> dict[str, Any]:
@@ -157,6 +304,53 @@ def _merge_dict(base: dict[str, Any], updates: Optional[dict[str, Any]]) -> dict
     return merged
 
 
+def _without_output_token_limits(
+    value: Any,
+    *,
+    path: str = "",
+    removed: Optional[list[str]] = None,
+) -> Any:
+    """Remove provider aliases that could override the selected stage cap."""
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, item in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            normalized_key = "".join(
+                character
+                for character in str(key).casefold()
+                if character.isalnum()
+            )
+            if normalized_key in OUTPUT_TOKEN_LIMIT_KEYS:
+                if removed is not None:
+                    removed.append(child_path)
+                continue
+            cleaned[key] = _without_output_token_limits(
+                item,
+                path=child_path,
+                removed=removed,
+            )
+        return cleaned
+    if isinstance(value, list):
+        return [
+            _without_output_token_limits(
+                item,
+                path=f"{path}[{index}]",
+                removed=removed,
+            )
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _without_output_token_limits(
+                item,
+                path=f"{path}[{index}]",
+                removed=removed,
+            )
+            for index, item in enumerate(value)
+        )
+    return value
+
+
 def _split_openai_compatible_parameters(
     request_parameters: Optional[dict[str, Any]] = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -169,28 +363,33 @@ def _split_openai_compatible_parameters(
     This keeps the provider policy generic for vLLM, Ollama, Cloudflare,
     OpenAI-compatible gateways, and self-hosted deployments.
     """
-    env_custom = _parse_env_json_object(
+    removed_output_limits: list[str] = []
+    env_custom = _without_output_token_limits(_parse_env_json_object(
         "OPENAI_COMPATIBLE_CUSTOM_PARAMS",
         "OPENAI_COMPATIBLE_CUSTOM_PARAMS_JSON",
-    )
-    env_model_kwargs = _parse_env_json_object(
+    ), path="env.custom", removed=removed_output_limits)
+    env_model_kwargs = _without_output_token_limits(_parse_env_json_object(
         "OPENAI_COMPATIBLE_MODEL_KWARGS",
         "OPENAI_COMPATIBLE_MODEL_KWARGS_JSON",
-    )
-    env_extra_body = _parse_env_json_object(
+    ), path="env.model_kwargs", removed=removed_output_limits)
+    env_extra_body = _without_output_token_limits(_parse_env_json_object(
         "OPENAI_COMPATIBLE_EXTRA_BODY",
         "OPENAI_COMPATIBLE_EXTRA_BODY_JSON",
-    )
-    env_headers = _parse_env_json_object(
+    ), path="env.extra_body", removed=removed_output_limits)
+    env_headers = _without_output_token_limits(_parse_env_json_object(
         "OPENAI_COMPATIBLE_DEFAULT_HEADERS",
         "OPENAI_COMPATIBLE_DEFAULT_HEADERS_JSON",
-    )
-    env_constructor = _parse_env_json_object(
+    ), path="env.default_headers", removed=removed_output_limits)
+    env_constructor = _without_output_token_limits(_parse_env_json_object(
         "OPENAI_COMPATIBLE_CONSTRUCTOR_KWARGS",
         "OPENAI_COMPATIBLE_CONSTRUCTOR_KWARGS_JSON",
-    )
+    ), path="env.constructor", removed=removed_output_limits)
 
-    incoming = request_parameters or {}
+    incoming = _without_output_token_limits(
+        request_parameters or {},
+        path="request",
+        removed=removed_output_limits,
+    )
     if not isinstance(incoming, dict):
         logger.warning("Ignoring OpenAI-compatible custom parameters because they are not a map")
         incoming = {}
@@ -283,6 +482,13 @@ def _split_openai_compatible_parameters(
             ignored_constructor_keys,
         )
 
+    if removed_output_limits:
+        logger.warning(
+            "Ignoring OpenAI-compatible output-length parameters so the "
+            "selected finite stage cap remains authoritative: %s",
+            sorted(removed_output_limits),
+        )
+
     return model_kwargs, allowed_constructor_kwargs, request_kwargs, incoming
 
 
@@ -297,7 +503,6 @@ def _trim_openai_endpoint_suffix(base_url: str) -> str:
     endpoint_suffixes = (
         "/chat/completions",
         "/completions",
-        "/embeddings",
         "/responses",
     )
     for suffix in endpoint_suffixes:
@@ -661,12 +866,6 @@ class LLMFactory:
         # Check for unsupported Gemini thinking models (applies to all providers)
         LLMFactory._check_unsupported_gemini_model(ai_model)
         
-        # model_kwargs to disable parallel tool calls at the API level
-        # This prevents stdio transport concurrency issues with MCP servers
-        model_kwargs = {
-            "parallel_tool_calls": False
-        }
-        
         # OpenRouter provider - access multiple models via single API
         if provider == "openrouter":
             extra_headers = {
@@ -678,8 +877,8 @@ class LLMFactory:
                 model_name=ai_model,
                 temperature=temperature,
                 organization="Codecrow",
-                model_kwargs=model_kwargs,
                 default_headers=extra_headers,
+                **_openai_protocol_transport_settings(),
             )
             if max_tokens:
                 kwargs["max_tokens"] = max_tokens
@@ -691,7 +890,7 @@ class LLMFactory:
                 api_key=ai_api_key,
                 model=ai_model,
                 temperature=temperature,
-                model_kwargs=model_kwargs,
+                **_openai_protocol_transport_settings(),
             )
             if max_tokens:
                 kwargs["max_tokens"] = max_tokens
@@ -699,25 +898,16 @@ class LLMFactory:
         
         # Direct Anthropic provider
         if provider == "anthropic":
+            anthropic_max_tokens = _anthropic_output_cap(ai_model, max_tokens)
             kwargs = dict(
                 api_key=ai_api_key,
                 model=ai_model,
                 temperature=temperature,
-                # Disable parallel tool use at the API level.
-                # Anthropic uses tool_choice.disable_parallel_tool_use
-                # instead of the OpenAI-style parallel_tool_calls param.
-                # This prevents Claude from returning multiple tool_use blocks
-                # in a single response, which would overwhelm the MCP stdio
-                # transport's unicast outbound sink.
-                model_kwargs={
-                    "tool_choice": {
-                        "type": "auto",
-                        "disable_parallel_tool_use": True,
-                    }
-                },
+                # Anthropic requires an explicit max_tokens value. Keep the
+                # factory finite even before a review stage binds its narrower
+                # profile; unknown/new model IDs remain fail-open and observable.
+                max_tokens=anthropic_max_tokens,
             )
-            if max_tokens:
-                kwargs["max_tokens"] = max_tokens
             return ChatAnthropic(**kwargs)
         
         # Google AI provider (Gemini models)
@@ -740,22 +930,31 @@ class LLMFactory:
                 # for code review).  Earlier versions omitted temperature, letting the
                 # SDK default to 1.0 which produced inconsistent results.
                 effective_thinking = thinking_level or "low"
-                return ChatGoogleGenerativeAI(
+                kwargs = dict(
                     google_api_key=ai_api_key,
                     model=ai_model,
                     temperature=temperature,
                     thinking_level=effective_thinking,
                 )
+                if max_tokens:
+                    # ChatGoogleGenerativeAI accepts ``max_tokens`` as the
+                    # constructor alias for its canonical
+                    # ``max_output_tokens`` field.
+                    kwargs["max_tokens"] = max_tokens
+                return ChatGoogleGenerativeAI(**kwargs)
             else:
                 # Gemini 2.x models use thinking_budget parameter:
                 #   0  = disable thinking (2.5 Flash) or use model minimum (2.5 Pro min=128)
                 #   -1 = dynamic thinking (model decides)
-                return ChatGoogleGenerativeAI(
+                kwargs = dict(
                     google_api_key=ai_api_key,
                     model=ai_model,
                     temperature=temperature,
                     thinking_budget=0,
                 )
+                if max_tokens:
+                    kwargs["max_tokens"] = max_tokens
+                return ChatGoogleGenerativeAI(**kwargs)
         
         # Google Vertex AI provider (Gemini models through Google Cloud)
         if provider == "google_vertex":
@@ -794,14 +993,6 @@ class LLMFactory:
                     "OPENAI_COMPATIBLE provider requires a base URL. "
                     "Please configure the endpoint URL in your AI connection settings."
                 )
-            # SSRF validation — blocks private/reserved IPs unless ALLOW_PRIVATE_ENDPOINTS=true
-            from llm.ssrf_safe_transport import (
-                create_ssrf_safe_http_client,
-                create_ssrf_safe_async_http_client,
-            )
-            http_client = create_ssrf_safe_http_client(ai_base_url)
-            async_http_client = create_ssrf_safe_async_http_client(ai_base_url)
-
             base_url = _normalize_openai_compatible_base_url(ai_base_url)
 
             (
@@ -812,7 +1003,42 @@ class LLMFactory:
             ) = _split_openai_compatible_parameters(
                 ai_custom_parameters
             )
-            openai_compatible_model_kwargs = _merge_dict(model_kwargs, custom_model_kwargs)
+            transport_settings = _openai_protocol_transport_settings()
+            if not {
+                "timeout",
+                "request_timeout",
+            }.intersection(custom_constructor_kwargs):
+                custom_constructor_kwargs["timeout"] = transport_settings["timeout"]
+            if "max_retries" not in custom_constructor_kwargs:
+                custom_constructor_kwargs["max_retries"] = transport_settings["max_retries"]
+
+            # SSRF validation — blocks private/reserved IPs unless
+            # ALLOW_PRIVATE_ENDPOINTS=true. Keep the explicitly configured
+            # compatible-endpoint timeout aligned with its underlying httpx
+            # clients rather than leaving their independent default.
+            from llm.ssrf_safe_transport import (
+                create_ssrf_safe_http_client,
+                create_ssrf_safe_async_http_client,
+            )
+            compatible_timeout = custom_constructor_kwargs.get(
+                "timeout",
+                custom_constructor_kwargs.get(
+                    "request_timeout",
+                    transport_settings["timeout"],
+                ),
+            )
+            http_client = create_ssrf_safe_http_client(
+                ai_base_url,
+                timeout=compatible_timeout,
+            )
+            async_http_client = create_ssrf_safe_async_http_client(
+                ai_base_url,
+                timeout=compatible_timeout,
+            )
+            openai_compatible_model_kwargs = _merge_dict(
+                {},
+                custom_model_kwargs,
+            )
             logger.info(
                 "Creating OPENAI_COMPATIBLE LLM: base_url=%s, model=%s, custom_param_keys=%s, constructor_param_keys=%s, request_param_keys=%s",
                 base_url,

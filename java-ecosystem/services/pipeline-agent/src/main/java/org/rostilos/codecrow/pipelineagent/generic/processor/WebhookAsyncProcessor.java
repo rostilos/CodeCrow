@@ -154,7 +154,6 @@ public class WebhookAsyncProcessor {
                 if (gateResult == BranchAnalysisGateService.GateResult.SUPERSEDED) {
                     String reason = "Superseded by a newer branch analysis job for " + job.getBranchName();
                     log.info("Skipping branch job {}: {}", job.getExternalId(), reason);
-                    cleanupSupersededMerge(payload, project);
                     jobService.skipJob(job, reason);
                     return;
                 }
@@ -319,20 +318,6 @@ public class WebhookAsyncProcessor {
         }
     }
 
-    private void cleanupSupersededMerge(WebhookPayload payload, Project project) {
-        if (!WebhookEventClassifier.isPullRequestMerge(payload)
-                || payload.pullRequestId() == null) {
-            return;
-        }
-        try {
-            ragOperationsService.deletePrFiles(
-                    project, Integer.parseInt(payload.pullRequestId()));
-        } catch (Exception e) {
-            log.warn("Failed to clean PR RAG data for superseded merge job (project={}, PR={}): {}",
-                    project.getId(), payload.pullRequestId(), e.getMessage());
-        }
-    }
-    
     /**
      * Initialize lazy associations that will be needed during webhook processing.
      * Must be called within an active Hibernate session (i.e., inside a @Transactional method).

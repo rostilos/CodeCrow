@@ -55,8 +55,7 @@ public final class VcsDiffUtils {
     }
 
     /**
-     * Fetches the delta diff between two commits, applies the content filter,
-     * and returns the filtered result. Returns {@code null} on failure
+     * Fetches the complete delta diff between two commits. Returns {@code null} on failure
      * (non-blocking — errors are logged as warnings).
      *
      * @param fetcher        provider-agnostic diff retriever
@@ -64,19 +63,16 @@ public final class VcsDiffUtils {
      * @param repoSlug       repository slug
      * @param baseCommit     base commit hash (the last successfully analysed one)
      * @param headCommit     head commit hash (the current one)
-     * @param contentFilter  content-size filter to strip oversised file diffs
-     * @return filtered delta diff, or {@code null} if fetching failed
+     * @return complete delta diff, or {@code null} if fetching failed
      */
     public static String fetchDeltaDiff(
             CommitRangeDiffFetcher fetcher,
             String workspace,
             String repoSlug,
             String baseCommit,
-            String headCommit,
-            DiffContentFilter contentFilter) {
+            String headCommit) {
         try {
-            String rawDeltaDiff = fetcher.fetch(workspace, repoSlug, baseCommit, headCommit);
-            return contentFilter.filterDiff(rawDeltaDiff);
+            return fetcher.fetch(workspace, repoSlug, baseCommit, headCommit);
         } catch (IOException e) {
             log.warn("Failed to fetch delta diff from {} to {}: {}",
                     truncateHash(baseCommit),

@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "post-fix-control.schema.json",
+  "title": "CodeCrow Magento 2 verified-F control",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "controlId",
+    "createdAt",
+    "registrationDigest",
+    "sealLedgerDigest",
+    "corpusId",
+    "corpusDigest",
+    "primaryAnalysisRunId",
+    "primaryAnalysisRunDigest",
+    "primaryJudgmentId",
+    "primaryJudgmentDigest",
+    "postFixAnalysisRunId",
+    "postFixAnalysisRunDigest",
+    "postFixReplayLockDigest",
+    "postFixReplayAttestationDigest",
+    "postFixJudgmentId",
+    "postFixJudgmentDigest",
+    "endpoint",
+    "summary",
+    "caseOutcomes",
+    "controlDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-post-fix-control"
+    },
+    "controlId": {
+      "$ref": "#/$defs/safeId"
+    },
+    "createdAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "registrationDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "sealLedgerDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "corpusId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "corpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "primaryAnalysisRunId": {
+      "$ref": "#/$defs/safeId"
+    },
+    "primaryAnalysisRunDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "primaryJudgmentId": {
+      "$ref": "#/$defs/safeId"
+    },
+    "primaryJudgmentDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "postFixAnalysisRunId": {
+      "$ref": "#/$defs/safeId"
+    },
+    "postFixAnalysisRunDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "postFixReplayLockDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "postFixReplayAttestationDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "postFixJudgmentId": {
+      "$ref": "#/$defs/safeId"
+    },
+    "postFixJudgmentDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "endpoint": {
+      "const": "conditional_H_true_positive_detection_disappearance_at_F"
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    },
+    "caseOutcomes": {
+      "type": "array",
+      "minItems": 50,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/caseOutcome"
+      }
+    },
+    "controlDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primaryMatchedGoldDenominator",
+        "disappeared",
+        "stillDetected",
+        "unverifiable",
+        "primaryUnmatchedNotApplicable",
+        "disappearanceRateConditionalOnPrimaryTruePositives",
+        "isRecall"
+      ],
+      "properties": {
+        "primaryMatchedGoldDenominator": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "disappeared": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stillDetected": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unverifiable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "primaryUnmatchedNotApplicable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "disappearanceRateConditionalOnPrimaryTruePositives": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "isRecall": {
+          "const": false
+        }
+      }
+    },
+    "caseOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "caseDigest",
+        "outcomes"
+      ],
+      "properties": {
+        "caseId": {
+          "$ref": "#/$defs/safeId"
+        },
+        "caseDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "outcomes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "goldId",
+              "primaryMatchedAtH",
+              "outcome"
+            ],
+            "properties": {
+              "goldId": {
+                "type": "string",
+                "pattern": "^G[0-9]{3}$"
+              },
+              "primaryMatchedAtH": {
+                "type": "boolean"
+              },
+              "outcome": {
+                "enum": [
+                  "disappeared",
+                  "still_detected",
+                  "unverifiable",
+                  "not_applicable_primary_unmatched"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

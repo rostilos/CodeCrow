@@ -1,14 +1,15 @@
-"""Bounded, deterministic evidence scopes for incremental pull-request review.
+"""Deterministic evidence scopes for incremental pull-request review.
 
 The review scope and the PR-state scope intentionally have different jobs:
 
 * the review scope owns model work and publication anchors and is the current
   incremental delta when one exists;
-* the PR-state scope is a compact base-to-head ledger used only for PR-wide
+* the PR-state scope is a base-to-head ledger used only for PR-wide
   reasoning such as task coverage and cross-file interaction.
 
-The ledger never expands the Stage 1 workload and never sends the complete PR
-diff unless it already fits inside the fixed Stage 2 evidence budget.
+The ledger never expands the Stage 1 workload, but it preserves every supplied
+file and hunk. Provider context limits are surfaced as provider errors rather
+than silently changing the evidence seen by the analysis.
 """
 
 from __future__ import annotations
@@ -20,8 +21,6 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 from utils.diff_processor import DiffFile, DiffHunk, HunkDisposition, ProcessedDiff
 
 
-STAGE_2_PR_EVIDENCE_CHAR_BUDGET = 24_000
-INCREMENTAL_DELTA_CHAR_BUDGET = 6_000
 PERSISTED_TASK_EVIDENCE_CHAR_BUDGET = 2_400
 PERSISTED_TASK_EVIDENCE_MAX_ITEMS = 8
 
@@ -102,7 +101,7 @@ class TaskImplementationEvidence:
 
 @dataclass(frozen=True)
 class PrEvidenceLedger:
-    """Fixed-budget evidence passed to Stage 2 and its publication gate."""
+    """Complete supplied evidence passed to Stage 2 and its publication gate."""
 
     full_pr_context: str
     incremental_delta_context: str
@@ -130,7 +129,7 @@ class PrEvidenceLedger:
         self,
         task_key: Optional[str],
     ) -> Optional[Dict[str, Any]]:
-        """Return bounded structured evidence for host-owned database persistence.
+        """Return structured evidence for host-owned database persistence.
 
         This data is deliberately separate from the human-facing review comment.
         It records positive changed-line evidence rather than an LLM assertion
@@ -298,7 +297,7 @@ def build_pr_evidence_ledger(
     pr_title: str = "",
     pr_description: str = "",
 ) -> PrEvidenceLedger:
-    """Build both evidence scopes inside one fixed Stage 2 character budget."""
+    """Build both complete supplied evidence scopes."""
     effective_full_pr_diff = (
         full_pr_diff
         if incremental
@@ -306,16 +305,12 @@ def build_pr_evidence_ledger(
     )
     task_terms = _extract_task_terms(task_context, pr_title, pr_description)
 
-    delta_budget = INCREMENTAL_DELTA_CHAR_BUDGET if incremental else 0
-    full_budget = STAGE_2_PR_EVIDENCE_CHAR_BUDGET - delta_budget
-
     evidence_by_ref: Dict[str, PrLedgerEvidence] = {}
     full_context, manifest_complete, full_evidence_complete, relevant_paths = (
         _build_scope_context(
             effective_full_pr_diff,
             scope="full_pr",
             ref_prefix="PRF",
-            budget=full_budget,
             task_terms=task_terms,
             evidence_by_ref=evidence_by_ref,
         )
@@ -326,7 +321,6 @@ def build_pr_evidence_ledger(
             review_diff,
             scope="delta",
             ref_prefix="DELTA",
-            budget=delta_budget,
             task_terms=task_terms,
             evidence_by_ref=evidence_by_ref,
         )
@@ -369,7 +363,6 @@ def _build_scope_context(
     *,
     scope: str,
     ref_prefix: str,
-    budget: int,
     task_terms: Sequence[str],
     evidence_by_ref: Dict[str, PrLedgerEvidence],
 ) -> tuple[str, bool, bool, set[str]]:
@@ -397,21 +390,14 @@ def _build_scope_context(
         ),
         "FILE MANIFEST:",
     ]
-    manifest_text, manifest_complete = _fit_lines(
-        manifest_header,
-        manifest_lines,
-        max(1_500, min(budget // 2, 9_000)),
+    manifest_text = "\n".join([*manifest_header, *manifest_lines])
+    manifest_complete = not processed_diff.truncated
+    manifest_text += (
+        "\nManifest status: COMPLETE"
+        if manifest_complete
+        else "\nManifest status: INCOMPLETE — source diff was incomplete."
     )
-    if not manifest_complete:
-        manifest_text += (
-            "\nManifest status: INCOMPLETE — PR-wide absence claims are not permitted."
-        )
-    else:
-        manifest_text += "\nManifest status: COMPLETE"
 
-    # Reserve room for the evidence-completeness declaration added below so no
-    # registered evidence reference can be truncated out of the actual prompt.
-    remaining = max(0, budget - len(manifest_text) - 240)
     all_evidence = _evidence_candidates(
         processed_diff,
         task_terms=task_terms,
@@ -420,7 +406,6 @@ def _build_scope_context(
         all_evidence,
         scope=scope,
         ref_prefix=ref_prefix,
-        budget=remaining,
         evidence_by_ref=evidence_by_ref,
     )
     all_reviewable_hunks = sum(
@@ -449,7 +434,7 @@ def _build_scope_context(
         and all_evidence_rendered
     )
 
-    if not complete_candidate_text and remaining:
+    if not complete_candidate_text:
         complete_candidate_text = "No changed source hunks are available in this scope."
 
     relevant_paths = {
@@ -461,12 +446,12 @@ def _build_scope_context(
         "Changed-line evidence status: COMPLETE"
         if full_evidence_complete
         else (
-            "Changed-line evidence status: BOUNDED — excerpts are positive supporting "
-            "evidence and their absence cannot prove missing behavior."
+            "Changed-line evidence status: INCOMPLETE — the supplied source diff "
+            "was incomplete."
         )
     )
     context = f"{manifest_text}\n\n{status}\n{complete_candidate_text}".strip()
-    return context[:budget], manifest_complete, full_evidence_complete, relevant_paths
+    return context, manifest_complete, full_evidence_complete, relevant_paths
 
 
 @dataclass(frozen=True)
@@ -510,27 +495,16 @@ def _render_evidence_candidates(
     *,
     scope: str,
     ref_prefix: str,
-    budget: int,
     evidence_by_ref: Dict[str, PrLedgerEvidence],
 ) -> tuple[str, bool]:
-    if budget <= 0:
-        return "", not candidates.ordered
-
     lines = ["EVIDENCE EXCERPTS:"]
-    used = len(lines[0])
     rendered = 0
-    all_excerpts_complete = True
     for _, path, hunk in candidates.ordered:
         ref = f"{ref_prefix}{rendered + 1:03d}"
-        excerpt, excerpt_complete = _bounded_hunk_excerpt(hunk)
+        excerpt = _hunk_excerpt(hunk)
         block = f"[{ref}] {path}\n{excerpt}"
-        extra = len(block) + 2
-        if used + extra > budget:
-            break
         lines.append(block)
-        used += extra
         rendered += 1
-        all_excerpts_complete = all_excerpts_complete and excerpt_complete
         evidence_by_ref[ref] = PrLedgerEvidence(
             ref=ref,
             scope=scope,
@@ -545,34 +519,15 @@ def _render_evidence_candidates(
             ),
         )
 
-    fully_rendered = (
-        rendered == len(candidates.ordered)
-        and all_excerpts_complete
-    )
-    if rendered < len(candidates.ordered):
-        lines.append(
-            f"... {len(candidates.ordered) - rendered} additional hunks omitted "
-            "by the fixed evidence budget"
-        )
-    return "\n\n".join(lines), fully_rendered
+    return "\n\n".join(lines), rendered == len(candidates.ordered)
 
 
-def _bounded_hunk_excerpt(
-    hunk: DiffHunk,
-    max_chars: int = 1_200,
-) -> tuple[str, bool]:
-    lines = [hunk.header]
-    lines.extend(
-        line[:320]
-        for line in hunk.content.splitlines()
-        if (
-            not line.startswith("@@")
-            and line.startswith(("+", "-"))
-            and not line.startswith(("+++", "---"))
-        )
-    )
-    complete_excerpt = "\n".join(lines)
-    return complete_excerpt[:max_chars], len(complete_excerpt) <= max_chars
+def _hunk_excerpt(hunk: DiffHunk) -> str:
+    """Render the complete parsed hunk, including unchanged context lines."""
+    content = hunk.content
+    if content.startswith(hunk.header):
+        return content
+    return f"{hunk.header}\n{content}" if content else hunk.header
 
 
 def _manifest_line(diff_file: DiffFile) -> str:
@@ -585,25 +540,6 @@ def _manifest_line(diff_file: DiffFile) -> str:
         f"- {change_type.upper()} {diff_file.path} "
         f"(+{diff_file.additions}/-{diff_file.deletions}, {disposition})"
     )
-
-
-def _fit_lines(
-    prefix_lines: Sequence[str],
-    item_lines: Sequence[str],
-    budget: int,
-) -> tuple[str, bool]:
-    lines = list(prefix_lines)
-    used = len("\n".join(lines))
-    included = 0
-    for line in item_lines:
-        if used + len(line) + 1 > budget:
-            break
-        lines.append(line)
-        used += len(line) + 1
-        included += 1
-    if included < len(item_lines):
-        lines.append(f"... {len(item_lines) - included} paths omitted by the manifest budget")
-    return "\n".join(lines), included == len(item_lines)
 
 
 def _task_relevance_score(

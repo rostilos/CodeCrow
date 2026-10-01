@@ -108,27 +108,6 @@ class TestParseJsonFromResponse:
         assert result == {"key": 1}
 
 
-# ── _truncate ─────────────────────────────────────────────────
-
-
-class TestTruncate:
-    def test_short_text(self):
-        assert QaDocumentationOrchestrator._truncate("hi", 10) == "hi"
-
-    def test_exact_length(self):
-        assert QaDocumentationOrchestrator._truncate("hello", 5) == "hello"
-
-    def test_long_text(self):
-        result = QaDocumentationOrchestrator._truncate("hello world", 5)
-        assert result == "hello…"
-
-    def test_none_text(self):
-        assert QaDocumentationOrchestrator._truncate(None, 10) == ""
-
-    def test_empty_text(self):
-        assert QaDocumentationOrchestrator._truncate("", 10) == ""
-
-
 # ── _build_placeholders ──────────────────────────────────────
 
 
@@ -192,27 +171,23 @@ class TestSlimStageResults:
     def setup_method(self):
         self.orch = QaDocumentationOrchestrator.__new__(QaDocumentationOrchestrator)
 
-    def test_strips_raw_analysis(self):
+    def test_preserves_raw_analysis(self):
         results = [{"file_analyses": [{"path": "a.py"}], "raw_analysis": "big text", "batch_id": 1}]
         text = self.orch._slim_stage_results(results)
         parsed = json.loads(text)
         assert isinstance(parsed, list)
-        for item in parsed:
-            assert "raw_analysis" not in item
-            assert "batch_id" not in item
+        assert parsed == results
 
-    def test_caps_output(self):
+    def test_preserves_large_output(self):
         results = [{"data": "x" * 1000}]
-        text = self.orch._slim_stage_results(results, max_chars=100)
-        assert len(text) <= 200  # cap + truncation notice
+        text = self.orch._slim_stage_results(results)
+        assert json.loads(text) == results
 
-    def test_strips_empty_values(self):
+    def test_preserves_empty_values(self):
         results = [{"key": "val", "empty": None, "blank": "", "void": []}]
         text = self.orch._slim_stage_results(results)
         parsed = json.loads(text)
-        assert "empty" not in parsed[0]
-        assert "blank" not in parsed[0]
-        assert "void" not in parsed[0]
+        assert parsed == results
 
 
 # ── _is_documentation_needed ──────────────────────────────────

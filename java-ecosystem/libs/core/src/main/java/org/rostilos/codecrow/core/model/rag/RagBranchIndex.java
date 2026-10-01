@@ -4,16 +4,9 @@ import jakarta.persistence.*;
 import org.rostilos.codecrow.core.model.project.Project;
 
 import java.time.OffsetDateTime;
-import java.util.HashSet;
-import java.util.Set;
 
 /**
- * Entity tracking RAG index state for a specific branch within a project.
- * 
- * With single-collection-per-project architecture, all branches share one Qdrant collection.
- * This entity tracks:
- * - Which commit is indexed for each branch
- * - Deleted files that should be excluded from queries
+ * Registry head for one branch's immutable physical generations.
  */
 @Entity
 @Table(name = "rag_branch_index",
@@ -42,15 +35,9 @@ public class RagBranchIndex {
     @Column(name = "branch_name", nullable = false, length = 256)
     private String branchName;
 
-    /**
-     * The commit hash that is currently indexed for this branch.
-     */
-    @Column(name = "commit_hash", length = 64)
-    private String commitHash;
-
     @Enumerated(EnumType.STRING)
     @Column(name = "index_kind", nullable = false, length = 24)
-    private RagBranchIndexKind indexKind = RagBranchIndexKind.LEGACY;
+    private RagBranchIndexKind indexKind;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "lifecycle_status", nullable = false, length = 24)
@@ -69,26 +56,14 @@ public class RagBranchIndex {
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
+    @Column(name = "last_failed_at")
+    private OffsetDateTime lastFailedAt;
+
     @Column(name = "cleanup_claim_token", length = 64)
     private String cleanupClaimToken;
 
     @Column(name = "cleanup_claimed_at")
     private OffsetDateTime cleanupClaimedAt;
-
-    /**
-     * Files that were deleted in this branch (for query-time filtering).
-     * These files should be excluded when querying the branch's context.
-     */
-    @ElementCollection(fetch = FetchType.EAGER)
-    @CollectionTable(
-        name = "rag_branch_deleted_files",
-        joinColumns = @JoinColumn(name = "branch_index_id")
-    )
-    @Column(name = "file_path", length = 512)
-    private Set<String> deletedFiles = new HashSet<>();
-
-    @Column(name = "chunk_count")
-    private Integer chunkCount;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
@@ -104,13 +79,12 @@ public class RagBranchIndex {
     public RagBranchIndex() {
     }
 
-    public RagBranchIndex(Project project, String branchName) {
+    public RagBranchIndex(
+            Project project,
+            String branchName,
+            RagBranchIndexKind indexKind) {
         this.project = project;
         this.branchName = branchName;
-    }
-
-    public RagBranchIndex(Project project, String branchName, RagBranchIndexKind indexKind) {
-        this(project, branchName);
         this.indexKind = indexKind;
         this.lifecycleStatus = RagBranchIndexLifecycleStatus.PENDING;
     }
@@ -123,11 +97,10 @@ public class RagBranchIndex {
 
     public void activate(RagBranchIndexGeneration generation) {
         this.activeGeneration = generation;
-        this.commitHash = generation.getRevision();
         this.desiredCommitHash = generation.getRevision();
-        this.chunkCount = generation.getChunkCount();
         this.lifecycleStatus = RagBranchIndexLifecycleStatus.READY;
         this.errorMessage = null;
+        this.lastFailedAt = null;
         this.lastAccessedAt = OffsetDateTime.now();
     }
 
@@ -136,6 +109,7 @@ public class RagBranchIndex {
                 ? RagBranchIndexLifecycleStatus.FAILED
                 : RagBranchIndexLifecycleStatus.READY;
         this.errorMessage = errorMessage;
+        this.lastFailedAt = OffsetDateTime.now();
     }
 
     public void markAccessed() {
@@ -164,14 +138,6 @@ public class RagBranchIndex {
 
     public void setBranchName(String branchName) {
         this.branchName = branchName;
-    }
-
-    public String getCommitHash() {
-        return commitHash;
-    }
-
-    public void setCommitHash(String commitHash) {
-        this.commitHash = commitHash;
     }
 
     public RagBranchIndexKind getIndexKind() {
@@ -222,6 +188,14 @@ public class RagBranchIndex {
         this.errorMessage = errorMessage;
     }
 
+    public OffsetDateTime getLastFailedAt() {
+        return lastFailedAt;
+    }
+
+    public void setLastFailedAt(OffsetDateTime lastFailedAt) {
+        this.lastFailedAt = lastFailedAt;
+    }
+
     public String getCleanupClaimToken() {
         return cleanupClaimToken;
     }
@@ -236,22 +210,6 @@ public class RagBranchIndex {
 
     public void setCleanupClaimedAt(OffsetDateTime cleanupClaimedAt) {
         this.cleanupClaimedAt = cleanupClaimedAt;
-    }
-
-    public Set<String> getDeletedFiles() {
-        return deletedFiles;
-    }
-
-    public void setDeletedFiles(Set<String> deletedFiles) {
-        this.deletedFiles = deletedFiles;
-    }
-
-    public Integer getChunkCount() {
-        return chunkCount;
-    }
-
-    public void setChunkCount(Integer chunkCount) {
-        this.chunkCount = chunkCount;
     }
 
     public OffsetDateTime getCreatedAt() {

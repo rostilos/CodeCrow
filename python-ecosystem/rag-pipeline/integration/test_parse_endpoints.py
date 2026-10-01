@@ -13,9 +13,9 @@ async def test_parse_single_file(client, auth_headers):
     data = resp.json()
     assert data["path"] == "example.py"
     assert data["success"] is True
-    # Should extract at least some semantic info
+    # Should extract at least some structural information.
     assert isinstance(data.get("imports", []), list)
-    assert isinstance(data.get("semantic_names", []), list)
+    assert isinstance(data.get("symbol_names", []), list)
 
 
 @pytest.mark.asyncio

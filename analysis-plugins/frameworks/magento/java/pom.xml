@@ -12,4 +12,17 @@
     <artifactId>codecrow-plugin-magento</artifactId>
     <packaging>jar</packaging>
     <properties><codecrow.plugin.id>magento</codecrow.plugin.id></properties>
+    <build>
+        <testResources>
+            <testResource>
+                <directory>src/test/resources</directory>
+            </testResource>
+            <testResource>
+                <directory>${project.basedir}/../../../contracts/fixtures</directory>
+                <includes>
+                    <include>magento-file-policy.json</include>
+                </includes>
+            </testResource>
+        </testResources>
+    </build>
 </project>

@@ -385,7 +385,6 @@ public class AIConnectionService {
         List<String> suffixes = List.of(
                 "/chat/completions",
                 "/completions",
-                "/embeddings",
                 "/responses"
         );
         for (String suffix : suffixes) {

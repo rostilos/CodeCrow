@@ -135,7 +135,7 @@ class DiffFile:
     is_skipped: bool = False
     skip_reason: Optional[str] = None
     plugin_disposition: Optional[str] = None
-    
+
     @property
     def total_changes(self) -> int:
         return self.additions + self.deletions
@@ -200,45 +200,45 @@ class DiffProcessor:
         self.max_files = max_files
         self.max_total_size = max_total_size
         self.max_lines_per_file = max_lines_per_file
-    
+
     def process(self, raw_diff: str) -> ProcessedDiff:
         """
         Process raw diff and apply all filtering rules.
 
         Args:
             raw_diff: Raw unified diff content
-            
+
         Returns:
             ProcessedDiff with filtered and prioritized files
         """
         if not raw_diff:
             return ProcessedDiff(files=[], original_size_bytes=0)
-        
+
         original_size = len(raw_diff.encode('utf-8'))
-        
+
         # Parse diff into files
         files = self._parse_diff(raw_diff)
-        
+
         # Apply skip rules
         for f in files:
             if self._should_skip(f):
                 f.is_skipped = True
-        
+
         # Keep reviewable files before mechanically skipped files while preserving
         # the original diff order. The LLM planning/batching stages receive the
         # file metadata and make semantic judgments; diff ingestion should not.
         files = self._prioritize_files(files)
-        
+
         # Apply limits
         processed_files, truncated, truncation_reason = self._apply_limits(files)
-        
+
         # Calculate stats
         total_additions = sum(f.additions for f in processed_files if not f.is_skipped)
         total_deletions = sum(f.deletions for f in processed_files if not f.is_skipped)
         total_files = len([f for f in processed_files if not f.is_skipped])
         skipped_files = len([f for f in processed_files if f.is_skipped])
         processed_size = sum(f.size_bytes for f in processed_files if not f.is_skipped)
-        
+
         return ProcessedDiff(
             files=processed_files,
             total_additions=total_additions,
@@ -261,12 +261,12 @@ class DiffProcessor:
             "Balanced add/delete (~120 lines) suggests code move"
         """
         signals = []
-        
+
         # 1. Explicit renames
         for f in files:
             if f.change_type == DiffChangeType.RENAMED and f.old_path:
                 signals.append(f"File rename: {f.old_path} → {f.path}")
-        
+
         # 2. Paired add + delete of files with same basename
         added = {f.path: f for f in files if f.change_type == DiffChangeType.ADDED}
         deleted = {f.path: f for f in files if f.change_type == DiffChangeType.DELETED}
@@ -304,7 +304,9 @@ class DiffProcessor:
         current_file = None
         current_content = []
         
-        lines = raw_diff.split('\n')
+        # Treat the final line terminator as transport framing rather than part
+        # of the last file section. Internal blank lines remain intact.
+        lines = raw_diff.splitlines()
         i = 0
         
         while i < len(lines):
@@ -438,7 +440,7 @@ class DiffProcessor:
             return True
 
         # Mode 160000 is a Git submodule pointer, not source content. The diff
-        # contains only old/new commit identifiers, so embedding it as a file
+        # contains only old/new commit identifiers, so including it as a file
         # creates retrieval noise and cannot support source-level findings.
         if file.is_gitlink:
             file.skip_reason = "Git submodule pointer"
@@ -466,24 +468,24 @@ class DiffProcessor:
             file.skip_reason = f"File too large: {file.size_bytes} bytes > {self.max_file_size}"
             file.content = summarize_oversized_diff(file.content, path)
             return False
-        
+
         # Summarize files with too many lines for the same reason.
         line_count = file.content.count('\n')
         if line_count > self.max_lines_per_file:
             file.skip_reason = f"Too many lines: {line_count} > {self.max_lines_per_file}"
             file.content = summarize_oversized_diff(file.content, path)
             return False
-        
+
         return False
-    
+
     def _prioritize_files(self, files: List[DiffFile]) -> List[DiffFile]:
         """Keep non-skipped files first and preserve original diff order."""
         def sort_key(item: Tuple[int, DiffFile]) -> Tuple[int, int]:
             index, f = item
             return (1 if f.is_skipped else 0, index)
-        
+
         return [f for _, f in sorted(enumerate(files), key=sort_key)]
-    
+
     def _apply_limits(self, files: List[DiffFile]) -> Tuple[List[DiffFile], bool, Optional[str]]:
         """
         Apply file count and total size limits to raw diff evidence.
@@ -491,20 +493,20 @@ class DiffProcessor:
         These limits protect prompt size; they are not review-scope filters.
         Reviewable text files beyond the raw evidence budget stay included with
         compact summaries so Stage 0/1/2 can decide how to use them.
-        
+
         Returns:
             (files, truncated, truncation_reason)
         """
         truncated = False
         truncation_reason = None
-        
+
         included_count = 0
         total_size = 0
-        
+
         for f in files:
             if f.is_skipped:
                 continue
-            
+
             # Check file count limit
             if included_count >= self.max_files:
                 self._compact_for_global_limit(
@@ -516,7 +518,7 @@ class DiffProcessor:
                     f"Diff compacted: exceeded {self.max_files} files full-diff limit"
                 )
                 continue
-            
+
             # Check total size limit
             if total_size + f.size_bytes > self.max_total_size:
                 self._compact_for_global_limit(
@@ -529,10 +531,10 @@ class DiffProcessor:
                 )
                 total_size += f.size_bytes
                 continue
-            
+
             included_count += 1
             total_size += f.size_bytes
-        
+
         return files, truncated, truncation_reason
 
     def _compact_for_global_limit(self, file: DiffFile, reason: str) -> None:
@@ -551,10 +553,10 @@ class DiffProcessor:
 def process_raw_diff(raw_diff: Optional[str]) -> ProcessedDiff:
     """
     Convenience function to process raw diff with default settings.
-    
+
     Args:
         raw_diff: Raw unified diff content or None
-        
+
     Returns:
         ProcessedDiff object
     """
@@ -577,12 +579,12 @@ def format_diff_for_prompt(
         processed_diff: ProcessedDiff from processor
         include_stats: Whether to include statistics header
         max_chars: Optional character limit
-        
+
     Returns:
         Formatted diff string
     """
     parts = []
-    
+
     if include_stats:
         parts.append(f"=== DIFF STATISTICS ===")
         parts.append(f"Files changed: {processed_diff.total_files}")
@@ -616,7 +618,7 @@ def format_diff_for_prompt(
     # Apply character limit if needed
     if max_chars and len(diff_content) > max_chars:
         diff_content = diff_content[:max_chars] + "\n... (truncated)"
-    
+
     parts.append(diff_content)
     
     return "\n".join(parts)

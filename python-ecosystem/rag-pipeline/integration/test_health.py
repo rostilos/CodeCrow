@@ -7,7 +7,7 @@ async def test_root(client, auth_headers):
     resp = await client.get("/", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
-    assert "CodeCrow RAG" in data.get("message", "")
+    assert data.get("message") == "CodeCrow Repository Index API"
 
 
 @pytest.mark.asyncio

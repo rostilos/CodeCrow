@@ -43,16 +43,8 @@ public class BranchHealthService {
                                        String branchName) {
         if (unanalyzedCommits.isEmpty()) return;
         try {
-            boolean multiBranch = project.getConfiguration() != null
-                    && project.getConfiguration().ragConfig() != null
-                    && project.getConfiguration().ragConfig().isMultiBranchEnabled();
-            if (multiBranch) {
-                analyzedCommitService.recordBranchCommitsAnalyzed(
-                        project, unanalyzedCommits, branchName);
-            } else {
-                analyzedCommitService.recordBranchCommitsAnalyzed(
-                        project, unanalyzedCommits);
-            }
+            analyzedCommitService.recordBranchCommitsAnalyzed(
+                    project, unanalyzedCommits, branchName);
             if (scmEvidenceService != null) {
                 scmEvidenceService.recordAnalysisReceipts(
                         project.getId(), unanalyzedCommits, branchName, branchName,

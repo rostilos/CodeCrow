@@ -1,11 +1,15 @@
-from types import SimpleNamespace
 import time
+from dataclasses import replace
+from types import SimpleNamespace
 
 from codecrow_plugins import (
+    ArchitecturePacket,
     FileArtifact,
+    GraphFact,
     PluginDiagnostic,
     PluginOutcome,
     RepositoryAnalysis,
+    SymbolDefinition,
 )
 from codecrow_plugins.runtime import RepositoryAnalysisHandle
 
@@ -115,6 +119,115 @@ def test_repository_runtime_reports_timeout_as_recoverable_and_stops():
     assert later.ingested == []
 
 
+class _StaticRepositorySession:
+    def __init__(self, analysis: RepositoryAnalysis):
+        self.analysis = analysis
+        self.dependencies = None
+        self.finished = False
+
+    def finish(self, dependencies):
+        self.dependencies = dependencies
+        self.finished = True
+        return PluginOutcome.handled(self.analysis)
+
+
+def _symbol(name: str) -> SymbolDefinition:
+    return SymbolDefinition(name, "class", f"src/{name}.py")
+
+
+def _packet(key: str) -> ArchitecturePacket:
+    path = f"src/{key}.py"
+    return ArchitecturePacket(
+        "test-plugin",
+        "test-architecture",
+        key,
+        (path,),
+        (GraphFact("test-fact", key, "declares", key, path),),
+    )
+
+
+def test_repository_symbol_provenance_is_not_semantic_identity_and_rebases():
+    symbol = _symbol("Orders")
+    php = replace(symbol, contributing_plugin_ids=("php",))
+    magento = replace(symbol, contributing_plugin_ids=("magento",))
+
+    assert php == magento
+    assert hash(php) == hash(magento)
+    assert replace(
+        php,
+        path="services/orders/src/Orders.py",
+    ).contributing_plugin_ids == ("php",)
+
+
+def test_repository_runtime_merges_symbol_contributors_before_composition():
+    symbol = _symbol("Orders")
+    first = _StaticRepositorySession(RepositoryAnalysis(symbols=(symbol,)))
+    second = _StaticRepositorySession(RepositoryAnalysis(symbols=(symbol,)))
+    runtime = SimpleNamespace(
+        MAX_REPOSITORY_SYMBOLS=10,
+        MAX_ARCHITECTURE_PACKETS=10,
+    )
+    handle = RepositoryAnalysisHandle(
+        runtime,
+        [("php", first), ("framework", second)],
+        [],
+    )
+
+    analysis, diagnostics = handle.finish()
+
+    assert diagnostics == ()
+    assert len(analysis.symbols) == 1
+    assert analysis.symbols[0] == symbol
+    assert analysis.symbols[0].contributing_plugin_ids == ("framework", "php")
+    assert second.dependencies.symbols[0].contributing_plugin_ids == ("php",)
+
+
+def test_repository_symbol_overflow_is_fatal_and_does_not_publish_a_slice():
+    first = _StaticRepositorySession(RepositoryAnalysis(symbols=(_symbol("First"),)))
+    overflow = _StaticRepositorySession(RepositoryAnalysis(symbols=(_symbol("Second"),)))
+    later = _StaticRepositorySession(RepositoryAnalysis(symbols=(_symbol("Third"),)))
+    runtime = SimpleNamespace(
+        MAX_REPOSITORY_SYMBOLS=1,
+        MAX_ARCHITECTURE_PACKETS=10,
+    )
+    handle = RepositoryAnalysisHandle(
+        runtime,
+        [("first-plugin", first), ("overflow-plugin", overflow), ("later-plugin", later)],
+        [],
+    )
+
+    analysis, diagnostics = handle.finish()
+
+    assert analysis.symbols == (_symbol("First"),)
+    assert [(item.code, item.recoverable) for item in diagnostics] == [
+        ("plugin-repository-symbol-limit", False),
+    ]
+    assert later.finished is False
+
+
+def test_repository_packet_overflow_is_fatal_and_does_not_publish_a_slice():
+    first = _StaticRepositorySession(RepositoryAnalysis(packets=(_packet("first"),)))
+    overflow = _StaticRepositorySession(RepositoryAnalysis(packets=(_packet("second"),)))
+    later = _StaticRepositorySession(RepositoryAnalysis(packets=(_packet("third"),)))
+    runtime = SimpleNamespace(
+        MAX_REPOSITORY_SYMBOLS=10,
+        MAX_ARCHITECTURE_PACKETS=1,
+    )
+    handle = RepositoryAnalysisHandle(
+        runtime,
+        [("first-plugin", first), ("overflow-plugin", overflow), ("later-plugin", later)],
+        [],
+    )
+
+    analysis, diagnostics = handle.finish()
+
+    assert analysis.packets == (_packet("first"),)
+    assert [(item.code, item.recoverable) for item in diagnostics] == [
+        ("plugin-repository-packet-limit", False),
+    ]
+    assert later.finished is False
+
+
 def test_repository_runtime_discards_result_that_returns_after_deadline(
     monkeypatch,
 ):
@@ -136,4 +249,51 @@ def test_repository_runtime_discards_result_that_returns_after_deadline(
     assert analysis == RepositoryAnalysis()
     assert [(item.code, item.recoverable) for item in diagnostics] == [
         ("plugin-repository-finalization-timeout", True),
+    ]
+
+
+class _ClosableRepositorySession(_StaticRepositorySession):
+    def __init__(self, *, fail_close=False):
+        super().__init__(RepositoryAnalysis())
+        self.close_count = 0
+        self.fail_close = fail_close
+
+    def close(self):
+        self.close_count += 1
+        if self.fail_close:
+            raise RuntimeError("cleanup unavailable")
+
+
+def test_repository_runtime_closes_all_sessions_when_deadline_skips_finalization():
+    first = _ClosableRepositorySession()
+    second = _ClosableRepositorySession()
+    handle = RepositoryAnalysisHandle(
+        SimpleNamespace(MAX_REPOSITORY_SYMBOLS=10, MAX_ARCHITECTURE_PACKETS=10),
+        [("first", first), ("second", second)],
+        [],
+    )
+    analysis, diagnostics = handle.finish(deadline=time.monotonic() - 1)
+    assert analysis == RepositoryAnalysis()
+    assert first.close_count == second.close_count == 1
+    assert not first.finished and not second.finished
+    assert not handle.active
+    assert [item.code for item in diagnostics] == ["plugin-repository-finalization-timeout"]
+    handle.close()
+    assert first.close_count == second.close_count == 1
+
+
+def test_repository_runtime_cleanup_failure_is_recoverable_and_other_sessions_close():
+    first = _ClosableRepositorySession(fail_close=True)
+    second = _ClosableRepositorySession()
+    handle = RepositoryAnalysisHandle(
+        SimpleNamespace(MAX_REPOSITORY_SYMBOLS=10, MAX_ARCHITECTURE_PACKETS=10),
+        [("first", first), ("second", second)],
+        [],
+    )
+    analysis, diagnostics = handle.finish()
+    assert analysis == RepositoryAnalysis()
+    assert first.finished and second.finished
+    assert first.close_count == second.close_count == 1
+    assert [(item.code, item.plugin_id, item.recoverable) for item in diagnostics] == [
+        ("plugin-repository-close-exception", "first", True),
     ]

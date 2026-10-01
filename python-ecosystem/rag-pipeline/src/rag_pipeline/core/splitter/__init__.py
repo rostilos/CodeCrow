@@ -4,7 +4,7 @@ AST-based code splitter module using Tree-sitter.
 Provides semantic code chunking with:
 - Tree-sitter query-based extraction (.scm files)
 - Fallback to manual AST traversal
-- RecursiveCharacterTextSplitter for oversized chunks
+- Complete semantic source units and lossless source fallback
 - Rich metadata extraction for RAG
 """
 
@@ -28,7 +28,7 @@ __all__ = [
     "ASTChunk",
     "generate_deterministic_id",
     "compute_file_hash",
-    
+
     # Languages
     "get_language_from_path",
     "get_treesitter_name",
@@ -37,12 +37,12 @@ __all__ = [
     "EXTENSION_TO_LANGUAGE",
     "AST_SUPPORTED_LANGUAGES",
     "LANGUAGE_TO_TREESITTER",
-    
+
     # Metadata
     "ContentType",
     "ChunkMetadata",
     "MetadataExtractor",
-    
+
     # Tree-sitter
     "TreeSitterParser",
     "get_parser",

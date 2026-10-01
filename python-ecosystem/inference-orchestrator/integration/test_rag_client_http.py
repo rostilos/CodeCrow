@@ -11,7 +11,7 @@ import httpx
 from unittest.mock import patch
 
 os.environ.setdefault("RAG_ENABLED", "true")
-os.environ.setdefault("RAG_API_URL", "http://rag-pipeline:8001")
+os.environ.setdefault("RAG_API_URL", "http://codecrow-rag-pipeline:8001")
 os.environ.setdefault("SERVICE_SECRET", "test-secret-token")
 
 from service.rag.rag_client import RagClient
@@ -19,31 +19,34 @@ from service.rag.rag_client import RagClient
 
 @pytest.fixture
 def rag_client():
-    client = RagClient(base_url="http://rag-pipeline:8001", enabled=True)
+    client = RagClient(base_url="http://codecrow-rag-pipeline:8001", enabled=True)
     yield client
 
 
-# ── get_pr_context ────────────────────────────────────────────
+# ── code search ───────────────────────────────────────────────
 
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
-async def test_get_pr_context_sends_correct_payload(rag_client):
-    route = respx.post("http://rag-pipeline:8001/query/pr-context").mock(
+async def test_search_code_sends_correct_payload(rag_client):
+    route = respx.post("http://codecrow-rag-pipeline:8001/query/code-search").mock(
         return_value=httpx.Response(200, json={
-            "context": {
-                "relevant_code": [{"path": "a.py", "content": "class A: pass"}],
-                "related_files": [],
-                "_metadata": {"result_count": 1},
-            }
+            "results": [{
+                "path": "a.py",
+                "text": "class A: pass",
+                "score": 12,
+                "match_reasons": ["path_token:a"],
+            }]
         })
     )
-    result = await rag_client.get_pr_context(
+    result = await rag_client.search_code(
+        query="class A",
         workspace="ws",
         project="proj",
         branch="feature/x",
-        changed_files=["a.py"],
-        diff_snippets=["def foo():"],
-        pr_title="Add foo",
+        top_k=5,
+        repository_revision="abc123",
+        repository_generation_manifest_sha256="f" * 64,
+        collection_target="cc_ws_proj_feature_x_generation",
     )
     assert route.called
     req_json = route.calls[0].request.read()
@@ -51,20 +54,23 @@ async def test_get_pr_context_sends_correct_payload(rag_client):
     payload = json.loads(req_json)
     assert payload["workspace"] == "ws"
     assert payload["branch"] == "feature/x"
-    assert "a.py" in payload["changed_files"]
+    assert payload["limit"] == 5
+    assert payload["repository_revision"] == "abc123"
+    assert payload["repository_generation_manifest_sha256"] == "f" * 64
+    assert payload["collection_target"] == "cc_ws_proj_feature_x_generation"
 
-    assert "relevant_code" in result.get("context", {})
+    assert result["results"][0]["match_reasons"] == ["path_token:a"]
     await rag_client.close()
 
 
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
-async def test_get_pr_context_sends_service_secret_header(rag_client):
-    route = respx.post("http://rag-pipeline:8001/query/pr-context").mock(
-        return_value=httpx.Response(200, json={"context": {"relevant_code": []}})
+async def test_search_code_sends_service_secret_header(rag_client):
+    route = respx.post("http://codecrow-rag-pipeline:8001/query/code-search").mock(
+        return_value=httpx.Response(200, json={"results": []})
     )
-    await rag_client.get_pr_context(
-        workspace="ws", project="p", branch="main", changed_files=["a.py"]
+    await rag_client.search_code(
+        query="class A", workspace="ws", project="p", branch="main"
     )
     assert route.called
     headers = route.calls[0].request.headers
@@ -74,45 +80,26 @@ async def test_get_pr_context_sends_service_secret_header(rag_client):
 
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
-async def test_get_pr_context_handles_timeout(rag_client):
-    respx.post("http://rag-pipeline:8001/query/pr-context").mock(
+async def test_search_code_handles_timeout(rag_client):
+    respx.post("http://codecrow-rag-pipeline:8001/query/code-search").mock(
         side_effect=httpx.ReadTimeout("timed out")
     )
-    result = await rag_client.get_pr_context(
-        workspace="ws", project="p", branch="main", changed_files=["a.py"]
+    result = await rag_client.search_code(
+        query="class A", workspace="ws", project="p", branch="main"
     )
-    # Should return empty context on failure, not raise
-    assert isinstance(result, dict)
+    assert result["results"] == []
+    assert result["status"] == "error"
     await rag_client.close()
 
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_rag_client_disabled_returns_empty():
     client = RagClient(enabled=False)
-    result = await client.get_pr_context(
-        workspace="ws", project="p", branch="main", changed_files=["a.py"]
+    result = await client.search_code(
+        query="class A", workspace="ws", project="p", branch="main"
     )
-    assert result == {"context": {"relevant_code": []}}
+    assert result == {"results": []}
     await client.close()
-
-
-# ── search ────────────────────────────────────────────────────
-
-@pytest.mark.asyncio(loop_scope="function")
-@respx.mock
-async def test_semantic_search_sends_correct_payload(rag_client):
-    route = respx.post("http://rag-pipeline:8001/query/search").mock(
-        return_value=httpx.Response(200, json={"results": [{"path": "b.py", "score": 0.9}]})
-    )
-    result = await rag_client.semantic_search(
-        query="def bar()",
-        workspace="ws", project="p", branch="main",
-        top_k=5,
-    )
-    assert route.called
-    assert isinstance(result, dict)
-    assert "results" in result
-    await rag_client.close()
 
 
 # ── health ────────────────────────────────────────────────────
@@ -120,7 +107,7 @@ async def test_semantic_search_sends_correct_payload(rag_client):
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
 async def test_is_healthy(rag_client):
-    route = respx.get("http://rag-pipeline:8001/health").mock(
+    route = respx.get("http://codecrow-rag-pipeline:8001/health").mock(
         return_value=httpx.Response(200, json={"status": "healthy"})
     )
     result = await rag_client.is_healthy()
@@ -132,7 +119,7 @@ async def test_is_healthy(rag_client):
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
 async def test_is_healthy_failure(rag_client):
-    respx.get("http://rag-pipeline:8001/health").mock(
+    respx.get("http://codecrow-rag-pipeline:8001/health").mock(
         side_effect=httpx.ConnectError("connection refused")
     )
     result = await rag_client.is_healthy()

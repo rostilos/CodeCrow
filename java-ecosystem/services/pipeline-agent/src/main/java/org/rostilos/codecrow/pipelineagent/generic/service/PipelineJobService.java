@@ -4,7 +4,6 @@ import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.job.JobLogLevel;
 import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.pipelineagent.generic.processor.PipelineActionProcessor;
@@ -87,71 +86,21 @@ public class PipelineJobService implements AnalysisJobService {
         );
     }
 
-    public Job createRagInitialIndexJob(Project project, User triggeredBy) {
-        log.info("Creating RAG initial indexing job for project: {}", project.getName());
-        return jobService.createRagIndexJob(
-                project,
-                true,
-                JobTriggerSource.API,
-                triggeredBy
-        );
-    }
-
-    /**
-     * Implementation of AnalysisJobService interface.
-     */
     @Override
-    public Job createRagIndexJob(Project project, User triggeredBy) {
-        return createRagInitialIndexJob(project, triggeredBy);
-    }
-
-    /**
-     * Create a job for RAG indexing with configurable trigger source.
-     * @param project The project to index
-     * @param isInitial true for initial indexing, false for incremental update
-     * @param triggerSource The source that triggered the job (WEBHOOK, API, etc.)
-     * @return The created job
-     */
-    @Override
-    public Job createRagIndexJob(Project project, boolean isInitial, JobTriggerSource triggerSource) {
-        log.info("Creating RAG {} job for project: {} (trigger: {})", 
-                isInitial ? "initial indexing" : "incremental update", 
-                project.getName(), 
-                triggerSource);
-        return jobService.createRagIndexJob(
-                project,
-                isInitial,
-                triggerSource,
-                null
-        );
-    }
-
-    @Override
-    public Job createRagIndexJob(
+    public Job createRepositoryIndexBuildJob(
             Project project,
-            boolean isInitial,
             JobTriggerSource triggerSource,
             String branchName,
-            String commitHash) {
-        log.info("Creating branch-bound RAG {} job for project: {}, branch: {} (trigger: {})",
-                isInitial ? "initial indexing" : "incremental update",
+            String revision) {
+        log.info("Creating repository index build job for project: {}, branch: {} (trigger: {})",
                 project.getName(), branchName, triggerSource);
-        return jobService.createRagIndexJob(
+        return jobService.createRepositoryIndexBuildJob(
                 project,
-                isInitial,
                 triggerSource,
                 null,
                 branchName,
-                commitHash
+                revision
         );
-    }
-
-    /**
-     * Alias for createRagIndexJob for backward compatibility.
-     * Used by pipeline processors for RAG jobs triggered by webhooks.
-     */
-    public Job createPipelineRagJob(Project project, boolean isInitial, JobTriggerSource triggerSource) {
-        return createRagIndexJob(project, isInitial, triggerSource);
     }
 
     /**

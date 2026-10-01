@@ -9,10 +9,16 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.LocalRepositorySnapshot;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -29,6 +35,7 @@ import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.TaskImplementationEvidenceService;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.model.VcsCommit;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.pr.PrIssueTrackingService;
@@ -77,6 +84,12 @@ class PullRequestAnalysisProcessorTest {
         private VcsClientProvider vcsClientProvider;
 
         @Mock
+        private VcsClient vcsClient;
+
+        @Mock
+        private LocalRepositorySnapshotService localRepositorySnapshotService;
+
+        @Mock
         private FileSnapshotService fileSnapshotService;
 
         @Mock
@@ -84,6 +97,9 @@ class PullRequestAnalysisProcessorTest {
 
         @Mock
         private AstScopeEnricher astScopeEnricher;
+
+        @Mock
+        private RagOperationsService ragOperationsService;
 
         @Mock
         private ApplicationEventPublisher eventPublisher;
@@ -135,9 +151,11 @@ class PullRequestAnalysisProcessorTest {
                                 analysisLockService,
                                 analyzedCommitService,
                                 vcsClientProvider,
+                                localRepositorySnapshotService,
                                 fileSnapshotService,
                                 prIssueTrackingService,
                                 astScopeEnricher,
+                                ragOperationsService,
                                 eventPublisher);
         }
 
@@ -333,6 +351,9 @@ class PullRequestAnalysisProcessorTest {
                                         .thenReturn(List.of(aiAnalysisRequest));
                         when(aiAnalysisRequest.getRawDiff()).thenReturn("");
                         when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        when(aiAnalysisRequest.getTargetBranchName()).thenReturn("main");
+                        when(aiAnalysisRequest.getTargetHeadCommitHash())
+                                        .thenReturn("target-head-a");
                         when(aiAnalysisRequest.getTaskContext()).thenReturn(Map.of(
                                         "task_key", "PROJ-123",
                                         "task_summary", "Build export"));
@@ -385,6 +406,8 @@ class PullRequestAnalysisProcessorTest {
                                         eq("Build export"));
                         verify(taskImplementationEvidenceService)
                                         .persistFromAnalysisResponse(codeAnalysis, taskEvidence);
+                        verify(ragOperationsService).refreshBranchGeneration(
+                                        eq(project), eq("main"), eq("target-head-a"), any());
                 }
 
                 @Test
@@ -593,6 +616,347 @@ class PullRequestAnalysisProcessorTest {
                         when(aiAnalysisRequest.getRawDiff()).thenReturn("diff");
                         when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
                         when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
+                }
+
+                private AiAnalysisRequestImpl stubMcpOverlayReview(
+                                List<String> changedFiles,
+                                List<String> deletedFiles,
+                                Map<String, String> enrichedContents,
+                                String sourceRevision) throws Exception {
+                        return stubMcpOverlayReview(
+                                        changedFiles,
+                                        deletedFiles,
+                                        enrichedContents,
+                                        sourceRevision,
+                                        changedFiles,
+                                        deletedFiles);
+                }
+
+                private AiAnalysisRequestImpl stubMcpOverlayReview(
+                                List<String> changedFiles,
+                                List<String> deletedFiles,
+                                Map<String, String> enrichedContents,
+                                String sourceRevision,
+                                List<String> proposedTreeChangedFiles,
+                                List<String> proposedTreeDeletedFiles) throws Exception {
+                        stubReviewThroughAi(Map.of("comment", "unused", "issues", List.of()));
+                        reset(aiAnalysisRequest);
+                        AiAnalysisRequestImpl request = mock(AiAnalysisRequestImpl.class);
+                        List<FileContentDto> fileContents = enrichedContents.entrySet().stream()
+                                        .map(entry -> FileContentDto.of(entry.getKey(), entry.getValue()))
+                                        .toList();
+                        PrEnrichmentDataDto enrichment = new PrEnrichmentDataDto(
+                                        fileContents,
+                                        List.of(),
+                                        List.of(),
+                                        PrEnrichmentDataDto.EnrichmentStats.empty());
+
+                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
+                                        .thenReturn(List.of(request));
+                        when(request.getRawDiff()).thenReturn("diff");
+                        when(request.getChangedFiles()).thenReturn(changedFiles);
+                        when(request.getDeletedFiles()).thenReturn(deletedFiles);
+                        when(request.getProposedTreeChangedFiles()).thenReturn(proposedTreeChangedFiles);
+                        when(request.getProposedTreeDeletedFiles()).thenReturn(proposedTreeDeletedFiles);
+                        when(request.getUseMcpTools()).thenReturn(true);
+                        when(request.getCurrentCommitHash()).thenReturn(sourceRevision);
+                        when(request.getTargetHeadCommitHash()).thenReturn("target-head-sha");
+                        when(request.getTargetBranchName()).thenReturn("main");
+                        when(request.getEnrichmentData()).thenReturn(enrichment);
+
+                        VcsRepoInfo repoInfo = project.getEffectiveVcsRepoInfo();
+                        when(repoInfo.getRepoWorkspace()).thenReturn("team");
+                        when(repoInfo.getRepoSlug()).thenReturn("repo");
+                        when(localRepositorySnapshotService.prepareForReview(
+                                        eq(vcsConnection),
+                                        eq("team"),
+                                        eq("repo"),
+                                        eq("main"),
+                                        eq("target-head-sha"),
+                                        anyMap(),
+                                        eq(proposedTreeChangedFiles),
+                                        eq(proposedTreeDeletedFiles)))
+                                        .thenReturn(Optional.empty());
+                        when(aiAnalysisClient.performAnalysis(eq(request), any()))
+                                        .thenThrow(new IOException("stop after overlay preparation"));
+                        return request;
+                }
+
+                @Test
+                @DisplayName("should reuse supplied proposed-tree bodies without another VCS request")
+                void shouldNotRefetchSuppliedProposedTreeBody() throws Exception {
+                        PrProcessRequest processRequest = createRequest();
+                        List<String> changedFiles = List.of("src/Supplied.java");
+                        Map<String, String> supplied = Map.of(
+                                        "src/Supplied.java", "class Supplied { int proposed; }");
+                        stubMcpOverlayReview(
+                                        changedFiles,
+                                        List.of(),
+                                        supplied,
+                                        "source-head-sha");
+
+                        Map<String, Object> result = processor.process(
+                                        processRequest,
+                                        mock(PullRequestAnalysisProcessor.EventConsumer.class),
+                                        project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verifyNoInteractions(vcsClientProvider);
+                        verify(localRepositorySnapshotService).prepareForReview(
+                                        vcsConnection,
+                                        "team",
+                                        "repo",
+                                        "main",
+                                        "target-head-sha",
+                                        supplied,
+                                        changedFiles,
+                                        List.of());
+                }
+
+                @Test
+                @DisplayName("should fetch only omitted changed bodies at the exact PR source commit")
+                void shouldCompleteProposedTreeAtExactSourceCommit() throws Exception {
+                        PrProcessRequest processRequest = createRequest();
+                        List<String> changedFiles = List.of(
+                                        "src/Supplied.java",
+                                        "src/Omitted.java");
+                        Map<String, String> supplied = Map.of(
+                                        "src/Supplied.java", "class Supplied { int proposed; }");
+                        stubMcpOverlayReview(
+                                        changedFiles,
+                                        List.of(),
+                                        supplied,
+                                        "source-head-sha");
+                        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
+                        when(vcsClient.getFileContents(
+                                        "team",
+                                        "repo",
+                                        List.of("src/Omitted.java"),
+                                        "source-head-sha",
+                                        100_000))
+                                        .thenReturn(Map.of(
+                                                        "src/Omitted.java",
+                                                        "class Omitted { int proposed; }"));
+
+                        Map<String, Object> result = processor.process(
+                                        processRequest,
+                                        mock(PullRequestAnalysisProcessor.EventConsumer.class),
+                                        project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verify(vcsClient).getFileContents(
+                                        "team",
+                                        "repo",
+                                        List.of("src/Omitted.java"),
+                                        "source-head-sha",
+                                        100_000);
+                        verify(localRepositorySnapshotService).prepareForReview(
+                                        vcsConnection,
+                                        "team",
+                                        "repo",
+                                        "main",
+                                        "target-head-sha",
+                                        Map.of(
+                                                        "src/Supplied.java",
+                                                        "class Supplied { int proposed; }",
+                                                        "src/Omitted.java",
+                                                        "class Omitted { int proposed; }"),
+                                        changedFiles,
+                                        List.of());
+                }
+
+                @Test
+                @DisplayName("should build the overlay from the full PR while reviewing only the incremental scope")
+                void shouldKeepFullProposedTreeSeparateFromIncrementalReviewScope() throws Exception {
+                        PrProcessRequest processRequest = createRequest();
+                        List<String> reviewChangedFiles = List.of("src/Delta.java");
+                        List<String> proposedTreeChangedFiles = List.of(
+                                        "src/Delta.java",
+                                        "src/Earlier.java",
+                                        "docs/Excluded.md");
+                        List<String> proposedTreeDeletedFiles = List.of("assets/Removed.bin");
+                        Map<String, String> supplied = Map.of(
+                                        "src/Delta.java", "class Delta { int current; }");
+                        AiAnalysisRequestImpl request = stubMcpOverlayReview(
+                                        reviewChangedFiles,
+                                        List.of(),
+                                        supplied,
+                                        "source-head-sha",
+                                        proposedTreeChangedFiles,
+                                        proposedTreeDeletedFiles);
+                        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
+                        when(vcsClient.getFileContents(
+                                        "team",
+                                        "repo",
+                                        List.of("src/Earlier.java", "docs/Excluded.md"),
+                                        "source-head-sha",
+                                        100_000))
+                                        .thenReturn(Map.of(
+                                                        "src/Earlier.java",
+                                                        "class Earlier { int current; }",
+                                                        "docs/Excluded.md",
+                                                        "complete proposed documentation"));
+
+                        Map<String, Object> result = processor.process(
+                                        processRequest,
+                                        mock(PullRequestAnalysisProcessor.EventConsumer.class),
+                                        project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        assertThat(request.getChangedFiles()).containsExactly("src/Delta.java");
+                        verify(vcsClient).getFileContents(
+                                        "team",
+                                        "repo",
+                                        List.of("src/Earlier.java", "docs/Excluded.md"),
+                                        "source-head-sha",
+                                        100_000);
+                        verify(localRepositorySnapshotService).prepareForReview(
+                                        vcsConnection,
+                                        "team",
+                                        "repo",
+                                        "main",
+                                        "target-head-sha",
+                                        Map.of(
+                                                        "src/Delta.java",
+                                                        "class Delta { int current; }",
+                                                        "src/Earlier.java",
+                                                        "class Earlier { int current; }",
+                                                        "docs/Excluded.md",
+                                                        "complete proposed documentation"),
+                                        proposedTreeChangedFiles,
+                                        proposedTreeDeletedFiles);
+                }
+
+                @Test
+                @DisplayName("should keep deleted and unavailable paths out of proposed-tree bodies")
+                void shouldPreserveDeletedAndUnavailableOverlaySemantics() throws Exception {
+                        PrProcessRequest processRequest = createRequest();
+                        List<String> changedFiles = List.of(
+                                        "src/Supplied.java",
+                                        "src/Deleted.java",
+                                        "src/Unavailable.java");
+                        List<String> deletedFiles = List.of("src/Deleted.java");
+                        Map<String, String> supplied = Map.of(
+                                        "src/Supplied.java", "class Supplied { int proposed; }",
+                                        "src/Deleted.java", "stale body must be discarded");
+                        stubMcpOverlayReview(
+                                        changedFiles,
+                                        deletedFiles,
+                                        supplied,
+                                        "source-head-sha");
+                        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
+                        when(vcsClient.getFileContents(
+                                        "team",
+                                        "repo",
+                                        List.of("src/Unavailable.java"),
+                                        "source-head-sha",
+                                        100_000))
+                                        .thenReturn(Map.of());
+
+                        Map<String, Object> result = processor.process(
+                                        processRequest,
+                                        mock(PullRequestAnalysisProcessor.EventConsumer.class),
+                                        project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verify(vcsClient).getFileContents(
+                                        "team",
+                                        "repo",
+                                        List.of("src/Unavailable.java"),
+                                        "source-head-sha",
+                                        100_000);
+                        verify(localRepositorySnapshotService).prepareForReview(
+                                        vcsConnection,
+                                        "team",
+                                        "repo",
+                                        "main",
+                                        "target-head-sha",
+                                        Map.of(
+                                                        "src/Supplied.java",
+                                                        "class Supplied { int proposed; }"),
+                                        changedFiles,
+                                        deletedFiles);
+                }
+
+                @Test
+                @DisplayName("should leave missing proposed bodies unavailable when source revision is unknown")
+                void shouldNotFallBackToTargetHeadForMissingProposedBody() throws Exception {
+                        PrProcessRequest processRequest = createRequest();
+                        List<String> changedFiles = List.of("src/Unavailable.java");
+                        stubMcpOverlayReview(
+                                        changedFiles,
+                                        List.of(),
+                                        Map.of(),
+                                        null);
+
+                        Map<String, Object> result = processor.process(
+                                        processRequest,
+                                        mock(PullRequestAnalysisProcessor.EventConsumer.class),
+                                        project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verifyNoInteractions(vcsClientProvider);
+                        verify(localRepositorySnapshotService).prepareForReview(
+                                        vcsConnection,
+                                        "team",
+                                        "repo",
+                                        "main",
+                                        "target-head-sha",
+                                        Map.of(),
+                                        changedFiles,
+                                        List.of());
+                }
+
+                @Test
+                @DisplayName("should close a prepared local MCP snapshot when inference fails")
+                void shouldClosePreparedLocalMcpSnapshotWhenInferenceFails() throws Exception {
+                        PrProcessRequest request = createRequest();
+                        PullRequestAnalysisProcessor.EventConsumer consumer = mock(
+                                        PullRequestAnalysisProcessor.EventConsumer.class);
+                        stubReviewThroughAi(Map.of("comment", "unused", "issues", List.of()));
+                        reset(aiAnalysisClient);
+                        VcsRepoInfo repoInfo = project.getEffectiveVcsRepoInfo();
+                        when(repoInfo.getRepoWorkspace()).thenReturn("team");
+                        when(repoInfo.getRepoSlug()).thenReturn("repo");
+                        when(aiAnalysisRequest.getUseMcpTools()).thenReturn(true);
+                        when(aiAnalysisRequest.getTargetHeadCommitHash())
+                                        .thenReturn("target-head-sha");
+                        when(aiAnalysisRequest.getProposedTreeChangedFiles())
+                                        .thenReturn(List.of("file.java"));
+                        when(aiAnalysisRequest.getProposedTreeDeletedFiles()).thenReturn(List.of());
+                        when(aiAnalysisRequest.getDeletedFiles()).thenReturn(List.of());
+                        var prepared = mock(LocalRepositorySnapshotService.PreparedSnapshot.class);
+                        LocalRepositorySnapshot transport = new LocalRepositorySnapshot(
+                                        "/tmp/codecrow-pr-review-test",
+                                        "main",
+                                        "target-head-sha");
+                        when(prepared.transport()).thenReturn(transport);
+                        when(localRepositorySnapshotService.prepareForReview(
+                                        eq(vcsConnection),
+                                        eq("team"),
+                                        eq("repo"),
+                                        eq("main"),
+                                        eq("target-head-sha"),
+                                        anyMap(),
+                                        eq(List.of("file.java")),
+                                        anyCollection()))
+                                        .thenReturn(Optional.of(prepared));
+                        when(aiAnalysisClient.performAnalysis(
+                                        eq(aiAnalysisRequest),
+                                        eq(transport),
+                                        any()))
+                                        .thenThrow(new IOException("inference unavailable"));
+
+                        Map<String, Object> result = processor.process(request, consumer, project);
+
+                        assertThat(result)
+                                        .containsEntry("status", "error")
+                                        .containsEntry("message", "inference unavailable");
+                        verify(prepared).close();
+                        verify(aiAnalysisClient).performAnalysis(
+                                        eq(aiAnalysisRequest),
+                                        eq(transport),
+                                        any());
                 }
 
                 private String stubCacheLookupPrerequisites() throws Exception {
@@ -1248,9 +1612,11 @@ class PullRequestAnalysisProcessorTest {
                                         analysisLockService,
                                         analyzedCommitService,
                                         vcsClientProvider,
+                                        localRepositorySnapshotService,
                                         fileSnapshotService,
                                         prIssueTrackingService,
                                         null, // astScopeEnricher
+                                        null, // ragOperationsService
                                         null // eventPublisher
                         );
 

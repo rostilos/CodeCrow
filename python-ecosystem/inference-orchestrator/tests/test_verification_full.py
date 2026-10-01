@@ -9,6 +9,8 @@ from service.review.orchestrator.verification_agent import (
     run_verification_agent,
     VerificationResult,
     _build_verification_batches,
+    _cap_verification_batches,
+    _verification_record_text,
     _FILE_CONTENTS_CACHE,
 )
 from model.output_schemas import CodeReviewIssue
@@ -126,6 +128,63 @@ def test_large_verification_set_is_split_without_record_loss():
         for batch_records, _ in batches
         for verification_id, _ in batch_records
     ] == [f"issue_{index}" for index in range(120)]
+
+
+def test_verification_record_fields_are_deterministically_bounded():
+    issue = MagicMock()
+    issue.id = "id-" + ("i" * 1_000)
+    issue.file = "src/" + ("p" * 2_000)
+    issue.severity = "HIGH"
+    issue.category = "BUG_RISK"
+    issue.title = "title " + ("t" * 1_000)
+    issue.reason = "reason " + ("r" * 5_000)
+    issue.suggestedFixDescription = "fix " + ("f" * 4_000)
+    issue.scope = "LINE"
+    issue.codeSnippet = "code " + ("c" * 4_000)
+
+    rendered = _verification_record_text("issue_0", issue)
+
+    assert len(rendered) < 6_000
+    assert rendered.count(
+        "[field truncated by deterministic verification budget]"
+    ) == 6
+
+
+def test_verification_batch_invocations_are_severity_first_and_finite():
+    severities = ["LOW", "CRITICAL", "MEDIUM", "HIGH", "HIGH", "LOW"]
+    batches = []
+    for index, severity in enumerate(severities):
+        issue = MagicMock()
+        issue.severity = severity
+        batches.append(([(f"issue_{index}", issue)], f"prompt-{index}"))
+
+    admitted, omitted_batches, omitted_records = _cap_verification_batches(
+        batches,
+        3,
+    )
+
+    assert [prompt for _, prompt in admitted] == [
+        "prompt-1",
+        "prompt-3",
+        "prompt-4",
+    ]
+    assert omitted_batches == 3
+    assert omitted_records == 3
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_oversized_complete_verification_prompt_is_not_sent_or_sliced():
+    llm = _FakeToolLLM([])
+    prompt = "verify the complete evidence: " + ("\U0001f9ea" * 20_000)
+
+    with pytest.raises(ValueError, match="without slicing tool evidence"):
+        await verification_agent._run_verification_tool_loop(
+            llm,
+            prompt,
+            input_token_target=1_000,
+        )
+
+    assert llm.messages == []
 
 
 # ── run_verification_agent ────────────────────────────────────

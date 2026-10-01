@@ -71,13 +71,11 @@ class BranchIndexGenerationBuildServiceTest {
                 project, "develop", RagBranchIndexKind.DURABLE,
                 null, "develop-400", null))
                 .thenReturn(new RagBranchIndexRegistryService.BuildRegistration(
-                        generation.getBranchIndex(), generation, operation, false,
-                        "opaque-generation-source"));
+                        generation.getBranchIndex(), generation, operation, false));
         when(pipelineClient.indexRepository(
                 anyString(), eq("workspace"), eq("namespace"),
                 eq("develop"), eq("develop-400"), eq(List.of("src/**")),
-                eq(List.of("vendor/**")), eq("opaque-generation-target"),
-                eq(false), eq(false), eq("opaque-generation-source")))
+                eq(List.of("vendor/**")), eq("opaque-generation-target")))
                 .thenReturn(Map.of(
                         "generation_manifest_sha256", "manifest-400",
                         "document_count", 231,
@@ -106,54 +104,12 @@ class BranchIndexGenerationBuildServiceTest {
         verify(pipelineClient).indexRepository(
                 anyString(), eq("workspace"), eq("namespace"),
                 eq("develop"), eq("develop-400"), eq(List.of("src/**")),
-                eq(List.of("vendor/**")), eq("opaque-generation-target"),
-                eq(false), eq(false), eq("opaque-generation-source"));
-        verify(pipelineClient).publishGenerationAliases(
-                "workspace", "namespace", "develop", "develop-400",
-                "opaque-generation-target", "manifest-400", true, false);
+                eq(List.of("vendor/**")), eq("opaque-generation-target"));
         ArgumentCaptor<Path> snapshot = ArgumentCaptor.forClass(Path.class);
         verify(archiveService).downloadAndExtractSnapshotToDirectory(
                 any(), eq("provider-workspace"), eq("repo"),
                 eq("develop-400"), isNull(), snapshot.capture());
         assertThat(Files.exists(snapshot.getValue())).isFalse();
-    }
-
-    @Test
-    void runtimeAliasFailureCannotReclassifyAPublishedGenerationAsFailed()
-            throws Exception {
-        when(pipelineClient.indexRepository(
-                anyString(), eq("workspace"), eq("namespace"),
-                eq("develop"), eq("develop-400"), eq(List.of()),
-                eq(List.of()), eq("opaque-generation-target"),
-                eq(false), eq(false)))
-                .thenReturn(Map.of(
-                        "generation_manifest_sha256", "manifest-400",
-                        "document_count", 231,
-                        "chunk_count", 400));
-        when(registryService.publish(30L, "manifest-400", 231, 400))
-                .thenAnswer(ignored -> {
-                    generation.activate("manifest-400", 231, 400);
-                    return generation;
-                });
-        doThrow(new IllegalStateException("observer alias adapter failed"))
-                .when(pipelineClient).publishGenerationAliases(
-                        anyString(), anyString(), anyString(), anyString(),
-                        anyString(), anyString(), anyBoolean(), anyBoolean());
-        var workspace = new org.rostilos.codecrow.core.model.workspace.Workspace();
-        ReflectionTestUtils.setField(workspace, "name", "workspace");
-        project.setWorkspace(workspace);
-        project.setNamespace("namespace");
-        var prepared = new BranchIndexGenerationBuildService.PreparedBuild(
-                30L, "opaque-generation-target", false, null, null);
-
-        Map<String, Object> result = service.execute(
-                project, new VcsConnection(), "provider-workspace", "repo",
-                "develop", "develop-400", RagBranchIndexKind.DURABLE,
-                List.of(), List.of(), prepared, null);
-
-        assertThat(result).containsEntry("generation_manifest_sha256", "manifest-400");
-        verify(registryService).publish(30L, "manifest-400", 231, 400);
-        verify(registryService, never()).fail(anyLong(), anyString());
     }
 
     @Test
@@ -163,8 +119,7 @@ class BranchIndexGenerationBuildServiceTest {
                 .thenReturn(new RagBranchIndexRegistryService.BuildRegistration(
                         generation.getBranchIndex(), generation, operation, false));
         when(pipelineClient.indexRepository(
-                anyString(), any(), any(), any(), any(), any(), any(), any(),
-                anyBoolean(), anyBoolean()))
+                anyString(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(Map.of("document_count", 231));
         var workspace = new org.rostilos.codecrow.core.model.workspace.Workspace();
         ReflectionTestUtils.setField(workspace, "name", "workspace");
@@ -211,12 +166,11 @@ class BranchIndexGenerationBuildServiceTest {
                 eq(project), eq("develop"), eq(RagBranchIndexKind.DURABLE),
                 isNull(), eq("develop-400"), startsWith("full-snapshot:job:77:")))
                 .thenReturn(new RagBranchIndexRegistryService.BuildRegistration(
-                        generation.getBranchIndex(), generation, operation, false,
-                        "opaque-generation-source"));
+                        generation.getBranchIndex(), generation, operation, false));
         when(pipelineClient.indexRepository(
                 anyString(), anyString(), anyString(), eq("develop"), eq("develop-400"),
                 anyList(), anyList(), eq("opaque-generation-target"),
-                eq(false), eq(false), eq(true), eq("opaque-generation-source"),
+                eq(true),
                 any(Runnable.class), any()))
                 .thenReturn(Map.of(
                         "generation_manifest_sha256", "fresh-manifest",
@@ -242,11 +196,8 @@ class BranchIndexGenerationBuildServiceTest {
         verify(pipelineClient).indexRepository(
                 anyString(), eq("workspace"), eq("namespace"), eq("develop"),
                 eq("develop-400"), anyList(), anyList(),
-                eq("opaque-generation-target"), eq(false), eq(false), eq(true),
-                eq("opaque-generation-source"), any(Runnable.class), any());
-        verify(pipelineClient).publishGenerationAliases(
-                "workspace", "namespace", "develop", "develop-400",
-                "opaque-generation-target", "fresh-manifest", true, false);
+                eq("opaque-generation-target"), eq(true),
+                any(Runnable.class), any());
     }
 
     @Test
@@ -258,7 +209,7 @@ class BranchIndexGenerationBuildServiceTest {
         ArgumentCaptor<String> snapshot = ArgumentCaptor.forClass(String.class);
         when(pipelineClient.indexRepository(
                 snapshot.capture(), anyString(), anyString(), anyString(), anyString(),
-                anyList(), anyList(), anyString(), anyBoolean(), anyBoolean(),
+                anyList(), anyList(), anyString(),
                 eq(true), any(Runnable.class), any()))
                 .thenThrow(new IOException("connection refused before admission"));
         var workspace = new org.rostilos.codecrow.core.model.workspace.Workspace();
@@ -286,10 +237,10 @@ class BranchIndexGenerationBuildServiceTest {
         ArgumentCaptor<String> snapshot = ArgumentCaptor.forClass(String.class);
         when(pipelineClient.indexRepository(
                 snapshot.capture(), anyString(), anyString(), anyString(), anyString(),
-                anyList(), anyList(), anyString(), anyBoolean(), anyBoolean(),
+                anyList(), anyList(), anyString(),
                 eq(true), any(Runnable.class), any()))
                 .thenAnswer(invocation -> {
-                    ((Runnable) invocation.getArgument(11)).run();
+                    ((Runnable) invocation.getArgument(9)).run();
                     throw new IOException("stream disconnected after admission");
                 });
         var workspace = new org.rostilos.codecrow.core.model.workspace.Workspace();
@@ -319,37 +270,6 @@ class BranchIndexGenerationBuildServiceTest {
     }
 
     @Test
-    void staleCompletedGenerationDoesNotPublishReadableAliases() throws Exception {
-        when(registryService.registerBuild(any(), anyString(), any(), isNull(),
-                anyString(), isNull()))
-                .thenReturn(new RagBranchIndexRegistryService.BuildRegistration(
-                        generation.getBranchIndex(), generation, operation, false));
-        when(pipelineClient.indexRepository(
-                anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyList(), anyList(), anyString(), eq(false), eq(false)))
-                .thenReturn(Map.of(
-                        "generation_manifest_sha256", "manifest-400",
-                        "document_count", 231,
-                        "chunk_count", 400));
-        generation.activate("manifest-400", 231, 400);
-        generation.supersede();
-        when(registryService.publish(30L, "manifest-400", 231, 400))
-                .thenReturn(generation);
-        var workspace = new org.rostilos.codecrow.core.model.workspace.Workspace();
-        ReflectionTestUtils.setField(workspace, "name", "workspace");
-        project.setWorkspace(workspace);
-        project.setNamespace("namespace");
-
-        service.build(project, new VcsConnection(), "provider-workspace", "repo",
-                "develop", "develop-400", RagBranchIndexKind.DURABLE,
-                List.of(), List.of());
-
-        verify(pipelineClient, never()).publishGenerationAliases(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyBoolean(), anyBoolean());
-    }
-
-    @Test
     void admittedBuildMaintainsAndConfirmsBranchLockBeforePublication() throws Exception {
         service = new BranchIndexGenerationBuildService(
                 archiveService, pipelineClient, registryService, heartbeatService,
@@ -359,8 +279,7 @@ class BranchIndexGenerationBuildServiceTest {
         when(lockLease.confirmOwnership()).thenReturn(true);
         when(pipelineClient.indexRepository(
                 anyString(), anyString(), anyString(), eq("develop"), eq("develop-400"),
-                anyList(), anyList(), eq("opaque-generation-target"),
-                eq(false), eq(false)))
+                anyList(), anyList(), eq("opaque-generation-target")))
                 .thenReturn(Map.of(
                         "generation_manifest_sha256", "manifest-400",
                         "document_count", 231,
@@ -385,7 +304,7 @@ class BranchIndexGenerationBuildServiceTest {
         var order = inOrder(pipelineClient, lockLease, registryService);
         order.verify(pipelineClient).indexRepository(
                 anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyList(), anyList(), anyString(), anyBoolean(), anyBoolean());
+                anyList(), anyList(), anyString());
         order.verify(lockLease).confirmOwnership();
         order.verify(registryService).publish(30L, "manifest-400", 231, 400);
         verify(lockLease).close();

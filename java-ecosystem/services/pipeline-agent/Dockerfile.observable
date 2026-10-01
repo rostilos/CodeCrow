@@ -2,13 +2,14 @@ FROM eclipse-temurin:17-jre-alpine
 
 RUN apk add --no-cache curl git unzip su-exec && \
     addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup && \
-    mkdir -p /app/logs && chown -R appuser:appgroup /app
+    mkdir -p /app/logs /app/config /app/codecrow-config /run/codecrow-config && chown -R appuser:appgroup /app
 
 WORKDIR /app
 
 # Copy the built jar file (--chown avoids a duplicate layer)
 COPY --chown=appuser:appgroup java-ecosystem/services/pipeline-agent/target/codecrow-pipeline-agent-1.0.jar app.jar
 COPY --chown=appuser:appgroup analysis-plugins/build/java/ /app/plugins/
+COPY java-ecosystem/services/pipeline-agent/entrypoint.sh /entrypoint.sh
 
 # Download New Relic Java agent (config newrelic.yml is mounted at runtime)
 RUN mkdir -p /usr/local/newrelic && \
@@ -19,8 +20,7 @@ RUN mkdir -p /usr/local/newrelic && \
     chmod 644 /usr/local/newrelic/newrelic.jar && \
     chown -R appuser:appgroup /usr/local/newrelic
 
-# Entrypoint: fix volume ownership, then drop to appuser
-RUN printf '#!/bin/sh\nchown -R appuser:appgroup /app/logs 2>/dev/null || true\nexec su-exec appuser "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 8082
 

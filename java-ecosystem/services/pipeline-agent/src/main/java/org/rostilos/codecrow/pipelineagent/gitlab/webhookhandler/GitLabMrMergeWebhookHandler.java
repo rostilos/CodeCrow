@@ -142,7 +142,6 @@ public class GitLabMrMergeWebhookHandler extends AbstractWebhookHandler implemen
 
             if (mrNumber != null) {
                 pullRequestService.markPullRequestMerged(project.getId(), mrNumber);
-                cleanupPrRagData(project, mrNumber);
             }
             
             BranchProcessRequest request = new BranchProcessRequest();
@@ -172,20 +171,4 @@ public class GitLabMrMergeWebhookHandler extends AbstractWebhookHandler implemen
         }
     }
 
-    private void cleanupPrRagData(Project project, Long mrNumber) {
-        if (ragOperationsService == null) {
-            return;
-        }
-        try {
-            boolean deleted = ragOperationsService.deletePrFiles(project, mrNumber.intValue());
-            if (deleted) {
-                log.info("Cleaned up MR !{} RAG data for project {} on merge", mrNumber, project.getId());
-            } else {
-                log.info("MR !{} RAG cleanup did not complete for project {}; "
-                        + "the cleanup operation recorded the failure detail", mrNumber, project.getId());
-            }
-        } catch (Exception e) {
-            log.warn("Error cleaning up MR RAG data for project {}: {}", project.getId(), e.getMessage());
-        }
-    }
 }

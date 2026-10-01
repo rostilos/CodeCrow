@@ -6,7 +6,7 @@ Covers: LLMFactory._normalize_provider, get_supported_providers,
         QaDocumentationService._create_llm and QA orchestration wiring
 """
 import asyncio
-
+import inspect
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,10 +22,13 @@ from llm.llm_factory import (
     DEFAULT_TEMPERATURE,
     forbid_llm_provider_construction,
     _coerce_openai_compatible_text_content,
+    _anthropic_output_cap,
     _is_cloudflare_base_url,
     _normalize_cloudflare_chat_payload,
+    _normalize_openrouter_chat_payload,
     _normalize_openai_compatible_base_url,
     _parse_google_vertex_config,
+    _split_openai_compatible_parameters,
     _strip_google_vertex_model_prefix,
 )
 from service.qa_documentation.qa_doc_service import QaDocumentationService
@@ -106,6 +109,9 @@ class TestCheckUnsupportedGeminiModel:
 # ── LLMFactory.create_llm ───────────────────────────────────────
 
 class TestCreateLlm:
+    def test_factory_accepts_an_explicit_output_token_cap(self):
+        assert "max_tokens" in inspect.signature(LLMFactory.create_llm).parameters
+
     def test_provider_construction_guard_fails_closed_and_resets(self):
         with forbid_llm_provider_construction("test dry run"):
             with pytest.raises(
@@ -125,6 +131,7 @@ class TestCreateLlm:
                 ai_api_key="test-key",
             )
         constructor.assert_called_once()
+        assert "model_kwargs" not in constructor.call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_provider_construction_guard_is_task_local(self):
@@ -165,6 +172,27 @@ class TestCreateLlm:
         )
         assert llm is not None
 
+    def test_openrouter_omits_completion_cap_when_caller_does_not_request_one(self):
+        with patch("llm.llm_factory.ChatOpenRouter") as constructor:
+            llm = LLMFactory.create_llm(
+                ai_model="deepseek/deepseek-v4-flash-0731",
+                ai_provider="openrouter",
+                ai_api_key="test-key",
+            )
+
+        assert llm is constructor.return_value
+        assert "max_tokens" not in constructor.call_args.kwargs
+        assert "max_completion_tokens" not in constructor.call_args.kwargs
+        assert "model_kwargs" not in constructor.call_args.kwargs
+
+    def test_openrouter_payload_uses_canonical_max_tokens_field(self):
+        payload = _normalize_openrouter_chat_payload({
+            "model": "deepseek/deepseek-v4-flash-0731",
+            "max_completion_tokens": 16_384,
+        })
+        assert payload["max_tokens"] == 16_384
+        assert "max_completion_tokens" not in payload
+
     def test_openai(self):
         llm = LLMFactory.create_llm(
             ai_model="gpt-4o",
@@ -173,29 +201,41 @@ class TestCreateLlm:
         )
         assert llm is not None
 
-    def test_anthropic(self):
-        llm = LLMFactory.create_llm(
-            ai_model="claude-3-sonnet",
-            ai_provider="anthropic",
-            ai_api_key="test-key",
-        )
-        assert llm is not None
+    @patch("llm.llm_factory._anthropic_output_cap", return_value=18_000)
+    def test_anthropic_uses_the_finite_resolved_cap(self, resolve_cap):
+        with patch("llm.llm_factory.ChatAnthropic") as constructor:
+            llm = LLMFactory.create_llm(
+                ai_model="claude-3-sonnet",
+                ai_provider="anthropic",
+                ai_api_key="test-key",
+                max_tokens=18_000,
+            )
+        assert llm is constructor.return_value
+        resolve_cap.assert_called_once_with("claude-3-sonnet", 18_000)
+        assert constructor.call_args.kwargs["max_tokens"] == 18_000
+        assert "model_kwargs" not in constructor.call_args.kwargs
 
     def test_google_gemini_2x(self):
+        ChatGoogleGenerativeAI.reset_mock()
         llm = LLMFactory.create_llm(
             ai_model="gemini-2.0-flash",
             ai_provider="google",
             ai_api_key="test-key",
+            max_tokens=16_384,
         )
         assert llm is not None
+        assert ChatGoogleGenerativeAI.call_args.kwargs["max_tokens"] == 16_384
 
     def test_google_gemini_3x(self):
+        ChatGoogleGenerativeAI.reset_mock()
         llm = LLMFactory.create_llm(
             ai_model="gemini-3.0-flash",
             ai_provider="google",
             ai_api_key="test-key",
+            max_tokens=16_384,
         )
         assert llm is not None
+        assert ChatGoogleGenerativeAI.call_args.kwargs["max_tokens"] == 16_384
 
     def test_google_vertex_service_account_json(self):
         llm = LLMFactory.create_llm(
@@ -275,19 +315,41 @@ class TestCreateLlm:
         )
         assert llm is not None
 
-    def test_max_tokens(self):
-        llm = LLMFactory.create_llm(
-            ai_model="gpt-4o",
-            ai_provider="openai",
-            ai_api_key="key",
-            max_tokens=4096,
-        )
-        assert llm is not None
-
-
 # ── OPENAI_COMPATIBLE URL and payload helpers ───────────────────
 
 class TestOpenAICompatibleHelpers:
+    def test_output_token_limits_are_removed_from_custom_parameters(self):
+        model_kwargs, constructor_kwargs, request_kwargs, _ = (
+            _split_openai_compatible_parameters(
+                {
+                    "max_tokens": 4_096,
+                    "model_kwargs": {
+                        "max_output_tokens": 6_000,
+                        "maxOutputLength": 7_000,
+                        "max_generation_tokens": 7_500,
+                        "max_length": 7_750,
+                        "num_predict": 3_000,
+                    },
+                    "extra_body": {
+                        "generation_config": {
+                            "maxOutputTokens": 8_000,
+                            "max_token_count": 9_000,
+                            "max_tokens_to_sample": 10_000,
+                        },
+                    },
+                }
+            )
+        )
+
+        assert "max_tokens" not in model_kwargs
+        assert "max_output_tokens" not in model_kwargs
+        assert "maxOutputLength" not in model_kwargs
+        assert "max_generation_tokens" not in model_kwargs
+        assert "max_length" not in model_kwargs
+        assert "num_predict" not in model_kwargs
+        assert request_kwargs == {}
+        assert constructor_kwargs == {"extra_body": {"generation_config": {}}}
+
     def test_normalize_standard_base_url_appends_v1(self):
         assert (
             _normalize_openai_compatible_base_url("https://my-vllm.example.com")
@@ -367,6 +429,30 @@ class TestOpenAICompatibleHelpers:
         assert normalized["messages"][2]["content"] is None
         assert normalized["messages"][3]["content"] == "result"
         assert "parallel_tool_calls" not in normalized
+
+
+class TestAnthropicFiniteOutputCap:
+    @patch(
+        "llm.llm_factory._anthropic_profile_max_output_tokens",
+        return_value=64_000,
+    )
+    def test_requested_cap_wins_below_known_local_capability(self, _profile):
+        assert _anthropic_output_cap("claude-sonnet-4-5", 18_000) == 18_000
+
+    @patch(
+        "llm.llm_factory._anthropic_profile_max_output_tokens",
+        return_value=None,
+    )
+    def test_unknown_profile_uses_finite_configured_default_without_network(self, _profile):
+        assert _anthropic_output_cap("claude-future-model", None) == 40_000
+        assert _anthropic_output_cap("claude-future-model", 12_000) == 12_000
+
+    @patch(
+        "llm.llm_factory._anthropic_profile_max_output_tokens",
+        return_value=64_000,
+    )
+    def test_known_provider_cap_clamps_larger_configured_cap(self, _profile):
+        assert _anthropic_output_cap("claude-legacy-model", 80_000) == 64_000
 
     def test_normalize_cloudflare_payload_langchain_message_objects(self):
         class MessageObject:

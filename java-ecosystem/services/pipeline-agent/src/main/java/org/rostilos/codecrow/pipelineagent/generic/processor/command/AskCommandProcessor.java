@@ -7,6 +7,7 @@ import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.CommentCommandWebhookHandler.CommentCommandProcessor;
 import org.rostilos.codecrow.analysisengine.service.PromptSanitizationService;
@@ -24,6 +25,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -59,6 +61,7 @@ public class AskCommandProcessor implements CommentCommandProcessor {
     private final AiCommandClient aiCommandClient;
     private final TokenEncryptionService tokenEncryptionService;
     private final VcsClientProvider vcsClientProvider;
+    private final RagBranchIndexRepository ragBranchIndexRepository;
     private final VcsConnectionCredentialsExtractor credentialsExtractor;
     
     public AskCommandProcessor(
@@ -66,13 +69,15 @@ public class AskCommandProcessor implements CommentCommandProcessor {
             PromptSanitizationService sanitizationService,
             AiCommandClient aiCommandClient,
             TokenEncryptionService tokenEncryptionService,
-            VcsClientProvider vcsClientProvider
+            VcsClientProvider vcsClientProvider,
+            RagBranchIndexRepository ragBranchIndexRepository
     ) {
         this.codeAnalysisService = codeAnalysisService;
         this.sanitizationService = sanitizationService;
         this.aiCommandClient = aiCommandClient;
         this.tokenEncryptionService = tokenEncryptionService;
         this.vcsClientProvider = vcsClientProvider;
+        this.ragBranchIndexRepository = ragBranchIndexRepository;
         this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
     }
     
@@ -466,6 +471,10 @@ public class AskCommandProcessor implements CommentCommandProcessor {
             Long prId = payload.pullRequestId() != null 
                 ? Long.parseLong(payload.pullRequestId()) 
                 : null;
+
+            String repositoryBranch = resolveRepositoryBranch(project, payload);
+            RagBranchIndexRepository.ActiveGenerationCoordinates generation =
+                    findActiveGeneration(project.getId(), repositoryBranch).orElse(null);
             
             return new AskRequest(
                 project.getId(),
@@ -479,7 +488,10 @@ public class AskCommandProcessor implements CommentCommandProcessor {
                 aiConnection.getBaseUrl(),
                 question,
                 prId,
-                payload.commitHash(),
+                repositoryBranch,
+                generation != null ? generation.getRevision() : null,
+                generation != null ? generation.getManifestDigest() : null,
+                generation != null ? generation.getCollectionName() : null,
                 credentials.oAuthClient(),
                 credentials.oAuthSecret(),
                 credentials.accessToken(),
@@ -494,6 +506,29 @@ public class AskCommandProcessor implements CommentCommandProcessor {
             log.error("Failed to decrypt credentials: {}", e.getMessage());
             return null;
         }
+    }
+
+    private String resolveRepositoryBranch(Project project, WebhookPayload payload) {
+        if (payload.targetBranch() != null && !payload.targetBranch().isBlank()) {
+            return payload.targetBranch().trim();
+        }
+        if (project.getDefaultBranch() != null
+                && project.getDefaultBranch().getBranchName() != null
+                && !project.getDefaultBranch().getBranchName().isBlank()) {
+            return project.getDefaultBranch().getBranchName().trim();
+        }
+        String configured = project.getEffectiveConfig().defaultBranch();
+        return configured == null || configured.isBlank() ? null : configured.trim();
+    }
+
+    private Optional<RagBranchIndexRepository.ActiveGenerationCoordinates> findActiveGeneration(
+            Long projectId,
+            String branch) {
+        if (branch == null || ragBranchIndexRepository.markAccessedIfUnclaimed(
+                projectId, branch, OffsetDateTime.now()) == 0) {
+            return Optional.empty();
+        }
+        return ragBranchIndexRepository.findActiveGenerationCoordinates(projectId, branch);
     }
     
     /**

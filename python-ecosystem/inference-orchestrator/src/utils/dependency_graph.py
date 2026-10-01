@@ -1,18 +1,8 @@
-"""
-Dependency graph builder for intelligent file batching.
+"""Dependency graph builder for intelligent file batching.
 
-SMART APPROACH: Leverages RAG's pre-indexed tree-sitter metadata to discover
-file relationships instead of re-parsing diffs with regex.
-
-The RAG system already has:
-- semantic_names: function/method/class names
-- imports: import statements parsed by tree-sitter
-- extends: parent classes/interfaces
-- parent_class: containing class
-- namespace: package/namespace
-
-This module queries RAG to build a relationship graph, enabling intelligent
-batching that keeps related files together for better cross-file context.
+The builder consumes pre-computed enrichment relationships or an exact relation
+map from the sealed structural repository generation. It never reconstructs
+repository relationships from retrieved source chunks.
 """
 import logging
 import inspect
@@ -45,11 +35,9 @@ class FileNode:
     related_files: Set[str] = field(default_factory=set)
     imports_symbols: Set[str] = field(default_factory=set)
     exports_symbols: Set[str] = field(default_factory=set)
-    parent_classes: Set[str] = field(default_factory=set)
-    namespaces: Set[str] = field(default_factory=set)
     extends: Set[str] = field(default_factory=set)
     focus_areas: List[str] = field(default_factory=list)
-    relationship_strength: float = 0.0
+    relationship_degree: int = 0
 
 
 @dataclass
@@ -57,46 +45,21 @@ class FileRelationship:
     """Represents a relationship between two files."""
     source_file: str
     target_file: str
-    relationship_type: str  # 'definition', 'same_class', 'same_namespace'
+    relationship_type: str
     matched_on: str
-    strength: float
 
 
 class DependencyGraphBuilder:
-    """
-    Builds a dependency graph using RAG's tree-sitter metadata or pre-computed relationships.
+    """Build a graph from enrichment data or exact structural relations.
 
-    SMART APPROACH: When Java sends enrichment data with pre-computed relationships,
-    use those directly instead of querying RAG. This eliminates duplicate work since
-    Java already called RAG's /parse endpoint.
-
-    Fallback: When no enrichment data available, query RAG's deterministic context API
-    which has the FULL file indexed with tree-sitter metadata.
-
-    Relationship types discovered:
-    - definition: File A uses symbol defined in File B
-    - same_class: Files contain methods of the same class
-    - same_namespace: Files are in the same package/namespace
+    Relationships come from explicit enrichment edges, plugin graph groups, or
+    a revision-bound structural relation map. Co-location alone is not an edge.
     """
 
-    RELATIONSHIP_WEIGHTS = {
-        'changed_file': 1.0,
-        'definition': 0.95,
-        'IMPORTS': 0.90,
-        'EXTENDS': 0.95,
-        'IMPLEMENTS': 0.95,
-        'CALLS': 0.85,
-        'class_context': 0.85,
-        'namespace_context': 0.75,
-        'SAME_PACKAGE': 0.60,
-        'PLUGIN_EVIDENCE': 1.0,
-    }
-
-    def __init__(self, rag_client: Optional["RAGClient"] = None):
+    def __init__(self, rag_client: Optional["RagClient"] = None):
         self.rag_client = rag_client
         self.nodes: Dict[str, FileNode] = {}
         self.relationships: List[FileRelationship] = []
-        self._metadata_cache: Dict[str, Dict] = {}
 
     def _initialize_nodes(self, file_groups: List[Any]) -> None:
         """Initialize nodes and preserve deterministic plugin evidence groups."""
@@ -130,14 +93,10 @@ class DependencyGraphBuilder:
                         target_file=related,
                         relationship_type="PLUGIN_EVIDENCE",
                         matched_on=str(group.group_id),
-                        strength=self.RELATIONSHIP_WEIGHTS["PLUGIN_EVIDENCE"],
                     ))
         for path, node in self.nodes.items():
             if node.related_files:
-                node.relationship_strength = self._calculate_strength(
-                    path,
-                    node.related_files,
-                )
+                node.relationship_degree = self._relationship_degree(path)
 
     def build_graph_from_enrichment(
         self,
@@ -160,7 +119,7 @@ class DependencyGraphBuilder:
             Dict of file paths to FileNode objects with relationships populated
         """
         if not enrichment_data or not enrichment_data.has_data():
-            logger.info("No enrichment data available, falling back to basic grouping")
+            logger.info("No enrichment data available; batching without inferred edges")
             return self._build_basic_graph(file_groups)
 
         # Initialize nodes from file groups and retain graph-derived constraints
@@ -180,13 +139,11 @@ class DependencyGraphBuilder:
                 relationships_by_file[source].add(target)
                 relationships_by_file[target].add(source)
 
-                weight = self.RELATIONSHIP_WEIGHTS.get(rel_type, 0.5)
                 self.relationships.append(FileRelationship(
                     source_file=source,
                     target_file=target,
                     relationship_type=rel_type,
                     matched_on=rel.matchedOn or "",
-                    strength=weight
                 ))
 
         # Process metadata to populate node symbols
@@ -195,22 +152,16 @@ class DependencyGraphBuilder:
                 node = self.nodes[meta.path]
                 if meta.imports:
                     node.imports_symbols.update(meta.imports)
-                if meta.semanticNames:
-                    node.exports_symbols.update(meta.semanticNames)
+                if meta.symbolNames:
+                    node.exports_symbols.update(meta.symbolNames)
                 if meta.extendsClasses:
                     node.extends.update(meta.extendsClasses)
-                if meta.parentClass:
-                    node.parent_classes.add(meta.parentClass)
-                if meta.namespace:
-                    node.namespaces.add(meta.namespace)
 
         # Update nodes with discovered relationships
         for file_path, related in relationships_by_file.items():
             if file_path in self.nodes:
                 self.nodes[file_path].related_files.update(related)
-                self.nodes[file_path].relationship_strength = self._calculate_strength(
-                    file_path, related
-                )
+                self.nodes[file_path].relationship_degree = self._relationship_degree(file_path)
 
         logger.info(
             f"Dependency graph built from enrichment: {len(self.nodes)} files, "
@@ -219,93 +170,19 @@ class DependencyGraphBuilder:
 
         return self.nodes
 
-    def build_graph_from_rag(
+    async def build_graph_from_structural_relations(
         self,
         file_groups: List[Any],
         workspace: str,
         project: str,
         branches: List[str],
+        structural_binding: Optional[Dict[str, str]] = None,
     ) -> Dict[str, FileNode]:
-        """
-        Build dependency graph by querying RAG's deterministic context API.
-
-        This leverages tree-sitter metadata extracted during indexing:
-        - imports, extends, parent_class, namespace, semantic_names
-        """
+        """Build changed-file edges from one exact structural relation map."""
         if not self.rag_client:
-            logger.warning("No RAG client provided, falling back to basic grouping")
-            return self._build_basic_graph(file_groups)
-
-        # Collect all file paths
-        all_file_paths = []
-        file_priority_map = {}
-        file_info_map = {}
-
-        self._initialize_nodes(file_groups)
-        for group in file_groups:
-            for f in group.files:
-                all_file_paths.append(f.path)
-                file_priority_map[f.path] = group.priority
-                file_info_map[f.path] = f
-
-        if not all_file_paths:
-            return self.nodes
-
-        # Query RAG for deterministic context
-        try:
-            rag_response = self.rag_client.get_deterministic_context(
-                workspace=workspace,
-                project=project,
-                branches=branches,
-                file_paths=all_file_paths,
-                limit_per_file=15
+            logger.info(
+                "No structural client provided; batching without inferred edges"
             )
-            if inspect.isawaitable(rag_response):
-                logger.warning(
-                    "RAG deterministic context client is async; use build_graph_from_rag_async "
-                    "for relationship-aware batching"
-                )
-                return self._build_basic_graph(file_groups)
-            if error := _rag_response_error(rag_response):
-                logger.warning(
-                    "RAG batching lookup failed, using basic grouping: %s",
-                    error,
-                )
-                self._add_basic_directory_relationships()
-                return self.nodes
-            self._metadata_cache['last_response'] = rag_response
-        except Exception as e:
-            logger.warning(f"RAG query failed, falling back to basic grouping: {e}")
-            return self._build_basic_graph(file_groups)
-
-        # Extract relationships from RAG response
-        self._extract_relationships_from_rag(
-            _unwrap_deterministic_context(rag_response),
-            all_file_paths,
-        )
-
-        logger.info(
-            f"Dependency graph built: {len(self.nodes)} files, "
-            f"{len(self.relationships)} relationships"
-        )
-
-        return self.nodes
-
-    async def build_graph_from_rag_async(
-        self,
-        file_groups: List[Any],
-        workspace: str,
-        project: str,
-        branches: List[str],
-    ) -> Dict[str, FileNode]:
-        """
-        Async variant for the inference orchestrator's httpx-based RAG client.
-
-        Keeps smart batching relationship-aware instead of accidentally treating
-        an un-awaited coroutine as a response and falling back to simple batches.
-        """
-        if not self.rag_client:
-            logger.warning("No RAG client provided, falling back to basic grouping")
             return self._build_basic_graph(file_groups)
 
         all_file_paths = []
@@ -317,183 +194,163 @@ class DependencyGraphBuilder:
         if not all_file_paths:
             return self.nodes
 
+        binding = dict(structural_binding or {})
+        if not binding or not hasattr(
+            self.rag_client,
+            "get_structural_relations",
+        ):
+            logger.info(
+                "No exact structural binding available; batching without "
+                "inferred edges"
+            )
+            return self.nodes
+
         try:
-            rag_response = self.rag_client.get_deterministic_context(
+            relation_map = self.rag_client.get_structural_relations(
+                paths=all_file_paths,
                 workspace=workspace,
                 project=project,
-                branches=branches,
-                file_paths=all_file_paths,
-                limit_per_file=15
+                branch=branches[0],
+                max_relations=min(500, max(80, len(all_file_paths) * 20)),
+                **binding,
             )
-            if inspect.isawaitable(rag_response):
-                rag_response = await rag_response
-            if error := _rag_response_error(rag_response):
+            if inspect.isawaitable(relation_map):
+                relation_map = await relation_map
+            if error := _rag_response_error(relation_map):
                 logger.warning(
-                    "Async RAG batching lookup failed, using basic grouping: %s",
+                    "Structural batching lookup failed; batching without "
+                    "inferred edges: %s",
                     error,
                 )
-                self._add_basic_directory_relationships()
                 return self.nodes
-            self._metadata_cache['last_response'] = rag_response
         except Exception as e:
-            logger.warning(f"Async RAG query failed, falling back to basic grouping: {e}")
-            return self._build_basic_graph(file_groups)
+            logger.warning(
+                "Structural batching lookup failed; batching without inferred "
+                "edges: %s",
+                e,
+            )
+            return self.nodes
 
-        self._extract_relationships_from_rag(
-            _unwrap_deterministic_context(rag_response),
+        self._extract_relationships_from_structural_map(
+            relation_map,
             all_file_paths,
         )
 
         logger.info(
-            f"Async dependency graph built: {len(self.nodes)} files, "
+            f"Structural dependency graph built: {len(self.nodes)} files, "
             f"{len(self.relationships)} relationships"
         )
 
         return self.nodes
 
-    def _extract_relationships_from_rag(
+    def _extract_relationships_from_structural_map(
         self,
-        rag_response: Dict,
-        changed_file_paths: List[str]
+        relation_map: Dict[str, Any],
+        changed_file_paths: List[str],
     ) -> None:
-        """Extract file relationships from RAG deterministic context response."""
-        changed_file_set = set(changed_file_paths)
+        """Project exact relation evidence onto the changed-file graph."""
+        changed_file_set = {path.lstrip('/') for path in changed_file_paths}
         file_relationships: Dict[str, Set[str]] = defaultdict(set)
 
-        # Process changed_files to extract metadata
-        changed_files = rag_response.get('changed_files', {})
-        for file_path, chunks in changed_files.items():
-            norm_path = file_path.lstrip('/')
-            if norm_path in self.nodes:
-                for chunk in chunks:
-                    metadata = chunk.get('metadata', {})
+        for anchor in relation_map.get("anchors") or ():
+            if not isinstance(anchor, dict):
+                continue
+            path = str(anchor.get("path") or "").lstrip('/')
+            if path not in self.nodes:
+                continue
+            for symbol in anchor.get("symbols") or ():
+                if not isinstance(symbol, dict):
+                    continue
+                for key in ("name", "qualifiedName"):
+                    value = symbol.get(key)
+                    if isinstance(value, str) and value.strip():
+                        self.nodes[path].exports_symbols.add(value.strip())
 
-                    # Extract symbols this file exports (defines)
-                    if metadata.get('primary_name'):
-                        self.nodes[norm_path].exports_symbols.add(metadata['primary_name'])
-                    if metadata.get('semantic_names'):
-                        self.nodes[norm_path].exports_symbols.update(metadata['semantic_names'])
+        existing_edges = {
+            tuple(sorted((relationship.source_file, relationship.target_file)))
+            + (relationship.relationship_type, relationship.matched_on)
+            for relationship in self.relationships
+        }
+        structural_nodes = {
+            str(node.get("unitId")): node
+            for node in relation_map.get("nodes") or ()
+            if isinstance(node, dict) and node.get("unitId")
+        }
+        for relation in relation_map.get("relations") or ():
+            if not isinstance(relation, dict):
+                continue
+            evidence_paths: set[str] = set()
+            origin = relation.get("origin")
+            if isinstance(origin, dict):
+                origin_path = str(origin.get("path") or "").lstrip('/')
+                if origin_path:
+                    evidence_paths.add(origin_path)
+            for path in relation.get("relatedPaths") or ():
+                if isinstance(path, str) and path.strip():
+                    evidence_paths.add(path.lstrip('/'))
+            for key in ("sourceUnit", "targetUnit"):
+                unit = relation.get(key)
+                if isinstance(unit, dict):
+                    path = str(unit.get("path") or "").lstrip('/')
+                    if path:
+                        evidence_paths.add(path)
+            for key in ("sourceUnitId", "targetUnitId"):
+                unit = structural_nodes.get(str(relation.get(key) or ""))
+                if isinstance(unit, dict):
+                    path = str(unit.get("path") or "").lstrip('/')
+                    if path:
+                        evidence_paths.add(path)
 
-                    # Extract what this file imports
-                    if metadata.get('imports'):
-                        for imp in metadata['imports']:
-                            if isinstance(imp, str):
-                                parts = imp.replace(';', '').split('\\')
-                                if parts:
-                                    self.nodes[norm_path].imports_symbols.add(parts[-1].strip())
-
-                    # Track class/namespace membership
-                    if metadata.get('parent_class'):
-                        self.nodes[norm_path].parent_classes.add(metadata['parent_class'])
-                    if metadata.get('namespace'):
-                        self.nodes[norm_path].namespaces.add(metadata['namespace'])
-                    if metadata.get('extends'):
-                        self.nodes[norm_path].extends.update(metadata['extends'])
-
-        # Process related_definitions
-        related_definitions = rag_response.get('related_definitions', {})
-        for symbol, chunks in related_definitions.items():
-            for chunk in chunks:
-                metadata = chunk.get('metadata', {})
-                related_path = metadata.get('path', '').lstrip('/')
-
-                if related_path and related_path in self.nodes:
-                    for file_path in changed_file_set:
-                        norm_path = file_path.lstrip('/')
-                        if norm_path in self.nodes:
-                            node = self.nodes[norm_path]
-                            if symbol in node.imports_symbols or symbol in node.exports_symbols:
-                                file_relationships[norm_path].add(related_path)
-                                file_relationships[related_path].add(norm_path)
-                                self.relationships.append(FileRelationship(
-                                    source_file=norm_path,
-                                    target_file=related_path,
-                                    relationship_type='definition',
-                                    matched_on=symbol,
-                                    strength=self.RELATIONSHIP_WEIGHTS['definition']
-                                ))
-
-        # Process class_context
-        class_context = rag_response.get('class_context', {})
-        for parent_class, chunks in class_context.items():
-            class_files = set()
-            for chunk in chunks:
-                metadata = chunk.get('metadata', {})
-                related_path = metadata.get('path', '').lstrip('/')
-                if related_path in self.nodes:
-                    class_files.add(related_path)
-
-            for f1 in class_files:
-                for f2 in class_files:
-                    if f1 != f2:
-                        file_relationships[f1].add(f2)
-                        if f1 < f2:
-                            self.relationships.append(FileRelationship(
-                                source_file=f1,
-                                target_file=f2,
-                                relationship_type='same_class',
-                                matched_on=parent_class,
-                                strength=self.RELATIONSHIP_WEIGHTS['class_context']
-                            ))
-
-        # Process namespace_context
-        namespace_context = rag_response.get('namespace_context', {})
-        for namespace, chunks in namespace_context.items():
-            ns_files = set()
-            for chunk in chunks:
-                metadata = chunk.get('metadata', {})
-                related_path = metadata.get('path', '').lstrip('/')
-                if related_path in self.nodes:
-                    ns_files.add(related_path)
-
-            for f1 in ns_files:
-                for f2 in ns_files:
-                    if f1 != f2:
-                        file_relationships[f1].add(f2)
-                        if f1 < f2:
-                            self.relationships.append(FileRelationship(
-                                source_file=f1,
-                                target_file=f2,
-                                relationship_type='same_namespace',
-                                matched_on=namespace,
-                                strength=self.RELATIONSHIP_WEIGHTS['namespace_context']
-                            ))
+            selected_paths = sorted(
+                path
+                for path in evidence_paths
+                if path in changed_file_set and path in self.nodes
+            )
+            relationship_type = str(
+                relation.get("kind") or "STRUCTURAL_RELATION"
+            )
+            matched_on = " ".join(
+                str(relation.get(key) or "").strip()
+                for key in ("source", "relation", "target")
+            ).strip()
+            for index, source_path in enumerate(selected_paths):
+                for target_path in selected_paths[index + 1:]:
+                    identity = (
+                        source_path,
+                        target_path,
+                        relationship_type,
+                        matched_on,
+                    )
+                    if identity in existing_edges:
+                        continue
+                    existing_edges.add(identity)
+                    file_relationships[source_path].add(target_path)
+                    file_relationships[target_path].add(source_path)
+                    self.relationships.append(FileRelationship(
+                        source_file=source_path,
+                        target_file=target_path,
+                        relationship_type=relationship_type,
+                        matched_on=matched_on,
+                    ))
 
         # Update nodes with discovered relationships
         for file_path, related in file_relationships.items():
             if file_path in self.nodes:
                 self.nodes[file_path].related_files.update(related)
-                self.nodes[file_path].relationship_strength = self._calculate_strength(
-                    file_path, related
-                )
+                self.nodes[file_path].relationship_degree = self._relationship_degree(file_path)
 
-    def _calculate_strength(self, file_path: str, related_files: Set[str]) -> float:
-        total_strength = 0.0
-        for rel in self.relationships:
-            if rel.source_file == file_path or rel.target_file == file_path:
-                total_strength += rel.strength
-        return min(total_strength, 5.0)
+    def _relationship_degree(self, file_path: str) -> int:
+        return sum(
+            1
+            for relationship in self.relationships
+            if relationship.source_file == file_path
+            or relationship.target_file == file_path
+        )
 
     def _build_basic_graph(self, file_groups: List[Any]) -> Dict[str, FileNode]:
-        """Fallback: build basic graph without RAG (by directory)."""
+        """Fallback without inventing relationships from file co-location."""
         self._initialize_nodes(file_groups)
-        self._add_basic_directory_relationships()
         return self.nodes
-
-    def _add_basic_directory_relationships(self) -> None:
-        """Add the bounded language-neutral directory fallback in place."""
-        # Files in same directory are related
-        dir_files: Dict[str, List[str]] = defaultdict(list)
-        for path in self.nodes:
-            dir_path = '/'.join(path.split('/')[:-1]) if '/' in path else ''
-            dir_files[dir_path].append(path)
-
-        for dir_path, files in dir_files.items():
-            if len(files) > 1:
-                for f1 in files:
-                    for f2 in files:
-                        if f1 != f2:
-                            self.nodes[f1].related_files.add(f2)
 
     def get_connected_components(self) -> List[Set[str]]:
         """Find connected components in the dependency graph."""
@@ -533,17 +390,19 @@ class DependencyGraphBuilder:
         min_batch_size: int = 3,
         enrichment_data: Any = None,
         max_allowed_tokens: int = 200000,
-        processed_diff: Any = None
+        processed_diff: Any = None,
+        token_cost_by_path: Optional[Dict[str, int]] = None,
     ) -> List[List[Dict[str, Any]]]:
         """
         Create intelligent batches that keep related files together.
 
         Strategy:
         1. If enrichment_data is available, use pre-computed relationships from Java
-        2. Otherwise, query RAG to discover file relationships via tree-sitter metadata
+        2. Otherwise, batch without inventing dependency edges
         3. Find connected components (files that are related)
         4. Batch files within components together
-        5. For large components, split by priority while keeping related files together
+        5. Split only when the file or token ceiling requires it
+        6. Never combine disconnected components merely to fill a prompt
 
         Args:
             file_groups: List of FileGroup objects with files
@@ -551,152 +410,22 @@ class DependencyGraphBuilder:
             project: Repository slug
             branches: Branch names for context
             max_batch_size: Maximum files per batch
-            min_batch_size: Minimum files per batch
+            min_batch_size: Soft target within one connected component. It is
+                never satisfied by combining unrelated components.
             enrichment_data: Optional PrEnrichmentDataDto from Java with pre-computed relationships
         """
-        # Use enrichment data if available, otherwise fall back to RAG
         if enrichment_data and hasattr(enrichment_data, 'has_data') and enrichment_data.has_data():
             logger.info("Using pre-computed enrichment data for dependency graph")
             self.build_graph_from_enrichment(file_groups, enrichment_data)
         else:
-            self.build_graph_from_rag(file_groups, workspace, project, branches)
-        components = self.get_connected_components()
-
-        logger.info(
-            f"Dependency analysis: {len(self.nodes)} files, "
-            f"{len(components)} connected components, "
-            f"{len(self.relationships)} relationships"
+            self._build_basic_graph(file_groups)
+        return self._build_batches_from_graph(
+            file_groups=file_groups,
+            max_batch_size=max_batch_size,
+            max_allowed_tokens=max_allowed_tokens,
+            processed_diff=processed_diff,
+            token_cost_by_path=token_cost_by_path,
         )
-
-        file_priority_map = {}
-        file_info_map = {}
-        file_token_cost = {}
-
-        # Estimate tokens using roughly 4 chars per token + 1000 tokens overhead (RAG context, AST)
-        if processed_diff and hasattr(processed_diff, 'files'):
-            for df in processed_diff.files:
-                file_token_cost[df.path] = (len(df.content) // 4) + 1000
-
-        for group in file_groups:
-            for f in group.files:
-                file_priority_map[f.path] = group.priority
-                file_info_map[f.path] = f
-                # Fallback token estimate
-                if f.path not in file_token_cost:
-                    file_token_cost[f.path] = 2000
-
-        batches = []
-        processed_files = set()
-        priority_order = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
-
-        def component_sort_key(comp):
-            max_priority = min(
-                priority_order.index(file_priority_map.get(f, 'LOW'))
-                for f in comp
-            )
-            return (-len(comp), max_priority)
-
-        for component in sorted(components, key=component_sort_key):
-            if all(f in processed_files for f in component):
-                continue
-
-            component_files = [f for f in component if f not in processed_files]
-            if not component_files:
-                continue
-
-            component_files_sorted = sorted(
-                component_files,
-                key=lambda f: (
-                    -self.nodes[f].relationship_strength,
-                    priority_order.index(file_priority_map.get(f, 'LOW')),
-                    f
-                )
-            )
-
-            current_batch = []
-            current_batch_tokens = 0
-            for file_path in component_files_sorted:
-                file_info = file_info_map.get(file_path)
-                if not file_info:
-                    continue
-
-                node = self.nodes[file_path]
-                file_tokens = file_token_cost.get(file_path, 2000)
-
-                if current_batch and (current_batch_tokens + file_tokens > max_allowed_tokens):
-                    batches.append(current_batch)
-                    current_batch = []
-                    current_batch_tokens = 0
-
-                current_batch.append({
-                    "file": file_info,
-                    "priority": file_priority_map.get(file_path, 'MEDIUM'),
-                    "has_relationships": len(node.related_files) > 0,
-                    "relationship_strength": node.relationship_strength,
-                    "related_in_batch": [
-                        r for r in node.related_files
-                        if r in {b['file'].path for b in current_batch}
-                    ]
-                })
-                current_batch_tokens += file_tokens
-                processed_files.add(file_path)
-
-                if len(current_batch) >= max_batch_size:
-                    batches.append(current_batch)
-                    current_batch = []
-                    current_batch_tokens = 0
-
-            if current_batch:
-                batches.append(current_batch)
-
-        # Handle orphan files
-        orphan_files = []
-        for group in file_groups:
-            for f in group.files:
-                if f.path not in processed_files:
-                    orphan_files.append({
-                        "file": f,
-                        "priority": group.priority,
-                        "has_relationships": False,
-                        "relationship_strength": 0.0,
-                        "related_in_batch": []
-                    })
-                    processed_files.add(f.path)
-
-        if orphan_files:
-            orphan_files_sorted = sorted(
-                orphan_files,
-                key=lambda x: (priority_order.index(x['priority']), x['file'].path)
-            )
-
-            current_batch = []
-            current_batch_tokens = 0
-            for orphan in orphan_files_sorted:
-                file_tokens = file_token_cost.get(orphan['file'].path, 2000)
-                if current_batch and (current_batch_tokens + file_tokens > max_allowed_tokens):
-                    batches.append(current_batch)
-                    current_batch = []
-                    current_batch_tokens = 0
-
-                current_batch.append(orphan)
-                current_batch_tokens += file_tokens
-                if len(current_batch) >= max_batch_size:
-                    batches.append(current_batch)
-                    current_batch = []
-                    current_batch_tokens = 0
-
-            if current_batch:
-                batches.append(current_batch)
-
-        batches = self._merge_small_batches(batches, min_batch_size, max_batch_size, max_allowed_tokens, file_token_cost)
-
-        logger.info(f"Smart batching created {len(batches)} batches from {len(self.nodes)} files")
-        for i, batch in enumerate(batches):
-            paths = [b['file'].path for b in batch]
-            rel_count = sum(1 for b in batch if b.get('has_relationships'))
-            logger.debug(f"Batch {i+1}: {len(batch)} files ({rel_count} with relationships): {paths}")
-
-        return batches
 
     async def get_smart_batches_async(
         self,
@@ -708,30 +437,38 @@ class DependencyGraphBuilder:
         min_batch_size: int = 3,
         enrichment_data: Any = None,
         max_allowed_tokens: int = 200000,
-        processed_diff: Any = None
+        processed_diff: Any = None,
+        token_cost_by_path: Optional[Dict[str, int]] = None,
+        structural_binding: Optional[Dict[str, str]] = None,
     ) -> List[List[Dict[str, Any]]]:
-        """Async equivalent of get_smart_batches for async RAG clients."""
+        """Build batches from enrichment or an exact structural relation map."""
         if enrichment_data and hasattr(enrichment_data, 'has_data') and enrichment_data.has_data():
             logger.info("Using pre-computed enrichment data for dependency graph")
             self.build_graph_from_enrichment(file_groups, enrichment_data)
         else:
-            await self.build_graph_from_rag_async(file_groups, workspace, project, branches)
+            await self.build_graph_from_structural_relations(
+                file_groups,
+                workspace,
+                project,
+                branches,
+                structural_binding=structural_binding,
+            )
 
         return self._build_batches_from_graph(
             file_groups=file_groups,
             max_batch_size=max_batch_size,
-            min_batch_size=min_batch_size,
             max_allowed_tokens=max_allowed_tokens,
             processed_diff=processed_diff,
+            token_cost_by_path=token_cost_by_path,
         )
 
     def _build_batches_from_graph(
         self,
         file_groups: List[Any],
         max_batch_size: int,
-        min_batch_size: int,
         max_allowed_tokens: int,
         processed_diff: Any = None,
+        token_cost_by_path: Optional[Dict[str, int]] = None,
     ) -> List[List[Dict[str, Any]]]:
         components = self.get_connected_components()
 
@@ -743,12 +480,16 @@ class DependencyGraphBuilder:
 
         file_priority_map = {}
         file_info_map = {}
-        file_token_cost = {}
+        file_token_cost = dict(token_cost_by_path or {})
 
-        # Estimate tokens using roughly 4 chars per token + 1000 tokens overhead (RAG context, AST)
+        # Diff-only estimation is retained only for callers that cannot render
+        # their real local prompt. Stage 1 supplies the exact rendered cost.
         if processed_diff and hasattr(processed_diff, 'files'):
             for df in processed_diff.files:
-                file_token_cost[df.path] = (len(df.content) // 4) + 1000
+                file_token_cost.setdefault(
+                    df.path,
+                    (len(df.content) // 4) + 1000,
+                )
 
         for group in file_groups:
             for f in group.files:
@@ -780,7 +521,7 @@ class DependencyGraphBuilder:
             component_files_sorted = sorted(
                 component_files,
                 key=lambda f: (
-                    -self.nodes[f].relationship_strength,
+                    -self.nodes[f].relationship_degree,
                     priority_order.index(file_priority_map.get(f, 'LOW')),
                     f
                 )
@@ -805,11 +546,9 @@ class DependencyGraphBuilder:
                     "file": file_info,
                     "priority": file_priority_map.get(file_path, 'MEDIUM'),
                     "has_relationships": len(node.related_files) > 0,
-                    "relationship_strength": node.relationship_strength,
-                    "related_in_batch": [
-                        r for r in node.related_files
-                        if r in {b['file'].path for b in current_batch}
-                    ]
+                    "relationship_degree": node.relationship_degree,
+                    "related_files": tuple(sorted(node.related_files)),
+                    "related_in_batch": [],
                 })
                 current_batch_tokens += file_tokens
                 processed_files.add(file_path)
@@ -831,7 +570,7 @@ class DependencyGraphBuilder:
                         "file": f,
                         "priority": group.priority,
                         "has_relationships": False,
-                        "relationship_strength": 0.0,
+                        "relationship_degree": 0,
                         "related_in_batch": []
                     })
                     processed_files.add(f.path)
@@ -841,27 +580,25 @@ class DependencyGraphBuilder:
                 orphan_files,
                 key=lambda x: (priority_order.index(x['priority']), x['file'].path)
             )
+            batches.extend([[orphan] for orphan in orphan_files_sorted])
 
-            current_batch = []
-            current_batch_tokens = 0
-            for orphan in orphan_files_sorted:
-                file_tokens = file_token_cost.get(orphan['file'].path, 2000)
-                if current_batch and (current_batch_tokens + file_tokens > max_allowed_tokens):
-                    batches.append(current_batch)
-                    current_batch = []
-                    current_batch_tokens = 0
+        # A connected component is the semantic prompt boundary. Previously,
+        # the final small-batch merge packed consecutive disconnected
+        # components until a capacity ceiling was reached. That made an agent
+        # divide its attention across unrelated files and erased the graph's
+        # only batching guarantee. Small components, including isolated files,
+        # intentionally remain independent batches.
 
-                current_batch.append(orphan)
-                current_batch_tokens += file_tokens
-                if len(current_batch) >= max_batch_size:
-                    batches.append(current_batch)
-                    current_batch = []
-                    current_batch_tokens = 0
-
-            if current_batch:
-                batches.append(current_batch)
-
-        batches = self._merge_small_batches(batches, min_batch_size, max_batch_size, max_allowed_tokens, file_token_cost)
+        for batch in batches:
+            batch_paths = {item['file'].path for item in batch}
+            for item in batch:
+                related_files = tuple(item.get('related_files', ()))
+                item['related_in_batch'] = [
+                    path for path in related_files if path in batch_paths
+                ]
+                item['related_outside_batch'] = [
+                    path for path in related_files if path not in batch_paths
+                ]
 
         logger.info(f"Smart batching created {len(batches)} batches from {len(self.nodes)} files")
         for i, batch in enumerate(batches):
@@ -870,64 +607,6 @@ class DependencyGraphBuilder:
             logger.debug(f"Batch {i+1}: {len(batch)} files ({rel_count} with relationships): {paths}")
 
         return batches
-
-    def _merge_small_batches(
-        self,
-        batches: List[List[Dict[str, Any]]],
-        min_size: int,
-        max_size: int,
-        max_allowed_tokens: int = 200000,
-        file_token_cost: Dict[str, int] = None
-    ) -> List[List[Dict[str, Any]]]:
-        """Merge small batches if they have the same priority."""
-        if not batches:
-            return batches
-
-        priority_order = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
-        priority_rank = {
-            priority: index
-            for index, priority in enumerate(priority_order)
-        }
-        priority_batches: Dict[str, List[List[Dict[str, Any]]]] = defaultdict(list)
-        for batch in batches:
-            if not batch:
-                continue
-            priorities = [b['priority'] for b in batch]
-            dominant = min(
-                set(priorities),
-                key=lambda priority: (
-                    -priorities.count(priority),
-                    priority_rank.get(priority, len(priority_order)),
-                    priority,
-                ),
-            )
-            priority_batches[dominant].append(batch)
-
-        merged = []
-        file_token_cost = file_token_cost or {}
-        for priority in sorted(
-            priority_batches,
-            key=lambda value: (
-                priority_rank.get(value, len(priority_order)),
-                value,
-            ),
-        ):
-            p_batches = priority_batches[priority]
-            current_merged = []
-            for batch in p_batches:
-                batch_tokens = sum(file_token_cost.get(b['file'].path, 2000) for b in batch)
-                current_merged_tokens = sum(file_token_cost.get(b['file'].path, 2000) for b in current_merged)
-
-                if (len(current_merged) + len(batch) <= max_size) and (current_merged_tokens + batch_tokens <= max_allowed_tokens):
-                    current_merged.extend(batch)
-                else:
-                    if current_merged:
-                        merged.append(current_merged)
-                    current_merged = batch[:]
-            if current_merged:
-                merged.append(current_merged)
-
-        return merged
 
     def get_relationship_summary(self) -> Dict[str, Any]:
         """Get a summary of discovered relationships."""
@@ -955,11 +634,12 @@ def create_smart_batches(
     workspace: str,
     project: str,
     branches: List[str],
-    rag_client: Optional["RAGClient"] = None,
+    rag_client: Optional["RagClient"] = None,
     max_batch_size: int = 15,
     enrichment_data: Any = None,
     max_allowed_tokens: int = 200000,
-    processed_diff: Any = None
+    processed_diff: Any = None,
+    token_cost_by_path: Optional[Dict[str, int]] = None,
 ) -> List[List[Dict[str, Any]]]:
     """
     Convenience function to create smart batches from file groups.
@@ -969,7 +649,6 @@ def create_smart_batches(
         workspace: Repository workspace/owner
         project: Repository slug
         branches: Branch names for context
-        rag_client: Optional RAG client for relationship discovery
         max_batch_size: Maximum files per batch
         enrichment_data: Optional PrEnrichmentDataDto with pre-computed relationships from Java
     """
@@ -982,7 +661,8 @@ def create_smart_batches(
         max_batch_size,
         enrichment_data=enrichment_data,
         max_allowed_tokens=max_allowed_tokens,
-        processed_diff=processed_diff
+        processed_diff=processed_diff,
+        token_cost_by_path=token_cost_by_path,
     )
 
 
@@ -991,13 +671,15 @@ async def create_smart_batches_async(
     workspace: str,
     project: str,
     branches: List[str],
-    rag_client: Optional["RAGClient"] = None,
+    rag_client: Optional["RagClient"] = None,
     max_batch_size: int = 15,
     enrichment_data: Any = None,
     max_allowed_tokens: int = 200000,
-    processed_diff: Any = None
+    processed_diff: Any = None,
+    token_cost_by_path: Optional[Dict[str, int]] = None,
+    structural_binding: Optional[Dict[str, str]] = None,
 ) -> List[List[Dict[str, Any]]]:
-    """Async convenience function for async RAG clients."""
+    """Create batches from enrichment and optional exact structural relations."""
     builder = DependencyGraphBuilder(rag_client=rag_client)
     return await builder.get_smart_batches_async(
         file_groups,
@@ -1007,20 +689,10 @@ async def create_smart_batches_async(
         max_batch_size,
         enrichment_data=enrichment_data,
         max_allowed_tokens=max_allowed_tokens,
-        processed_diff=processed_diff
+        processed_diff=processed_diff,
+        token_cost_by_path=token_cost_by_path,
+        structural_binding=structural_binding,
     )
-
-
-def _unwrap_deterministic_context(rag_response: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Accept either raw deterministic context or {'context': context} API response."""
-    if not isinstance(rag_response, dict):
-        return {}
-    context = rag_response.get("context")
-    if isinstance(context, dict):
-        return context
-    return rag_response
-
-
 def build_dependency_aware_batches(
     changed_files: List[str],
     enrichment_data: Any = None,

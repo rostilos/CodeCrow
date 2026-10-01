@@ -79,6 +79,20 @@ class TestIssueMatchesFiles:
 # ── compute_issue_fingerprint ────────────────────────────────────
 
 class TestComputeIssueFingerprint:
+    def test_long_reasons_with_same_prefix_remain_distinct(self):
+        shared = "same concrete prefix " * 5
+
+        first = compute_issue_fingerprint({
+            "file": "a.py", "line": 10, "severity": "HIGH",
+            "reason": shared + "first failure mode",
+        })
+        second = compute_issue_fingerprint({
+            "file": "a.py", "line": 10, "severity": "HIGH",
+            "reason": shared + "second failure mode",
+        })
+
+        assert first != second
+
 
     def test_deterministic(self):
         data = {"file": "a.py", "line": 10, "severity": "HIGH", "reason": "Bad code"}

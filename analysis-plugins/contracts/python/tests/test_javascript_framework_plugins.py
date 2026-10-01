@@ -104,6 +104,41 @@ def test_package_detection_retains_every_matching_framework_root(
         )
 
 
+def test_package_detection_bounds_roots_with_partial_markers(
+    catalog: PluginCatalog,
+):
+    roots = tuple(f"apps/service-{index:03d}" for index in range(65))
+    package_paths = tuple(f"{root}/package.json" for root in roots)
+    server_paths = tuple(f"{root}/server.js" for root in roots)
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=tuple(sorted((*package_paths, *server_paths))),
+        marker_contents={
+            path: '{"dependencies":{"express":"latest"}}'
+            for path in package_paths
+        },
+    ))
+
+    evidence = set(capabilities.detection_evidence["express"])
+    assert {f"root:{root}" for root in roots[:64]} <= evidence
+    assert f"root:{roots[-1]}" not in evidence
+    assert "partial:detection-root-limit:1" in evidence
+    assert "partial:detection-evidence-limit:64" in evidence
+    admitted_path = server_paths[-2]
+    facts, diagnostics = PluginRuntime(catalog).graph_facts(
+        FileArtifact(
+            admitted_path,
+            "import express from 'express'; const app = express();",
+        ),
+        capabilities,
+    )
+    assert diagnostics == ()
+    assert any(
+        fact.kind == "express-application" and fact.path == admitted_path
+        for fact in facts
+    )
+
+
 def test_ember_indexes_nested_routes_framework_roles_and_templates(catalog: PluginCatalog):
     plugin = catalog.implementation("ember")
     artifacts = (
@@ -285,6 +320,30 @@ app.use(failures);""",
     )
     assert any(fact.kind == "express-middleware" and fact.target == "audit" for fact in facts)
     assert any(fact.kind == "express-error-handler" and fact.target == "failures" for fact in facts)
+
+
+def test_express_bounds_a_long_static_handler_expression(catalog: PluginCatalog):
+    handler = f"createHandler('{'x' * 160}')"
+    outcome = catalog.implementation("express").index_file(FileArtifact(
+        "src/server.ts",
+        (
+            "import express from 'express';\n"
+            "const app = express();\n"
+            f"app.get('/large', {handler});\n"
+        ),
+    ))
+
+    assert outcome.status is OutcomeStatus.HANDLED
+    assert not any(
+        fact.kind == "express-route-handler"
+        and fact.target == handler
+        for fact in outcome.value
+    )
+    assert any(
+        fact.kind == "express-route-handler"
+        and fact.target == "inline@3"
+        for fact in outcome.value
+    )
 
 
 def test_express_does_not_guess_that_unknown_path_middleware_is_a_router_mount(catalog: PluginCatalog):
@@ -778,3 +837,29 @@ def test_framework_review_requests_exact_evidence(
     assert [request.kind for request in contribution.evidence_requests] == [kind]
     assert contribution.evidence_requests[0].identifier == path
     assert any("topology" in rule.casefold() for rule in contribution.rules)
+
+
+@pytest.mark.parametrize(
+    ("plugin_id", "path_template", "kind"),
+    (
+        ("ember", "app/routes/route-{index:03d}.ts", "ember-framework"),
+        ("express", "src/routes/route-{index:03d}.ts", "express-framework"),
+        ("nextjs", "src/app/route-{index:03d}/page.tsx", "nextjs-framework"),
+    ),
+)
+def test_framework_review_preserves_paths_beyond_former_boundary(
+    catalog: PluginCatalog,
+    plugin_id: str,
+    path_template: str,
+    kind: str,
+):
+    paths = tuple(path_template.format(index=index) for index in range(85))
+
+    contribution = catalog.implementation(plugin_id).review(paths).value
+
+    assert tuple(
+        request.identifier for request in contribution.evidence_requests
+    ) == paths
+    assert {
+        request.kind for request in contribution.evidence_requests
+    } == {kind}

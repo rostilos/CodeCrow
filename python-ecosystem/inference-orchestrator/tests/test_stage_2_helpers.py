@@ -2,14 +2,11 @@
 Unit tests for service.review.orchestrator.stage_2_cross_file — helpers.
 """
 import json
-import pytest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
 from model.output_schemas import CodeReviewIssue
 from service.review.orchestrator.stage_2_cross_file import (
     _build_architecture_context,
     _detect_migration_paths,
-    _fetch_cross_module_context,
     _slim_issues_for_stage_2,
 )
 
@@ -65,13 +62,13 @@ class TestBuildArchitectureContext:
         result = _build_architecture_context(enrichment, ["b.py"])
         assert "imports" in result.lower()
 
-    def test_large_context_is_bounded_and_keeps_high_value_edges_first(self):
+    def test_large_context_preserves_records_and_marks_bounded_metadata_detail(self):
         relationships = [
             _rel(
                 f"src/package/Source{index:03d}.java",
                 f"src/package/Target{index:03d}.java",
-                "SAME_PACKAGE",
-                f"package-{index:03d}",
+                "CALLS",
+                f"method-{index:03d}",
             )
             for index in range(100)
         ]
@@ -94,23 +91,32 @@ class TestBuildArchitectureContext:
             ],
         )
 
-        result = _build_architecture_context(
-            enrichment,
-            [],
-            max_chars=8_000,
-        )
+        result = _build_architecture_context(enrichment, [])
         payload = json.loads(result.split("\n", 1)[1])
 
-        assert len(result) <= 8_000
+        assert len(payload["relationships"]) == 101
+        assert len(payload["file_metadata"]) == 40
         assert any(
             relationship["type"] == "EXTENDS"
             for relationship in payload["relationships"]
         )
-        assert payload["inventory"]["omitted_relationship_count"] > 0
-        assert payload["inventory"]["omitted_metadata_file_count"] > 0
-        assert "unknown, not evidence" in payload["inventory"]["omission_semantics"]
+        assert all(
+            "external.library.Type7" in metadata.get("imports", [])
+            for metadata in payload["file_metadata"]
+        )
+        assert all(
+            "external.library.Type19" not in metadata.get("imports", [])
+            for metadata in payload["file_metadata"]
+        )
+        assert all(
+            metadata.get("imports_omitted") == 12
+            for metadata in payload["file_metadata"]
+        )
+        assert payload["inventory"]["record_inventory_complete"] is True
+        assert payload["inventory"]["metadata_detail_complete"] is False
+        assert payload["inventory"]["complete"] is False
 
-    def test_path_table_cannot_overrun_the_total_budget(self):
+    def test_path_table_preserves_very_long_paths(self):
         very_long_path = "src/" + ("nested/" * 800) + "Source.java"
         enrichment = SimpleNamespace(
             relationships=[
@@ -119,16 +125,11 @@ class TestBuildArchitectureContext:
             fileMetadata=[],
         )
 
-        result = _build_architecture_context(
-            enrichment,
-            [],
-            max_chars=2_000,
-        )
+        result = _build_architecture_context(enrichment, [])
         payload = json.loads(result.split("\n", 1)[1])
 
-        assert len(result) <= 2_000
-        assert payload["relationships"] == []
-        assert payload["inventory"]["omitted_relationship_count"] == 1
+        assert very_long_path in payload["path_table"].values()
+        assert len(payload["relationships"]) == 1
 
 
 # ── _detect_migration_paths ──────────────────────────────────
@@ -157,58 +158,10 @@ class TestDetectMigrationPaths:
         assert "not pre-classified" in result
 
 
-@pytest.mark.asyncio(loop_scope="function")
-async def test_cross_module_context_does_not_guess_main_without_target_branch():
-    request = MagicMock()
-    request.get_rag_branch.return_value = None
-    request.get_rag_base_branch.return_value = None
-    rag = MagicMock()
-    rag.search_for_duplicates = AsyncMock()
-
-    result = await _fetch_cross_module_context(rag, request)
-
-    assert result == ""
-    rag.search_for_duplicates.assert_not_awaited()
-
-
-@pytest.mark.asyncio(loop_scope="function")
-async def test_revision_bound_cross_module_transport_failure_fails_open():
-    request = SimpleNamespace(
-        baseCommitHash="a" * 40,
-        ragBaseGenerationManifestSha256="b" * 64,
-        changedFiles=["src/service.py"],
-        prTitle="Change service",
-        projectWorkspace="ws",
-        projectNamespace="project",
-        get_rag_branch=lambda: "main",
-        get_rag_base_branch=lambda: "main",
-    )
-    rag = SimpleNamespace(
-        search_for_duplicates=AsyncMock(
-            side_effect=ConnectionError("transport unavailable")
-        ),
-    )
-
-    assert await _fetch_cross_module_context(rag, request) == ""
-
-
-@pytest.mark.asyncio(loop_scope="function")
-async def test_cross_module_context_skips_partial_generation_lease():
-    request = SimpleNamespace(
-        baseCommitHash="a" * 40,
-        ragBaseGenerationManifestSha256=None,
-    )
-    rag = SimpleNamespace(search_for_duplicates=AsyncMock())
-
-    assert await _fetch_cross_module_context(rag, request) == ""
-
-    rag.search_for_duplicates.assert_not_awaited()
-
-
 # ── _slim_issues_for_stage_2 ────────────────────────────────
 
 class TestSlimIssues:
-    def test_strips_fields(self):
+    def test_preserves_complete_finding_fields(self):
         issue = CodeReviewIssue(
             file="a.py",
             line=10,
@@ -222,10 +175,10 @@ class TestSlimIssues:
         )
         result = json.loads(_slim_issues_for_stage_2([issue]))
         assert len(result) == 1
-        assert "suggestedFixDiff" not in result[0]
-        assert "suggestedFixDescription" not in result[0]
-        assert "resolutionReason" not in result[0]
-        assert "resolutionExplanation" not in result[0]
+        assert result[0]["suggestedFixDiff"] == "diff here"
+        assert result[0]["suggestedFixDescription"] == "fix desc"
+        assert result[0]["resolutionReason"] == "client lifecycle field"
+        assert result[0]["resolutionExplanation"] == "internal lifecycle field"
         assert result[0]["file"] == "a.py"
 
     def test_empty_list(self):
@@ -246,7 +199,7 @@ class TestSlimIssues:
 
         assert json.loads(_slim_issues_for_stage_2([resolved])) == []
 
-    def test_large_finding_set_is_bounded_without_one_file_starving_others(self):
+    def test_large_finding_set_preserves_every_current_finding(self):
         issues = [
             CodeReviewIssue(
                 id=f"file-{index}",
@@ -276,12 +229,9 @@ class TestSlimIssues:
             for index in range(100)
         )
 
-        result = _slim_issues_for_stage_2(issues, max_chars=30_000)
+        result = _slim_issues_for_stage_2(issues)
         payload = json.loads(result)
 
-        assert len(result) <= 30_000
+        assert len(payload) == 130
         assert any(item.get("file") == "src/File029.py" for item in payload)
-        inventory = payload[-1]["_codecrow_prompt_inventory"]
-        assert inventory["total_current_findings"] == 130
-        assert inventory["omitted_findings"] > 0
-        assert "not proof" in inventory["omission_semantics"]
+        assert any(item.get("id") == "noisy-99" for item in payload)

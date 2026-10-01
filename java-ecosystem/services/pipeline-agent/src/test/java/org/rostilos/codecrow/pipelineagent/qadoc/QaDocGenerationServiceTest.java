@@ -401,6 +401,44 @@ class QaDocGenerationServiceTest {
         }
 
         @Test
+        @DisplayName("should preserve complete issue records beyond the former field and summary limits")
+        void shouldPreserveCompleteLargeIssueRecords() {
+            CodeAnalysis analysis = new CodeAnalysis();
+
+            String completeReason = "reason-body-" + "r".repeat(12_000) + "-REASON-END";
+            String completeFix = "fix-body-" + "f".repeat(1_000) + "-FIX-END";
+            CodeAnalysisIssue largeIssue = new CodeAnalysisIssue();
+            largeIssue.setSeverity(IssueSeverity.HIGH);
+            largeIssue.setFilePath("src/Large.java");
+            largeIssue.setTitle("Large evidence record");
+            largeIssue.setReason(completeReason);
+            largeIssue.setSuggestedFixDescription(completeFix);
+            largeIssue.setLineNumber(7);
+            analysis.addIssue(largeIssue);
+
+            CodeAnalysisIssue trailingIssue = new CodeAnalysisIssue();
+            trailingIssue.setSeverity(IssueSeverity.MEDIUM);
+            trailingIssue.setFilePath("src/AfterLimit.java");
+            trailingIssue.setTitle("TRAILING-ISSUE-TITLE");
+            trailingIssue.setReason("TRAILING-ISSUE-REASON");
+            trailingIssue.setSuggestedFixDescription("TRAILING-ISSUE-FIX");
+            trailingIssue.setLineNumber(99);
+            analysis.addIssue(trailingIssue);
+
+            String result = QaDocGenerationService.buildAnalysisSummary(analysis);
+
+            assertThat(result)
+                    .hasSizeGreaterThan(10_000)
+                    .contains(completeReason)
+                    .contains(completeFix)
+                    .containsOnlyOnce("TRAILING-ISSUE-TITLE")
+                    .containsOnlyOnce("TRAILING-ISSUE-REASON")
+                    .containsOnlyOnce("TRAILING-ISSUE-FIX")
+                    .contains("`src/AfterLimit.java`")
+                    .doesNotContain("... (truncated");
+        }
+
+        @Test
         @DisplayName("should include analysisSummary in payload when CodeAnalysis is provided")
         void shouldIncludeAnalysisSummaryInPayload() throws Exception {
             // Setup analysis with a single issue

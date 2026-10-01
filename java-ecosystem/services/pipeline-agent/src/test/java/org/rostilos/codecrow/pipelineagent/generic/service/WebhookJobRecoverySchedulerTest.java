@@ -100,41 +100,31 @@ class WebhookJobRecoverySchedulerTest {
 
     @Test
     void neverClaimsPendingRagChildrenOrConsultsPersistedPayload() {
-        Job initial = mock(Job.class);
-        Job incremental = mock(Job.class);
-        when(initial.getId()).thenReturn(12L);
-        when(initial.getJobType()).thenReturn(JobType.RAG_INITIAL_INDEX);
-        when(incremental.getId()).thenReturn(13L);
-        when(incremental.getJobType()).thenReturn(JobType.RAG_INCREMENTAL_INDEX);
+        Job indexBuild = mock(Job.class);
+        when(indexBuild.getId()).thenReturn(12L);
+        when(indexBuild.getJobType()).thenReturn(JobType.REPOSITORY_INDEX_BUILD);
         when(jobService.findRecoverableWebhookJobs(any(), eq(50)))
-                .thenReturn(List.of(initial, incremental));
+                .thenReturn(List.of(indexBuild));
         scheduler.recoverAcceptedJobs();
 
         verify(jobService, never()).claimRecoverableWebhookJob(eq(12L), any());
-        verify(jobService, never()).claimRecoverableWebhookJob(eq(13L), any());
         verify(jobService, never()).findWebhookDispatchPayload(12L);
-        verify(jobService, never()).findWebhookDispatchPayload(13L);
         verify(asyncProcessor, never()).processWebhookAsync(
                 any(), any(), any(), any(), any());
     }
 
     @Test
     void neverClaimsAbandonedRunningRagChildren() {
-        Job initial = mock(Job.class);
-        Job incremental = mock(Job.class);
-        when(initial.getId()).thenReturn(14L);
-        when(initial.getJobType()).thenReturn(JobType.RAG_INITIAL_INDEX);
-        when(incremental.getId()).thenReturn(15L);
-        when(incremental.getJobType()).thenReturn(JobType.RAG_INCREMENTAL_INDEX);
+        Job indexBuild = mock(Job.class);
+        when(indexBuild.getId()).thenReturn(14L);
+        when(indexBuild.getJobType()).thenReturn(JobType.REPOSITORY_INDEX_BUILD);
         when(jobService.findAbandonedRunningWebhookJobs(any(), eq(20)))
-                .thenReturn(List.of(initial, incremental));
+                .thenReturn(List.of(indexBuild));
 
         scheduler.recoverAcceptedJobs();
 
         verify(jobService, never()).claimAbandonedRunningWebhookJob(eq(14L), any());
-        verify(jobService, never()).claimAbandonedRunningWebhookJob(eq(15L), any());
         verify(jobService, never()).findWebhookDispatchPayload(14L);
-        verify(jobService, never()).findWebhookDispatchPayload(15L);
         verify(asyncProcessor, never()).processWebhookAsync(
                 any(), any(), any(), any(), any());
     }

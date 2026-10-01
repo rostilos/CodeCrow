@@ -186,7 +186,7 @@ class TestBuildEnrichmentLookup:
 # ── QaDocOrchestrator._slim_stage_results ────────────────────────
 
 class TestSlimStageResults:
-    def test_strips_verbose_fields(self):
+    def test_preserves_every_field(self):
         data = [
             {
                 "batch_id": 1,
@@ -197,23 +197,21 @@ class TestSlimStageResults:
         ]
         result = QaDocOrchestrator._slim_stage_results(data)
         parsed = json.loads(result)
-        assert "raw_analysis" not in parsed[0]
-        assert "error" not in parsed[0]
-        assert "batch_id" not in parsed[0]
+        assert parsed[0]["raw_analysis"] == "long text..."
+        assert parsed[0]["error"] == "some error"
+        assert parsed[0]["batch_id"] == 1
         assert "file_analyses" in parsed[0]
 
-    def test_truncates_when_max_chars(self):
+    def test_preserves_large_values(self):
         data = {"key": "x" * 10000}
-        result = QaDocOrchestrator._slim_stage_results(data, max_chars=100)
-        assert len(result) <= 150  # 100 + suffix
+        result = QaDocOrchestrator._slim_stage_results(data)
+        assert json.loads(result) == data
 
-    def test_empty_values_stripped(self):
+    def test_empty_values_preserved(self):
         data = {"key": "value", "empty_list": [], "none_val": None, "empty_str": ""}
         result = QaDocOrchestrator._slim_stage_results(data)
         parsed = json.loads(result)
-        assert "empty_list" not in parsed
-        assert "none_val" not in parsed
-        assert "empty_str" not in parsed
+        assert parsed == data
 
     def test_compact_format(self):
         data = {"a": 1}
@@ -669,24 +667,3 @@ class TestParseJsonFromResponse:
         result = QaDocOrchestrator._parse_json_from_response(text)
         assert result is not None
         assert result["items"] == [1, 2, 3]
-
-
-# ── QaDocOrchestrator._truncate ──────────────────────────────────
-
-class TestTruncate:
-    def test_short_text(self):
-        assert QaDocOrchestrator._truncate("hello", 10) == "hello"
-
-    def test_exact_length(self):
-        assert QaDocOrchestrator._truncate("12345", 5) == "12345"
-
-    def test_truncated(self):
-        result = QaDocOrchestrator._truncate("1234567890", 5)
-        assert len(result) <= 7  # 5 + ellipsis char
-        assert result.endswith("…")
-
-    def test_empty(self):
-        assert QaDocOrchestrator._truncate("", 10) == ""
-
-    def test_none(self):
-        assert QaDocOrchestrator._truncate(None, 10) == ""

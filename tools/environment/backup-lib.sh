@@ -22,7 +22,6 @@ header()  { echo -e "\n${BOLD}${CYAN}── $* ──${NC}\n"; }
 # ─── Container names ────────────────────────────────────────────────────────
 
 PG_CONTAINER="${PG_CONTAINER:-codecrow-postgres}"
-QDRANT_CONTAINER="${QDRANT_CONTAINER:-codecrow-qdrant}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-codecrow-redis}"
 
 # ─── Container health ───────────────────────────────────────────────────────
@@ -99,102 +98,6 @@ pg_exec_stdin() {
     PGPASSFILE=/tmp/.pgpass_codecrow psql -h localhost -U '${user}' -d '${dbname}' \"\$@\" ; \
     RC=\$? ; rm -f /tmp/.pgpass_codecrow ; exit \$RC
   " -- "$@"
-}
-
-# ─── Qdrant API key reading ──────────────────────────────────────────────────
-
-# Reads QDRANT_API_KEY from deployment/.env
-# Sets: QDRANT_API_KEY
-# An explicitly set QDRANT_API_KEY environment variable takes precedence,
-# including an empty value for an unauthenticated Qdrant endpoint.
-# Arguments:
-#   $1 — path to the deployment directory (must contain .env)
-read_qdrant_api_key() {
-  local deployment_dir="$1"
-
-  if [[ "${QDRANT_API_KEY+x}" == "x" ]]; then
-    if [[ -z "$QDRANT_API_KEY" ]]; then
-      warn "QDRANT_API_KEY is explicitly empty — Qdrant requests will be unauthenticated."
-    fi
-    return
-  fi
-
-  QDRANT_API_KEY=""
-
-  if [[ -f "$deployment_dir/.env" ]]; then
-    QDRANT_API_KEY=$(grep -E '^QDRANT_API_KEY=' "$deployment_dir/.env" | cut -d= -f2 || true)
-  fi
-
-  if [[ -z "$QDRANT_API_KEY" ]]; then
-    warn "QDRANT_API_KEY not found in $deployment_dir/.env — Qdrant requests will be unauthenticated."
-  fi
-}
-
-# Helper: returns curl auth header args for Qdrant (empty if no key set)
-qdrant_auth_header() {
-  if [[ -n "${QDRANT_API_KEY:-}" ]]; then
-    echo "-H" "api-key: $QDRANT_API_KEY"
-  fi
-}
-
-# Runs curl against Qdrant without exposing the API key in the process
-# environment. Callers provide the URL and any additional curl arguments.
-qdrant_curl() {
-  local args=(-fsS)
-
-  if [[ -n "${QDRANT_API_KEY:-}" ]]; then
-    args+=(-H "api-key: $QDRANT_API_KEY")
-  fi
-
-  curl "${args[@]}" "$@"
-}
-
-# Percent-encodes one URL path segment. Qdrant collection and snapshot names
-# are path parameters, so they must not be interpolated into a URL verbatim.
-urlencode_path_segment() {
-  local value="$1"
-  local encoded=""
-  local character
-  local i
-  local LC_ALL=C
-
-  for ((i = 0; i < ${#value}; i++)); do
-    character="${value:i:1}"
-    case "$character" in
-      [a-zA-Z0-9.~_-])
-        encoded+="$character"
-        ;;
-      *)
-        printf -v character '%%%02X' "'$character"
-        encoded+="$character"
-        ;;
-    esac
-  done
-
-  printf '%s' "$encoded"
-}
-
-# Extracts unescaped string values for a key from Qdrant's JSON responses.
-# Qdrant collection, snapshot, and alias names are safe path identifiers and
-# therefore do not contain JSON escape sequences.
-qdrant_json_string_values() {
-  local key="$1"
-
-  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"\\\\]*\"" |
-    sed -E "s/^\"${key}\"[[:space:]]*:[[:space:]]*\"//; s/\"$//"
-}
-
-# Escapes Qdrant identifiers before placing them in an alias API JSON body.
-json_escape_string() {
-  local value="$1"
-
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  value="${value//$'\n'/\\n}"
-  value="${value//$'\r'/\\r}"
-  value="${value//$'\t'/\\t}"
-
-  printf '%s' "$value"
 }
 
 # ─── Redis path resolution ──────────────────────────────────────────────────

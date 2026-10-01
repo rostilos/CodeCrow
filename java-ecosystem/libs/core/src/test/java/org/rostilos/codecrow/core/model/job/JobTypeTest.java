@@ -17,8 +17,7 @@ class JobTypeTest {
                 JobType.PR_ANALYSIS,
                 JobType.BRANCH_ANALYSIS,
                 JobType.BRANCH_RECONCILIATION,
-                JobType.RAG_INITIAL_INDEX,
-                JobType.RAG_INCREMENTAL_INDEX,
+                JobType.REPOSITORY_INDEX_BUILD,
                 JobType.MANUAL_ANALYSIS,
                 JobType.REPO_SYNC,
                 JobType.SUMMARIZE_COMMAND,
@@ -47,10 +46,10 @@ class JobTypeTest {
     }
 
     @Test
-    @DisplayName("valueOf should return correct enum for RAG types")
-    void valueOfShouldReturnCorrectEnumForRagTypes() {
-        assertThat(JobType.valueOf("RAG_INITIAL_INDEX")).isEqualTo(JobType.RAG_INITIAL_INDEX);
-        assertThat(JobType.valueOf("RAG_INCREMENTAL_INDEX")).isEqualTo(JobType.RAG_INCREMENTAL_INDEX);
+    @DisplayName("valueOf should return the repository index job type")
+    void valueOfShouldReturnRepositoryIndexType() {
+        assertThat(JobType.valueOf("REPOSITORY_INDEX_BUILD"))
+                .isEqualTo(JobType.REPOSITORY_INDEX_BUILD);
     }
 
     @Test

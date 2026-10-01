@@ -630,7 +630,7 @@ class EmberPlugin:
                 "ember-framework",
                 path,
                 "exact Ember route, controller, component, service, Ember Data, and template facts",
-            ) for path in selected[:80])),
+            ) for path in selected)),
         ))
 
     def validate(self, claim: CandidateClaim):

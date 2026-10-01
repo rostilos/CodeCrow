@@ -148,13 +148,13 @@ class PrFileEnrichmentServiceTest {
                                     "imports", List.of("Repository"),
                                     "extends", List.of("Base"),
                                     "implements", List.of(),
-                                    "semantic_names", List.of("Service"),
+                                    "symbol_names", List.of("Service"),
                                     "calls", List.of()),
                             Map.of("path", "src/Repository.java", "language", "java",
                                     "imports", List.of(),
                                     "extends", List.of(),
                                     "implements", List.of(),
-                                    "semantic_names", List.of("Repository"),
+                                    "symbol_names", List.of("Repository"),
                                     "calls", List.of())
                     ),
                     "total_files", 2, "successful", 2, "failed", 0));
@@ -321,7 +321,7 @@ class PrFileEnrichmentServiceTest {
     @Nested
     @DisplayName("enrichPrFiles() - relationship building")
     class RelationshipTests {
-        @Test void buildsSamePackageRelationships() throws Exception {
+        @Test void doesNotInferRelationshipsFromDirectoryColocation() throws Exception {
             List<String> files = List.of("com/example/A.java", "com/example/B.java", "com/other/C.java");
             Map<String, String> contents = Map.of(
                     "com/example/A.java", "class A {}",
@@ -336,9 +336,7 @@ class PrFileEnrichmentServiceTest {
                     .setBody("{\"results\":[]}"));
 
             PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
-            assertThat(result.relationships().stream()
-                    .anyMatch(r -> r.relationshipType() == FileRelationshipDto.RelationshipType.SAME_PACKAGE))
-                    .isTrue();
+            assertThat(result.relationships()).isEmpty();
         }
 
         @Test void buildsImportRelationships() throws Exception {
@@ -364,6 +362,100 @@ class PrFileEnrichmentServiceTest {
                             && r.sourceFile().equals("src/UserService.java")
                             && r.targetFile().equals("src/UserRepo.java")))
                     .isTrue();
+        }
+
+        @Test void ambiguousBasenameDoesNotCreateRelationship() throws Exception {
+            List<String> files = List.of(
+                    "src/Caller.java",
+                    "domain/User.java",
+                    "transport/User.java");
+            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+                    .thenReturn(Map.of(
+                            "src/Caller.java", "import User;",
+                            "domain/User.java", "class User {}",
+                            "transport/User.java", "class User {}"));
+
+            mockWebServer.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "application/json")
+                    .setBody(objectMapper.writeValueAsString(Map.of("results", List.of(
+                            Map.of("path", "src/Caller.java", "imports", List.of("User"),
+                                    "extends", List.of(), "implements", List.of(), "calls", List.of()))))));
+
+            PrEnrichmentDataDto result = service.enrichPrFiles(
+                    vcsClient, "ws", "repo", "main", files);
+
+            assertThat(result.relationships()).isEmpty();
+        }
+
+        @Test void qualifiedReferenceSelectsExactPathAmongDuplicateBasenames() throws Exception {
+            List<String> files = List.of(
+                    "src/Caller.java",
+                    "domain/User.java",
+                    "transport/User.java");
+            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+                    .thenReturn(Map.of(
+                            "src/Caller.java", "import domain.User;",
+                            "domain/User.java", "class User {}",
+                            "transport/User.java", "class User {}"));
+
+            mockWebServer.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "application/json")
+                    .setBody(objectMapper.writeValueAsString(Map.of("results", List.of(
+                            Map.of("path", "src/Caller.java", "imports", List.of("domain.User"),
+                                    "extends", List.of(), "implements", List.of(), "calls", List.of()))))));
+
+            PrEnrichmentDataDto result = service.enrichPrFiles(
+                    vcsClient, "ws", "repo", "main", files);
+
+            assertThat(result.relationships())
+                    .singleElement()
+                    .satisfies(relationship -> {
+                        assertThat(relationship.relationshipType())
+                                .isEqualTo(FileRelationshipDto.RelationshipType.IMPORTS);
+                        assertThat(relationship.targetFile()).isEqualTo("domain/User.java");
+                    });
+        }
+
+        @Test void mismatchedQualifiedReferenceDoesNotFallBackToUniqueBasename() throws Exception {
+            List<String> files = List.of("src/Caller.java", "domain/User.java");
+            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+                    .thenReturn(Map.of(
+                            "src/Caller.java", "import external.User;",
+                            "domain/User.java", "class User {}"));
+
+            mockWebServer.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "application/json")
+                    .setBody(objectMapper.writeValueAsString(Map.of("results", List.of(
+                            Map.of("path", "src/Caller.java", "imports", List.of("external.User"),
+                                    "extends", List.of(), "implements", List.of(), "calls", List.of()))))));
+
+            PrEnrichmentDataDto result = service.enrichPrFiles(
+                    vcsClient, "ws", "repo", "main", files);
+
+            assertThat(result.relationships()).isEmpty();
+        }
+
+        @Test void substringReferenceDoesNotCreateRelationship() throws Exception {
+            List<String> files = List.of("src/Caller.java", "src/UserService.java");
+            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+                    .thenReturn(Map.of(
+                            "src/Caller.java", "import User;",
+                            "src/UserService.java", "class UserService {}"));
+
+            mockWebServer.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "application/json")
+                    .setBody(objectMapper.writeValueAsString(Map.of("results", List.of(
+                            Map.of("path", "src/Caller.java", "imports", List.of("User"),
+                                    "extends", List.of(), "implements", List.of(), "calls", List.of()))))));
+
+            PrEnrichmentDataDto result = service.enrichPrFiles(
+                    vcsClient, "ws", "repo", "main", files);
+
+            assertThat(result.relationships()).isEmpty();
         }
 
         @Test void doesNotCreateSelfRelationships_excludesSameFile() throws Exception {

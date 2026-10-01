@@ -2,7 +2,6 @@ package org.rostilos.codecrow.pipelineagent.qadoc;
 
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
-import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
@@ -242,12 +241,11 @@ public class QaAutoDocListener {
         if (pendingHandoffDocument.isEmpty()
                 && isSamePrRerun && state.getLastCommitHash() != null
                 && currentCommitHash != null && vcsClient != null) {
-            DiffContentFilter contentFilter = new DiffContentFilter();
             final VcsClient client = vcsClient;
             deltaDiff = VcsDiffUtils.fetchDeltaDiff(
                     client::getCommitRangeDiff,
                     workspace, repoSlug,
-                    state.getLastCommitHash(), currentCommitHash, contentFilter);
+                    state.getLastCommitHash(), currentCommitHash);
             if (deltaDiff != null) {
                 log.info("QA auto-doc: computed delta diff ({} chars) for same-PR re-run", deltaDiff.length());
             }

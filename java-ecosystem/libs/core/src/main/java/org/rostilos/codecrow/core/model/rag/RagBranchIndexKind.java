@@ -4,7 +4,5 @@ package org.rostilos.codecrow.core.model.rag;
 public enum RagBranchIndexKind {
     PRIMARY,
     DURABLE,
-    TRANSIENT,
-    LEGACY
+    TRANSIENT
 }
-

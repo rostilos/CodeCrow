@@ -1,9 +1,16 @@
+import errno
+import os
 import subprocess
+from contextlib import contextmanager
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from rag_pipeline.core.source_tree import (
+    RepositoryFileSizeLimitExceeded,
     RepositorySourceTreeError,
+    attest_repository_source_tree,
     compute_repository_source_tree_sha256,
     read_repository_file_bytes,
     require_repository_source_tree_unchanged,
@@ -83,6 +90,7 @@ def test_git_tree_requires_exact_clean_head(tmp_path):
     source = verify_repository_source_tree(tmp_path, commit, digest)
 
     assert source.git_commit_verified is True
+    assert attest_repository_source_tree(tmp_path, commit).tree_sha256 == digest
     with pytest.raises(RepositorySourceTreeError, match="does not match"):
         verify_repository_source_tree(tmp_path, "f" * 40, digest)
 
@@ -154,3 +162,101 @@ def test_per_file_attestation_detects_mutation_before_final_tree_recheck(
     # make the untrusted bytes eligible for loading.
     source_file.write_text("trusted\n", encoding="utf-8")
     require_repository_source_tree_unchanged(tmp_path, source)
+
+
+def test_bounded_file_read_accepts_exact_limit_without_truncation(tmp_path):
+    content = b"complete" * 16
+    (tmp_path / "exact.txt").write_bytes(content)
+
+    observed = read_repository_file_bytes(
+        tmp_path,
+        "exact.txt",
+        max_size_bytes=len(content),
+    )
+
+    assert observed == content
+
+
+def test_bounded_file_read_rejects_limit_plus_one_without_returning_prefix(
+    tmp_path,
+):
+    content = b"x" * 101
+    (tmp_path / "large.txt").write_bytes(content)
+
+    with pytest.raises(RepositoryFileSizeLimitExceeded) as raised:
+        read_repository_file_bytes(
+            tmp_path,
+            "large.txt",
+            max_size_bytes=100,
+        )
+
+    assert raised.value.relative_path == "large.txt"
+    assert raised.value.size_bytes == 101
+    assert raised.value.max_size_bytes == 100
+
+
+def test_known_oversized_file_is_rejected_before_any_content_read():
+    source = MagicMock()
+    source.fileno.return_value = 123
+
+    @contextmanager
+    def opened_source(*_args, **_kwargs):
+        yield source
+
+    with (
+        patch(
+            "rag_pipeline.core.source_tree.open_repository_file_no_follow",
+            opened_source,
+        ),
+        patch(
+            "rag_pipeline.core.source_tree.os.fstat",
+            return_value=SimpleNamespace(st_size=101),
+        ),
+        pytest.raises(RepositoryFileSizeLimitExceeded),
+    ):
+        read_repository_file_bytes(
+            "/repo",
+            "large.txt",
+            max_size_bytes=100,
+        )
+
+    source.read.assert_not_called()
+
+
+def test_source_entry_inspection_failure_reports_os_error_without_retry(
+    tmp_path,
+):
+    (tmp_path / "changed.py").write_text("content\n", encoding="utf-8")
+    failure = FileNotFoundError(
+        errno.ENOENT,
+        os.strerror(errno.ENOENT),
+    )
+    real_stat = os.stat
+
+    def fail_entry_inspection(path, *args, **kwargs):
+        if kwargs.get("dir_fd") is not None:
+            raise failure
+        return real_stat(path, *args, **kwargs)
+
+    with (
+        patch(
+            "rag_pipeline.core.source_tree.os.stat",
+            side_effect=fail_entry_inspection,
+        ) as inspect_entry,
+        pytest.raises(RepositorySourceTreeError) as raised,
+    ):
+        compute_repository_source_tree_sha256(tmp_path)
+
+    assert "cannot inspect repository source entry: changed.py" in str(
+        raised.value
+    )
+    assert "FileNotFoundError" in str(raised.value)
+    assert f"errno={errno.ENOENT}" in str(raised.value)
+    assert f"reason={os.strerror(errno.ENOENT)}" in str(raised.value)
+    assert raised.value.__cause__ is failure
+    entry_inspections = [
+        call
+        for call in inspect_entry.call_args_list
+        if call.kwargs.get("dir_fd") is not None
+    ]
+    assert len(entry_inspections) == 1

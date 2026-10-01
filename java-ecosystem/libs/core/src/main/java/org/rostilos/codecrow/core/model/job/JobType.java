@@ -4,8 +4,7 @@ public enum JobType {
     PR_ANALYSIS,
     BRANCH_ANALYSIS,
     BRANCH_RECONCILIATION,
-    RAG_INITIAL_INDEX,
-    RAG_INCREMENTAL_INDEX,
+    REPOSITORY_INDEX_BUILD,
     MANUAL_ANALYSIS,
     REPO_SYNC,
     // Comment command job types

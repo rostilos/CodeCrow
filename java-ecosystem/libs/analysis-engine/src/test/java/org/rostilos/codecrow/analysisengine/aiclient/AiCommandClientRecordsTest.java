@@ -55,7 +55,8 @@ class AiCommandClientRecordsTest {
             AiCommandClient.AskRequest request = new AiCommandClient.AskRequest(
                     1L, "workspace", "repo-slug", "project-workspace", "namespace",
                     "anthropic", "claude-3", "api-key", null, "What is this code doing?",
-                    42L, "abc123", "oauth-client", "oauth-secret", "access-token",
+                    42L, "main", "abc123", "manifest", "collection",
+                    "oauth-client", "oauth-secret", "access-token",
                     8192, "github", null, "analysis context", List.of("issue-1", "issue-2")
             );
 
@@ -75,12 +76,12 @@ class AiCommandClientRecordsTest {
             AiCommandClient.AskRequest request = new AiCommandClient.AskRequest(
                     1L, "workspace", "repo-slug", null, null,
                     "openai", "gpt-4", "api-key", null, "question",
-                    null, null, null, null, null,
+                    null, null, null, null, null, null, null, null,
                     null, "bitbucket", null, null, null
             );
 
             assertThat(request.pullRequestId()).isNull();
-            assertThat(request.commitHash()).isNull();
+            assertThat(request.repositoryRevision()).isNull();
             assertThat(request.analysisContext()).isNull();
             assertThat(request.issueReferences()).isNull();
         }

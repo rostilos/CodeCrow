@@ -1,6 +1,7 @@
 """
 Issue reconciliation and deduplication logic for incremental reviews.
 """
+from service.review.execution_scheduler import review_model_slot
 import logging
 import difflib
 import asyncio
@@ -15,8 +16,14 @@ from model.output_schemas import (
     SemanticDeduplicationDecision,
 )
 from service.review.candidate_ledger import CandidateEvidenceLedger
+from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
 from utils.llm_response import extract_llm_response_text
-from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
+from service.review.orchestrator.json_utils import (
+    parse_llm_response,
+    resolve_structured_output,
+    supports_structured_output,
+)
+from service.review.orchestrator.structured_output import invoke_structured_output
 from utils.path_identity import repository_paths_match
 
 logger = logging.getLogger(__name__)
@@ -127,16 +134,16 @@ def compute_issue_fingerprint(data: dict) -> str:
     uses SHA-256 of (category + lineHash + normalizedTitle) for persistent
     content-based tracking.
     
-    Uses file + normalized line (±3 tolerance) + severity + truncated reason.
+    Uses file + normalized line (±3 tolerance) + severity + complete reason.
     """
     file_path = data.get('file', data.get('filePath', ''))
     line = data.get('line', data.get('lineNumber', 0))
     line_group = int(line) // 3 if line else 0
     severity = data.get('severity', '')
     reason = data.get('reason', data.get('description', ''))
-    reason_prefix = reason[:50].lower().strip() if reason else ''
+    normalized_reason = reason.lower().strip() if reason else ''
     
-    return f"{file_path}::{line_group}::{severity}::{reason_prefix}"
+    return f"{file_path}::{line_group}::{severity}::{normalized_reason}"
 
 
 def is_semantically_similar(reason1: str, reason2: str, threshold: float = 0.70) -> bool:
@@ -805,10 +812,12 @@ def deduplicate_final_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIs
 
 _DEDUP_BATCH_SIZE = 50
 _DEDUP_MAX_PARALLEL = max(1, _env_int("REVIEW_DEDUP_MAX_PARALLEL", 4))
-_DEDUP_BATCH_CHAR_BUDGET = max(
-    8_000,
-    _env_int("REVIEW_DEDUP_BATCH_CHAR_BUDGET", 48_000),
+_DEDUP_INPUT_TOKEN_TARGET = max(
+    10_000,
+    _env_int("REVIEW_STAGE1_BATCH_TOKEN_BUDGET", 60_000),
 )
+_DEDUP_CONTEXT_RESERVE_TOKENS = 20_000
+_DEDUP_ESTIMATOR_SAFETY_TOKENS = 256
 
 _DEDUP_SYSTEM_PROMPT = (
     "You are a code-review root-cause deduplication assistant. You receive only "
@@ -899,41 +908,90 @@ def _format_semantic_batch(
     )
 
 
+def _dedup_prompt(issues_text: str) -> str:
+    return (
+        f"{_DEDUP_SYSTEM_PROMPT}\n\n"
+        f"Candidate findings JSON:\n{issues_text}\n\n"
+        "Return duplicate_groups only."
+    )
+
+
+def _estimate_dedup_input_tokens(prompt: str) -> int:
+    schema = SemanticDeduplicationDecision.model_json_schema()
+    serialized = json.dumps(
+        {"prompt": prompt, "output_schema": schema},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return max(
+        1,
+        (len(serialized) + 2) // 3 + _DEDUP_ESTIMATOR_SAFETY_TOKENS,
+    )
+
+
+def _dedup_input_token_target(max_allowed_tokens: Any = None) -> int:
+    try:
+        model_context = int(max_allowed_tokens)
+    except (TypeError, ValueError):
+        model_context = 200_000
+    if model_context <= 0:
+        model_context = 200_000
+    if model_context > _DEDUP_CONTEXT_RESERVE_TOKENS:
+        model_safe = model_context - _DEDUP_CONTEXT_RESERVE_TOKENS
+    else:
+        model_safe = max(1_000, model_context // 2)
+    return min(_DEDUP_INPUT_TOKEN_TARGET, model_safe)
+
+
 def _build_semantic_dedup_batches(
     groups: Sequence[Sequence[CodeReviewIssue]],
+    *,
+    input_token_target: int = _DEDUP_INPUT_TOKEN_TARGET,
 ) -> List[tuple[List[CodeReviewIssue], Dict[int, str]]]:
-    """Pack whole candidate groups by rendered size without clipping content."""
+    """Pack whole candidate groups without clipping or cross-group products."""
     batches: List[tuple[List[CodeReviewIssue], Dict[int, str]]] = []
     current_groups: List[Sequence[CodeReviewIssue]] = []
-    current_chars = 0
 
-    def group_size(group: Sequence[CodeReviewIssue], group_index: int) -> int:
-        mapping = {index: f"candidate_{group_index}" for index in range(len(group))}
-        return len(_format_semantic_batch(group, mapping))
-
-    def flush() -> None:
-        nonlocal current_groups, current_chars
-        if not current_groups:
-            return
+    def render_groups(
+        packed_groups: Sequence[Sequence[CodeReviewIssue]],
+    ) -> tuple[List[CodeReviewIssue], Dict[int, str]]:
         issues: List[CodeReviewIssue] = []
         mapping: Dict[int, str] = {}
-        for local_group_index, group in enumerate(current_groups):
+        for local_group_index, group in enumerate(packed_groups):
             group_id = f"candidate_{local_group_index}"
             for issue in group:
                 mapping[len(issues)] = group_id
                 issues.append(issue)
+        return issues, mapping
+
+    def estimated_tokens(
+        packed_groups: Sequence[Sequence[CodeReviewIssue]],
+    ) -> int:
+        issues, mapping = render_groups(packed_groups)
+        return _estimate_dedup_input_tokens(
+            _dedup_prompt(_format_semantic_batch(issues, mapping))
+        )
+
+    def flush() -> None:
+        nonlocal current_groups
+        if not current_groups:
+            return
+        issues, mapping = render_groups(current_groups)
         batches.append((issues, mapping))
         current_groups = []
-        current_chars = 0
 
-    for group_index, group in enumerate(groups):
-        rendered_chars = group_size(group, group_index)
-        if current_groups and current_chars + rendered_chars > _DEDUP_BATCH_CHAR_BUDGET:
+    for group in groups:
+        if (
+            current_groups
+            and estimated_tokens([*current_groups, group]) > input_token_target
+        ):
             flush()
         current_groups.append(group)
-        current_chars += rendered_chars
-        # An unusually detailed group is sent alone with its evidence intact.
-        if rendered_chars > _DEDUP_BATCH_CHAR_BUDGET:
+        # A single indivisible candidate component may be over target. Keep it
+        # atomic here; the invocation guard below will retain all its findings
+        # without sending a giant or partial request.
+        if estimated_tokens(current_groups) > input_token_target:
             flush()
     flush()
     return batches
@@ -974,31 +1032,56 @@ async def _dedup_batch_with_llm(
     llm,
     batch: List[CodeReviewIssue],
     group_by_index: Optional[Dict[int, str]] = None,
+    *,
+    input_token_target: int = _DEDUP_INPUT_TOKEN_TARGET,
 ) -> List[CodeReviewIssue]:
     """Merge only validated high-confidence duplicate groups from one batch."""
-    groups = group_by_index or {index: "candidate_0" for index in range(len(batch))}
+    # Merge authority exists only when the caller supplies the host-selected
+    # connected components. A direct/internal caller that omits the mapping gets
+    # singleton groups, so an LLM response cannot manufacture merge scope.
+    groups = group_by_index or {
+        index: f"candidate_{index}"
+        for index in range(len(batch))
+    }
     issues_text = _format_semantic_batch(batch, groups)
-    prompt = (
-        f"{_DEDUP_SYSTEM_PROMPT}\n\n"
-        f"Candidate findings JSON:\n{issues_text}\n\n"
-        "Return duplicate_groups only."
-    )
+    prompt = _dedup_prompt(issues_text)
+    estimated_tokens = _estimate_dedup_input_tokens(prompt)
+    if estimated_tokens > input_token_target:
+        logger.warning(
+            "LLM semantic dedup skipped one indivisible candidate component: "
+            "complete request estimate=%d tokens exceeds target=%d; retaining "
+            "all findings without slicing evidence",
+            estimated_tokens,
+            input_token_target,
+        )
+        return deduplicate_final_issues(batch)
 
     try:
         if supports_structured_output(llm):
-            structured_llm = llm.with_structured_output(
-                SemanticDeduplicationDecision
+            invocation = await invoke_structured_output(
+                llm,
+                prompt,
+                SemanticDeduplicationDecision,
+                effort=ReasoningEffort.LOW,
+                label="semantic-deduplication",
             )
-            result: SemanticDeduplicationDecision = await structured_llm.ainvoke(
-                prompt
+            result: SemanticDeduplicationDecision = await resolve_structured_output(
+                invocation,
+                SemanticDeduplicationDecision,
+                llm,
             )
         else:
             logger.info("Structured output skipped for LLM dedup batch; using prompt JSON parsing")
-            response = await llm.ainvoke(prompt)
+            async with review_model_slot("reconciliation"):
+                response = await llm.ainvoke(
+                    prompt,
+                    **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
+                )
             result = await parse_llm_response(
                 extract_llm_response_text(response),
                 SemanticDeduplicationDecision,
                 llm,
+                max_provider_repairs=0,
             )
 
         removed_indices: set[int] = set()
@@ -1029,18 +1112,10 @@ async def _dedup_batch_with_llm(
                 )
                 continue
             keeper = replacements.get(keeper_index, batch[keeper_index])
-            if not all(
-                issues_are_semantic_dedup_candidates(
-                    keeper,
-                    batch[duplicate_index],
-                )
-                for duplicate_index in duplicate_indices
-            ):
-                logger.warning(
-                    "LLM dedup rejected decision without host candidate evidence: %s",
-                    decision.model_dump(),
-                )
-                continue
+            # The shared candidate_group is already a host-selected connected
+            # component. Do not repeat a pairwise keeper-to-every-duplicate
+            # check here: connected components are intentionally transitive, so
+            # their endpoints need not themselves satisfy the candidate edge.
             for duplicate_index in duplicate_indices:
                 keeper = _merge_duplicate_issues(
                     keeper,
@@ -1074,9 +1149,9 @@ async def _dedup_batch_with_llm(
 
     except Exception as exc:
         logger.warning(
-            "LLM dedup batch failed (%s); retaining ambiguous findings after "
+            "LLM dedup batch failed (error_type=%s); retaining ambiguous findings after "
             "exact deterministic dedup",
-            exc,
+            type(exc).__name__,
         )
         return deduplicate_final_issues(batch)
 
@@ -1084,6 +1159,8 @@ async def _dedup_batch_with_llm(
 async def deduplicate_final_issues_llm(
     llm,
     issues: List[CodeReviewIssue],
+    *,
+    max_allowed_tokens: Any = None,
 ) -> List[CodeReviewIssue]:
     """Recall-safe semantic dedup over host-selected candidate components.
 
@@ -1107,20 +1184,27 @@ async def deduplicate_final_issues_llm(
         )
         return exact_deduped
 
-    batches = _build_semantic_dedup_batches(candidate_groups)
-    rendered_chars = sum(
-        len(_format_semantic_batch(batch, mapping))
+    input_token_target = _dedup_input_token_target(max_allowed_tokens)
+    batches = _build_semantic_dedup_batches(
+        candidate_groups,
+        input_token_target=input_token_target,
+    )
+    estimated_tokens = sum(
+        _estimate_dedup_input_tokens(
+            _dedup_prompt(_format_semantic_batch(batch, mapping))
+        )
         for batch, mapping in batches
     )
     candidate_count = sum(len(group) for group in candidate_groups)
     logger.info(
         "LLM semantic dedup: %d/%d findings in %d candidate group(s), "
-        "%d batch(es), input≈%d tokens, concurrency=%d",
+        "%d batch(es), input≈%d tokens, target=%d, concurrency=%d",
         candidate_count,
         len(exact_deduped),
         len(candidate_groups),
         len(batches),
-        rendered_chars // 4,
+        estimated_tokens,
+        input_token_target,
         _DEDUP_MAX_PARALLEL,
     )
 
@@ -1137,7 +1221,12 @@ async def deduplicate_final_issues_llm(
                 f"LLM dedup: processing batch {batch_idx + 1}/{len(batches)} "
                 f"({len(batch)} issues)"
             )
-            kept = await _dedup_batch_with_llm(llm, batch, mapping)
+            kept = await _dedup_batch_with_llm(
+                llm,
+                batch,
+                mapping,
+                input_token_target=input_token_target,
+            )
             return batch_idx, kept
 
     tasks = [

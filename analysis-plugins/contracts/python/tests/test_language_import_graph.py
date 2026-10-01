@@ -9,7 +9,6 @@ from codecrow_plugins import (
     PluginRuntime,
     ProjectCapabilities,
     ProjectSelector,
-    RepositoryAnalysisMode,
     RepositoryFacts,
     ValidationDecision,
 )
@@ -87,7 +86,6 @@ def test_python_import_and_call_resolve_to_unchanged_policy_path():
         capabilities,
         "fedcba9876543210",
         snapshots=analysis.snapshots,
-        mode=RepositoryAnalysisMode.PR_OVERLAY,
     )
     restored.ingest((FileArtifact(
         "app/export_service.py",
@@ -105,14 +103,11 @@ def test_python_import_and_call_resolve_to_unchanged_policy_path():
         and fact.related_paths == ("app/export_policy.py",)
         for fact in _facts(overlaid)
     )
-    removed_call = next(
-        fact
+    assert not any(
+        fact.kind == "python-call-resolution"
+        and fact.target == "app.export_policy::can_export"
         for fact in _facts(overlaid)
-        if fact.kind == "python-pr-removed-relation"
-        and dict(fact.attributes)["originalKind"] == "python-call-resolution"
     )
-    assert removed_call.target == "app.export_policy::can_export"
-    assert removed_call.related_paths == ("app/export_policy.py",)
 
 
 def test_java_same_package_call_resolves_to_policy_path():
@@ -159,7 +154,6 @@ def test_java_same_package_call_resolves_to_policy_path():
         capabilities,
         "fedcba9876543210",
         snapshots=analysis.snapshots,
-        mode=RepositoryAnalysisMode.PR_OVERLAY,
     )
     restored.ingest((FileArtifact(
         "src/main/java/example/RefundService.java",
@@ -175,14 +169,10 @@ def test_java_same_package_call_resolves_to_policy_path():
     overlaid, diagnostics = restored.finish()
 
     assert diagnostics == ()
-    removed = {
-        dict(fact.attributes)["originalKind"]: fact
+    assert not any(
+        fact.kind == "java-call-resolution"
+        and fact.target == "example::canRefund"
         for fact in _facts(overlaid)
-        if fact.kind == "java-pr-removed-relation"
-    }
-    assert removed["java-call-resolution"].target == "example::canRefund"
-    assert removed["java-call-resolution"].related_paths == (
-        "src/main/java/example/RefundPolicy.java",
     )
 
 
@@ -201,7 +191,6 @@ def test_line_only_movement_does_not_publish_removed_relation():
         capabilities,
         "fedcba9876543210",
         snapshots=analysis.snapshots,
-        mode=RepositoryAnalysisMode.PR_OVERLAY,
     )
     restored.ingest((FileArtifact(
         "app/service.py",
@@ -210,41 +199,10 @@ def test_line_only_movement_does_not_publish_removed_relation():
     overlaid, diagnostics = restored.finish()
 
     assert diagnostics == ()
-    assert not any(
-        fact.kind == "python-pr-removed-relation"
+    assert any(
+        fact.kind == "python-call-resolution"
+        and fact.target == "app.policy::allowed"
         for fact in _facts(overlaid)
-    )
-
-
-def test_persistent_incremental_does_not_store_pr_transition_facts():
-    files = {
-        "app/policy.py": "def allowed(user):\n    return user.active\n",
-        "app/service.py": (
-            "from app.policy import allowed\n"
-            "def can_run(user):\n"
-            "    return allowed(user)\n"
-        ),
-    }
-    _, runtime, capabilities, analysis = _analyze(files)
-    restored = runtime.start_repository_analysis(
-        capabilities,
-        "fedcba9876543210",
-        snapshots=analysis.snapshots,
-        mode=RepositoryAnalysisMode.PERSISTENT_INCREMENTAL,
-    )
-    restored.ingest((FileArtifact(
-        "app/service.py",
-        "def can_run(user):\n    return user.active\n",
-    ),))
-
-    updated, diagnostics = restored.finish()
-
-    assert diagnostics == ()
-    assert not any(
-        fact.kind.endswith("-pr-removed-relation")
-        or packet.kind.endswith("-import-graph-delta")
-        for packet in updated.packets
-        for fact in packet.facts
     )
 
 
@@ -325,3 +283,44 @@ def test_typescript_validator_rejects_coarse_or_contradicted_relation_claims():
 
     assert coarse[0].decision is ValidationDecision.INSUFFICIENT_EVIDENCE
     assert contradicted[0].decision is ValidationDecision.REJECT
+
+
+def test_python_package_initializer_relative_import_resolves_inside_package():
+    _, _, _, analysis = _analyze({
+        "app/__init__.py": "from .policy import Policy\nPolicy.check()\n",
+        "app/policy.py": "class Policy:\n    def check(self): pass\n",
+    })
+    assert any(
+        fact.kind == "python-call-resolution"
+        and fact.path == "app/__init__.py"
+        and fact.related_paths == ("app/policy.py",)
+        for fact in _facts(analysis)
+    )
+
+
+def test_python_colocated_stub_does_not_replace_runtime_source_target():
+    _, _, _, analysis = _analyze({
+        "app/policy.py": "class Policy: pass\n",
+        "app/policy.pyi": "class Policy: ...\n",
+        "app/use.py": "from app.policy import Policy\n",
+    })
+    assert any(
+        fact.kind == "python-module-resolution"
+        and fact.path == "app/use.py"
+        and fact.related_paths == ("app/policy.py",)
+        for fact in _facts(analysis)
+    )
+
+
+def test_python_package_initializer_wins_over_same_name_module():
+    _, _, _, analysis = _analyze({
+        "app/policy.py": "class Policy: pass\n",
+        "app/policy/__init__.py": "class Policy: pass\n",
+        "app/use.py": "from app.policy import Policy\n",
+    })
+    assert any(
+        fact.kind == "python-module-resolution"
+        and fact.path == "app/use.py"
+        and fact.related_paths == ("app/policy/__init__.py",)
+        for fact in _facts(analysis)
+    )

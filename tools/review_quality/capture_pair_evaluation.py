@@ -10,6 +10,13 @@ from typing import Any, Mapping, Sequence
 from .evaluation import evaluate_dataset
 
 
+_STRUCTURAL_RETRIEVAL_STATES = frozenset({
+    "complete",
+    "bounded",
+    "unavailable",
+})
+
+
 def _canonical_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
@@ -512,20 +519,21 @@ def _capture_hunk_counts(
         for state in deterministic_states
     ):
         raise ValueError(f"{path}: deterministic retrieval evidence is invalid")
-    if registered > 0 and not deterministic_states:
-        raise ValueError(f"{path}: deterministic retrieval evidence is missing")
-    if any(state != "complete" for state in deterministic_states):
-        raise ValueError(f"{path}: deterministic retrieval evidence is incomplete")
-    semantic_failures = retrieval.get("semanticFailures")
+    unknown_retrieval_states = sorted({
+        state
+        for state in deterministic_states
+        if state not in _STRUCTURAL_RETRIEVAL_STATES
+    })
+    if unknown_retrieval_states:
+        raise ValueError(
+            f"{path}: structural retrieval evidence has unknown states: "
+            + ", ".join(unknown_retrieval_states)
+        )
     exact_evidence_ids = retrieval.get("exactEvidenceIds")
     if (
-        not isinstance(semantic_failures, int)
-        or isinstance(semantic_failures, bool)
-        or semantic_failures != 0
-        or not isinstance(exact_evidence_ids, int)
+        not isinstance(exact_evidence_ids, int)
         or isinstance(exact_evidence_ids, bool)
         or exact_evidence_ids < 0
-        or not isinstance(retrieval.get("semanticDisabled"), bool)
     ):
         raise ValueError(f"{path}: terminal retrieval evidence is degraded")
 

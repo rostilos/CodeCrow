@@ -5,7 +5,11 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from rag_pipeline.core.loader import DocumentLoader, _is_generated_asset
+from rag_pipeline.core.loader import (
+    REPOSITORY_FILE_SIZE_LIMIT_CODE,
+    DocumentLoader,
+    _is_generated_asset,
+)
 from rag_pipeline.models.config import RAGConfig
 
 
@@ -76,14 +80,34 @@ class TestDocumentLoaderIterFiles:
         files = list(loader.iter_repository_files(tmp_path))
         assert files == [Path("main.py")]
 
-    def test_excludes_oversized_files(self, tmp_path):
+    def test_excludes_files_above_configured_limit_without_truncation(
+        self, tmp_path, caplog
+    ):
         config = RAGConfig(max_file_size_bytes=100)
-        (tmp_path / "big.py").write_text("x" * 200)
+        (tmp_path / "exact.py").write_bytes(b"x" * 100)
+        (tmp_path / "big.py").write_bytes(b"x" * 101)
         (tmp_path / "small.py").write_text("x = 1")
         loader = DocumentLoader(config)
+        skips = []
 
-        files = list(loader.iter_repository_files(tmp_path))
-        assert len(files) == 1
+        files = list(loader.iter_repository_files(tmp_path, on_skip=skips.append))
+        assert set(files) == {Path("exact.py"), Path("small.py")}
+        assert "path=big.py bytes=101 max_bytes=100" in caplog.text
+        assert len(skips) == 1
+        assert skips[0].code == REPOSITORY_FILE_SIZE_LIMIT_CODE
+        assert skips[0].path == "big.py"
+        assert skips[0].size_bytes == 101
+        assert skips[0].max_file_size_bytes == 100
+
+    def test_file_ceiling_is_measured_in_utf8_bytes(self, tmp_path):
+        (tmp_path / "unicode.txt").write_text("é" * 6, encoding="utf-8")
+        loader = DocumentLoader(RAGConfig(max_file_size_bytes=10))
+        skips = []
+
+        files = list(loader.iter_repository_files(tmp_path, on_skip=skips.append))
+
+        assert files == []
+        assert skips[0].size_bytes == 12
 
     def test_include_patterns_filter(self, tmp_path):
         (tmp_path / "src").mkdir()
@@ -175,19 +199,39 @@ class TestDocumentLoaderLoadBatch:
         )
         assert len(docs) == 0
 
-    def test_cleans_archive_path(self, tmp_path):
-        archive_dir = tmp_path / "owner-repo-commitabc123"
-        src_dir = archive_dir / "src"
-        src_dir.mkdir(parents=True)
-        (src_dir / "main.py").write_text("x = 1")
+    def test_rechecks_file_size_at_batch_load(self, tmp_path, caplog):
+        (tmp_path / "big.py").write_bytes(b"x" * 101)
+        loader = DocumentLoader(RAGConfig(max_file_size_bytes=100))
+        skips = []
+
+        docs = loader.load_file_batch(
+            [Path("big.py")],
+            repo_base=tmp_path,
+            workspace="ws", project="proj", branch="main", commit="abc",
+            on_skip=skips.append,
+        )
+
+        assert docs == []
+        assert "path=big.py bytes=101 max_bytes=100" in caplog.text
+        assert [skip.path for skip in skips] == ["big.py"]
+
+    def test_preserves_repository_relative_top_level_directories(self, tmp_path):
+        paths = (
+            Path("payments-platform-component/src/A.py"),
+            Path("service-platform-v2/src/A.py"),
+        )
+        for path in paths:
+            (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / path).write_text(f"component = {str(path)!r}\n")
 
         config = RAGConfig()
         loader = DocumentLoader(config)
 
         docs = loader.load_file_batch(
-            [Path("owner-repo-commitabc123/src/main.py")],
+            list(paths),
             repo_base=tmp_path,
             workspace="ws", project="proj", branch="main", commit="abc",
         )
-        assert len(docs) == 1
-        assert docs[0].metadata["path"] == "src/main.py"
+        assert {doc.metadata["path"] for doc in docs} == {
+            path.as_posix() for path in paths
+        }

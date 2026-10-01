@@ -22,7 +22,7 @@ class TestFileNode:
         n = FileNode(path="a.py", priority="MEDIUM")
         assert n.path == "a.py"
         assert n.priority == "MEDIUM"
-        assert n.relationship_strength == 0.0
+        assert n.relationship_degree == 0
         assert isinstance(n.related_files, set)
 
     def test_custom_fields(self):
@@ -35,7 +35,7 @@ class TestFileRelationship:
     def test_creation(self):
         r = FileRelationship(
             source_file="a.py", target_file="b.py",
-            relationship_type="import", matched_on="module_b", strength=0.9
+            relationship_type="import", matched_on="module_b"
         )
         assert r.source_file == "a.py"
         assert r.matched_on == "module_b"
@@ -49,14 +49,13 @@ class TestDependencyGraphBuilderBasic:
         assert b.rag_client is None
         assert len(b.nodes) == 0
 
-    def test_calculate_strength_capped(self):
+    def test_relationship_degree(self):
         b = DependencyGraphBuilder()
         b.relationships = [
-            FileRelationship(source_file="a.py", target_file="b.py", relationship_type="import", matched_on="x", strength=3.0),
-            FileRelationship(source_file="a.py", target_file="c.py", relationship_type="import", matched_on="y", strength=3.0),
+            FileRelationship(source_file="a.py", target_file="b.py", relationship_type="import", matched_on="x"),
+            FileRelationship(source_file="a.py", target_file="c.py", relationship_type="import", matched_on="y"),
         ]
-        strength = b._calculate_strength("a.py", {"b.py", "c.py"})
-        assert strength == 5.0  # capped at 5
+        assert b._relationship_degree("a.py") == 2
 
     def test_get_relationship_summary_empty(self):
         b = DependencyGraphBuilder()
@@ -83,7 +82,6 @@ def _make_enrichment(relationships=None, file_metadata=None):
                 sourceFile=r[0], targetFile=r[1],
                 relationshipType=SimpleNamespace(value=r[2]),
                 matchedOn=r[3] if len(r) > 3 else None,
-                strength=r[4] if len(r) > 4 else 0.8
             ))
     metas = []
     if file_metadata:
@@ -91,7 +89,7 @@ def _make_enrichment(relationships=None, file_metadata=None):
             metas.append(SimpleNamespace(
                 path=m["path"],
                 imports=m.get("imports", []),
-                semanticNames=m.get("semantic_names", []),
+                symbolNames=m.get("symbol_names", []),
                 extendsClasses=m.get("extends", []),
                 implementsInterfaces=m.get("implements", []),
                 parentClass=m.get("parent_class"),
@@ -164,14 +162,15 @@ class TestBuildGraphFromEnrichment:
 # ── _build_basic_graph ───────────────────────────────────────
 
 class TestBuildBasicGraph:
-    def test_directory_grouping(self):
+    def test_co_location_does_not_invent_relationships(self):
         groups = [
             _make_group("HIGH", [_make_file("src/a.py"), _make_file("src/b.py")]),
         ]
         b = DependencyGraphBuilder()
         nodes = b._build_basic_graph(groups)
         assert "src/a.py" in nodes
-        assert "src/b.py" in nodes["src/a.py"].related_files
+        assert nodes["src/a.py"].related_files == set()
+        assert nodes["src/b.py"].related_files == set()
 
 
 # ── get_connected_components ─────────────────────────────────
@@ -196,6 +195,28 @@ class TestGetConnectedComponents:
 # ── get_smart_batches ────────────────────────────────────────
 
 class TestGetSmartBatches:
+    def test_twelve_isolated_files_remain_independent_batches(self):
+        priorities = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+        groups = [
+            _make_group(
+                priority,
+                [_make_file(f"src/{priority.lower()}_{index}.py") for index in range(3)],
+            )
+            for priority in priorities
+        ]
+
+        batches = DependencyGraphBuilder().get_smart_batches(
+            groups,
+            "ws",
+            "proj",
+            ["main"],
+            max_batch_size=15,
+            max_allowed_tokens=60_000,
+        )
+
+        assert len(batches) == 12
+        assert all(len(batch) == 1 for batch in batches)
+
     def test_with_enrichment(self):
         groups = [
             _make_group("HIGH", [_make_file("a.py"), _make_file("b.py")]),
@@ -209,11 +230,10 @@ class TestGetSmartBatches:
             groups, "ws", "proj", ["main"],
             enrichment_data=enrichment,
         )
-        assert len(batches) >= 1
-        all_paths = [item["file"].path for batch in batches for item in batch]
-        assert "a.py" in all_paths
-        assert "b.py" in all_paths
-        assert "c.py" in all_paths
+        assert {
+            frozenset(item["file"].path for item in batch)
+            for batch in batches
+        } == {frozenset({"a.py", "b.py"}), frozenset({"c.py"})}
 
     def test_max_batch_size(self):
         files = [_make_file(f"f{i}.py") for i in range(20)]
@@ -229,23 +249,6 @@ class TestGetSmartBatches:
             assert len(batch) <= 5
 
 
-# ── _merge_small_batches ────────────────────────────────────
-
-class TestMergeSmallBatches:
-    def test_merges(self):
-        b = DependencyGraphBuilder()
-        batch1 = [{"file": _make_file("a.py"), "priority": "HIGH"}]
-        batch2 = [{"file": _make_file("b.py"), "priority": "HIGH"}]
-        result = b._merge_small_batches([batch1, batch2], min_size=3, max_size=10)
-        # Should merge them since same priority and total < max
-        assert len(result) == 1
-        assert len(result[0]) == 2
-
-    def test_empty(self):
-        b = DependencyGraphBuilder()
-        assert b._merge_small_batches([], 3, 10) == []
-
-
 # ── create_smart_batches convenience function ────────────────
 
 class TestCreateSmartBatches:
@@ -259,39 +262,49 @@ class TestCreateSmartBatches:
         assert len(batches) >= 1
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_async_rag_client_is_awaited(self):
-        class AsyncRag:
+    async def test_async_structural_client_is_awaited(self):
+        class StructuralClient:
             def __init__(self):
                 self.called = False
 
-            async def get_deterministic_context(self, **kwargs):
+            async def get_structural_relations(self, **kwargs):
                 self.called = True
                 return {
-                    "context": {
-                        "changed_files": {
-                            "a.py": [{"metadata": {"path": "a.py", "primary_name": "A"}}],
-                            "b.py": [{"metadata": {"path": "b.py", "primary_name": "B"}}],
-                        },
-                        "related_definitions": {
-                            "A": [{"metadata": {"path": "b.py"}}],
-                        },
-                    }
+                    "anchors": [],
+                    "relations": [{
+                        "kind": "IMPORTS",
+                        "source": "a.py",
+                        "relation": "imports",
+                        "target": "b.py",
+                        "origin": {"path": "a.py", "line": 1},
+                        "relatedPaths": ["a.py", "b.py"],
+                    }],
                 }
 
         groups = [_make_group("HIGH", [_make_file("a.py"), _make_file("b.py")])]
-        rag = AsyncRag()
+        client = StructuralClient()
 
         batches = await create_smart_batches_async(
-            groups, "ws", "proj", ["main"], rag_client=rag, max_batch_size=5
+            groups,
+            "ws",
+            "proj",
+            ["main"],
+            rag_client=client,
+            max_batch_size=5,
+            structural_binding={
+                "repository_revision": "abc123",
+                "repository_generation_manifest_sha256": "a" * 64,
+                "collection_target": "generation-target",
+            },
         )
 
-        assert rag.called is True
+        assert client.called is True
         assert len(batches) >= 1
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_async_structured_rag_error_uses_basic_fallback(self):
-        class AsyncRag:
-            async def get_deterministic_context(self, **kwargs):
+    async def test_async_structural_error_uses_basic_fallback(self):
+        class StructuralClient:
+            async def get_structural_relations(self, **kwargs):
                 return {
                     "status": "error",
                     "status_code": 503,
@@ -312,15 +325,19 @@ class TestCreateSmartBatches:
             "ws",
             "proj",
             ["main"],
-            rag_client=AsyncRag(),
+            rag_client=StructuralClient(),
             max_batch_size=5,
+            structural_binding={
+                "repository_revision": "abc123",
+                "repository_generation_manifest_sha256": "a" * 64,
+                "collection_target": "generation-target",
+            },
         )
 
-        batch_paths = [
-            {entry["file"].path for entry in batch}
+        assert {
+            tuple(entry["file"].path for entry in batch)
             for batch in batches
-        ]
-        assert any({"src/a.py", "src/b.py"}.issubset(paths) for paths in batch_paths)
+        } == {("src/a.py",), ("src/b.py",), ("lib/c.py",)}
 
 
 # ── build_dependency_aware_batches ───────────────────────────
@@ -382,6 +399,29 @@ class TestBuildDependencyAwareBatches:
         assert len(batches) == 1
 
 
+def test_smart_batching_prefers_supplied_rendered_prompt_costs():
+    groups = [_make_group(
+        "HIGH",
+        [_make_file("a.py"), _make_file("b.py")],
+    )]
+
+    batches = create_smart_batches(
+        groups,
+        "ws",
+        "proj",
+        ["main"],
+        rag_client=None,
+        max_batch_size=15,
+        max_allowed_tokens=10_000,
+        token_cost_by_path={"a.py": 8_000, "b.py": 8_000},
+    )
+
+    assert [[item["file"].path for item in batch] for batch in batches] == [
+        ["a.py"],
+        ["b.py"],
+    ]
+
+
 # ── get_relationship_summary ─────────────────────────────────
 
 class TestGetRelationshipSummary:
@@ -390,7 +430,7 @@ class TestGetRelationshipSummary:
         b.nodes["a"] = FileNode(path="a", priority="HIGH", related_files={"b"})
         b.nodes["b"] = FileNode(path="b", priority="LOW")
         b.relationships = [
-            FileRelationship(source_file="a", target_file="b", relationship_type="import", matched_on="z", strength=0.8),
+            FileRelationship(source_file="a", target_file="b", relationship_type="import", matched_on="z"),
         ]
         summary = b.get_relationship_summary()
         assert summary["total_files"] == 2

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from typing import Mapping
-
 from codecrow_plugins import (
     FileArtifact,
     ImportBinding,
     ImportFileRecord,
+    ImportRecordIndex,
     ImportedCall,
     TreeSitterDocument,
 )
@@ -106,20 +105,13 @@ def parse_import_record(artifact: FileArtifact) -> ImportFileRecord | None:
 def resolve_import(
     source: ImportFileRecord,
     binding: ImportBinding,
-    records: Mapping[str, ImportFileRecord],
+    records: ImportRecordIndex,
 ) -> str:
-    candidates: list[str] = []
-    for record in records.values():
-        if binding.imported not in record.exports:
-            continue
-        qualified = (
-            f"{record.module}.{binding.imported}"
-            if record.module
-            else binding.imported
-        )
-        if binding.module:
-            if binding.module == qualified:
-                candidates.append(record.path)
-        elif record.module == source.module:
-            candidates.append(record.path)
-    return candidates[0] if len(candidates) == 1 else ""
+    if binding.module:
+        module, separator, imported = binding.module.rpartition(".")
+        if not separator or imported != binding.imported:
+            return ""
+    else:
+        module = source.module
+    candidates = records.by_export.get((module, binding.imported), ())
+    return candidates[0].path if len(candidates) == 1 else ""

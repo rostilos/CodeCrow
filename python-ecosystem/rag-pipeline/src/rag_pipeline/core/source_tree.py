@@ -22,6 +22,25 @@ class RepositorySourceTreeError(RuntimeError):
     """The indexing source is not the attested immutable repository tree."""
 
 
+class RepositoryFileSizeLimitExceeded(RepositorySourceTreeError):
+    """A repository file is ineligible for indexing because it is too large."""
+
+    def __init__(
+        self,
+        relative_path: str | Path,
+        size_bytes: int,
+        max_size_bytes: int,
+    ) -> None:
+        self.relative_path = Path(relative_path).as_posix()
+        self.size_bytes = size_bytes
+        self.max_size_bytes = max_size_bytes
+        super().__init__(
+            "repository file exceeds configured indexing ceiling: "
+            f"path={self.relative_path} size_bytes={size_bytes} "
+            f"max_file_size_bytes={max_size_bytes}"
+        )
+
+
 @dataclass(frozen=True)
 class RepositorySourceTree:
     """Verified source identity retained across the indexing operation."""
@@ -59,7 +78,7 @@ def open_repository_file_no_follow(
     """Open one regular repository file through pinned, no-follow descriptors."""
     parts = _relative_parts(relative_path)
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    file_flags = os.O_RDONLY
+    file_flags = os.O_RDONLY | os.O_NONBLOCK
     no_follow = getattr(os, "O_NOFOLLOW", 0)
     if not no_follow:
         raise RepositorySourceTreeError(
@@ -110,10 +129,38 @@ def read_repository_file_bytes(
     relative_path: str | Path,
     *,
     expected_sha256: str | None = None,
+    max_size_bytes: int | None = None,
 ) -> bytes:
-    """Read one regular file without symlink traversal and verify its identity."""
+    """Read one complete regular file and optionally enforce an indexing ceiling.
+
+    The ceiling is an eligibility boundary, not a truncation boundary. A caller
+    either receives the complete file or a size-limit exception; a prefix is
+    never returned.
+    """
+    if max_size_bytes is not None and max_size_bytes < 1:
+        raise ValueError("max_size_bytes must be positive when supplied")
     with open_repository_file_no_follow(repo_path, relative_path) as source:
-        content = source.read()
+        if max_size_bytes is None:
+            content = source.read()
+        else:
+            observed_size = os.fstat(source.fileno()).st_size
+            if observed_size > max_size_bytes:
+                raise RepositoryFileSizeLimitExceeded(
+                    relative_path,
+                    observed_size,
+                    max_size_bytes,
+                )
+            # The descriptor is pinned, but a non-Git caller can still mutate a
+            # regular file after fstat. A bounded read catches growth without
+            # allocating the newly oversized file. The extra byte is detection
+            # only and is never returned as partial content.
+            content = source.read(max_size_bytes + 1)
+            if len(content) > max_size_bytes:
+                raise RepositoryFileSizeLimitExceeded(
+                    relative_path,
+                    len(content),
+                    max_size_bytes,
+                )
     if (
         expected_sha256 is not None
         and hashlib.sha256(content).hexdigest() != expected_sha256
@@ -189,7 +236,10 @@ def _repository_entries(root: Path):
             except OSError as exception:
                 raise RepositorySourceTreeError(
                     "cannot inspect repository source entry: "
-                    f"{relative_path.as_posix()}"
+                    f"{relative_path.as_posix()} "
+                    f"({exception.__class__.__name__}, "
+                    f"errno={exception.errno}, "
+                    f"reason={exception.strerror or str(exception)})"
                 ) from exception
 
     root_fd = None
@@ -332,14 +382,33 @@ def _verify_git_checkout(root: Path, commit: str) -> bool:
     return True
 
 
+def attest_repository_source_tree(
+    repo_path: str | Path,
+    commit: str,
+) -> RepositorySourceTree:
+    """Derive one authoritative source identity and verify Git when present."""
+    if not isinstance(commit, str) or not commit:
+        raise RepositorySourceTreeError("repository source commit is required")
+
+    root = Path(repo_path)
+    git_commit_verified = _verify_git_checkout(root, commit)
+    observed_tree_sha256, file_sha256_by_path = _compute_repository_source_tree(
+        root
+    )
+    return RepositorySourceTree(
+        commit=commit,
+        tree_sha256=observed_tree_sha256,
+        git_commit_verified=git_commit_verified,
+        file_sha256_by_path=file_sha256_by_path,
+    )
+
+
 def verify_repository_source_tree(
     repo_path: str | Path,
     commit: str,
     expected_tree_sha256: str,
 ) -> RepositorySourceTree:
     """Verify the caller-attested tree and, for Git worktrees, exact HEAD."""
-    if not isinstance(commit, str) or not commit:
-        raise RepositorySourceTreeError("repository source commit is required")
     if (
         not isinstance(expected_tree_sha256, str)
         or not _SHA256_RE.fullmatch(expected_tree_sha256)
@@ -348,22 +417,13 @@ def verify_repository_source_tree(
             "repository source tree requires a canonical SHA-256 attestation"
         )
 
-    root = Path(repo_path)
-    git_commit_verified = _verify_git_checkout(root, commit)
-    observed_tree_sha256, file_sha256_by_path = _compute_repository_source_tree(
-        root
-    )
-    if observed_tree_sha256 != expected_tree_sha256:
+    source_tree = attest_repository_source_tree(repo_path, commit)
+    if source_tree.tree_sha256 != expected_tree_sha256:
         raise RepositorySourceTreeError(
             "repository source tree does not match its acquisition attestation: "
-            f"expected={expected_tree_sha256}, actual={observed_tree_sha256}"
+            f"expected={expected_tree_sha256}, actual={source_tree.tree_sha256}"
         )
-    return RepositorySourceTree(
-        commit=commit,
-        tree_sha256=observed_tree_sha256,
-        git_commit_verified=git_commit_verified,
-        file_sha256_by_path=file_sha256_by_path,
-    )
+    return source_tree
 
 
 def require_repository_source_tree_unchanged(

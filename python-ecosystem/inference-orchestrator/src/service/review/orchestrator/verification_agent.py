@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -16,6 +17,7 @@ from model.output_schemas import CodeReviewIssue
 from service.review.candidate_ledger import CandidateEvidenceLedger
 from model.dtos import ReviewRequestDto
 from utils.llm_response import extract_llm_response_text
+from llm.reasoning_policy import ReasoningEffort
 from service.review.orchestrator.json_utils import load_json_with_local_repairs
 from utils.diff_processor import (
     DiffFile,
@@ -46,6 +48,12 @@ VERIFICATION_PROMPT_CHAR_BUDGET = max(
     8_000,
     _env_int("REVIEW_VERIFICATION_PROMPT_CHAR_BUDGET", 64_000),
 )
+VERIFICATION_INPUT_TOKEN_TARGET = max(
+    10_000,
+    _env_int("REVIEW_STAGE1_BATCH_TOKEN_BUDGET", 60_000),
+)
+_VERIFICATION_CONTEXT_RESERVE_TOKENS = 20_000
+_VERIFICATION_ESTIMATOR_SAFETY_TOKENS = 256
 
 # Compatibility fallback for direct tool callers/tests. Live reviews use a
 # ContextVar below so concurrent analyses cannot overwrite each other's source.
@@ -842,13 +850,7 @@ def _reviewable_hunks(diff_file: DiffFile) -> List[DiffHunk]:
         # Some direct/internal callers construct ProcessedDiff manually. Parse
         # their exact file section instead of treating missing derived hunk
         # objects as proof that the file was unchanged.
-        size = max(len(diff_file.content.encode("utf-8")) + 1, 1)
-        reparsed = DiffProcessor(
-            max_file_size=size,
-            max_files=1,
-            max_total_size=size,
-            max_lines_per_file=max(diff_file.content.count("\n") + 1, 1),
-        ).process(diff_file.content)
+        reparsed = DiffProcessor().process(diff_file.content)
         matched = _diff_file_for_path(reparsed, diff_file.path)
         if matched is not None:
             hunks = list(matched.hunks)
@@ -934,6 +936,94 @@ def reviewable_hunk_ids_for_issue(
     )
 
 
+def _current_source_line_at(hunk: DiffHunk, line_number: int) -> Optional[str]:
+    """Return one exact current-side source line from a parsed diff hunk."""
+    current_line = hunk.new_start
+    lines = hunk.content.splitlines()
+    if lines and lines[0].startswith("@@ "):
+        lines = lines[1:]
+
+    for raw_line in lines:
+        if raw_line.startswith(("-", "\\")):
+            continue
+        if not raw_line.startswith(("+", " ")):
+            continue
+        source_line = raw_line[1:]
+        if current_line == line_number:
+            return source_line
+        current_line += 1
+    return None
+
+
+def _anchor_text_variants(value: str) -> set[str]:
+    """Normalize only transport decoration around a single source line."""
+    stripped = (value or "").strip()
+    if not stripped:
+        return set()
+
+    variants = {stripped}
+    if stripped.startswith("`") and stripped.endswith("`"):
+        unwrapped = stripped.strip("`").strip()
+        if "\n" not in unwrapped and unwrapped:
+            variants.add(unwrapped)
+    for candidate in tuple(variants):
+        if candidate.startswith("+") and not candidate.startswith("+++"):
+            variants.add(candidate[1:].strip())
+    return variants
+
+
+def canonicalize_prompt_visible_line_anchor(
+    issue: CodeReviewIssue,
+    processed_diff: Optional[ProcessedDiff],
+    visible_hunk_ids: set[str],
+) -> tuple[str, ...]:
+    """Canonicalize a Stage 2 line anchor from exact prompt-visible diff data.
+
+    Stage 2 sees unified-diff records, so otherwise correct model output can
+    carry the leading ``+`` marker or Markdown backticks in ``codeSnippet``.
+    When the supplied snippet already identifies any reviewable hunk, it is
+    left untouched. Otherwise, an explicit in-hunk line hint may recover the
+    exact current-source line, but only when the decorated snippet agrees with
+    that line (or the model omitted the snippet entirely).
+    """
+    if processed_diff is None or not visible_hunk_ids:
+        return ()
+
+    existing_hunks = _anchor_reviewable_hunk_ids(issue, processed_diff, {})
+    if existing_hunks:
+        return existing_hunks
+
+    try:
+        line_number = int(getattr(issue, "line", 0) or 0)
+    except (TypeError, ValueError):
+        return ()
+    if line_number <= 0:
+        return ()
+
+    diff_file = _diff_file_for_path(
+        processed_diff,
+        _issue_field(issue, "file"),
+    )
+    if diff_file is None:
+        return ()
+
+    supplied_variants = _anchor_text_variants(
+        _issue_field(issue, "codeSnippet")
+    )
+    for hunk in _reviewable_hunks(diff_file):
+        if hunk.id not in visible_hunk_ids:
+            continue
+        source_line = _current_source_line_at(hunk, line_number)
+        if source_line is None or not source_line.strip():
+            continue
+        if supplied_variants and source_line.strip() not in supplied_variants:
+            continue
+        issue.file = diff_file.path
+        issue.codeSnippet = source_line
+        return (hunk.id,)
+    return ()
+
+
 def _anchor_overlaps_reviewable_hunk(
     issue: CodeReviewIssue,
     processed_diff: ProcessedDiff,
@@ -959,6 +1049,12 @@ def apply_candidate_provenance_gate(
     historical_ids = previous_open_issue_ids(request)
     unit_owners = units_by_hunk or {}
     kept: List[CodeReviewIssue] = []
+    rejection_counts: Dict[str, int] = {}
+
+    def record_rejection(stage: str, code: str) -> None:
+        key = f"{stage}:{code}"
+        rejection_counts[key] = rejection_counts.get(key, 0) + 1
+
     for issue in issues:
         issue_id = _issue_field(issue, "id").strip()
         historical = bool(issue_id) and issue_id in historical_ids
@@ -977,6 +1073,7 @@ def apply_candidate_provenance_gate(
                 gate="candidate_provenance",
                 code="unbound_review_unit",
             )
+            record_rejection(record.stage, "unbound_review_unit")
             continue
         anchor_hunks = reviewable_hunk_ids_for_issue(
             issue,
@@ -992,6 +1089,10 @@ def apply_candidate_provenance_gate(
                 gate="candidate_provenance",
                 code="anchor_outside_generation_unit",
             )
+            record_rejection(
+                record.stage,
+                "anchor_outside_generation_unit",
+            )
             continue
         if unit_owners and not any(
             set(record.review_unit_ids) & unit_owners.get(hunk_id, set())
@@ -1002,18 +1103,64 @@ def apply_candidate_provenance_gate(
                 gate="candidate_provenance",
                 code="review_unit_ownership_mismatch",
             )
-            continue
-        candidate_ledger.confirm_anchor_hunks(issue, matching_hunks)
-        if not set(record.evidence_refs).issubset(
-            record.visible_evidence_by_id
-        ):
-            candidate_ledger.reject(
-                issue,
-                gate="candidate_provenance",
-                code="evidence_outside_generation_prompt",
+            record_rejection(
+                record.stage,
+                "review_unit_ownership_mismatch",
             )
             continue
+        candidate_ledger.confirm_anchor_hunks(issue, matching_hunks)
+        unavailable_evidence_refs = set(record.evidence_refs).difference(
+            record.visible_evidence_by_id
+        )
+        claim_kind = _issue_field(issue, "claimKind").strip()
+        if unavailable_evidence_refs:
+            if claim_kind:
+                candidate_ledger.reject(
+                    issue,
+                    gate="candidate_provenance",
+                    code="evidence_outside_generation_prompt",
+                )
+                record_rejection(
+                    record.stage,
+                    "evidence_outside_generation_prompt",
+                )
+                continue
+
+            logger.info(
+                "Candidate provenance ignored %d unavailable optional "
+                "evidence reference(s) for generic %s candidate",
+                len(unavailable_evidence_refs),
+                record.stage,
+            )
+
+        # Reconciliation may transfer a generated-candidate record to a
+        # canonical issue object and merge fields from a duplicate. Citations
+        # are generation provenance, so they may be narrowed but never gained
+        # from that later merge. Generic findings remain grounded by their
+        # changed-source anchor; typed findings retain the strict rejection
+        # above when any citation they generated was not prompt-visible.
+        current_evidence_refs = set(
+            getattr(issue, "evidenceRefs", None) or ()
+        )
+        retained_evidence_refs = [
+            reference
+            for reference in record.evidence_refs
+            if reference in current_evidence_refs
+            and reference in record.visible_evidence_by_id
+        ]
+        if list(getattr(issue, "evidenceRefs", None) or ()) != retained_evidence_refs:
+            issue.evidenceRefs = retained_evidence_refs
+        candidate_ledger.retain_evidence_refs(
+            issue,
+            retained_evidence_refs,
+        )
         kept.append(issue)
+    if rejection_counts:
+        logger.info(
+            "Candidate provenance gate rejected %d candidate(s): %s",
+            sum(rejection_counts.values()),
+            dict(sorted(rejection_counts.items())),
+        )
     return kept
 
 
@@ -1025,7 +1172,7 @@ def _drop_out_of_hunk_anchors(
 ) -> Tuple[List[CodeReviewIssue], List[str]]:
     """Keep new findings scoped to a reviewable changed hunk.
 
-    Full-file and RAG context are supporting evidence, not permission to report
+    Full-file and structural repository context are supporting evidence, not permission to report
     unrelated pre-existing code. Historical lifecycle records remain exempt.
     """
     if processed_diff is None:
@@ -1205,18 +1352,120 @@ def _parse_verification_result(content: str) -> VerificationResult:
     return VerificationResult(**data)
 
 
-async def _run_verification_tool_loop(llm, prompt: str) -> VerificationResult:
+def _positive_int_or_default(value: Any, default: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _verification_input_token_target(request: ReviewRequestDto) -> int:
+    model_context = _positive_int_or_default(
+        getattr(request, "maxAllowedTokens", None),
+        200_000,
+    )
+    if model_context > _VERIFICATION_CONTEXT_RESERVE_TOKENS:
+        model_safe = model_context - _VERIFICATION_CONTEXT_RESERVE_TOKENS
+    else:
+        model_safe = max(1_000, model_context // 2)
+    return min(VERIFICATION_INPUT_TOKEN_TARGET, model_safe)
+
+
+def _verification_message_payload(message: Any) -> Any:
+    if isinstance(message, dict):
+        return message
+    if hasattr(message, "model_dump"):
+        try:
+            return message.model_dump(mode="json", exclude_none=True)
+        except (TypeError, ValueError):
+            try:
+                return message.model_dump(exclude_none=True)
+            except Exception:
+                pass
+    return {
+        key: value
+        for key in ("role", "content", "tool_calls", "name", "tool_call_id")
+        for value in (getattr(message, key, None),)
+        if value is not None
+    }
+
+
+def _verification_tool_declaration() -> Dict[str, Any]:
+    return {
+        "name": "search_file_content",
+        "description": (
+            "Search complete request-local file content for an exact string."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string"},
+                "search_string": {"type": "string"},
+            },
+            "required": ["file_path", "search_string"],
+        },
+    }
+
+
+def _estimated_verification_tokens(messages: List[Any]) -> int:
+    serialized = json.dumps(
+        {
+            "messages": [
+                _verification_message_payload(message)
+                for message in messages
+            ],
+            "tools": [_verification_tool_declaration()],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return max(
+        1,
+        (len(serialized) + 2) // 3
+        + _VERIFICATION_ESTIMATOR_SAFETY_TOKENS,
+    )
+
+
+async def _run_verification_tool_loop(
+    llm,
+    prompt: str,
+    *,
+    input_token_target: int = VERIFICATION_INPUT_TOKEN_TARGET,
+) -> VerificationResult:
     if not hasattr(llm, "bind_tools"):
         raise RuntimeError("LLM does not support tool binding")
 
-    llm_with_tools = llm.bind_tools([search_file_content])
+    # Keep this module importable by provider-free quality tooling; load the
+    # shared agent implementation only when the optional verifier executes.
+    from service.agent import AgentExecutionService
+
+    model_session = AgentExecutionService(
+        llm=llm,
+        client=None,
+    ).create_model_session(
+        tool_definitions=[search_file_content],
+        reasoning_effort=ReasoningEffort.HIGH,
+    )
     messages: List[Any] = [
         {"role": "system", "content": "You verify code-review findings and return only valid JSON."},
         {"role": "user", "content": prompt},
     ]
 
     for iteration in range(VERIFICATION_MAX_TOOL_ROUNDS):
-        response = await llm_with_tools.ainvoke(messages)
+        estimated_tokens = _estimated_verification_tokens(messages)
+        if estimated_tokens > input_token_target:
+            raise ValueError(
+                "complete verification conversation exceeds the request-aware "
+                f"input target ({estimated_tokens} estimated tokens > "
+                f"{input_token_target}); optional verification stopped without "
+                "slicing tool evidence"
+            )
+        response = await model_session.ainvoke(messages)
         messages.append(response)
         tool_calls = getattr(response, "tool_calls", None) or []
 
@@ -1249,12 +1498,71 @@ async def _run_verification_tool_loop(llm, prompt: str) -> VerificationResult:
     )
 
 
+def _cap_verification_batches(
+    batches: List[Tuple[List[Tuple[str, CodeReviewIssue]], str]],
+    max_batches: int,
+) -> Tuple[
+    List[Tuple[List[Tuple[str, CodeReviewIssue]], str]],
+    int,
+    int,
+]:
+    """Admit severity-first verification batches under one finite call cap."""
+    cap = _positive_int_or_default(max_batches, 4)
+    if len(batches) <= cap:
+        return batches, 0, 0
+
+    severity_rank = {
+        "CRITICAL": 0,
+        "HIGH": 1,
+        "MEDIUM": 2,
+        "LOW": 3,
+    }
+
+    def batch_rank(index_batch):
+        index, (records, _) = index_batch
+        priority = min(
+            (
+                severity_rank.get(
+                    _issue_field(issue, "severity").upper(),
+                    2,
+                )
+                for _, issue in records
+            ),
+            default=2,
+        )
+        return priority, index
+
+    admitted_indices = {
+        index
+        for index, _ in sorted(
+            enumerate(batches),
+            key=batch_rank,
+        )[:cap]
+    }
+    omitted = [
+        batch
+        for index, batch in enumerate(batches)
+        if index not in admitted_indices
+    ]
+    admitted = [
+        batch
+        for index, batch in enumerate(batches)
+        if index in admitted_indices
+    ]
+    return (
+        admitted,
+        len(omitted),
+        sum(len(records) for records, _ in omitted),
+    )
+
+
 async def run_verification_agent(
     llm,
     issues: List[CodeReviewIssue],
     request: ReviewRequestDto,
     processed_diff: Optional[ProcessedDiff] = None,
     candidate_ledger: Optional[CandidateEvidenceLedger] = None,
+    inference_profile: Optional[Any] = None,
 ) -> List[CodeReviewIssue]:
     """
     Stage 1.5: LLM-Driven Verification.
@@ -1360,11 +1668,49 @@ async def run_verification_agent(
         for index, issue in enumerate(active_issues)
     ]
     verification_batches = _build_verification_batches(verification_records)
+    verification_batch_cap = 4
+    if inference_profile is not None:
+        try:
+            verification_batch_cap = _positive_int_or_default(
+                inference_profile.invocation_cap("stage_1_total"),
+                verification_batch_cap,
+            )
+        except Exception as exception:
+            logger.warning(
+                "Stage 1.5 could not read the review invocation profile; "
+                "using the finite fallback cap=%d: %s",
+                verification_batch_cap,
+                exception,
+            )
+    source_batch_count = len(verification_batches)
+    (
+        verification_batches,
+        omitted_batch_count,
+        omitted_record_count,
+    ) = _cap_verification_batches(
+        verification_batches,
+        verification_batch_cap,
+    )
+    if omitted_batch_count:
+        logger.warning(
+            "Stage 1.5 verification invocation ceiling admitted %d/%d "
+            "batch(es); omitted_batches=%d omitted_records=%d. Higher-severity "
+            "records were admitted first; omitted issues remain retained.",
+            len(verification_batches),
+            source_batch_count,
+            omitted_batch_count,
+            omitted_record_count,
+        )
+    verification_input_target = _verification_input_token_target(request)
     logger.info(
-        "Stage 1.5: Split %d verification record(s) into %d deterministic "
-        "prompt batch(es), cap=%d chars",
+        "Stage 1.5: Split %d verification record(s) into %d admitted "
+        "deterministic prompt batch(es), source_batches=%d, omitted_batches=%d, "
+        "omitted_records=%d, cap=%d chars",
         len(verification_records),
         len(verification_batches),
+        source_batch_count,
+        omitted_batch_count,
+        omitted_record_count,
         VERIFICATION_PROMPT_CHAR_BUDGET,
     )
 
@@ -1380,7 +1726,11 @@ async def run_verification_agent(
                 for verification_id, _ in batch_records
             }
             try:
-                result = await _run_verification_tool_loop(llm, prompt)
+                result = await _run_verification_tool_loop(
+                    llm,
+                    prompt,
+                    input_token_target=verification_input_target,
+                )
             except Exception as exception:
                 failed_batches += 1
                 log = logger.info if failed_batches == 1 else logger.debug

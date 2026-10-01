@@ -7,7 +7,6 @@ Orchestrates the 4-stage AI code review pipeline:
 - Stage 2: Cross-File & Architectural Analysis
 - Stage 3: Aggregation & Final Report
 """
-import asyncio
 import json
 import logging
 import os
@@ -33,6 +32,7 @@ from service.review.orchestrator.reconciliation import (
 from service.review.orchestrator.verification_agent import (
     _resolve_historical_candidate,
     apply_candidate_provenance_gate,
+    canonicalize_prompt_visible_line_anchor,
     previous_open_issue_ids,
     reviewable_hunk_ids_for_issue,
     run_deterministic_evidence_gate,
@@ -43,13 +43,16 @@ from service.review.orchestrator.inference_policy import (
     should_run_stage_2,
     should_use_fast_dedup,
     should_use_llm_dedup,
-    with_stage_output_cap,
 )
 from service.review.orchestrator.stage_1_file_review import (
     Stage1RagState,
     Stage1ReviewUnitState,
 )
-from utils.path_identity import normalize_repository_path, repository_paths_match
+from service.review.orchestrator.stage_2_cross_file import (
+    Stage2GenerationError,
+    stage_2_coverage_ledger,
+)
+from utils.path_identity import normalize_repository_path
 from service.review.orchestrator.stages import (
     apply_mechanical_skip_constraints,
     execute_branch_analysis,
@@ -57,25 +60,18 @@ from service.review.orchestrator.stages import (
     execute_stage_0_planning,
     execute_stage_1_file_reviews,
     execute_stage_2_cross_file,
-    prefetch_stage_2_cross_module_context,
     execute_stage_3_aggregation,
     _emit_status,
     _emit_progress,
 )
 from service.review.plugin_context import (
-    apply_effective_project_capabilities,
     apply_plugin_plan_constraints,
     apply_plugin_validation_gate,
 )
 from service.review.candidate_ledger import CandidateEvidenceLedger
-from service.review.snapshot_identity import (
-    ReviewSnapshotIdentity,
-    ReviewSnapshotPreconditionError,
-    validate_review_snapshot_identity,
-)
+from service.review.snapshot_identity import validate_review_snapshot_identity
 from service.review.pr_evidence import (
     PrEvidenceLedger,
-    STAGE_2_PR_EVIDENCE_CHAR_BUDGET,
     build_pr_evidence_ledger,
     gate_task_coverage_candidates,
 )
@@ -134,44 +130,11 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _resolve_enrichment_content(
-    path: str,
-    entries: list[tuple[str, str]],
-) -> tuple[Optional[str], bool]:
-    """Resolve one repository path without choosing an ambiguous suffix.
-
-    The boolean reports ambiguity. Duplicate candidates with identical content
-    are safe because they produce the same immutable artifact.
-    """
-    normalized_path = normalize_repository_path(path)
-    exact_contents = {
-        content
-        for candidate_path, content in entries
-        if normalize_repository_path(candidate_path) == normalized_path
-    }
-    if len(exact_contents) == 1:
-        return next(iter(exact_contents)), False
-    if len(exact_contents) > 1:
-        return None, True
-
-    suffix_contents = {
-        content
-        for candidate_path, content in entries
-        if repository_paths_match(normalized_path, candidate_path)
-    }
-    if len(suffix_contents) == 1:
-        return next(iter(suffix_contents)), False
-    return None, len(suffix_contents) > 1
-
-
-INTERNAL_PR_INDEX_ENABLED = _env_bool("REVIEW_INTERNAL_PR_INDEX_ENABLED", True)
 VERIFICATION_ENABLED = _env_bool("REVIEW_VERIFICATION_ENABLED", True)
 
 _REQUEST_RAG_BINDING_FIELDS = (
     "ragCollectionTarget",
     "ragBaseGenerationManifestSha256",
-    "ragPrGenerationFingerprint",
-    "ragPrOverlayGenerationManifestSha256",
     "ragBasePluginFingerprint",
     "ragBasePluginDescriptorFingerprint",
     "ragBasePluginImplementationFingerprint",
@@ -200,7 +163,6 @@ def _emit_review_evidence_completed(
     candidate_ledger: Optional[CandidateEvidenceLedger] = None,
     *,
     request: ReviewRequestDto,
-    pr_indexed: bool,
 ) -> None:
     """Expose compact host-owned completion evidence without prompt/source data."""
     if callback is None:
@@ -236,59 +198,30 @@ def _emit_review_evidence_completed(
                 if rag_state is not None
                 else ()
             ),
-            "semanticFailures": (
-                rag_state.semantic_failures if rag_state is not None else 0
-            ),
-            "semanticDisabled": (
-                rag_state.semantic_disabled if rag_state is not None else False
-            ),
             "exactEvidenceIds": len(
                 rag_state.exact_evidence_by_id if rag_state is not None else {}
             ),
         },
         "revisionBinding": {
-            "prIndexed": pr_indexed,
             "pullRequestId": request.pullRequestId,
             "targetBranch": request.targetBranchName,
             "sourceRevision": (
                 request.currentCommitHash or request.commitHash
             ),
-            "baseRevision": request.baseCommitHash,
-            "baseGenerationManifestSha256": (
-                request.ragBaseGenerationManifestSha256
-                if pr_indexed else None
-            ),
-            "prGenerationFingerprint": (
-                request.ragPrGenerationFingerprint
-                if pr_indexed else None
-            ),
-            "prOverlayGenerationManifestSha256": (
-                request.ragPrOverlayGenerationManifestSha256
-                if pr_indexed else None
-            ),
-            "basePluginFingerprint": (
-                request.ragBasePluginFingerprint
-                if pr_indexed else None
-            ),
+            "baseRevision": request.get_target_head_commit_hash(),
+            "baseGenerationManifestSha256": request.ragBaseGenerationManifestSha256,
+            "basePluginFingerprint": request.ragBasePluginFingerprint,
             "basePluginDescriptorFingerprint": (
                 request.ragBasePluginDescriptorFingerprint
-                if pr_indexed else None
             ),
             "basePluginImplementationFingerprint": (
                 request.ragBasePluginImplementationFingerprint
-                if pr_indexed else None
             ),
             "baseIndexRepresentationFingerprint": (
                 request.ragBaseIndexRepresentationFingerprint
-                if pr_indexed else None
             ),
         },
     })
-
-
-# Compatibility import for existing callers. Snapshot identity and PR-overlay
-# compatibility are both preconditions for the same review context boundary.
-PrIndexPreconditionError = ReviewSnapshotPreconditionError
 
 
 class MultiStageReviewOrchestrator:
@@ -306,302 +239,14 @@ class MultiStageReviewOrchestrator:
         mcp_client, 
         rag_client=None,
         event_callback: Optional[Callable[[Dict], None]] = None,
-        llm_reranker=None
+        agent_service=None,
     ):
         self.llm = llm
         self.client = mcp_client
         self.rag_client = rag_client
         self.event_callback = event_callback
-        self.llm_reranker = llm_reranker
+        self.agent_service = agent_service
         self.max_parallel_stage_1 = max(1, _env_int("REVIEW_STAGE1_MAX_PARALLEL", 5))
-        self._pr_number: Optional[int] = None
-        self._pr_indexed: bool = False
-        self._repository_review_groups: tuple[tuple[str, ...], ...] = ()
-
-    async def _index_pr_files(
-        self,
-        request: ReviewRequestDto,
-        processed_diff: Optional[ProcessedDiff],
-        snapshot_identity: Optional[ReviewSnapshotIdentity] = None,
-    ) -> None:
-        """
-        Index PR files into the main RAG collection with PR-specific metadata.
-        This enables hybrid queries that prioritize PR data over stale branch data.
-        
-        Complete post-change source is eligible for PR semantic/plugin indexing.
-        When enrichment does not contain it, the unified diff remains review
-        evidence but is explicitly marked partial so RAG cannot parse or embed it
-        as a complete repository artifact.
-        """
-        self._repository_review_groups = ()
-        self._pr_indexed = False
-        request.ragPrGenerationFingerprint = None
-        request.ragPrOverlayGenerationManifestSha256 = None
-        if not request.ragEnabled:
-            _clear_request_rag_bindings(request)
-            logger.info("PR file indexing skipped because project RAG is disabled")
-            return
-        if not INTERNAL_PR_INDEX_ENABLED:
-            logger.info("PR file indexing disabled by REVIEW_INTERNAL_PR_INDEX_ENABLED")
-            return
-
-        if not self.rag_client or not processed_diff:
-            return
-        
-        pr_number = request.pullRequestId
-        if not pr_number:
-            logger.info("No PR number, skipping PR file indexing")
-            return
-
-        identity = (
-            snapshot_identity
-            if snapshot_identity is not None
-            else validate_review_snapshot_identity(request)
-        )
-        
-        # Build lookup from enrichment data so we can populate full_content on DiffFiles.
-        # Java sends PrEnrichmentDataDto with fileContents containing the FULL source of
-        # each changed file — this is what we want to index, NOT the diff hunks.
-        enrichment_entries: list[tuple[str, str]] = []
-        if request.enrichmentData and request.enrichmentData.fileContents:
-            for fc in request.enrichmentData.fileContents:
-                if fc.content is not None and not fc.skipped:
-                    enrichment_entries.append((fc.path, fc.content))
-            if enrichment_entries:
-                logger.info(
-                    "Enrichment lookup built: %s entries for PR file indexing",
-                    len(enrichment_entries),
-                )
-        
-        files = []
-        for f in processed_diff.files:
-            raw_change_type = (
-                f.change_type.value
-                if hasattr(f.change_type, "value")
-                else str(f.change_type)
-            )
-            change_type = raw_change_type.upper()
-            if f.is_skipped and change_type != "DELETED":
-                continue
-
-            # Prefer exact repository identity. A checkout-prefix suffix is
-            # accepted only when all matching candidates contain identical
-            # source; ambiguous monorepo paths remain explicitly partial.
-            if f.full_content is None and enrichment_entries:
-                resolved_content, ambiguous = _resolve_enrichment_content(
-                    f.path,
-                    enrichment_entries,
-                )
-                if resolved_content is not None:
-                    f.full_content = resolved_content
-                elif ambiguous:
-                    logger.warning(
-                        "PR indexing: ambiguous enrichment source for %s; "
-                        "retaining partial diff state",
-                        f.path,
-                    )
-            
-            if change_type == "DELETED":
-                files.append({
-                    "path": f.path,
-                    "content": "",
-                    "change_type": change_type,
-                    "content_state": "complete",
-                })
-                continue
-
-            has_complete_source = f.full_content is not None
-            content = f.full_content if has_complete_source else f.content
-            if content is None:
-                continue
-            content_state = "complete" if has_complete_source else "partial_diff"
-            if content_state == "partial_diff":
-                logger.warning(
-                    "PR indexing: complete source unavailable for %s; "
-                    "sending explicitly partial diff evidence",
-                    f.path,
-                )
-            files.append({
-                "path": f.path,
-                "content": content,
-                "change_type": change_type,
-                "content_state": content_state,
-            })
-        
-        if not files:
-            logger.info("No files to index for PR")
-            return
-        
-        # Set _pr_number BEFORE the indexing call so that cleanup can always
-        # run in the finally block, even if indexing partially succeeds then errors.
-        self._pr_number = pr_number
-        
-        try:
-            capabilities = request.projectCapabilities
-            result = await self.rag_client.index_pr_files(
-                workspace=request.projectWorkspace,
-                project=request.projectNamespace,
-                pr_number=pr_number,
-                branch=identity.target_branch,
-                base_branch=identity.target_branch,
-                source_revision=identity.head_revision,
-                base_revision=identity.base_revision,
-                collection_target=request.ragCollectionTarget,
-                base_generation_manifest_sha256=(
-                    request.ragBaseGenerationManifestSha256
-                ),
-                repository_plugins=(
-                    list(capabilities.repositoryPlugins) if capabilities else []
-                ),
-                plugin_detection_evidence=(
-                    dict(capabilities.detectionEvidence) if capabilities else {}
-                ),
-                plugin_fingerprint=(
-                    capabilities.fingerprint
-                    if capabilities
-                    else "sha256:" + "0" * 64
-                ),
-                plugin_descriptor_fingerprint=(
-                    capabilities.descriptorFingerprint
-                    if capabilities
-                    else "sha256:" + "0" * 64
-                ),
-                files=files
-            )
-            if result.get("status") in {"indexed", "reused"}:
-                apply_effective_project_capabilities(
-                    request,
-                    result.get("effective_project_capabilities"),
-                )
-                base_generation_manifest = (
-                    result.get("base_generation_manifest_sha256")
-                    or request.ragBaseGenerationManifestSha256
-                )
-                pr_generation_fingerprint = result.get(
-                    "generation_fingerprint"
-                )
-                overlay_generation_manifest = result.get(
-                    "overlay_generation_manifest_sha256"
-                )
-                request.ragBaseGenerationManifestSha256 = (
-                    base_generation_manifest
-                )
-                request.ragPrGenerationFingerprint = None
-                request.ragPrOverlayGenerationManifestSha256 = None
-                request.ragBasePluginFingerprint = (
-                    result.get("plugin_fingerprint")
-                    or request.ragBasePluginFingerprint
-                )
-                request.ragBasePluginDescriptorFingerprint = (
-                    result.get("plugin_descriptor_fingerprint")
-                    or request.ragBasePluginDescriptorFingerprint
-                )
-                request.ragBasePluginImplementationFingerprint = (
-                    result.get("plugin_implementation_fingerprint")
-                    or request.ragBasePluginImplementationFingerprint
-                )
-                request.ragBaseIndexRepresentationFingerprint = (
-                    result.get("index_representation_fingerprint")
-                    or request.ragBaseIndexRepresentationFingerprint
-                )
-                self._repository_review_groups = tuple(
-                    tuple(
-                        path for path in group
-                        if isinstance(path, str) and path.strip()
-                    )
-                    for group in (result.get("review_groups") or ())
-                    if isinstance(group, (list, tuple))
-                )
-                complete_overlay_binding = all(
-                    isinstance(value, str) and bool(value.strip())
-                    for value in (
-                        identity.head_revision,
-                        identity.base_revision,
-                        request.ragCollectionTarget,
-                        base_generation_manifest,
-                        pr_generation_fingerprint,
-                        overlay_generation_manifest,
-                    )
-                )
-                if complete_overlay_binding:
-                    request.ragPrGenerationFingerprint = (
-                        pr_generation_fingerprint
-                    )
-                    request.ragPrOverlayGenerationManifestSha256 = (
-                        overlay_generation_manifest
-                    )
-                    self._pr_indexed = True
-                    logger.info(
-                        "%s PR #%s overlay: %s chunks, %s partial files, "
-                        "%s repository review groups",
-                        "Reused" if result.get("status") == "reused" else "Indexed",
-                        pr_number,
-                        result.get("chunks_indexed", 0),
-                        len(result.get("partial_files") or ()),
-                        len(self._repository_review_groups),
-                    )
-                else:
-                    self._pr_indexed = False
-                    self._repository_review_groups = ()
-                    logger.info(
-                        "PR #%s overlay was prepared without a complete generation "
-                        "lease; continuing with target-branch and local evidence",
-                        pr_number,
-                    )
-            elif result.get("status") == "skipped":
-                logger.info("PR indexing skipped: %s", result)
-            else:
-                status_code = result.get("status_code")
-                detail = result.get("error") or result
-                log_unavailable = (
-                    logger.info if status_code == 409 else logger.warning
-                )
-                log_unavailable(
-                    "PR context indexing unavailable%s; continuing review without "
-                    "the PR overlay: %s",
-                    f" (HTTP {status_code})" if status_code else "",
-                    detail,
-                )
-        except Exception as e:
-            logger.warning(
-                "PR context indexing failed before model execution; continuing "
-                "without the PR overlay: %s: %s",
-                type(e).__name__,
-                e,
-            )
-
-    async def _cleanup_pr_files(self, request: ReviewRequestDto) -> None:
-        """Delete PR-indexed data after analysis completes.
-        
-        Always attempts cleanup when pr_number is set, regardless of whether
-        _pr_indexed flag is True. This handles edge cases where indexing partially
-        succeeded (some points upserted) but _pr_indexed was never set to True.
-        The RAG delete endpoint is idempotent — calling it for a non-existent PR
-        returns 'skipped', so this is safe.
-        """
-        if not self._pr_number or not self.rag_client:
-            return
-        
-        try:
-            deleted = await self.rag_client.delete_pr_files(
-                workspace=request.projectWorkspace,
-                project=request.projectNamespace,
-                pr_number=self._pr_number,
-                collection_target=request.ragCollectionTarget,
-            )
-            if deleted:
-                logger.info("Cleaned up PR #%s indexed data", self._pr_number)
-            else:
-                logger.info(
-                    "PR #%s indexed-data cleanup did not complete; the RAG "
-                    "client recorded the failure detail",
-                    self._pr_number,
-                )
-        except Exception as e:
-            logger.warning(f"Failed to cleanup PR files: {e}")
-        finally:
-            self._pr_number = None
-            self._pr_indexed = False
 
     # ── Token-budget constants for branch reconciliation batching ──
     # Rough ratio: 1 token ≈ 4 chars.  We reserve headroom for the prompt
@@ -619,7 +264,8 @@ class MultiStageReviewOrchestrator:
             self.llm,
             self.client,
             prompt,
-            self.event_callback
+            self.event_callback,
+            agent_service=self.agent_service,
         )
 
     # ── Batched branch reconciliation ────────────────────────────────
@@ -649,19 +295,9 @@ class MultiStageReviewOrchestrator:
             logger.info("Branch reconciliation: no previous issues — nothing to reconcile")
             return {"issues": [], "comment": "No previous issues to reconcile."}
 
-        # ── Pre-dedup: eliminate near-duplicate issues BEFORE sending to LLM ──
-        # Java may send issues from multiple analyses for the same code location
-        # with slightly different titles (LLM phrasing instability).  Dedup here
-        # saves tokens and prevents the LLM from producing redundant output.
-        pre_dedup_count = len(all_issues)
-        all_issues = self._deduplicate_previous_issues(all_issues)
-        if len(all_issues) != pre_dedup_count:
-            logger.info(
-                f"Branch reconciliation pre-dedup: {pre_dedup_count} → {len(all_issues)} issues "
-                f"({pre_dedup_count - len(all_issues)} duplicates removed)"
-            )
-            # Update pr_metadata so downstream prompt builders see the deduped list
-            pr_metadata = {**pr_metadata, "previousCodeAnalysisIssues": all_issues}
+        # Lifecycle reconciliation owns every persisted issue record. Similar
+        # issues may still resolve independently, but none may disappear from
+        # prompt ownership merely because their prose looks alike.
 
         # Determine whether to use MCP-free direct path
         file_contents: Dict[str, str] = {}
@@ -672,122 +308,39 @@ class MultiStageReviewOrchestrator:
                 f"({len(file_contents)} pre-fetched files)"
             )
 
-        batches = self._split_issues_into_batches(all_issues)
-        total_batches = len(batches)
-
         # Extract raw diff from request (per-file diffs for AI-bound files,
         # pre-filtered by Java)
         raw_diff: Optional[str] = getattr(request, 'rawDiff', None)
 
-        if total_batches == 1:
-            # Fast path — single batch, no overhead
-            logger.info(
-                f"Branch reconciliation: {len(all_issues)} issues fit in a single batch"
-            )
-            if file_contents:
-                # MCP-free direct path
-                prompt = PromptBuilder.build_branch_reconciliation_direct_prompt(
-                    pr_metadata, file_contents, raw_diff=raw_diff,
-                )
-                return await execute_branch_reconciliation_direct(
-                    self.llm, prompt, self.event_callback
-                )
-            else:
-                # Legacy MCP path (fallback if no file contents provided)
-                prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(
-                    pr_metadata
-                )
-                return await execute_branch_analysis(
-                    self.llm, self.client, prompt, self.event_callback
-                )
-
-        logger.info(
-            f"Branch reconciliation: splitting {len(all_issues)} issues "
-            f"into {total_batches} batches"
+        from service.review.orchestrator.branch_reconciliation_packing import (
+            execute_packed_branch_reconciliation,
+            legacy_reconciliation_fail_open,
         )
+
+        if not file_contents:
+            return legacy_reconciliation_fail_open(
+                request=request,
+                issue_count=len(all_issues),
+            )
+
+        branch_profile = build_review_inference_profile(request, None)
         _emit_status(
             self.event_callback,
-            "branch_reconciliation_batching",
-            f"Splitting {len(all_issues)} issues into {total_batches} batches...",
+            "branch_reconciliation_packing",
+            "Packing complete branch reconciliation evidence...",
         )
-
-        merged_issues: List[Dict[str, Any]] = []
-        comments: List[str] = []
-
-        for idx, batch in enumerate(batches, start=1):
-            batch_label = f"Batch {idx}/{total_batches}"
-            logger.info(
-                f"Branch reconciliation {batch_label}: {len(batch)} issues"
-            )
-            _emit_progress(
-                self.event_callback,
-                int((idx - 1) / total_batches * 100),
-                f"Reconciling {batch_label} ({len(batch)} issues)...",
-            )
-
-            # Build a per-batch metadata dict with only this batch's issues
-            batch_metadata = {
-                **pr_metadata,
-                "previousCodeAnalysisIssues": batch,
-            }
-
-            try:
-                if file_contents:
-                    # Filter file contents to only files referenced by this batch
-                    batch_files = {
-                        issue.get("file")
-                        for issue in batch
-                        if issue.get("file")
-                    }
-                    batch_file_contents = {
-                        fp: content
-                        for fp, content in file_contents.items()
-                        if fp in batch_files
-                    }
-                    # Filter raw diff to only per-file diffs for this batch's files
-                    batch_diff = self._filter_diff_for_files(raw_diff, batch_files) if raw_diff else None
-                    prompt = PromptBuilder.build_branch_reconciliation_direct_prompt(
-                        batch_metadata, batch_file_contents,
-                        batch_number=idx, total_batches=total_batches,
-                        raw_diff=batch_diff,
-                    )
-                    result = await execute_branch_reconciliation_direct(
-                        self.llm, prompt, self.event_callback
-                    )
-                else:
-                    # Legacy MCP path
-                    prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(
-                        batch_metadata,
-                        batch_number=idx,
-                        total_batches=total_batches,
-                    )
-                    result = await execute_branch_analysis(
-                        self.llm, self.client, prompt, self.event_callback
-                    )
-
-                merged_issues.extend(result.get("issues", []))
-                if result.get("comment"):
-                    comments.append(f"[{batch_label}] {result['comment']}")
-            except Exception as e:
-                logger.error(
-                    f"Branch reconciliation {batch_label} failed: {e}",
-                    exc_info=True,
-                )
-                raise RuntimeError(
-                    "Branch reconciliation failed atomically at "
-                    f"{batch_label}; refusing a partial result from "
-                    f"{idx - 1}/{total_batches} completed batches"
-                ) from e
-
-        summary = (
-            f"Branch reconciliation completed in {total_batches} batches.\n"
-            + "\n".join(comments)
+        return await execute_packed_branch_reconciliation(
+            llm=self.llm,
+            request=request,
+            pr_metadata=pr_metadata,
+            file_contents=file_contents,
+            raw_diff=raw_diff,
+            event_callback=self.event_callback,
+            direct_executor=execute_branch_reconciliation_direct,
+            max_shards=branch_profile.invocation_cap(
+                "branch_reconciliation_packets"
+            ),
         )
-        logger.info(
-            f"Branch reconciliation merged: {len(merged_issues)} total issues "
-            f"from {total_batches} batches"
-        )
-        return {"issues": merged_issues, "comment": summary}
 
     @staticmethod
     def _filter_diff_for_files(
@@ -942,7 +495,6 @@ class MultiStageReviewOrchestrator:
     async def orchestrate_review(
         self, 
         request: ReviewRequestDto, 
-        rag_context: Optional[Any] = None,
         processed_diff: Optional[ProcessedDiff] = None,
         full_pr_processed_diff: Optional[ProcessedDiff] = None,
     ) -> Dict[str, Any]:
@@ -951,11 +503,10 @@ class MultiStageReviewOrchestrator:
         Supports both FULL (initial review) and INCREMENTAL (follow-up review) modes.
         """
         request_rag_client = self.rag_client if request.ragEnabled else None
-        request_rag_context = rag_context if request.ragEnabled else None
         if not request.ragEnabled:
             _clear_request_rag_bindings(request)
 
-        snapshot_identity = validate_review_snapshot_identity(request)
+        validate_review_snapshot_identity(request)
         validate_acquired_diff_manifest(
             request.changedFiles or (),
             request.deletedFiles or (),
@@ -989,7 +540,7 @@ class MultiStageReviewOrchestrator:
         )
         logger.info(
             "[%s] PR evidence scopes ready: delta_files=%d, full_pr_files=%d, "
-            "prompt_chars=%d/%d, manifest_complete=%s, evidence_complete=%s",
+            "prompt_chars=%d, manifest_complete=%s, evidence_complete=%s",
             _review_log_id(request),
             len(processed_diff.files) if processed_diff else 0,
             len(full_pr_processed_diff.files)
@@ -1000,7 +551,6 @@ class MultiStageReviewOrchestrator:
                 else 0
             ),
             pr_evidence_ledger.prompt_chars,
-            STAGE_2_PR_EVIDENCE_CHAR_BUDGET,
             pr_evidence_ledger.manifest_complete,
             pr_evidence_ledger.full_evidence_complete,
         )
@@ -1019,34 +569,12 @@ class MultiStageReviewOrchestrator:
         else:
             logger.info("Fast check not enabled: %s", inference_profile.describe())
 
-        stage_2_context_task: Optional[asyncio.Task] = None
-        stage_2_visible_evidence_by_id: Dict[
-            str, tuple[Dict[str, Any], ...]
-        ] = {}
         stage_2_visible_prompt_hunk_ids: set[str] = set()
         stage_2_prompt_provenance: Dict[str, str] = {}
         hunk_coverage = HunkCoverageLedger.from_processed_diff(processed_diff)
         candidate_ledger = CandidateEvidenceLedger()
 
         try:
-            # Build the optional current-source overlay before the first model
-            # call. RAG/index failures are reported but do not block diff review.
-            _emit_status(
-                self.event_callback,
-                "pr_context_enrichment_started",
-                "Preparing optional repository context...",
-            )
-            await self._index_pr_files(
-                request,
-                processed_diff,
-                snapshot_identity=snapshot_identity,
-            )
-            _emit_status(
-                self.event_callback,
-                "pr_context_enrichment_completed",
-                "Optional repository context preparation completed",
-            )
-
             if (
                 processed_diff is not None
                 and not hunk_coverage.reviewable_hunk_ids
@@ -1059,7 +587,6 @@ class MultiStageReviewOrchestrator:
                     hunk_coverage,
                     candidate_ledger=candidate_ledger,
                     request=request,
-                    pr_indexed=self._pr_indexed,
                 )
                 logger.info(
                     "Review completed locally: every acquired hunk has a "
@@ -1083,7 +610,7 @@ class MultiStageReviewOrchestrator:
             # === STAGE 0: Planning ===
             _emit_status(self.event_callback, "stage_0_started", "Stage 0: Planning & Prioritization...")
             review_plan = await execute_stage_0_planning(
-                with_stage_output_cap(self.llm, "stage_0", inference_profile),
+                self.llm,
                 request,
                 is_incremental,
                 processed_diff=processed_diff,
@@ -1097,7 +624,6 @@ class MultiStageReviewOrchestrator:
             review_plan = apply_plugin_plan_constraints(
                 review_plan,
                 request,
-                repository_group_paths=self._repository_review_groups,
             )
             required_paths = (
                 list(hunk_coverage.reviewable_paths)
@@ -1118,16 +644,6 @@ class MultiStageReviewOrchestrator:
             )
             _emit_progress(self.event_callback, 10, stage_0_message)
 
-            if not inference_profile.fast_check_enabled and request_rag_client:
-                stage_2_context_task = asyncio.create_task(
-                    prefetch_stage_2_cross_module_context(
-                        request_rag_client,
-                        request,
-                        processed_diff=processed_diff,
-                        visible_evidence_by_id=stage_2_visible_evidence_by_id,
-                    )
-                )
-            
             # === STAGE 1: File Reviews ===
             stage_1_rag_state = Stage1RagState()
             stage_1_review_unit_state = Stage1ReviewUnitState()
@@ -1135,25 +651,44 @@ class MultiStageReviewOrchestrator:
             _emit_status(self.event_callback, "stage_1_started", f"Stage 1: Analyzing {self._count_files(review_plan)} files...")
             use_mcp = getattr(request, 'useMcpTools', False) or False
             file_issues = await execute_stage_1_file_reviews(
-                with_stage_output_cap(self.llm, "stage_1", inference_profile),
-                request, 
-                review_plan, 
+                self.llm,
+                request,
+                review_plan,
                 request_rag_client,
-                request_rag_context,
-                processed_diff, 
-                is_incremental,
-                self.max_parallel_stage_1,
-                self.event_callback,
-                self._pr_indexed,
-                llm_reranker=self.llm_reranker,
-                use_llm_rerank=not inference_profile.fast_check_enabled,
+                processed_diff=processed_diff,
+                is_incremental=is_incremental,
+                max_parallel=self.max_parallel_stage_1,
+                event_callback=self.event_callback,
                 fallback_llm=self.llm,
                 rag_state=stage_1_rag_state,
                 review_unit_state=stage_1_review_unit_state,
                 candidate_ledger=candidate_ledger,
+                inference_profile=inference_profile,
+                agent_service=self.agent_service if use_mcp else None,
             )
+            omitted_stage1_hunks = tuple(sorted(
+                stage_1_review_unit_state.omitted_hunk_ids
+            ))
+            if omitted_stage1_hunks:
+                hunk_coverage.mark_budget_omitted_hunks(
+                    omitted_stage1_hunks,
+                    reason=(
+                        "finite Stage 1 input/invocation budget: "
+                        f"omitted_units={stage_1_review_unit_state.omitted_unit_count}, "
+                        "omitted_context_chars="
+                        f"{stage_1_review_unit_state.omitted_context_chars}"
+                    ),
+                )
+                logger.warning(
+                    "Stage 1 completed with explicit bounded omissions: "
+                    "hunks=%d units=%d context_chars=%d",
+                    len(omitted_stage1_hunks),
+                    stage_1_review_unit_state.omitted_unit_count,
+                    stage_1_review_unit_state.omitted_context_chars,
+                )
             hunk_coverage.mark_reviewed_hunks(
-                stage_1_review_unit_state.reviewed_hunk_ids
+                stage_1_review_unit_state.reviewed_hunk_ids,
+                allow_excluded=True,
             )
             
             # Cross-batch deduplication applies only to active findings.
@@ -1196,11 +731,12 @@ class MultiStageReviewOrchestrator:
             if VERIFICATION_ENABLED:
                 _emit_status(self.event_callback, "verification_started", "Verifying issues against file contents...")
                 file_issues = await run_verification_agent(
-                    with_stage_output_cap(self.llm, "verification", inference_profile),
+                    self.llm,
                     file_issues,
                     request,
                     processed_diff,
                     candidate_ledger,
+                    inference_profile=inference_profile,
                 )
                 _emit_progress(self.event_callback, 75, f"Verification Complete: {len(file_issues)} total issues after verification")
             else:
@@ -1218,31 +754,74 @@ class MultiStageReviewOrchestrator:
                 review_plan,
                 file_issues,
             )
+            stage_2_degraded = False
             if run_stage_2:
                 _emit_status(
                     self.event_callback,
                     "stage_2_started",
                     f"Stage 2: Analyzing cross-file patterns ({stage_2_reason})...",
                 )
-                prefetched_cross_module_context = (
-                    await stage_2_context_task
-                    if stage_2_context_task is not None
-                    else None
-                )
-                cross_file_results = await execute_stage_2_cross_file(
-                    with_stage_output_cap(self.llm, "stage_2", inference_profile),
-                    request,
-                    file_issues,
-                    review_plan,
-                    processed_diff=processed_diff,
-                    rag_client=request_rag_client,
-                    fallback_llm=self.llm,
-                    prefetched_cross_module_context=prefetched_cross_module_context,
-                    visible_evidence_by_id=stage_2_visible_evidence_by_id,
-                    visible_prompt_hunk_ids=stage_2_visible_prompt_hunk_ids,
-                    prompt_provenance=stage_2_prompt_provenance,
-                    pr_evidence_ledger=pr_evidence_ledger,
-                )
+                try:
+                    cross_file_results = await execute_stage_2_cross_file(
+                        self.llm,
+                        request,
+                        file_issues,
+                        review_plan,
+                        processed_diff=processed_diff,
+                        fallback_llm=self.llm,
+                        visible_prompt_hunk_ids=stage_2_visible_prompt_hunk_ids,
+                        prompt_provenance=stage_2_prompt_provenance,
+                        pr_evidence_ledger=pr_evidence_ledger,
+                        inference_profile=inference_profile,
+                    )
+                except Stage2GenerationError as exc:
+                    stage_2_degraded = True
+                    stage_2_prompt_provenance["degraded"] = "true"
+                    stage_2_prompt_provenance[
+                        "degradedReason"
+                    ] = "response_exhausted"
+                    active_severities = {
+                        str(issue.severity or "").upper()
+                        for issue in file_issues
+                        if getattr(issue, "isResolved", False) is not True
+                    }
+                    risk_level = next(
+                        (
+                            severity
+                            for severity in (
+                                "CRITICAL",
+                                "HIGH",
+                                "MEDIUM",
+                                "LOW",
+                            )
+                            if severity in active_severities
+                        ),
+                        "LOW",
+                    )
+                    cross_file_results = CrossFileAnalysisResult(
+                        pr_risk_level=risk_level,
+                        cross_file_issues=[],
+                        pr_recommendation=(
+                            "Cross-file synthesis unavailable after response "
+                            "exhaustion; validated file-level findings were retained."
+                        ),
+                        confidence="LOW",
+                    )
+                    logger.warning(
+                        "[%s] Stage 2 degraded after response exhaustion; "
+                        "retaining %d validated file-level finding(s): %s",
+                        _review_log_id(request),
+                        len(file_issues),
+                        exc,
+                    )
+                    _emit_status(
+                        self.event_callback,
+                        "stage_2_degraded",
+                        (
+                            "Cross-file synthesis was unavailable; continuing "
+                            "with validated file-level findings."
+                        ),
+                    )
                 coverage_gate = gate_task_coverage_candidates(
                     cross_file_results.cross_file_issues,
                     incremental=bool(is_incremental),
@@ -1251,7 +830,10 @@ class MultiStageReviewOrchestrator:
                         issue.id
                         for issue in (request.previousCodeAnalysisIssues or ())
                     ),
-                    ledger=pr_evidence_ledger,
+                    ledger=stage_2_coverage_ledger(
+                        pr_evidence_ledger,
+                        stage_2_prompt_provenance,
+                    ),
                 )
                 if coverage_gate.rejected:
                     cross_file_results.cross_file_issues = list(
@@ -1278,8 +860,6 @@ class MultiStageReviewOrchestrator:
                         ),
                     )
             else:
-                if stage_2_context_task and not stage_2_context_task.done():
-                    stage_2_context_task.cancel()
                 logger.info("Fast check: skipping Stage 2 (%s)", stage_2_reason)
                 _emit_status(
                     self.event_callback,
@@ -1302,7 +882,7 @@ class MultiStageReviewOrchestrator:
                     stage_1_review_unit_state,
                     candidate_ledger,
                     stage_2_visible_prompt_hunk_ids,
-                    stage_2_visible_evidence_by_id,
+                    stage_1_rag_state.exact_evidence_by_id,
                     stage_2_prompt_provenance,
                 )
                 file_issues.extend(cross_issues_converted)
@@ -1331,23 +911,6 @@ class MultiStageReviewOrchestrator:
             exact_evidence_by_id = dict(
                 stage_1_rag_state.exact_evidence_by_id
             )
-            for evidence_id, facts in stage_2_visible_evidence_by_id.items():
-                existing = exact_evidence_by_id.get(evidence_id, ())
-                exact_evidence_by_id[evidence_id] = tuple(sorted(
-                    {
-                        json.dumps(
-                            fact,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ): fact
-                        for fact in (*existing, *facts)
-                    }.values(),
-                    key=lambda fact: json.dumps(
-                        fact,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                ))
             file_issues = apply_plugin_validation_gate(
                 file_issues,
                 request,
@@ -1359,7 +922,15 @@ class MultiStageReviewOrchestrator:
             )
             hunk_coverage.mark_validated()
 
-            _emit_progress(self.event_callback, 85, "Stage 2 Complete: Cross-file analysis finished")
+            _emit_progress(
+                self.event_callback,
+                85,
+                (
+                    "Stage 2 Degraded: file-level findings retained"
+                    if stage_2_degraded
+                    else "Stage 2 Complete: Cross-file analysis finished"
+                ),
+            )
 
             # === FINAL DEDUP: after ALL issue-finding stages (1 + 1.5 + 2) ===
             # Historical resolutions are lifecycle updates, not competing
@@ -1386,8 +957,13 @@ class MultiStageReviewOrchestrator:
                     ),
                 )
                 deduplicated_active_issues = await deduplicate_final_issues_llm(
-                    with_stage_output_cap(self.llm, "dedup", inference_profile),
+                    self.llm,
                     active_issues,
+                    max_allowed_tokens=getattr(
+                        request,
+                        "maxAllowedTokens",
+                        None,
+                    ),
                 )
             else:
                 fast_dedup = should_use_fast_dedup(
@@ -1463,6 +1039,7 @@ class MultiStageReviewOrchestrator:
             removed_cross_file_count = _retain_published_cross_file_issues(
                 cross_file_results,
                 file_issues,
+                preserve_degraded=stage_2_degraded,
             )
             if removed_cross_file_count:
                 logger.info(
@@ -1473,7 +1050,7 @@ class MultiStageReviewOrchestrator:
             # === STAGE 3: Aggregation ===
             _emit_status(self.event_callback, "stage_3_started", "Stage 3: Generating final report...")
             stage_3_result = await execute_stage_3_aggregation(
-                with_stage_output_cap(self.llm, "stage_3", inference_profile),
+                self.llm,
                 request,
                 review_plan,
                 file_issues,
@@ -1482,6 +1059,7 @@ class MultiStageReviewOrchestrator:
                 mcp_client=self.client if use_mcp else None,
                 use_mcp_tools=use_mcp,
                 fallback_llm=self.llm,
+                inference_profile=inference_profile,
             )
             final_report = stage_3_result["report"]
             task_key = _task_evidence_key(request)
@@ -1537,7 +1115,6 @@ class MultiStageReviewOrchestrator:
                 stage_1_rag_state,
                 candidate_ledger,
                 request=request,
-                pr_indexed=self._pr_indexed,
             )
             logger.info("Review hunk coverage complete: %s", hunk_coverage.summary())
 
@@ -1564,25 +1141,6 @@ class MultiStageReviewOrchestrator:
                 exc_info=True,
             )
             raise
-        finally:
-            if stage_2_context_task and not stage_2_context_task.done():
-                stage_2_context_task.cancel()
-                try:
-                    await stage_2_context_task
-                except asyncio.CancelledError:
-                    pass
-            elif stage_2_context_task and stage_2_context_task.done() and not stage_2_context_task.cancelled():
-                try:
-                    stage_2_context_task.exception()
-                except Exception:
-                    pass
-            # PR-indexed data is intentionally NOT cleaned up here.
-            # It persists so that subsequent PR context queries can use it.
-            # Cleanup happens via:
-            #   - Webhook handlers on PR close/merge (Java side)
-            #   - Re-analysis re-indexes (pr.py deletes old data first)
-            pass
-
     def _count_files(self, plan) -> int:
         """Count total files in review plan."""
         return sum(len(g.files) for g in plan.file_groups)
@@ -1743,25 +1301,100 @@ def _register_stage_2_candidates(
     review_units: Stage1ReviewUnitState,
     candidate_ledger: CandidateEvidenceLedger,
     visible_prompt_hunk_ids: set[str],
-    visible_evidence_by_id: Dict[
+    evidence_catalog_by_id: Dict[
         str, tuple[Dict[str, Any], ...]
     ],
     prompt_provenance: Dict[str, str],
 ) -> None:
     """Tie cross-file candidates back to the completed Stage 1 hunk units."""
     prompt_digest = prompt_provenance.get("generationPromptDigest")
-    if not prompt_digest:
+    try:
+        issue_prompt_digests = json.loads(
+            prompt_provenance.get("issuePromptDigests", "{}")
+        )
+        issue_prompt_hunks = json.loads(
+            prompt_provenance.get("issuePromptHunkIds", "{}")
+        )
+        issue_prompt_evidence_ids = json.loads(
+            prompt_provenance.get("issuePromptEvidenceIds", "{}")
+        )
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            "Stage 2 candidate prompt provenance is malformed"
+        ) from exc
+    if not isinstance(issue_prompt_digests, dict):
+        issue_prompt_digests = {}
+    if not isinstance(issue_prompt_hunks, dict):
+        issue_prompt_hunks = {}
+    if not isinstance(issue_prompt_evidence_ids, dict):
+        issue_prompt_evidence_ids = {}
+    if not prompt_digest and not issue_prompt_digests:
         raise RuntimeError(
             "Stage 2 candidates have no exact generation prompt provenance"
         )
     for index, issue in enumerate(issues):
+        issue_id = str(issue.id or "")
+        exact_prompt_digest = issue_prompt_digests.get(issue_id, prompt_digest)
+        if not isinstance(exact_prompt_digest, str) or not exact_prompt_digest:
+            raise RuntimeError(
+                "Stage 2 candidate has no issue-specific generation prompt "
+                f"provenance: {issue_id or index}"
+            )
+        exact_visible_hunks_value = issue_prompt_hunks.get(issue_id)
+        if issue_prompt_digests and not isinstance(
+            exact_visible_hunks_value,
+            list,
+        ):
+            raise RuntimeError(
+                "Stage 2 candidate has no issue-specific visible-hunk "
+                f"provenance: {issue_id or index}"
+            )
+        exact_visible_hunks = {
+            str(hunk_id)
+            for hunk_id in (
+                exact_visible_hunks_value
+                if isinstance(exact_visible_hunks_value, list)
+                else visible_prompt_hunk_ids
+            )
+            if isinstance(hunk_id, str) and hunk_id
+        }
+        exact_visible_evidence_value = issue_prompt_evidence_ids.get(
+            issue_id,
+            [],
+        )
+        exact_visible_evidence_ids = {
+            str(evidence_id).strip()
+            for evidence_id in (
+                exact_visible_evidence_value
+                if isinstance(exact_visible_evidence_value, list)
+                else []
+            )
+            if isinstance(evidence_id, str) and evidence_id.strip()
+        }
+        exact_visible_evidence = {
+            evidence_id: evidence_catalog_by_id[evidence_id]
+            for evidence_id in sorted(exact_visible_evidence_ids)
+            if evidence_id in evidence_catalog_by_id
+        }
+        canonical_hunks = canonicalize_prompt_visible_line_anchor(
+            issue,
+            processed_diff,
+            exact_visible_hunks,
+        )
+        if canonical_hunks:
+            logger.info(
+                "Stage 2 canonicalized candidate %s to an exact "
+                "prompt-visible source line in hunk %s",
+                issue_id or index,
+                canonical_hunks[0],
+            )
         anchor_hunk_ids = reviewable_hunk_ids_for_issue(
             issue,
             request,
             processed_diff,
         )
         prompt_hunk_ids = tuple(sorted(
-            set(anchor_hunk_ids) & visible_prompt_hunk_ids
+            set(anchor_hunk_ids) & exact_visible_hunks
         ))
         unit_ids = tuple(sorted({
             unit_id
@@ -1774,14 +1407,16 @@ def _register_stage_2_candidates(
             source_key=str(index),
             review_unit_ids=unit_ids,
             prompt_hunk_ids=prompt_hunk_ids,
-            prompt_digest=prompt_digest,
-            visible_evidence_by_id=visible_evidence_by_id,
+            prompt_digest=exact_prompt_digest,
+            visible_evidence_by_id=exact_visible_evidence,
         )
 
 
 def _retain_published_cross_file_issues(
     cross_file_results: CrossFileAnalysisResult,
     published_issues: List[CodeReviewIssue],
+    *,
+    preserve_degraded: bool = False,
 ) -> int:
     """Limit Stage 3 context to findings that passed the publication gate."""
     published_keys = {
@@ -1820,12 +1455,23 @@ def _retain_published_cross_file_issues(
         ),
         "LOW",
     )
-    if "CRITICAL" in active_severities:
-        cross_file_results.pr_recommendation = "FAIL"
-    elif active_severities:
-        cross_file_results.pr_recommendation = "PASS_WITH_WARNINGS"
+    if preserve_degraded:
+        degraded_detail = cross_file_results.pr_recommendation
+        if "CRITICAL" in active_severities:
+            cross_file_results.pr_recommendation = (
+                f"FAIL — {degraded_detail}"
+            )
+        elif active_severities:
+            cross_file_results.pr_recommendation = (
+                f"PASS_WITH_WARNINGS — {degraded_detail}"
+            )
     else:
-        cross_file_results.pr_recommendation = "PASS"
+        if "CRITICAL" in active_severities:
+            cross_file_results.pr_recommendation = "FAIL"
+        elif active_severities:
+            cross_file_results.pr_recommendation = "PASS_WITH_WARNINGS"
+        else:
+            cross_file_results.pr_recommendation = "PASS"
 
     return len(original) - len(retained)
 

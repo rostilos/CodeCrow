@@ -18,19 +18,6 @@ import java.util.Optional;
 
 public interface JobRepository extends JpaRepository<Job, Long> {
 
-    /**
-     * Scalar identity for a legacy incremental RAG job whose producer may
-     * have disappeared. Keeping recovery coordinates scalar avoids carrying
-     * detached project proxies out of the repository transaction.
-     */
-    interface LegacyRagJobRecoveryCoordinates {
-        Long getJobId();
-        Long getProjectId();
-        String getBranchName();
-        String getCommitHash();
-        String getErrorMessage();
-    }
-
     Optional<Job> findByExternalId(String externalId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -146,7 +133,7 @@ public interface JobRepository extends JpaRepository<Job, Long> {
 
     /**
      * A PR accepted after a target-branch update must wait until that older
-     * branch job has reconciled repository state and published its RAG update.
+     * branch job has published its immutable repository-index generation.
      * Later branch jobs wait for the PR instead, so the persisted job id gives
      * both directions one deadlock-free ordering rule.
      */
@@ -203,6 +190,105 @@ public interface JobRepository extends JpaRepository<Job, Long> {
             @Param("currentJobId") Long currentJobId
     );
 
+    @Query("SELECT j FROM Job j WHERE j.project.id = :projectId " +
+            "AND j.branchName = :branchName " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND j.status IN (org.rostilos.codecrow.core.model.job.JobStatus.PENDING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.RUNNING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.WAITING) " +
+            "ORDER BY j.id DESC")
+    List<Job> findActiveRepositoryIndexJobs(
+            @Param("projectId") Long projectId,
+            @Param("branchName") String branchName);
+
+    /**
+     * Fair, branch-serialized dispatch order. A retry diagnostic touches
+     * updatedAt, naturally rotating that candidate behind untouched work.
+     * A durable successor is not dispatchable while an older job still owns
+     * the same project/branch lane.
+     */
+    @Query("SELECT j FROM Job j WHERE " +
+            "j.jobType = org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND (j.status = org.rostilos.codecrow.core.model.job.JobStatus.PENDING " +
+            "OR (j.status = org.rostilos.codecrow.core.model.job.JobStatus.QUEUED " +
+            "AND j.updatedAt < :queuedBefore)) " +
+            "AND NOT EXISTS (SELECT older.id FROM Job older " +
+            "WHERE older.project.id = j.project.id " +
+            "AND older.branchName = j.branchName " +
+            "AND older.jobType = " +
+            "org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND older.id < j.id " +
+            "AND older.status IN (" +
+            "org.rostilos.codecrow.core.model.job.JobStatus.PENDING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.RUNNING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.WAITING)) " +
+            "ORDER BY j.updatedAt ASC, j.id ASC")
+    List<Job> findRepositoryIndexDispatchCandidates(
+            @Param("queuedBefore") OffsetDateTime queuedBefore,
+            Pageable pageable);
+
+    /**
+     * Coalesce an unclaimed successor without ever saving a stale Job entity.
+     * The status predicate makes this update mutually exclusive with dispatch
+     * claim: either the new revision becomes the claimed payload, or intake
+     * observes the failed update and creates a separate durable successor.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Job j SET j.commitHash = :revision, j.updatedAt = :updatedAt " +
+            "WHERE j.id = :jobId " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND j.status = org.rostilos.codecrow.core.model.job.JobStatus.PENDING")
+    int updatePendingRepositoryIndexRevision(
+            @Param("jobId") Long jobId,
+            @Param("revision") String revision,
+            @Param("updatedAt") OffsetDateTime updatedAt);
+
+    /** Promote an unclaimed automatic request to an operator-owned rebuild. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Job j SET j.triggerSource = " +
+            "org.rostilos.codecrow.core.model.job.JobTriggerSource.UI, " +
+            "j.updatedAt = :updatedAt WHERE j.id = :jobId " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND j.status = org.rostilos.codecrow.core.model.job.JobStatus.PENDING")
+    int promotePendingRepositoryIndexJobToOperator(
+            @Param("jobId") Long jobId,
+            @Param("updatedAt") OffsetDateTime updatedAt);
+
+    /**
+     * Report a provider lookup failure without saving the detached candidate.
+     * A concurrent claim or terminal transition always retains its own state.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Job j SET j.currentStep = " +
+            "'Waiting for repository access; branch-head lookup will retry', " +
+            "j.updatedAt = :attemptedAt WHERE j.id = :jobId " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND j.status = org.rostilos.codecrow.core.model.job.JobStatus.PENDING")
+    int recordPendingRepositoryIndexAccessDeferral(
+            @Param("jobId") Long jobId,
+            @Param("attemptedAt") OffsetDateTime attemptedAt);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Job j SET j.status = org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
+            "j.commitHash = :resolvedRevision, " +
+            "j.currentStep = 'Repository-index capacity acquired', " +
+            "j.updatedAt = :claimedAt " +
+            "WHERE j.id = :jobId " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.REPOSITORY_INDEX_BUILD " +
+            "AND ((j.commitHash = :expectedRevision) " +
+            "OR (j.commitHash IS NULL AND :expectedRevision IS NULL)) " +
+            "AND (j.status = org.rostilos.codecrow.core.model.job.JobStatus.PENDING " +
+            "OR (j.status = org.rostilos.codecrow.core.model.job.JobStatus.QUEUED " +
+            "AND j.updatedAt < :queuedBefore))")
+    int claimRepositoryIndexJob(
+            @Param("jobId") Long jobId,
+            @Param("expectedRevision") String expectedRevision,
+            @Param("resolvedRevision") String resolvedRevision,
+            @Param("queuedBefore") OffsetDateTime queuedBefore,
+            @Param("claimedAt") OffsetDateTime claimedAt);
+
     @Query("SELECT j FROM Job j WHERE j.status = org.rostilos.codecrow.core.model.job.JobStatus.RUNNING " +
             "AND j.startedAt < :threshold")
     List<Job> findStuckJobs(@Param("threshold") OffsetDateTime threshold);
@@ -245,123 +331,6 @@ public interface JobRepository extends JpaRepository<Job, Long> {
     @Modifying
     @Query("UPDATE Job j SET j.updatedAt = :activityAt WHERE j.id = :jobId")
     int touchJob(@Param("jobId") Long jobId, @Param("activityAt") OffsetDateTime activityAt);
-
-    /**
-     * Atomically renew a live legacy incremental RAG producer. Exact-generation
-     * jobs are owned by {@code RagIndexOperation} and must never share this
-     * recovery path.
-     */
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query(value = """
-            UPDATE job j
-               SET updated_at = :renewedAt
-             WHERE j.id = :jobId
-               AND j.job_type = 'RAG_INCREMENTAL_INDEX'
-               AND j.status = 'RUNNING'
-               AND j.updated_at >= :validAfter
-               AND NOT EXISTS (
-                    SELECT 1
-                      FROM rag_index_operation o
-                     WHERE o.job_id = j.id
-               )
-            """, nativeQuery = true)
-    int renewLegacyRagJobLease(
-            @Param("jobId") Long jobId,
-            @Param("validAfter") OffsetDateTime validAfter,
-            @Param("renewedAt") OffsetDateTime renewedAt);
-
-    /**
-     * Find legacy incremental RAG jobs with no durable producer activity. The
-     * guarded update below remains the authority; this projection only bounds
-     * and prioritizes recovery work.
-     */
-    @Query("SELECT j.id AS jobId, j.project.id AS projectId, " +
-            "j.branchName AS branchName, j.commitHash AS commitHash, " +
-            "j.errorMessage AS errorMessage " +
-            "FROM Job j WHERE " +
-            "j.jobType = org.rostilos.codecrow.core.model.job.JobType.RAG_INCREMENTAL_INDEX " +
-            "AND j.status IN (org.rostilos.codecrow.core.model.job.JobStatus.PENDING, " +
-            "org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
-            "org.rostilos.codecrow.core.model.job.JobStatus.RUNNING, " +
-            "org.rostilos.codecrow.core.model.job.JobStatus.WAITING) " +
-            "AND j.updatedAt < :threshold " +
-            "AND NOT EXISTS (SELECT o.id FROM RagIndexOperation o WHERE o.jobId = j.id) " +
-            "ORDER BY j.updatedAt ASC")
-    List<LegacyRagJobRecoveryCoordinates> findAbandonedLegacyRagJobs(
-            @Param("threshold") OffsetDateTime threshold,
-            Pageable pageable);
-
-    /**
-     * Win recovery only if neither a heartbeat nor a terminal transition moved
-     * the row after selection. This CAS is the fencing point between a live
-     * producer and the recovery scheduler.
-     */
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query(value = """
-            UPDATE job j
-               SET status = 'FAILED',
-                   completed_at = :failedAt,
-                   error_message = :diagnostic,
-                   updated_at = :failedAt
-             WHERE j.id = :jobId
-               AND j.job_type = 'RAG_INCREMENTAL_INDEX'
-               AND j.status IN ('PENDING', 'QUEUED', 'RUNNING', 'WAITING')
-               AND j.updated_at < :threshold
-               AND NOT EXISTS (
-                    SELECT 1
-                      FROM rag_index_operation o
-                     WHERE o.job_id = j.id
-               )
-            """, nativeQuery = true)
-    int failAbandonedLegacyRagJob(
-            @Param("jobId") Long jobId,
-            @Param("threshold") OffsetDateTime threshold,
-            @Param("failedAt") OffsetDateTime failedAt,
-            @Param("diagnostic") String diagnostic);
-
-    /**
-     * Atomically win the terminal transition for a still-owned legacy RAG
-     * producer. The surrounding transaction commits this row together with
-     * project and branch checkpoints, so recovery cannot interleave between
-     * ownership proof and publication.
-     */
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query(value = """
-            UPDATE job j
-               SET status = 'COMPLETED',
-                   completed_at = :completedAt,
-                   progress = 100,
-                   updated_at = :completedAt
-             WHERE j.id = :jobId
-               AND j.job_type = 'RAG_INCREMENTAL_INDEX'
-               AND j.status = 'RUNNING'
-               AND j.updated_at >= :validAfter
-               AND NOT EXISTS (
-                    SELECT 1
-                      FROM rag_index_operation o
-                     WHERE o.job_id = j.id
-               )
-            """, nativeQuery = true)
-    int completeOwnedLegacyRagJob(
-            @Param("jobId") Long jobId,
-            @Param("validAfter") OffsetDateTime validAfter,
-            @Param("completedAt") OffsetDateTime completedAt);
-
-    /** Retry projection repair if the process stopped after failing the job. */
-    @Query("SELECT j.id AS jobId, j.project.id AS projectId, " +
-            "j.branchName AS branchName, j.commitHash AS commitHash, " +
-            "j.errorMessage AS errorMessage " +
-            "FROM Job j WHERE " +
-            "j.jobType = org.rostilos.codecrow.core.model.job.JobType.RAG_INCREMENTAL_INDEX " +
-            "AND j.status = org.rostilos.codecrow.core.model.job.JobStatus.FAILED " +
-            "AND NOT EXISTS (SELECT o.id FROM RagIndexOperation o WHERE o.jobId = j.id) " +
-            "AND EXISTS (SELECT s.id FROM RagIndexStatus s WHERE " +
-            "s.project.id = j.project.id AND s.activeJobId = j.id " +
-            "AND s.status IN (org.rostilos.codecrow.core.model.analysis.RagIndexingStatus.INDEXING, " +
-            "org.rostilos.codecrow.core.model.analysis.RagIndexingStatus.UPDATING)) " +
-            "ORDER BY j.updatedAt ASC")
-    List<LegacyRagJobRecoveryCoordinates> findFailedLegacyRagJobsWithActiveStatus(
-            Pageable pageable);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE Job j SET j.status = org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +

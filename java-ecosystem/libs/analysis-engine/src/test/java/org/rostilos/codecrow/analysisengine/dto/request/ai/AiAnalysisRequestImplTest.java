@@ -33,6 +33,9 @@ class AiAnalysisRequestImplTest {
         @DisplayName("should build with all fields")
         void shouldBuildWithAllFields() {
             List<String> changedFiles = Arrays.asList("file1.java", "file2.java");
+            List<String> proposedTreeChangedFiles = Arrays.asList(
+                    "file1.java", "file2.java", "excluded.md");
+            List<String> proposedTreeDeletedFiles = List.of("removed.bin");
             List<String> diffSnippets = Arrays.asList("snippet1", "snippet2");
 
             AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
@@ -50,6 +53,8 @@ class AiAnalysisRequestImplTest {
                     .withPrDescription("PR Description")
                     .withTaskContext(Map.of("task_key", "PROJ-123", "task_summary", "Build export"))
                     .withChangedFiles(changedFiles)
+                    .withProposedTreeChangedFiles(proposedTreeChangedFiles)
+                    .withProposedTreeDeletedFiles(proposedTreeDeletedFiles)
                     .withDiffSnippets(diffSnippets)
                     .withProjectMetadata("proj-workspace", "proj-namespace")
                     .withTargetBranchName("main")
@@ -59,6 +64,8 @@ class AiAnalysisRequestImplTest {
                     .withDeltaDiff("delta diff")
                     .withPreviousCommitHash("abc123")
                     .withCurrentCommitHash("def456")
+                    .withTargetHeadCommitHash("target789")
+                    .withBaseCommitHash("base012")
                     .build();
 
             assertThat(request.getProjectId()).isEqualTo(1L);
@@ -78,6 +85,10 @@ class AiAnalysisRequestImplTest {
             assertThat(request.getTaskContext()).containsEntry("task_key", "PROJ-123");
             assertThat(request.getTaskContext()).containsEntry("task_summary", "Build export");
             assertThat(request.getChangedFiles()).containsExactly("file1.java", "file2.java");
+            assertThat(request.getProposedTreeChangedFiles())
+                    .containsExactlyElementsOf(proposedTreeChangedFiles);
+            assertThat(request.getProposedTreeDeletedFiles())
+                    .containsExactlyElementsOf(proposedTreeDeletedFiles);
             assertThat(request.getDiffSnippets()).containsExactly("snippet1", "snippet2");
             assertThat(request.getProjectWorkspace()).isEqualTo("proj-workspace");
             assertThat(request.getProjectNamespace()).isEqualTo("proj-namespace");
@@ -88,6 +99,8 @@ class AiAnalysisRequestImplTest {
             assertThat(request.getDeltaDiff()).isEqualTo("delta diff");
             assertThat(request.getPreviousCommitHash()).isEqualTo("abc123");
             assertThat(request.getCurrentCommitHash()).isEqualTo("def456");
+            assertThat(request.getTargetHeadCommitHash()).isEqualTo("target789");
+            assertThat(request.getBaseCommitHash()).isEqualTo("base012");
         }
 
         @Test
@@ -95,10 +108,25 @@ class AiAnalysisRequestImplTest {
         void shouldDefaultAnalysisModeToFullWhenNotSet() {
             AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
                     .withProjectId(1L)
+                    .withChangedFiles(List.of("selected.java"))
+                    .withDeletedFiles(List.of("selected-deleted.java"))
                     .build();
 
             assertThat(request.getAnalysisMode()).isEqualTo(AnalysisMode.FULL);
             assertThat(request.getRagEnabled()).isTrue();
+            assertThat(request.getProposedTreeChangedFiles()).containsExactly("selected.java");
+            assertThat(request.getProposedTreeDeletedFiles()).containsExactly("selected-deleted.java");
+        }
+
+        @Test
+        @DisplayName("should use the legacy base commit when target head is absent")
+        void shouldUseBaseCommitAsTargetHeadFallback() {
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withBaseCommitHash("legacy-target-head")
+                    .build();
+
+            assertThat(request.getTargetHeadCommitHash())
+                    .isEqualTo("legacy-target-head");
         }
 
         @Test
@@ -296,6 +324,36 @@ class AiAnalysisRequestImplTest {
             CodeAnalysisIssue issue1 = createIssue(1L, "File.java", 10, IssueSeverity.HIGH, "Bug 1", false, 1);
             CodeAnalysisIssue issue2 = createIssue(2L, "Other.java", 20, IssueSeverity.LOW, "Bug 2", false, 1);
 
+            CodeAnalysis analysis = mock(CodeAnalysis.class);
+            when(analysis.getIssues()).thenReturn(List.of(issue1, issue2));
+
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withAllPrAnalysesData(List.of(analysis))
+                    .build();
+
+            assertThat(request.getPreviousCodeAnalysisIssues()).hasSize(2);
+        }
+
+        @Test
+        @DisplayName("should not merge issues whose reasons differ after a shared long prefix")
+        void shouldUseCompleteReasonForDeduplication() {
+            String sharedPrefix = "same diagnostic prefix ".repeat(4);
+            CodeAnalysisIssue issue1 = createIssue(
+                    1L,
+                    "File.java",
+                    10,
+                    IssueSeverity.HIGH,
+                    sharedPrefix + "first root cause",
+                    false,
+                    1);
+            CodeAnalysisIssue issue2 = createIssue(
+                    2L,
+                    "File.java",
+                    10,
+                    IssueSeverity.HIGH,
+                    sharedPrefix + "second independent root cause",
+                    false,
+                    1);
             CodeAnalysis analysis = mock(CodeAnalysis.class);
             when(analysis.getIssues()).thenReturn(List.of(issue1, issue2));
 

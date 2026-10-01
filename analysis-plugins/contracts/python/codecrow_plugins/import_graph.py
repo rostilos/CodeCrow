@@ -12,6 +12,7 @@ import gzip
 import json
 from dataclasses import dataclass, field
 from typing import Callable, Mapping
+from types import MappingProxyType
 
 from .api import (
     ArchitecturePacket,
@@ -19,7 +20,6 @@ from .api import (
     GraphFact,
     PluginOutcome,
     RepositoryAnalysis,
-    RepositoryAnalysisMode,
     RepositorySnapshot,
 )
 
@@ -66,9 +66,41 @@ class ImportFileRecord:
             raise ValueError("import record calls must be sorted and unique")
 
 
+class ImportRecordIndex(Mapping[str, ImportFileRecord]):
+    """Immutable lookup projection built once for one repository join.
+
+    Module/export strings remain plugin-owned identifiers; the neutral index
+    applies no namespace, classpath, package-manager, or path semantics.
+    """
+
+    def __init__(self, records: Mapping[str, ImportFileRecord]) -> None:
+        self._records = dict(records)
+        modules: dict[str, list[ImportFileRecord]] = {}
+        exports: dict[tuple[str, str], list[ImportFileRecord]] = {}
+        for record in self._records.values():
+            modules.setdefault(record.module, []).append(record)
+            for name in record.exports:
+                exports.setdefault((record.module, name), []).append(record)
+        self.by_module = MappingProxyType({
+            name: tuple(values) for name, values in modules.items()
+        })
+        self.by_export = MappingProxyType({
+            name: tuple(values) for name, values in exports.items()
+        })
+
+    def __getitem__(self, path: str) -> ImportFileRecord:
+        return self._records[path]
+
+    def __iter__(self):
+        return iter(self._records)
+
+    def __len__(self) -> int:
+        return len(self._records)
+
+
 RecordParser = Callable[[FileArtifact], ImportFileRecord | None]
 ModuleResolver = Callable[
-    [ImportFileRecord, ImportBinding, Mapping[str, ImportFileRecord]],
+    [ImportFileRecord, ImportBinding, ImportRecordIndex],
     str,
 ]
 
@@ -144,9 +176,6 @@ class ImportGraphSession:
     parser: RecordParser = field(compare=False, repr=False)
     resolver: ModuleResolver = field(compare=False, repr=False)
     _records: dict[str, ImportFileRecord] = field(default_factory=dict)
-    _baseline_records: dict[str, ImportFileRecord] = field(default_factory=dict)
-    _changed_paths: set[str] = field(default_factory=set)
-    _analysis_mode: RepositoryAnalysisMode = RepositoryAnalysisMode.FULL_INDEX
 
     @classmethod
     def restore(
@@ -192,17 +221,10 @@ class ImportGraphSession:
             parser=parser,
             resolver=resolver,
             _records=dict(records),
-            _baseline_records=dict(records),
         )
-
-    def set_analysis_mode(self, mode: RepositoryAnalysisMode) -> None:
-        if not isinstance(mode, RepositoryAnalysisMode):
-            raise ValueError("repository analysis mode is invalid")
-        self._analysis_mode = mode
 
     def ingest(self, artifacts: tuple[FileArtifact, ...]) -> None:
         for artifact in artifacts:
-            self._changed_paths.add(artifact.path)
             self._records.pop(artifact.path, None)
             if artifact.deleted:
                 continue
@@ -234,12 +256,13 @@ class ImportGraphSession:
     ) -> tuple[ArchitecturePacket, ...]:
         packets: list[ArchitecturePacket] = []
         prefix = self.plugin_id
+        indexed_records = ImportRecordIndex(records)
         for source_path, record in sorted(records.items()):
             facts: set[GraphFact] = set()
             packet_paths: set[str] = {source_path}
             resolved_by_local: dict[str, tuple[ImportBinding, str]] = {}
             for binding in record.imports:
-                target_path = self.resolver(record, binding, records)
+                target_path = self.resolver(record, binding, indexed_records)
                 if not target_path or target_path == source_path:
                     continue
                 target = records.get(target_path)
@@ -315,91 +338,8 @@ class ImportGraphSession:
                 ))
         return tuple(sorted(packets))
 
-    @staticmethod
-    def _relation_identity(fact: GraphFact) -> tuple[object, ...]:
-        """Identify one relationship independently from source line movement."""
-        return (
-            fact.kind,
-            fact.source,
-            fact.relation,
-            fact.target,
-            fact.path,
-            fact.attributes,
-            fact.related_paths,
-        )
-
-    def _removed_relation_packets(
-        self,
-        current_packets: tuple[ArchitecturePacket, ...],
-    ) -> tuple[ArchitecturePacket, ...]:
-        """Preserve exact navigation when a PR removes a base relationship.
-
-        Prompt assembly correctly rejects a base architecture packet touching
-        a changed file as stale.  A PR-owned transition fact keeps the exact
-        path to unchanged related source without claiming the removal is a
-        defect.
-        """
-        if (
-            self._analysis_mode is not RepositoryAnalysisMode.PR_OVERLAY
-            or not self._baseline_records
-            or not self._changed_paths
-        ):
-            return ()
-
-        baseline_packets = self._packets_for(self._baseline_records)
-        current_identities = {
-            self._relation_identity(fact)
-            for packet in current_packets
-            for fact in packet.facts
-        }
-        removed_by_path: dict[str, set[GraphFact]] = {}
-        for packet in baseline_packets:
-            for fact in packet.facts:
-                if fact.path not in self._changed_paths:
-                    continue
-                if self._relation_identity(fact) in current_identities:
-                    continue
-                removed_by_path.setdefault(fact.path, set()).add(GraphFact(
-                    f"{self.plugin_id}-pr-removed-relation",
-                    fact.source,
-                    "removed-from-pr-overlay",
-                    fact.target,
-                    fact.path,
-                    fact.line,
-                    attributes=tuple(sorted((
-                        ("originalKind", fact.kind),
-                        ("originalRelation", fact.relation),
-                        ("state", "absent-in-pr-overlay"),
-                    ))),
-                    related_paths=fact.related_paths,
-                ))
-
-        return tuple(sorted(
-            ArchitecturePacket(
-                plugin_id=self.plugin_id,
-                kind=f"{self.plugin_id}-import-graph-delta",
-                key=f"removed:{source_path}",
-                paths=tuple(sorted({
-                    source_path,
-                    *(
-                        related_path
-                        for fact in facts
-                        for related_path in fact.related_paths
-                    ),
-                })),
-                facts=tuple(sorted(facts)),
-                attributes=(
-                    ("evidenceRole", "navigation"),
-                    ("state", "base-to-pr-transition"),
-                ),
-            )
-            for source_path, facts in sorted(removed_by_path.items())
-            if facts
-        ))
-
     def _packets(self) -> tuple[ArchitecturePacket, ...]:
-        current = self._packets_for(self._records)
-        return tuple(sorted((*current, *self._removed_relation_packets(current))))
+        return self._packets_for(self._records)
 
     def finish(self, dependencies: RepositoryAnalysis):
         return PluginOutcome.handled(RepositoryAnalysis(

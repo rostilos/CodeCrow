@@ -39,7 +39,7 @@ public class PlatformMcpServer {
     private static final ObjectMapper objectMapper;
     private static final PlatformMcpTools mcpTools;
 
-    /** Serialize tool execution — see McpStdioServer javadoc for rationale. */
+    /** Serialize access to the shared platform tool implementation. */
     private static final Semaphore TOOL_SEMAPHORE = new Semaphore(1, true);
     
     static {
@@ -209,10 +209,6 @@ public class PlatformMcpServer {
                     "filePath": {
                       "type": "string",
                       "description": "Filter by file path pattern"
-                    },
-                    "limit": {
-                      "type": "integer",
-                      "description": "Maximum number of issues to return (default: 20)"
                     }
                   },
                   "required": ["projectId"]
@@ -220,7 +216,7 @@ public class PlatformMcpServer {
                 """;
         tools.add(new Tool(
             "searchIssues", 
-            "Search for code issues in a project with optional filters for severity, category, and file path.",
+            "Search for all matching code issues in a project with optional filters for severity, category, and file path.",
             searchIssuesSchema
         ));
 

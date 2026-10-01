@@ -7,10 +7,19 @@ Covers: _build_summarize_prompt, _build_ask_prompt, _build_jvm_props_for_*,
 """
 import pytest
 import json
-import logging
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from service.command.command_service import CommandService
+from service.command.command_service import (
+    AskOutput,
+    COMMAND_MAX_OUTPUT_TOKENS,
+    CommandInputLimitError,
+    CommandService,
+    _CommandProviderInputGuard,
+    _command_input_token_budget,
+    _estimated_command_input_tokens,
+)
+from utils.mcp_config import MCPConfigBuilder
 
 
 @pytest.fixture
@@ -78,42 +87,6 @@ class TestBuildJvmPropsForAsk:
         assert isinstance(result, dict)
 
 
-@pytest.mark.asyncio(loop_scope="function")
-async def test_summarize_rag_failure_has_one_owner_diagnostic_and_event(
-    service,
-    caplog,
-):
-    service.rag_client.get_pr_context = AsyncMock(return_value={
-        "status": "error",
-        "status_code": 503,
-        "error": "RAG service unavailable",
-    })
-    request = MagicMock(
-        projectWorkspace="ws",
-        projectNamespace="project",
-        pullRequestId=42,
-    )
-    request.get_rag_branch.return_value = "main"
-    request.get_rag_base_branch.return_value = None
-    events = []
-
-    with caplog.at_level(
-        logging.WARNING,
-        logger="service.command.command_service",
-    ):
-        result = await service._fetch_rag_context_for_summarize(
-            request,
-            events.append,
-        )
-
-    assert result is None
-    assert sum(
-        "Optional RAG context unavailable for summarize" in record.getMessage()
-        for record in caplog.records
-    ) == 1
-    assert any(event.get("state") == "rag_skipped" for event in events)
-
-
 # ── _build_platform_jvm_props ────────────────────────────────────
 
 class TestBuildPlatformJvmProps:
@@ -146,6 +119,46 @@ class TestBuildPlatformJvmProps:
         result = service._build_platform_jvm_props(request)
         assert result.get("oAuthClient") == "client"
 
+    @patch("os.path.exists", return_value=True)
+    def test_command_credentials_and_internal_secret_do_not_enter_process_args(
+            self,
+            mock_exists,
+            service,
+    ):
+        request = MagicMock(
+            projectId=5,
+            pullRequestId=10,
+            projectVcsWorkspace="ws",
+            projectVcsRepoSlug="repo",
+            accessToken="command-flow-token-sentinel",
+            oAuthClient=None,
+            oAuthSecret=None,
+            vcsProvider="github",
+            vcsBaseUrl=None,
+        )
+        with patch.dict(
+                "os.environ",
+                {"INTERNAL_API_SECRET": "command-internal-secret-sentinel"},
+        ):
+            platform_props = service._build_platform_jvm_props(request)
+
+        config = MCPConfigBuilder.build_config(
+            "/vcs.jar",
+            include_platform_mcp=True,
+            platform_mcp_jar_path="/platform.jar",
+            platform_jvm_props=platform_props,
+        )["mcpServers"]["codecrow-platform-mcp"]
+        loggable_args = " ".join(config["args"])
+
+        assert "command-flow-token-sentinel" not in loggable_args
+        assert "command-internal-secret-sentinel" not in loggable_args
+        assert config["env"]["CODECROW_MCP_ACCESS_TOKEN"] == (
+            "command-flow-token-sentinel"
+        )
+        assert config["env"]["CODECROW_MCP_INTERNAL_API_SECRET"] == (
+            "command-internal-secret-sentinel"
+        )
+
 
 # ── _build_summarize_prompt ──────────────────────────────────────
 
@@ -159,39 +172,11 @@ class TestBuildSummarizePrompt:
             sourceBranch="feature/abc",
             targetBranch="main",
         )
-        result = service._build_summarize_prompt(request, None)
+        result = service._build_summarize_prompt(request)
         assert "PR #42" in result or "#42" in result
         assert "ws" in result
         assert "repo" in result
         assert "ASCII" in result
-
-    def test_with_rag_context_list(self, service):
-        request = MagicMock(
-            pullRequestId=1,
-            projectVcsWorkspace="ws",
-            projectVcsRepoSlug="repo",
-            supportsMermaid=True,
-            sourceBranch="feat",
-            targetBranch="main",
-        )
-        rag_ctx = [{"text": "some code context"}]
-        result = service._build_summarize_prompt(request, rag_ctx)
-        assert "RELEVANT CODEBASE CONTEXT" in result
-        assert "some code context" in result
-
-    def test_with_rag_context_dict(self, service):
-        request = MagicMock(
-            pullRequestId=1,
-            projectVcsWorkspace="ws",
-            projectVcsRepoSlug="repo",
-            supportsMermaid=False,
-            sourceBranch="feat",
-            targetBranch="main",
-        )
-        rag_ctx = {"relevant_code": [{"text": "code here", "metadata": {"path": "a.py"}}]}
-        result = service._build_summarize_prompt(request, rag_ctx)
-        assert "code here" in result
-
 
 # ── _build_ask_prompt ────────────────────────────────────────────
 
@@ -253,7 +238,7 @@ class TestBuildAskPrompt:
         assert "#312" in result
         assert "getIssueDetails" in result
 
-    def test_with_rag_context_list(self, service):
+    def test_with_deterministic_code_matches(self, service):
         request = MagicMock(
             question="Q?",
             pullRequestId=None,
@@ -262,9 +247,72 @@ class TestBuildAskPrompt:
             analysisContext=None,
             issueReferences=None,
         )
-        rag = [{"text": "relevant code", "path": "file.py"}]
-        result = service._build_ask_prompt(request, rag)
-        assert "relevant code" in result
+        matches = [{
+            "text": "def authenticate(): ...",
+            "path": "file.py",
+            "match_reasons": ["symbol:authenticate", "path:file.py"],
+        }]
+        result = service._build_ask_prompt(request, matches)
+        assert "DETERMINISTIC REPOSITORY SEARCH MATCHES" in result
+        assert "def authenticate(): ..." in result
+        assert "rank score" not in result
+        assert "symbol:authenticate" in result
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_code_search_failure_is_fail_open(self, service):
+        service.rag_client.search_code = AsyncMock(return_value={
+            "status": "error",
+            "status_code": 503,
+            "error": "search unavailable",
+            "results": [],
+        })
+        request = MagicMock(
+            projectWorkspace="ws",
+            projectNamespace="project",
+            question="where is authentication handled?",
+            branch="main",
+            repositoryRevision="abc123",
+            ragGenerationManifestSha256="receipt",
+            ragCollectionTarget="generation-collection",
+        )
+        events = []
+
+        result = await service._search_code_for_ask(request, events.append)
+
+        assert result is None
+        service.rag_client.search_code.assert_awaited_once_with(
+            workspace="ws",
+            project="project",
+            query="where is authentication handled?",
+            branch="main",
+            repository_revision="abc123",
+            repository_generation_manifest_sha256="receipt",
+            collection_target="generation-collection",
+        )
+        assert any(event.get("state") == "code_search_skipped" for event in events)
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_code_search_without_complete_binding_uses_exact_tools_only(
+        self,
+        service,
+    ):
+        service.rag_client.search_code = AsyncMock()
+        request = MagicMock(
+            projectWorkspace="ws",
+            projectNamespace="project",
+            question="where is authentication handled?",
+            branch="main",
+            repositoryRevision=None,
+            ragGenerationManifestSha256=None,
+            ragCollectionTarget=None,
+        )
+        events = []
+
+        result = await service._search_code_for_ask(request, events.append)
+
+        assert result is None
+        service.rag_client.search_code.assert_not_awaited()
+        assert any(event.get("state") == "code_search_skipped" for event in events)
 
     def test_no_pr_context(self, service):
         request = MagicMock(
@@ -277,6 +325,164 @@ class TestBuildAskPrompt:
         )
         result = service._build_ask_prompt(request, None)
         assert "Q?" in result
+
+    def test_partial_code_search_is_explicit_and_all_matches_are_rendered(self, service):
+        request = MagicMock(
+            question="Q?",
+            pullRequestId=None,
+            projectVcsWorkspace="ws",
+            projectVcsRepoSlug="repo",
+            analysisContext=None,
+            issueReferences=None,
+        )
+        search = {
+            "results": [
+                {"path": f"src/{index}.py", "text": f"marker-{index}"}
+                for index in range(150)
+            ],
+            "coverage": {
+                "complete": False,
+                "partial_reasons": ["global_matching_point_limit"],
+            },
+        }
+
+        prompt = service._build_ask_prompt(request, search)
+
+        assert "Search coverage: PARTIAL/UNKNOWN" in prompt
+        for index in range(150):
+            assert prompt.count(f"marker-{index}\n") == 1
+
+
+class TestCommandInputPacking:
+    def test_request_budget_reserves_output_without_setting_output_cap(self):
+        assert _command_input_token_budget(MagicMock(maxAllowedTokens=50_000)) == 30_000
+        assert _command_input_token_budget(MagicMock(maxAllowedTokens=200_000)) == 60_000
+        assert _command_input_token_budget(MagicMock(maxAllowedTokens=8_000)) == 4_000
+
+    def test_estimator_counts_utf8_schema_and_tools(self):
+        ascii_only = _estimated_command_input_tokens("a" * 2_000)
+        unicode_text = _estimated_command_input_tokens("界" * 2_000)
+        with_declarations = _estimated_command_input_tokens(
+            "a" * 2_000,
+            tool_definitions=[{"description": "tool" * 1_000}],
+            response_schema=AskOutput,
+        )
+        assert unicode_text > ascii_only
+        assert with_declarations > ascii_only
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_complete_ask_prompt_uses_no_synthesis_call_when_it_fits(self, service):
+        request = MagicMock(
+            question="What changed?",
+            pullRequestId=10,
+            projectVcsWorkspace="ws",
+            projectVcsRepoSlug="repo",
+            analysisContext="complete small context",
+            issueReferences=None,
+        )
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock()
+
+        prompt = await service._prepare_ask_prompt(
+            request,
+            None,
+            has_platform_mcp=False,
+            llm=llm,
+            input_token_budget=10_000,
+            event_callback=None,
+        )
+
+        assert "complete small context" in prompt
+        llm.ainvoke.assert_not_awaited()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_huge_unicode_context_is_bounded_with_coverage_diagnostic(self, service):
+        paragraphs = [
+            f"## Section {index}\nmarker-{index:04d}-界\n" + ("payload λ界 " * 180)
+            for index in range(70)
+        ]
+        analysis_context = "\n\n".join(paragraphs)
+        request = MagicMock(
+            question="Which sections affect authentication?",
+            pullRequestId=10,
+            projectVcsWorkspace="ws",
+            projectVcsRepoSlug="repo",
+            analysisContext=analysis_context,
+            issueReferences=None,
+        )
+        calls = []
+
+        async def synthesize(prompt):
+            calls.append(prompt)
+            record_ids = re.findall(r"--- RECORD ([^ ]+) START ---", prompt)
+            response = MagicMock()
+            response.content = json.dumps({
+                "evidenceSynthesis": "condensed " + ",".join(record_ids)
+            })
+            return response
+
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock(side_effect=synthesize)
+        budget = 5_000
+
+        final_prompt = await service._prepare_ask_prompt(
+            request,
+            None,
+            has_platform_mcp=False,
+            llm=llm,
+            input_token_budget=budget,
+            event_callback=None,
+        )
+
+        level_one = [prompt for prompt in calls if "Hierarchy level: 1;" in prompt]
+        visible = "\n".join(level_one)
+        assert 1 <= len(calls) <= 3
+        assert "marker-0000-界" in visible
+        assert sum(
+            f"marker-{index:04d}-界" in visible for index in range(70)
+        ) < 70
+        assert "COMMAND_COVERAGE_DIAGNOSTIC" in visible
+        assert "COMMAND_COVERAGE_DIAGNOSTIC" in final_prompt
+        assert all(_estimated_command_input_tokens(prompt) <= budget for prompt in calls)
+        assert _estimated_command_input_tokens(
+            final_prompt,
+            response_schema=AskOutput,
+        ) <= budget
+        assert "Original evidence SHA-256" in final_prompt
+        assert all(call.kwargs == {} for call in llm.ainvoke.await_args_list)
+
+    def test_indivisible_unicode_atom_hard_split_keeps_exact_bytes_and_fits(self, service):
+        source = "界λ" * 12_000
+        budget = 2_000
+
+        fragments = service._hard_split_synthesis_record(
+            "source-000001",
+            source,
+            question="Where is this used?",
+            level=1,
+            input_token_budget=budget,
+        )
+
+        assert "".join(fragment for _, fragment in fragments) == source
+        assert len({fragment_id for fragment_id, _ in fragments}) == len(fragments)
+        for fragment in fragments:
+            prompt = service._render_synthesis_prompt(
+                question="Where is this used?",
+                records=[fragment],
+                level=1,
+                batch_index=1,
+                batch_count=len(fragments),
+            )
+            assert _estimated_command_input_tokens(prompt) <= budget
+
+    def test_provider_callback_rejects_tool_schema_growth_before_call(self):
+        guard = _CommandProviderInputGuard(2_000, AskOutput)
+        with pytest.raises(CommandInputLimitError, match="no evidence was truncated"):
+            guard.on_chat_model_start(
+                {"model": "test"},
+                [[{"role": "user", "content": "question"}]],
+                invocation_params={"tools": [{"description": "界" * 10_000}]},
+            )
 
 
 # ── _parse_json_response ─────────────────────────────────────────
@@ -414,7 +620,7 @@ class TestExecuteSummarize:
         message.content = '{"summary": "PR summary", "diagram": "", "diagramType": "ASCII"}'
         agent = self.FakeAgent(stream_items=[{"messages": [message]}])
 
-        with patch("service.command.command_service.MCPAgent", return_value=agent):
+        with patch("service.agent.agent_execution_service.RecursiveMCPAgent", return_value=agent):
             result = await service._execute_summarize(
                 llm=MagicMock(),
                 client=MagicMock(),
@@ -431,15 +637,18 @@ class TestExecuteSummarize:
         assert agent.run_called is False
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_retries_agent_run_when_stream_summary_is_empty(self, service):
+    async def test_uses_one_guarded_direct_fallback_when_stream_summary_is_empty(self, service):
         agent = self.FakeAgent(
             stream_items=[{"summary": ""}],
             run_result='{"summary": "Fallback summary", "diagram": "", "diagramType": "ASCII"}',
         )
 
-        with patch("service.command.command_service.MCPAgent", return_value=agent):
+        response = MagicMock(content='{"summary": "Fallback summary", "diagram": "", "diagramType": "ASCII"}')
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock(return_value=response)
+        with patch("service.agent.agent_execution_service.RecursiveMCPAgent", return_value=agent):
             result = await service._execute_summarize(
-                llm=MagicMock(),
+                llm=llm,
                 client=MagicMock(),
                 prompt="prompt",
                 supports_mermaid=False,
@@ -447,18 +656,22 @@ class TestExecuteSummarize:
             )
 
         assert result["summary"] == "Fallback summary"
-        assert agent.run_called is True
+        assert agent.run_called is False
+        assert llm.ainvoke.await_args.kwargs == {}
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_retries_agent_run_when_stream_raises_provider_error(self, service):
+    async def test_direct_fallback_is_guarded_when_stream_raises_provider_error(self, service):
         agent = self.FakeAgent(
             stream_error=Exception("The AI provider rejected the request"),
             run_result='{"summary": "Fallback summary", "diagram": "", "diagramType": "ASCII"}',
         )
 
-        with patch("service.command.command_service.MCPAgent", return_value=agent):
+        response = MagicMock(content='{"summary": "Fallback summary", "diagram": "", "diagramType": "ASCII"}')
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock(return_value=response)
+        with patch("service.agent.agent_execution_service.RecursiveMCPAgent", return_value=agent):
             result = await service._execute_summarize(
-                llm=MagicMock(),
+                llm=llm,
                 client=MagicMock(),
                 prompt="prompt",
                 supports_mermaid=False,
@@ -466,7 +679,7 @@ class TestExecuteSummarize:
             )
 
         assert result["summary"] == "Fallback summary"
-        assert agent.run_called is True
+        assert agent.run_called is False
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_uses_direct_llm_when_agent_outputs_empty_summary_sentinels(self, service):
@@ -476,7 +689,7 @@ class TestExecuteSummarize:
         llm = MagicMock()
         llm.ainvoke = AsyncMock(return_value=response)
 
-        with patch("service.command.command_service.MCPAgent", return_value=agent):
+        with patch("service.agent.agent_execution_service.RecursiveMCPAgent", return_value=agent):
             result = await service._execute_summarize(
                 llm=llm,
                 client=MagicMock(),
@@ -486,7 +699,7 @@ class TestExecuteSummarize:
             )
 
         assert result["summary"] == "Direct fallback summary."
-        assert agent.run_called is True
+        assert agent.run_called is False
         llm.ainvoke.assert_awaited_once()
 
 
@@ -530,7 +743,7 @@ class TestExecuteAsk:
         message.content = '{"answer": "The PR updates auth handling."}'
         agent = self.FakeAgent(stream_items=[{"messages": [message]}])
 
-        with patch("service.command.command_service.MCPAgent", return_value=agent):
+        with patch("service.agent.agent_execution_service.RecursiveMCPAgent", return_value=agent):
             result = await service._execute_ask(
                 llm=MagicMock(),
                 client=MagicMock(),
@@ -542,40 +755,47 @@ class TestExecuteAsk:
         assert agent.run_called is False
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_retries_agent_run_when_stream_is_empty(self, service):
+    async def test_uses_one_guarded_direct_fallback_when_stream_is_empty(self, service):
         agent = self.FakeAgent(
             stream_items=[],
             run_result='{"answer": "Fallback answer from non-structured run."}',
         )
 
-        with patch("service.command.command_service.MCPAgent", return_value=agent):
+        response = MagicMock(content='{"answer": "Fallback answer from non-structured run."}')
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock(return_value=response)
+        with patch("service.agent.agent_execution_service.RecursiveMCPAgent", return_value=agent):
             result = await service._execute_ask(
-                llm=MagicMock(),
+                llm=llm,
                 client=MagicMock(),
                 prompt="prompt",
                 event_callback=None,
             )
 
         assert result == {"answer": "Fallback answer from non-structured run."}
-        assert agent.run_called is True
+        assert agent.run_called is False
+        assert llm.ainvoke.await_args.kwargs == {}
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_retries_agent_run_when_stream_answer_is_empty(self, service):
+    async def test_uses_direct_fallback_when_stream_answer_is_empty(self, service):
         agent = self.FakeAgent(
             stream_items=[{"answer": ""}],
             run_result='{"answer": "Fallback answer after empty structured output."}',
         )
 
-        with patch("service.command.command_service.MCPAgent", return_value=agent):
+        response = MagicMock(content='{"answer": "Fallback answer after empty structured output."}')
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock(return_value=response)
+        with patch("service.agent.agent_execution_service.RecursiveMCPAgent", return_value=agent):
             result = await service._execute_ask(
-                llm=MagicMock(),
+                llm=llm,
                 client=MagicMock(),
                 prompt="prompt",
                 event_callback=None,
             )
 
         assert result == {"answer": "Fallback answer after empty structured output."}
-        assert agent.run_called is True
+        assert agent.run_called is False
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_uses_direct_llm_when_agent_outputs_empty_sentinels(self, service):
@@ -585,7 +805,7 @@ class TestExecuteAsk:
         llm = MagicMock()
         llm.ainvoke = AsyncMock(return_value=response)
 
-        with patch("service.command.command_service.MCPAgent", return_value=agent):
+        with patch("service.agent.agent_execution_service.RecursiveMCPAgent", return_value=agent):
             result = await service._execute_ask(
                 llm=llm,
                 client=MagicMock(),
@@ -594,8 +814,37 @@ class TestExecuteAsk:
             )
 
         assert result == {"answer": "Direct fallback answer."}
-        assert agent.run_called is True
+        assert agent.run_called is False
         llm.ainvoke.assert_awaited_once()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_stops_observably_when_tool_transcript_cannot_fit(self, service):
+        action = MagicMock()
+        action.tool = "getPullRequestDiff"
+        action.tool_input = {"pullRequestId": "42"}
+        agent = self.FakeAgent(stream_items=[(action, {"diff": "界" * 20_000})])
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock()
+        events = []
+
+        with patch("service.agent.agent_execution_service.RecursiveMCPAgent", return_value=agent):
+            result = await service._execute_ask(
+                llm=llm,
+                client=MagicMock(),
+                prompt="small prompt",
+                event_callback=events.append,
+                input_token_budget=5_000,
+            )
+
+        assert "error" in result
+        assert "no evidence was truncated" in result["error"]
+        assert any(event.get("state") == "input_limit_exceeded" for event in events)
+        llm.ainvoke.assert_not_awaited()
+
+    def test_full_returned_json_is_parsed_without_response_slicing(self, service):
+        answer = "界" * 80_000 + "TAIL-EVIDENCE"
+        result = service._coerce_ask_final_result(json.dumps({"answer": answer}))
+        assert result["answer"] == answer
 
 
 # ── _create_mcp_client ───────────────────────────────────────────
@@ -606,6 +855,7 @@ class TestCreateMcpClient:
             mock_cls.from_dict.return_value = MagicMock()
             client = service._create_mcp_client({"servers": {}})
             mock_cls.from_dict.assert_called_once()
+            client.add_middleware.assert_called_once()
 
     def test_raises_on_failure(self, service):
         with patch("service.command.command_service.MCPClient") as mock_cls:
@@ -627,7 +877,13 @@ class TestCreateLlm:
         with patch("service.command.command_service.LLMFactory") as mock_factory:
             mock_factory.create_llm.return_value = MagicMock()
             llm = service._create_llm(request)
-            mock_factory.create_llm.assert_called_once()
+            mock_factory.create_llm.assert_called_once_with(
+                "gpt-4",
+                "openai",
+                "key",
+                ai_base_url=None,
+                max_tokens=COMMAND_MAX_OUTPUT_TOKENS,
+            )
 
     def test_raises_on_failure(self, service):
         request = MagicMock(

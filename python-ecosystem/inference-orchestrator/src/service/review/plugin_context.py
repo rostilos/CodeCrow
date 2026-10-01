@@ -55,19 +55,12 @@ def _log_plugin_diagnostics(scope: str, diagnostics: tuple[Any, ...]) -> None:
     )
 
 
-def _require_complete_plugin_contribution(
+def _record_plugin_contribution_diagnostics(
     scope: str,
     diagnostics: tuple[Any, ...],
 ) -> None:
-    """Stop prompt construction when selected plugin context is incomplete."""
-    if not diagnostics:
-        return
+    """Expose bounded optional-plugin omissions without blocking the review."""
     _log_plugin_diagnostics(scope, diagnostics)
-    summary = "; ".join(
-        f"{item.plugin_id or 'plugin'}:{item.code}: {item.message}"
-        for item in diagnostics[:10]
-    )
-    raise RuntimeError(f"Plugin {scope} contribution is incomplete: {summary}")
 
 
 def _bounded_lines(lines: list[str], max_chars: int) -> str:
@@ -342,7 +335,7 @@ def review_plugin_context(
         tuple(sorted({path.lstrip("/") for path in paths})),
         capabilities,
     )
-    _require_complete_plugin_contribution("review", diagnostics)
+    _record_plugin_contribution_diagnostics("review", diagnostics)
     evidence_requests = contribution.evidence_requests
     hidden_request_count = 0
     if visible_evidence_by_id is not None and evidence_requests:
@@ -360,6 +353,20 @@ def review_plugin_context(
         )
 
     lines: list[str] = []
+    if diagnostics:
+        lines.append(
+            "Plugin context coverage diagnostics (optional enrichment is partial):"
+        )
+        lines.extend(
+            "- "
+            f"{item.plugin_id or 'plugin'}:{item.code}: {item.message}"
+            for item in diagnostics[:10]
+        )
+        if len(diagnostics) > 10:
+            lines.append(
+                f"[{len(diagnostics) - 10} additional plugin diagnostic(s) "
+                "omitted by prompt budget]"
+            )
     if contribution.rules:
         lines.append("Deterministic analysis-plugin evidence rules:")
         lines.extend(f"- {rule}" for rule in contribution.rules)
@@ -376,13 +383,15 @@ def review_plugin_context(
             lines.append(f"- E{index}: {kind} — {reason}")
         lines.append(
             "For a relationship claim governed by E#, set claimKind to its "
-            "exact evidence class and cite matching RAG Evidence IDs; leave "
+            "exact evidence class and cite matching preloaded structural "
+            "relation evidence IDs; leave "
             "claimKind empty for generic defects proved by changed source."
         )
         lines.append(
-            "For a structural fact, existence proves the relationship but not "
-            "a defect; report it only when current source or an exact diagnostic "
-            "fact proves concrete harmful behavior."
+            "For a structural fact, treat it as navigation evidence only: "
+            "existence proves the relationship but not a defect; report it "
+            "only when current source or an exact diagnostic fact proves "
+            "concrete harmful behavior."
         )
 
         if include_evidence_targets:
@@ -440,6 +449,20 @@ def _visible_plugin_fact_identifiers(
             if isinstance(attributes, Mapping):
                 for key, value in attributes.items():
                     for candidate in (key, value):
+                        normalized = _normalized_evidence_identifier(candidate)
+                        if normalized:
+                            identifiers.add(normalized)
+            elif isinstance(attributes, Sequence) and not isinstance(
+                attributes,
+                (str, bytes),
+            ):
+                for attribute in attributes:
+                    if not isinstance(attribute, Mapping):
+                        continue
+                    for candidate in (
+                        attribute.get("name"),
+                        attribute.get("value"),
+                    ):
                         normalized = _normalized_evidence_identifier(candidate)
                         if normalized:
                             identifiers.add(normalized)
@@ -519,7 +542,7 @@ def apply_plugin_plan_constraints(
         tuple(sorted(set(request.changedFiles or []))),
         capabilities,
     )
-    _require_complete_plugin_contribution("review planning", diagnostics)
+    _record_plugin_contribution_diagnostics("review planning", diagnostics)
     all_group_paths = (
         *contribution.group_paths,
         *tuple(tuple(paths) for paths in repository_group_paths),
@@ -585,21 +608,51 @@ def apply_plugin_validation_gate(
 
     def graph_fact(payload: Mapping[str, Any]) -> Optional[GraphFact]:
         try:
-            attributes = payload.get("attributes")
+            raw_attributes = payload.get("attributes")
+            if isinstance(raw_attributes, Mapping):
+                attributes = {
+                    str(key): str(value)
+                    for key, value in raw_attributes.items()
+                }
+            elif isinstance(raw_attributes, Sequence) and not isinstance(
+                raw_attributes,
+                (str, bytes),
+            ):
+                attributes = {
+                    str(attribute["name"]): str(attribute.get("value", ""))
+                    for attribute in raw_attributes
+                    if (
+                        isinstance(attribute, Mapping)
+                        and isinstance(attribute.get("name"), str)
+                        and attribute["name"]
+                    )
+                }
+            else:
+                attributes = {}
+
+            # Canonical structural relations store the relationship verb in
+            # ``kind`` and retain the plugin GraphFact kind as an attribute.
+            # Old generations expose GraphFact fields directly.
+            fact_kind = attributes.pop("fact_kind", None) or payload["kind"]
+            relation = payload.get("relation") or payload["kind"]
+            span = payload.get("span")
+            span = span if isinstance(span, Mapping) else {}
+            line = payload.get("line", span.get("start_line", 1))
+            attributes = {
+                key: value
+                for key, value in attributes.items()
+                if key not in {"packet_key", "packet_kind"}
+                and not key.startswith("packet:")
+            }
             return GraphFact(
-                kind=str(payload["kind"]),
+                kind=str(fact_kind),
                 source=str(payload["source"]),
-                relation=str(payload["relation"]),
+                relation=str(relation),
                 target=str(payload["target"]),
                 path=str(payload["path"]).lstrip("/"),
-                line=max(1, int(payload.get("line", 1) or 1)),
+                line=max(1, int(line or 1)),
                 attributes=tuple(sorted(
-                    (str(key), str(value))
-                    for key, value in (
-                        attributes.items()
-                        if isinstance(attributes, Mapping)
-                        else ()
-                    )
+                    (str(key), str(value)) for key, value in attributes.items()
                 )),
                 related_paths=tuple(sorted({
                     str(path).lstrip("/")

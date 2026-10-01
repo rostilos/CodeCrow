@@ -1,6 +1,8 @@
 package org.rostilos.codecrow.analysisapi.rag;
 
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.job.Job;
+import org.rostilos.codecrow.core.util.BranchPatternMatcher;
 
 import java.util.function.Consumer;
 import java.util.Map;
@@ -44,90 +46,44 @@ public interface RagOperationsService {
         return true; // Default assumes healthy; implementations should do actual check
     }
 
-    /**
-     * Trigger an incremental RAG update for the given project after a branch merge or commit.
-     * 
-     * @param project The project to update
-     * @param branchName The branch name that was updated
-     * @param commitHash The commit hash of the update
-     * @param rawDiff The raw diff from the VCS (used to determine which files changed)
-     * @param eventConsumer Consumer to receive status updates during processing
-     * @return {@code true} only when the requested commit is safely represented
-     *         by the RAG index (including an intentional no-op); {@code false}
-     *         when acquisition, locking, or mutation failed
-     */
-    boolean triggerIncrementalUpdate(
-            Project project, 
-            String branchName, 
-            String commitHash,
-            String rawDiff,
-            Consumer<Map<String, Object>> eventConsumer
-    );
-    
-    // ==========================================================================
-    // PR-SPECIFIC RAG OPERATIONS
-    // ==========================================================================
+    /** Build and atomically activate a complete immutable generation for a revision. */
+    boolean refreshBranchGeneration(
+            Project project,
+            String branchName,
+            String revision,
+            Consumer<Map<String, Object>> eventConsumer);
 
-    /**
-     * Delete all RAG-indexed points for a specific PR from the project's collection.
-     * Called after PR analysis completes or when a PR is closed/merged.
-     * This operation is idempotent — safe to call even if no points exist for this PR.
-     *
-     * @param project  The project
-     * @param prNumber The PR number whose indexed data should be cleaned up
-     * @return true if cleanup succeeded or nothing to clean, false on error
-     */
-    default boolean deletePrFiles(Project project, int prNumber) {
-        return true; // Default: no-op
-    }
-    
-    // ==========================================================================
-    // MULTI-BRANCH INDEX OPERATIONS
-    // ==========================================================================
-    
-    /**
-     * Check if multi-branch indexing is enabled for the given project.
-     * 
-     * @param project The project to check
-     * @return true if multi-branch indexing is enabled
-     */
-    default boolean isMultiBranchEnabled(Project project) {
-        var config = project.getConfiguration();
-        if (config == null || config.ragConfig() == null) {
-            return false;
-        }
-        return config.ragConfig().isMultiBranchEnabled();
+    /** Execute one already claimed durable repository-index queue job. */
+    default boolean executeQueuedBranchGeneration(
+            Project project,
+            String branchName,
+            String revision,
+            Job queuedJob) {
+        return false;
     }
     
     /**
-     * Check if a branch is explicitly configured for a retained RAG index.
-     * Branch analysis configuration is a separate concern and never grants RAG
-     * snapshot ownership.
+     * Check whether an observed branch belongs to either configured analysis
+     * surface. Branch snapshots are created lazily from real PR/branch events;
+     * wildcard patterns are never enumerated eagerly.
      *
      * @param project The project to check
      * @param branchName The branch name to evaluate
-     * @return true if the branch is explicitly configured for retained indexed context
+     * @return true if the branch is an eligible PR target or push-analysis branch
      */
     default boolean shouldHaveBranchIndex(Project project, String branchName) {
         var config = project.getConfiguration();
-        if (config == null || config.ragConfig() == null) {
+        if (branchName == null || branchName.isBlank()) {
             return false;
         }
-        return config.ragConfig().shouldHaveBranchIndex(branchName);
-    }
-
-    /**
-     * Whether an eligible PR target that is not retained may receive a temporary,
-     * revision-pinned branch snapshot. This never makes branch pushes retain data.
-     */
-    default boolean shouldCreateTransientBranchIndex(Project project, String branchName) {
-        var config = project.getConfiguration();
-        if (config == null || config.ragConfig() == null || branchName == null) {
-            return false;
+        if (config == null || config.branchAnalysis() == null) {
+            return true;
         }
-        return config.ragConfig().isTransientBranchIndexesEnabled()
-                && !branchName.equals(getBaseBranch(project))
-                && !shouldHaveBranchIndex(project, branchName);
+        var branchConfig = config.branchAnalysis();
+        return BranchPatternMatcher.shouldAnalyze(
+                    branchName, branchConfig.prTargetBranches())
+                || BranchPatternMatcher.shouldAnalyze(
+                    branchName, branchConfig.branchPushPatterns());
     }
     
     /**
@@ -187,58 +143,6 @@ public interface RagOperationsService {
     }
     
     /**
-     * Create or update branch index for multi-branch context.
-     * With single-collection architecture, branch data is stored in shared collection
-     * with branch metadata for filtering.
-     * 
-     * @param project The project
-     * @param branchName The branch to index (e.g., "release/1.0")
-     * @param baseBranch The base branch (e.g., "master")
-     * @param branchCommit The commit hash of the branch
-     * @param rawDiff The raw diff from VCS
-     * @param eventConsumer Consumer to receive status updates
-     */
-    default void createOrUpdateBranchIndex(
-            Project project,
-            String branchName,
-            String baseBranch,
-            String branchCommit,
-            String rawDiff,
-            Consumer<Map<String, Object>> eventConsumer
-    ) {
-        // Default implementation does nothing - override in actual implementation
-        eventConsumer.accept(Map.of(
-            "type", "warning",
-            "message", "Branch index operations not implemented"
-        ));
-    }
-    
-    /**
-     * Update an already retained branch from its completed checkpoint. A first
-     * legacy branch seed may still compare it with the primary branch; exact
-     * generation implementations replace that seed path with a complete snapshot.
-     * 
-     * Use this when a push happens to a non-main branch and you need to update
-     * the RAG index to reflect the current state of that branch.
-     * 
-     * @param project The project
-     * @param targetBranch The branch that was pushed to (e.g., "release/1.0")
-     * @param eventConsumer Consumer to receive status updates
-     * @return true if update succeeded, false otherwise
-     */
-    default boolean updateBranchIndex(
-            Project project,
-            String targetBranch,
-            Consumer<Map<String, Object>> eventConsumer
-    ) {
-        eventConsumer.accept(Map.of(
-            "type", "warning",
-            "message", "Branch index update not implemented"
-        ));
-        return false;
-    }
-    
-    /**
      * Check if a branch has indexed data.
      * 
      * @param project The project
@@ -292,90 +196,4 @@ public interface RagOperationsService {
         return Map.of("status", "not_implemented");
     }
     
-    /**
-     * Decision record for multi-branch RAG usage.
-     */
-    record MultiBranchRagDecision(
-        boolean useMultiBranch,
-        String baseBranch,
-        String targetBranch,
-        boolean branchIndexAvailable,
-        String reason
-    ) {}
-    
-    /**
-     * Determine if multi-branch RAG should be used for a PR.
-     * 
-     * @param project The project
-     * @param targetBranch The PR target branch
-     * @return Decision about whether to use multi-branch RAG
-     */
-    default MultiBranchRagDecision shouldUseMultiBranchRag(Project project, String targetBranch) {
-        if (!isRagEnabled(project)) {
-            return new MultiBranchRagDecision(false, null, targetBranch, false, "rag_disabled");
-        }
-        
-        String baseBranch = getBaseBranch(project);
-        
-        // If target is the base branch, no need for multi-branch
-        if (baseBranch.equals(targetBranch)) {
-            return new MultiBranchRagDecision(false, baseBranch, targetBranch, false, "target_is_base");
-        }
-        
-        // Check if multi-branch is enabled and available
-        if (!isMultiBranchEnabled(project)) {
-            return new MultiBranchRagDecision(false, baseBranch, targetBranch, false, "multi_branch_disabled");
-        }
-        
-        boolean branchReady = isBranchIndexReady(project, targetBranch);
-        if (branchReady) {
-            return new MultiBranchRagDecision(true, baseBranch, targetBranch, true, "branch_index_available");
-        } else {
-            return new MultiBranchRagDecision(false, baseBranch, targetBranch, false, "branch_index_not_ready");
-        }
-    }
-    
-    /**
-     * Ensure branch index exists for a PR target branch if needed.
-     * This is called during PR analysis to create branch index on-demand
-     * when the target branch should have one but doesn't exist yet.
-     * 
-     * @param project The project
-     * @param targetBranch The PR target branch
-     * @param eventConsumer Consumer to receive status updates
-     * @return true if branch index is ready (either existed or was created), false otherwise
-     */
-    default boolean ensureBranchIndexForPrTarget(
-            Project project,
-            String targetBranch,
-            Consumer<Map<String, Object>> eventConsumer
-    ) {
-        // Default implementation - override in actual implementation
-        return false;
-    }
-    
-    /**
-     * Ensure RAG index is up-to-date for PR analysis.
-     * 
-     * For PRs targeting the main branch:
-     * - Check if the RAG index commit matches the current target branch HEAD
-     * - If not, fetch the diff and perform incremental update
-     * 
-     * For PRs targeting other branches with multi-branch enabled:
-     * - Check if the branch index commit matches the current target branch HEAD
-     * - If not, update the branch index with the diff
-     * 
-     * @param project The project
-     * @param targetBranch The PR target branch
-     * @param eventConsumer Consumer to receive status updates
-     * @return true if index is ready for analysis, false otherwise
-     */
-    default boolean ensureRagIndexUpToDate(
-            Project project,
-            String targetBranch,
-            Consumer<Map<String, Object>> eventConsumer
-    ) {
-        // Default implementation - override in actual implementation
-        return false;
-    }
 }

@@ -1,7 +1,7 @@
 """
 Comprehensive unit tests for rag_pipeline.utils.utils module.
-Covers: detect_language_from_path, make_namespace, make_project_namespace,
-        clean_archive_path, should_include_file, should_exclude_file, is_binary_file.
+Covers: make_namespace, should_include_file,
+        should_exclude_file, is_binary_file.
 """
 import os
 import tempfile
@@ -9,94 +9,14 @@ import pytest
 from pathlib import Path
 
 from rag_pipeline.utils.utils import (
-    detect_language_from_path,
     make_namespace,
-    make_project_namespace,
-    clean_archive_path,
     should_include_file,
     should_exclude_file,
     is_binary_file,
-    LANGUAGE_MAP,
 )
 
 
-# ─── detect_language_from_path ────────────────────────────────────────────────
-
-
-class TestDetectLanguage:
-
-    @pytest.mark.parametrize("path,expected", [
-        ("main.py", "python"),
-        ("app.js", "javascript"),
-        ("app.jsx", "javascript"),
-        ("App.tsx", "typescript"),
-        ("App.ts", "typescript"),
-        ("Main.java", "java"),
-        ("Main.kt", "kotlin"),
-        ("index.php", "php"),
-        ("page.phtml", "php"),
-        ("main.go", "go"),
-        ("lib.rs", "rust"),
-        ("util.cpp", "cpp"),
-        ("util.cc", "cpp"),
-        ("util.hpp", "cpp"),
-        ("main.c", "c"),
-        ("header.h", "c"),
-        ("app.rb", "ruby"),
-        ("Program.cs", "csharp"),
-        ("app.swift", "swift"),
-        ("file.m", "objective-c"),
-        ("App.scala", "scala"),
-        ("script.sh", "bash"),
-        ("script.bash", "bash"),
-        ("script.zsh", "zsh"),
-        ("query.sql", "sql"),
-        ("analysis.r", "r"),
-        ("analysis.R", "r"),
-        ("mod.lua", "lua"),
-        ("mod.pl", "perl"),
-        ("README.md", "markdown"),
-        ("doc.rst", "rst"),
-        ("notes.txt", "text"),
-        ("data.json", "json"),
-        ("config.xml", "xml"),
-        ("config.yaml", "yaml"),
-        ("config.yml", "yaml"),
-        ("config.toml", "toml"),
-        ("config.ini", "ini"),
-        ("server.conf", "config"),
-        ("index.html", "html"),
-        ("page.htm", "html"),
-        ("styles.css", "css"),
-        ("styles.scss", "scss"),
-        ("styles.sass", "sass"),
-        ("App.vue", "vue"),
-        ("App.svelte", "svelte"),
-    ])
-    def test_known_extensions(self, path, expected):
-        assert detect_language_from_path(path) == expected
-
-    def test_unknown_extension_returns_text(self):
-        assert detect_language_from_path("file.xyz") == "text"
-        assert detect_language_from_path("file.abc") == "text"
-        assert detect_language_from_path("Makefile") == "text"
-
-    def test_case_insensitive_extension(self):
-        assert detect_language_from_path("FILE.PY") == "python"
-        assert detect_language_from_path("APP.JS") == "javascript"
-        assert detect_language_from_path("DATA.JSON") == "json"
-
-    def test_nested_path(self):
-        assert detect_language_from_path("src/main/java/App.java") == "java"
-        assert detect_language_from_path("deep/nested/dir/script.py") == "python"
-
-    def test_all_language_map_entries_covered(self):
-        """Every entry in LANGUAGE_MAP should return its value."""
-        for ext, lang in LANGUAGE_MAP.items():
-            assert detect_language_from_path(f"test{ext}") == lang
-
-
-# ─── make_namespace / make_project_namespace ──────────────────────────────────
+# ─── make_namespace ──────────────────────────────────────────────────────────
 
 
 class TestNamespaces:
@@ -113,47 +33,6 @@ class TestNamespaces:
     def test_namespace_lowercased(self):
         assert make_namespace("WS", "PROJ", "MAIN") == "ws__proj__main"
 
-    def test_project_namespace_no_branch(self):
-        assert make_project_namespace("ws", "proj") == "ws__proj"
-
-    def test_project_namespace_replaces_special(self):
-        assert make_project_namespace("my/ws", "proj.x") == "my_ws__proj_x"
-
-
-# ─── clean_archive_path ──────────────────────────────────────────────────────
-
-
-class TestCleanArchivePath:
-
-    def test_empty_path(self):
-        assert clean_archive_path("") == ""
-        assert clean_archive_path(None) is None
-
-    def test_single_component_unchanged(self):
-        assert clean_archive_path("file.py") == "file.py"
-
-    def test_source_marker_first_part_unchanged(self):
-        for marker in ["src", "lib", "app", "test", "tests", "pkg", "cmd"]:
-            path = f"{marker}/some/file.py"
-            assert clean_archive_path(path) == path
-
-    def test_strips_bitbucket_archive_prefix(self):
-        # owner-repo-commitHash pattern (>20 chars, hyphens)
-        assert clean_archive_path("owner-repo-abc123def456/src/main.py") == "src/main.py"
-
-    def test_strips_long_commit_hash_prefix(self):
-        # 40+ char prefix
-        long_hash = "a" * 45
-        assert clean_archive_path(f"{long_hash}/lib/util.py") == "lib/util.py"
-
-    def test_strips_multi_hyphen_with_digits(self):
-        assert clean_archive_path("my-repo-v2-abc123/src/file.py") == "src/file.py"
-
-    def test_preserves_normal_paths(self):
-        assert clean_archive_path("normal/path/file.py") == "normal/path/file.py"
-        assert clean_archive_path("mymodule/subdir/test.js") == "mymodule/subdir/test.js"
-
-
 # ─── should_include_file ─────────────────────────────────────────────────────
 
 
@@ -166,6 +45,21 @@ class TestShouldIncludeFile:
         assert should_include_file("src/main/App.java", ["src/**"]) is True
         assert should_include_file("src/deep/nested/App.java", ["src/**"]) is True
         assert should_include_file("lib/main.py", ["src/**"]) is False
+
+    def test_single_star_does_not_cross_directory_boundaries(self):
+        assert should_include_file("src/App.java", ["src/*"]) is True
+        assert should_include_file("src/main/App.java", ["src/*"]) is False
+
+    def test_globstar_keeps_the_required_suffix(self):
+        pattern = "packages/app-store/**/lib/*.ts"
+        assert should_include_file(
+            "packages/app-store/vital/lib/reschedule.ts",
+            [pattern],
+        ) is True
+        assert should_include_file(
+            "packages/app-store/vital/static/reschedule.ts",
+            [pattern],
+        ) is False
 
     def test_extension_pattern(self):
         assert should_include_file("src/main.py", ["*.py"]) is True
@@ -200,6 +94,10 @@ class TestShouldExcludeFile:
         assert should_exclude_file("node_modules/pkg/index.js", ["node_modules/**"]) is True
         assert should_exclude_file("src/main.js", ["node_modules/**"]) is False
 
+    def test_single_star_exclude_does_not_cross_directory_boundaries(self):
+        assert should_exclude_file("src/main.js", ["src/*"]) is True
+        assert should_exclude_file("src/lib/main.js", ["src/*"]) is False
+
     def test_extension_exclude(self):
         assert should_exclude_file("app.min.js", ["*.min.js"]) is True
         assert should_exclude_file("app.js", ["*.min.js"]) is False
@@ -210,6 +108,56 @@ class TestShouldExcludeFile:
 
     def test_globstar_suffix_pattern(self):
         assert should_exclude_file("some/dir/bundle.min.css", ["**/*.min.css"]) is True
+        assert should_exclude_file("bundle.min.css", ["**/*.min.css"]) is True
+
+    def test_nested_globstar_exclusion_requires_its_suffix_directory(self):
+        patterns = [
+            "packages/app-store/**/static/**",
+            "packages/app-store/**/public/**",
+        ]
+        assert should_exclude_file(
+            "packages/app-store/vital/static/icon.png",
+            patterns,
+        ) is True
+        assert should_exclude_file(
+            "packages/app-store/static/icon.png",
+            patterns,
+        ) is True
+        assert should_exclude_file(
+            "packages/app-store/vital/public/logo.svg",
+            patterns,
+        ) is True
+        assert should_exclude_file(
+            "packages/app-store/_utils/getCalendar.ts",
+            patterns,
+        ) is False
+        assert should_exclude_file(
+            "packages/app-store/vital/lib/reschedule.ts",
+            patterns,
+        ) is False
+        assert should_exclude_file(
+            "packages/app-store/vital/staticish/icon.svg",
+            patterns,
+        ) is False
+
+    def test_nested_globstar_file_exclusion_requires_the_terminal_name(self):
+        pattern = "packages/prisma/migrations/**/steps.json"
+        assert should_exclude_file(
+            "packages/prisma/migrations/20230101_init/steps.json",
+            [pattern],
+        ) is True
+        assert should_exclude_file(
+            "packages/prisma/migrations/steps.json",
+            [pattern],
+        ) is True
+        assert should_exclude_file(
+            "packages/prisma/migrations/20230101_init/migration.sql",
+            [pattern],
+        ) is False
+        assert should_exclude_file(
+            "packages/prisma/migrations/20230101_init/steps.json.bak",
+            [pattern],
+        ) is False
 
     def test_archive_root_prefix(self):
         assert should_exclude_file("repo-hash123/node_modules/pkg.js", ["node_modules/**"]) is True

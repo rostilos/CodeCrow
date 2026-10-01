@@ -1,827 +1,573 @@
-"""
-Tests for rag_pipeline.core.splitter.splitter — ASTCodeSplitter.
-Targets the biggest uncovered module (650 stmts, 578 missing).
-"""
+"""Coverage for complete structural source units and metadata."""
+
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
-from dataclasses import dataclass
 
-from llama_index.core.schema import Document
+from codecrow_plugins import SyntaxContribution
 
-from rag_pipeline.core.splitter.splitter import (
-    ASTCodeSplitter,
+from rag_pipeline.core.documents import Document, TextNode
+from rag_pipeline.core.splitter import (
     ASTChunk,
-    generate_deterministic_id,
-    compute_file_hash,
+    ASTCodeSplitter,
+    CapturedNode,
+    ChunkMetadata,
     ContentType,
+    MetadataExtractor,
+    QueryMatch,
+    compute_file_hash,
+    generate_deterministic_id,
 )
 
 
-# ── Helper functions ──
+def test_chunk_identity_and_file_hash_are_deterministic():
+    assert generate_deterministic_id("src/a.py", "value = 1", 0) == (
+        generate_deterministic_id("src/a.py", "value = 1", 0)
+    )
+    assert generate_deterministic_id("src/a.py", "value = 1", 0) != (
+        generate_deterministic_id("src/a.py", "value = 1", 1)
+    )
+    assert compute_file_hash("value = 1") == compute_file_hash("value = 1")
+    assert compute_file_hash("value = 1") != compute_file_hash("value = 2")
 
 
-class TestGenerateDeterministicId:
+def test_existing_splitter_constructor_configuration_remains_accepted():
+    splitter = ASTCodeSplitter()
 
-    def test_same_input_same_output(self):
-        id1 = generate_deterministic_id("file.py", "content", 0)
-        id2 = generate_deterministic_id("file.py", "content", 0)
-        assert id1 == id2
-
-    def test_different_path_different_id(self):
-        id1 = generate_deterministic_id("a.py", "content", 0)
-        id2 = generate_deterministic_id("b.py", "content", 0)
-        assert id1 != id2
-
-    def test_different_chunk_index_different_id(self):
-        id1 = generate_deterministic_id("file.py", "content", 0)
-        id2 = generate_deterministic_id("file.py", "content", 1)
-        assert id1 != id2
-
-    def test_id_is_32_chars(self):
-        result = generate_deterministic_id("f.py", "c", 0)
-        assert len(result) == 32
+    assert splitter.max_chunk_size == 8000
+    assert splitter.min_chunk_size == 100
+    assert splitter.chunk_overlap == 200
+    assert splitter.parser_threshold == 3
+    assert not hasattr(splitter, "embed_model")
 
 
-class TestComputeFileHash:
+def test_regex_metadata_keeps_complete_unicode_inventories_and_late_signature():
+    extractor = MetadataExtractor()
+    expected_names = [f"方法_{index:03d}_界" for index in range(45)]
+    source = "\n".join(f"def {name}(): pass" for name in expected_names)
 
-    def test_deterministic(self):
-        h1 = compute_file_hash("hello")
-        h2 = compute_file_hash("hello")
-        assert h1 == h2
+    assert extractor.extract_names_from_content(source, "python") == expected_names
 
-    def test_different_content(self):
-        assert compute_file_hash("a") != compute_file_hash("b")
+    expected_imports = [
+        f"org.example{index:03d}.类型_{index:03d}_界"
+        for index in range(75)
+    ]
+    import_source = "\n".join(
+        [*(f"import {name};" for name in expected_imports),
+         f"import {expected_imports[10]};"]
+    )
+    assert extractor.extract_inheritance(import_source, "java")["imports"] == (
+        expected_imports
+    )
+
+    parameters = [f"参数_{index:02d}_界" for index in range(12)]
+    signature_source = "\n".join([
+        *(f"# header line {index}" for index in range(25)),
+        "def late_signature(",
+        *(f"    {parameter}," for parameter in parameters),
+        "):",
+        "    pass",
+    ])
+    signature = extractor.extract_signature(signature_source, "python")
+    assert signature is not None
+    assert signature.startswith("def late_signature(")
+    assert parameters[-1] in signature
+    assert signature.endswith(":")
 
 
-# ── ASTChunk dataclass ──
+def _rich_unicode_tree():
+    source = bytearray()
 
-
-class TestASTChunk:
-
-    def test_default_fields(self):
-        chunk = ASTChunk(
-            content="code",
-            content_type=ContentType.FUNCTIONS_CLASSES,
-            language="python",
-            path="test.py",
+    def text_node(node_type: str, value: str):
+        start = len(source)
+        source.extend(value.encode("utf-8"))
+        end = len(source)
+        source.extend(b"\n")
+        return SimpleNamespace(
+            type=node_type,
+            start_byte=start,
+            end_byte=end,
+            children=[],
         )
-        assert chunk.methods == []
-        assert chunk.properties == []
-        assert chunk.parameters == []
-        assert chunk.return_type is None
-        assert chunk.decorators == []
-        assert chunk.modifiers == []
-        assert chunk.calls == []
-        assert chunk.referenced_types == []
-        assert chunk.variables == []
-        assert chunk.constants == []
-        assert chunk.type_parameters == []
 
-    def test_all_fields(self):
-        chunk = ASTChunk(
-            content="code",
-            content_type=ContentType.FUNCTIONS_CLASSES,
-            language="python",
-            path="test.py",
-            semantic_names=["MyClass"],
-            parent_context=["Outer"],
-            methods=["foo", "bar"],
-            extends=["Base"],
-            implements=["IFoo"],
-            decorators=["staticmethod"],
+    def named_node(node_type: str, value: str):
+        identifier = text_node("identifier", value)
+        return SimpleNamespace(
+            type=node_type,
+            start_byte=identifier.start_byte,
+            end_byte=identifier.end_byte,
+            children=[identifier],
         )
-        assert chunk.methods == ["foo", "bar"]
-        assert chunk.extends == ["Base"]
 
-
-# ── ASTCodeSplitter initialization ──
-
-
-class TestASTCodeSplitterInit:
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_default_init(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-        assert splitter.max_chunk_size == 8000
-        assert splitter.min_chunk_size == 100
-        assert splitter.chunk_overlap == 200
-        assert splitter.parser_threshold == 3
-        assert splitter.enrich_embedding_text is True
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_custom_init(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter(
-            max_chunk_size=4000,
-            min_chunk_size=50,
-            chunk_overlap=100,
-            parser_threshold=5,
-            enrich_embedding_text=False,
-        )
-        assert splitter.max_chunk_size == 4000
-        assert splitter.enrich_embedding_text is False
-
-
-# ── split_documents ──
-
-
-class TestSplitDocuments:
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_empty_documents(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-        result = splitter.split_documents([])
-        assert result == []
-
-    def test_java_query_metadata_includes_ast_relationships(self):
-        pytest.importorskip("tree_sitter_java")
-        from llama_index.core.schema import Document
-
-        code = """package com.example;
-import org.example.Service;
-import java.io.Closeable;
-
-public class Controller extends BaseController implements Closeable, Runnable {
-  private Service service;
-
-  public void handle(Request request) {
-    service.run(request);
-    Helper.create();
-    new Worker().start();
-  }
-}
-"""
-        splitter = ASTCodeSplitter(max_chunk_size=8000)
-        nodes = splitter.split_documents([
-            Document(
-                text=code,
-                metadata={"path": "src/main/java/com/example/Controller.java"},
-            )
-        ])
-
-        by_name = {
-            node.metadata.get("primary_name"): node.metadata
-            for node in nodes
-            if node.metadata.get("primary_name")
-        }
-
-        controller = by_name["Controller"]
-        assert controller["namespace"] == "com.example"
-        assert controller["imports"] == ["org.example.Service", "java.io.Closeable"]
-        assert controller["extends"] == ["BaseController"]
-        assert controller["implements"] == ["Closeable", "Runnable"]
-        assert controller["methods"] == ["handle"]
-        assert controller["properties"] == ["service"]
-        assert "Service" in controller["referenced_types"]
-
-        handle = by_name["handle"]
-        assert handle["parent_class"] == "Controller"
-        assert handle["full_path"] == "Controller.handle"
-        assert handle["parameters"] == ["request"]
-        assert handle["calls"] == ["run", "create", "start"]
-        assert {"Request", "Helper", "Worker"} <= set(handle["referenced_types"])
-
-    def test_php_query_metadata_includes_ast_relationships(self):
-        pytest.importorskip("tree_sitter_php")
-        from llama_index.core.schema import Document
-
-        code = """<?php
-namespace App\\Http\\Controllers;
-
-use App\\Services\\OrderService;
-use Psr\\Log\\LoggerInterface;
-
-class OrderController extends BaseController implements ControllerInterface {
-    private OrderService $orders;
-
-    public function show(Request $request): Response {
-        $this->orders->load($request->id);
-        Helper::format($request);
-        return new Response();
+    expected = {
+        "methods": [f"method_{index:03d}_界" for index in range(65)],
+        "properties": [f"property_{index:03d}_界" for index in range(65)],
+        "parameters": [f"parameter_{index:03d}_界" for index in range(45)],
+        "decorators": [f"decorator_{index:03d}_界" for index in range(35)],
+        "calls": [f"call_{index:03d}_界" for index in range(90)],
+        "referenced_types": [f"Type_{index:03d}_界" for index in range(65)],
+        "variables": [f"property_{index:03d}_界" for index in range(65)],
+        "type_parameters": [f"T_{index:03d}_界" for index in range(35)],
     }
-}
-"""
-        splitter = ASTCodeSplitter(max_chunk_size=8000)
-        nodes = splitter.split_documents([
-            Document(
-                text=code,
-                metadata={"path": "src/Http/Controllers/OrderController.php"},
-            )
-        ])
-
-        by_name = {
-            node.metadata.get("primary_name"): node.metadata
-            for node in nodes
-            if node.metadata.get("primary_name")
-        }
-
-        controller = by_name["OrderController"]
-        assert controller["namespace"] == "App\\Http\\Controllers"
-        assert controller["imports"] == [
-            "App\\Services\\OrderService",
-            "Psr\\Log\\LoggerInterface",
-        ]
-        assert controller["extends"] == ["BaseController"]
-        assert controller["implements"] == ["ControllerInterface"]
-        assert controller["methods"] == ["show"]
-        assert controller["properties"] == ["orders"]
-        assert "OrderService" in controller["referenced_types"]
-
-        show = by_name["show"]
-        assert show["parent_class"] == "OrderController"
-        assert show["full_path"] == "OrderController.show"
-        assert show["parameters"] == ["request"]
-        assert show["return_type"] == "Response"
-        assert show["calls"] == ["load", "format"]
-        assert {"Request", "Helper", "Response"} <= set(show["referenced_types"])
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    @patch("rag_pipeline.core.splitter.splitter.get_language_from_path")
-    def test_fallback_for_unknown_language(self, mock_lang, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        mock_lang.return_value = None
-
-        splitter = ASTCodeSplitter()
-
-        doc = MagicMock()
-        doc.text = "some code here\nline 2\nline 3\nline 4\nline 5"
-        doc.metadata = {"path": "unknown.xyz", "language": "text"}
-
-        nodes = splitter.split_documents([doc])
-        assert len(nodes) >= 0  # May produce nodes via fallback
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    @patch("rag_pipeline.core.splitter.splitter.get_language_from_path")
-    @patch("rag_pipeline.core.splitter.splitter.AST_SUPPORTED_LANGUAGES", new=set())
-    def test_fallback_for_unsupported_ast_language(self, mock_lang, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        from langchain_text_splitters import Language
-        mock_lang.return_value = Language.PYTHON
-
-        splitter = ASTCodeSplitter()
-        doc = MagicMock()
-        doc.text = "def foo():\n    pass\n" * 10
-        doc.metadata = {"path": "test.py", "language": "python"}
-
-        nodes = splitter.split_documents([doc])
-        assert len(nodes) >= 0
+    children = [
+        *(named_node("function_definition", value) for value in expected["methods"]),
+        *(named_node("assignment", value) for value in expected["properties"]),
+        *(named_node("parameter", value) for value in expected["parameters"]),
+        *(text_node("decorator", f"@{value}") for value in expected["decorators"]),
+        *(named_node("call_expression", value) for value in expected["calls"]),
+        *(text_node("type_identifier", value) for value in expected["referenced_types"]),
+        *(text_node("type_parameter", value) for value in expected["type_parameters"]),
+        # Repeated captures must not duplicate semantic records.
+        named_node("function_definition", expected["methods"][0]),
+        text_node("decorator", f"@{expected['decorators'][0]}"),
+    ]
+    deep_call_name = "deep_call_界"
+    deep_node = named_node("call_expression", deep_call_name)
+    for _ in range(25):
+        deep_node = SimpleNamespace(
+            type="block",
+            start_byte=deep_node.start_byte,
+            end_byte=deep_node.end_byte,
+            children=[deep_node],
+        )
+    children.append(deep_node)
+    expected["calls"].append(deep_call_name)
+    root = SimpleNamespace(
+        type="module",
+        start_byte=0,
+        end_byte=len(source),
+        children=children,
+    )
+    return source.decode("utf-8"), root, expected
 
 
-# ── _split_fallback ──
+def test_rich_ast_metadata_preserves_inventories_with_depth_diagnostics():
+    source, root, expected = _rich_unicode_tree()
+    splitter = ASTCodeSplitter()
+    via_capture = ASTChunk(
+        content=source,
+        content_type=ContentType.FUNCTIONS_CLASSES,
+        language="python",
+        path="src/完整.py",
+        symbol_names=["Container_界"],
+    )
+    via_node = ASTChunk(
+        content=source,
+        content_type=ContentType.FUNCTIONS_CLASSES,
+        language="python",
+        path="src/完整.py",
+        symbol_names=["Container_界"],
+    )
+
+    splitter.extractor.details._extract_rich_ast_details(
+        via_capture,
+        SimpleNamespace(root_node=root),
+        root,
+        "python",
+    )
+    splitter.extractor.details._extract_rich_details_from_node(
+        via_node,
+        root,
+        source.encode("utf-8"),
+        "python",
+    )
+
+    # The optional traversal's depth diagnostic remains explicit; collected
+    # inventories retain every distinct value, including beyond former caps.
+    expected["calls"] = expected["calls"][:-1]
+    for field_name, values in expected.items():
+        assert getattr(via_capture, field_name) == values
+        assert getattr(via_node, field_name) == values
+    assert via_capture.metadata_partial_reasons == ["ast_depth_limit"]
+    assert via_node.metadata_partial_reasons == ["ast_depth_limit"]
+    metadata = splitter.emitter._build_metadata(via_capture, {}, 0, 1)
+    for field_name, values in expected.items():
+        assert metadata[field_name] == values
+    assert metadata["structural_metadata_complete"] is False
+    assert "ast_depth_limit" in metadata["structural_metadata_partial_reasons"]
 
 
-class TestSplitFallback:
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_empty_text_returns_empty(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        doc = MagicMock()
-        doc.text = ""
-        doc.metadata = {"path": "test.py", "language": "python"}
-
-        nodes = splitter._split_fallback(doc)
-        assert nodes == []
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_whitespace_only_returns_empty(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        doc = MagicMock()
-        doc.text = "   \n\n   "
-        doc.metadata = {"path": "test.py", "language": "python"}
-
-        nodes = splitter._split_fallback(doc)
-        assert nodes == []
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_small_code(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        doc = MagicMock()
-        doc.text = "class Foo(Bar):\n    def method(self):\n        return 42\n" * 5
-        doc.metadata = {"path": "test.py", "language": "python"}
-
-        nodes = splitter._split_fallback(doc)
-        assert len(nodes) > 0
-        # Check metadata
-        node = nodes[0]
-        assert node.metadata["content_type"] == "fallback"
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_fallback_with_no_language(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        doc = MagicMock()
-        doc.text = "some random text\n" * 20
-        doc.metadata = {"path": "readme.txt", "language": "text"}
-
-        nodes = splitter._split_fallback(doc, language=None)
-        assert len(nodes) >= 0
-
-
-# ── _build_metadata ──
-
-
-class TestBuildMetadata:
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_full_metadata(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        chunk = ASTChunk(
-            content="def foo(): pass",
+def test_query_relationships_and_parent_members_preserve_all_values():
+    splitter = ASTCodeSplitter()
+    owner = ASTChunk(
+        content="class Owner_界: pass",
+        content_type=ContentType.FUNCTIONS_CLASSES,
+        language="python",
+        path="src/完整.py",
+        symbol_names=["Owner_界"],
+        node_type="class",
+    )
+    methods = [f"method_{index:03d}_界" for index in range(70)]
+    properties = [f"field_{index:03d}_界" for index in range(70)]
+    ranges = [(0, 10_000, owner)]
+    for index, name in enumerate(methods, 1):
+        child = ASTChunk(
+            content=name,
             content_type=ContentType.FUNCTIONS_CLASSES,
             language="python",
-            path="test.py",
-            semantic_names=["foo"],
-            parent_context=["MyClass"],
-            docstring="Does something",
-            signature="def foo():",
-            start_line=1,
-            end_line=5,
-            node_type="function_definition",
-            extends=["Base"],
-            implements=["IFoo"],
-            imports=["os"],
-            namespace="mypackage",
-            methods=["bar"],
-            properties=["prop"],
-            parameters=["x", "y"],
-            return_type="int",
-            decorators=["staticmethod"],
-            modifiers=["public"],
-            calls=["print"],
-            referenced_types=["str"],
-            variables=["z"],
-            constants=["PI"],
-            type_parameters=["T"],
+            path=owner.path,
+            symbol_names=[name],
+            node_type="method",
         )
-
-        base_meta = {"workspace": "ws", "project": "proj", "branch": "main", "path": "test.py"}
-        meta = splitter._build_metadata(chunk, base_meta, 0, 5)
-
-        assert meta["content_type"] == "functions_classes"
-        assert meta["semantic_names"] == ["foo"]
-        assert meta["primary_name"] == "foo"
-        assert meta["parent_context"] == ["MyClass"]
-        assert meta["parent_class"] == "MyClass"
-        assert meta["docstring"] == "Does something"
-        assert meta["signature"] == "def foo():"
-        assert meta["extends"] == ["Base"]
-        assert meta["implements"] == ["IFoo"]
-        assert meta["imports"] == ["os"]
-        assert meta["namespace"] == "mypackage"
-        assert meta["methods"] == ["bar"]
-        assert meta["properties"] == ["prop"]
-        assert meta["parameters"] == ["x", "y"]
-        assert meta["return_type"] == "int"
-        assert meta["decorators"] == ["staticmethod"]
-        assert meta["modifiers"] == ["public"]
-        assert meta["calls"] == ["print"]
-        assert meta["referenced_types"] == ["str"]
-        assert meta["variables"] == ["z"]
-        assert meta["constants"] == ["PI"]
-        assert meta["type_parameters"] == ["T"]
-        assert "information_density" in meta
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_minimal_metadata(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        chunk = ASTChunk(
-            content="x = 1",
-            content_type=ContentType.FALLBACK,
-            language="python",
-            path="test.py",
-        )
-        meta = splitter._build_metadata(chunk, {}, 0, 1)
-        assert meta["content_type"] == "fallback"
-        assert "parent_context" not in meta
-        assert "semantic_names" not in meta
-
-
-# ── _compute_information_density ──
-
-
-class TestComputeInformationDensity:
-
-    def test_high_density(self):
-        meta = {
-            "start_line": 1, "end_line": 10,
-            "semantic_names": ["foo", "bar"],
-            "signature": "def foo():",
-            "methods": ["m1", "m2", "m3"],
-            "properties": ["p1"],
-            "calls": ["print", "len"],
-            "docstring": "hello",
-            "parameters": ["x"],
-        }
-        density = ASTCodeSplitter._compute_information_density(meta)
-        assert density > 0.0
-        assert density <= 1.0
-
-    def test_low_density(self):
-        meta = {"start_line": 1, "end_line": 200}
-        density = ASTCodeSplitter._compute_information_density(meta)
-        assert density == 0.0
-
-    def test_caps_at_1(self):
-        meta = {
-            "start_line": 1, "end_line": 2,
-            "semantic_names": ["a", "b", "c", "d", "e"],
-            "signature": "sig",
-            "methods": list(range(20)),
-            "properties": list(range(20)),
-            "constants": list(range(10)),
-            "extends": ["Base"],
-            "implements": ["IFoo"],
-            "calls": list(range(50)),
-            "referenced_types": list(range(50)),
-            "docstring": "doc",
-            "parameters": list(range(20)),
-            "decorators": list(range(10)),
-        }
-        density = ASTCodeSplitter._compute_information_density(meta)
-        assert density == 1.0
-
-
-# ── _create_embedding_text ──
-
-
-class TestCreateEmbeddingText:
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_enriched_text(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        meta = {
-            "path": "src/main.py",
-            "parent_context": ["MyClass"],
-            "extends": ["Base"],
-            "implements": ["IFoo"],
-            "node_type": "class",
-            "methods": ["m1", "m2"],
-            "properties": ["p1", "p2"],
-            "docstring": "A class.",
-        }
-        text = splitter._create_embedding_text("class MyClass:", meta)
-        assert "[" in text
-        assert "File:" in text
-        assert "In: MyClass" in text
-        assert "Extends: Base" in text
-        assert "Implements: IFoo" in text
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_no_enrichment_when_disabled(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter(enrich_embedding_text=False)
-
-        text = splitter._create_embedding_text("code", {"path": "f.py"})
-        assert text == "code"
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_namespace_cleaned(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        meta = {"path": "f.py", "namespace": "package com.example;"}
-        text = splitter._create_embedding_text("code", meta)
-        assert "com.example" in text
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_no_context_returns_plain(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        text = splitter._create_embedding_text("code", {})
-        assert text == "code"
-
-
-# ── _clean_path ──
-
-
-class TestCleanPath:
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_strips_commit_hash_prefix(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        result = splitter._clean_path("owner-repo-abc123def456789012345678901234567890/src/main.py")
-        assert result == "src/main.py"
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_keeps_normal_path(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        result = splitter._clean_path("src/main.py")
-        assert result == "src/main.py"
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_empty_path(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        assert splitter._clean_path("") == ""
-        assert splitter._clean_path(None) is None
-
-
-# ── _parse_type_list ──
-
-
-class TestParseTypeList:
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_simple_list(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        result = splitter._parse_type_list("Base, Mixin")
-        assert result == ["Base", "Mixin"]
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_with_generics(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        result = splitter._parse_type_list("List<String>, Map<K,V>")
-        assert "List" in result
-        assert "Map" in result
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_empty(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        assert splitter._parse_type_list("") == []
-        assert splitter._parse_type_list(None) == []
-
-
-# ── _get_semantic_node_types ──
-
-
-class TestGetSemanticNodeTypes:
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_python_types(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        types = splitter._get_semantic_node_types("python")
-        assert "class_definition" in types["class"]
-        assert "function_definition" in types["function"]
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_java_types(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        types = splitter._get_semantic_node_types("java")
-        assert "class_declaration" in types["class"]
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_unknown_language(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        types = splitter._get_semantic_node_types("unknown")
-        assert types == {"class": [], "function": []}
-
-
-# ── _get_rich_node_types ──
-
-
-class TestGetRichNodeTypes:
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    @pytest.mark.parametrize("lang", ["python", "java", "javascript", "typescript", "go", "rust", "c_sharp", "php"])
-    def test_known_languages(self, mock_qr, mock_parser, lang):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        types = splitter._get_rich_node_types(lang)
-        assert "method" in types
-        assert "property" in types
-        assert "parameter" in types
-        assert "decorator" in types
-        assert "call" in types or "call" in types.get("call", []) is not None
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_unknown_gets_defaults(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        types = splitter._get_rich_node_types("brainfuck")
-        assert "method" in types
-        assert types["method"] == []
-
-
-# ── _split_oversized_chunk ──
-
-
-class TestSplitOversizedChunk:
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_splits_large_chunk(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter(max_chunk_size=100, min_chunk_size=10, chunk_overlap=10)
-
-        chunk = ASTChunk(
-            content="def foo():\n    pass\n" * 50,
+        ranges.append((index * 10, index * 10 + 5, child))
+    for index, name in enumerate(properties, 101):
+        child = ASTChunk(
+            content=name,
             content_type=ContentType.FUNCTIONS_CLASSES,
             language="python",
-            path="test.py",
-            semantic_names=["foo"],
-            parent_context=["MyClass"],
-            start_line=1,
-            end_line=100,
-            node_type="function_definition",
-            extends=["Base"],
-            implements=["IFoo"],
-            methods=["bar", "baz"],
+            path=owner.path,
+            symbol_names=[name],
+            node_type="field",
+        )
+        ranges.append((index * 10, index * 10 + 5, child))
+
+    splitter.extractor._attach_query_parent_context(ranges)
+
+    assert owner.methods == methods
+    assert owner.properties == properties
+    assert owner.metadata_partial_reasons == []
+
+    def captured(capture_name: str, value: str, offset: int) -> CapturedNode:
+        return CapturedNode(
+            name=capture_name,
+            text=value,
+            start_byte=offset,
+            end_byte=offset + 1,
+            start_point=(0, offset),
+            end_point=(0, offset + 1),
+            node_type="identifier",
         )
 
-        from langchain_text_splitters import Language
-        nodes = splitter._split_oversized_chunk(chunk, Language.PYTHON, {"path": "test.py"}, "test.py")
-        assert len(nodes) > 0
-        for node in nodes:
-            assert node.metadata["content_type"] == "oversized_split"
-            assert node.metadata.get("is_fragment") is True
+    relationship_owner = ASTChunk(
+        content="def relationship_owner(): pass",
+        content_type=ContentType.FUNCTIONS_CLASSES,
+        language="python",
+        path=owner.path,
+    )
+    matches = []
+    expected_calls = [f"dependency_{index:03d}_界" for index in range(90)]
+    expected_parameters = [f"argument_{index:03d}_界" for index in range(45)]
+    expected_fields = [f"field_{index:03d}_界" for index in range(65)]
+    expected_variables = [f"variable_{index:03d}_界" for index in range(65)]
+    expected_types = [f"Type_{index:03d}_界" for index in range(65)]
+    offset = 1
+    for pattern_name, capture_name, values in (
+        ("call", "call.name", expected_calls),
+        ("parameter", "parameter.name", expected_parameters),
+        ("field", "field.name", expected_fields),
+        ("variable", "variable.name", expected_variables),
+        ("type_reference", "type_reference.name", expected_types),
+    ):
+        for value in values:
+            main = captured(pattern_name, value, offset)
+            matches.append(QueryMatch(pattern_name, {
+                pattern_name: main,
+                capture_name: captured(capture_name, value, offset),
+            }))
+            offset += 1
+    # Exercise stable de-duplication as well as former list boundaries.
+    duplicate = captured("call", expected_calls[0], offset)
+    matches.append(QueryMatch("call", {
+        "call": duplicate,
+        "call.name": captured("call.name", expected_calls[0], offset),
+    }))
+
+    splitter.extractor._attach_query_relationship_metadata(
+        matches,
+        [(0, 10_000, relationship_owner)],
+    )
+
+    assert relationship_owner.calls == expected_calls
+    assert relationship_owner.parameters == expected_parameters
+    assert relationship_owner.properties == expected_fields
+    assert relationship_owner.variables == expected_variables
+    assert relationship_owner.referenced_types == expected_types
+    assert relationship_owner.metadata_partial_reasons == []
 
 
-# ── _create_simplified_code ──
+def test_symbol_inventory_is_complete_without_changing_primary_path_identity():
+    symbols = [f"symbol_{index:03d}_界" for index in range(75)]
+    chunk = ASTChunk(
+        content="class Container_界: pass",
+        content_type=ContentType.FUNCTIONS_CLASSES,
+        language="python",
+        path="src/完整.py",
+        symbol_names=symbols,
+        parent_context=["package_界", "Owner_界"],
+    )
+    metadata = ASTCodeSplitter().emitter._build_metadata(chunk, {}, 0, 1)
+
+    assert metadata["symbol_names"] == symbols
+    assert metadata["primary_name"] == symbols[0]
+    assert metadata["full_path"] == f"package_界.Owner_界.{symbols[0]}"
+    assert metadata.get("structural_metadata_complete", True) is True
+    assert not metadata.get("structural_metadata_partial_reasons")
 
 
-class TestCreateSimplifiedCode:
+def test_unknown_source_remains_one_complete_raw_unit():
+    source = "\n".join(
+        f"opaque line {index:03d} " + "x" * 30
+        for index in range(30)
+    )
+    splitter = ASTCodeSplitter(
+        max_chunk_size=160,
+        min_chunk_size=1,
+        chunk_overlap=20,
+    )
 
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_replaces_chunks_with_placeholders(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
+    nodes = splitter.split_documents([
+        Document(source, {"path": "assets/data.unknown", "language": "text"})
+    ])
 
-        source = "import os\n\ndef foo():\n    pass\n\ndef bar():\n    pass\n"
-        chunks = [
-            ASTChunk(
-                content="def foo():\n    pass",
-                content_type=ContentType.FUNCTIONS_CLASSES,
-                language="python",
-                path="test.py",
-                start_line=3,
-                end_line=4,
-            ),
-        ]
-        result = splitter._create_simplified_code(source, chunks, "python")
-        assert "# Code for:" in result
-
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_no_semantic_chunks_returns_source(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
-
-        source = "import os\nprint('hello')"
-        chunks = [
-            ASTChunk(
-                content=source,
-                content_type=ContentType.SIMPLIFIED_CODE,
-                language="python",
-                path="test.py",
-            ),
-        ]
-        result = splitter._create_simplified_code(source, chunks, "python")
-        assert result == source
+    assert len(nodes) == 1
+    assert nodes[0].text == source
+    assert all(
+        node.metadata["content_type"] == ContentType.FALLBACK.value
+        for node in nodes
+    )
+    assert all("structural_file" not in node.metadata for node in nodes)
+    assert all("plugin_graph_facts" not in node.metadata for node in nodes)
+    assert "".join(node.text for node in nodes) == source
 
 
-# ── Static methods ──
+def test_fallback_preserves_small_tail_in_the_complete_source():
+    source = ("A" * 20) + "\n" + "z"
+    splitter = ASTCodeSplitter(
+        max_chunk_size=21,
+        min_chunk_size=100,
+        chunk_overlap=10,
+    )
+
+    nodes = splitter.emitter._split_fallback(Document(
+        source,
+        {"path": "assets/tail.unknown", "language": "text"},
+    ))
+
+    assert [node.text for node in nodes] == [source]
+    assert "".join(node.text for node in nodes).encode("utf-8") == source.encode(
+        "utf-8"
+    )
 
 
-class TestStaticMethods:
+def test_fallback_preserves_large_source_without_size_fragmentation():
+    source = "X" * 35_001
+    splitter = ASTCodeSplitter(
+        max_chunk_size=50_000,
+        min_chunk_size=1,
+        chunk_overlap=200,
+    )
 
-    def test_get_supported_languages(self):
-        langs = ASTCodeSplitter.get_supported_languages()
-        assert isinstance(langs, list)
-        assert len(langs) > 0
+    nodes = splitter.emitter._split_fallback(Document(
+        source,
+        {"path": "assets/large.unknown", "language": "text"},
+    ))
 
-    def test_is_ast_supported_python(self):
-        assert ASTCodeSplitter.is_ast_supported("test.py") is True
+    assert [node.text for node in nodes] == [source]
+    assert "".join(node.text for node in nodes) == source
 
-    def test_is_ast_supported_unknown(self):
-        assert ASTCodeSplitter.is_ast_supported("test.xyz") is False
+
+def test_fallback_keeps_large_unicode_atom_and_exact_byte_coordinates():
+    source = "界" * 25_001
+    splitter = ASTCodeSplitter(
+        max_chunk_size=10_000,
+        min_chunk_size=1,
+        chunk_overlap=200,
+    )
+
+    nodes = splitter.emitter._split_fallback(Document(
+        source,
+        {"path": "assets/atom.unknown", "language": "text"},
+    ))
+
+    assert [node.text for node in nodes] == [source]
+    assert nodes[0].metadata["start_byte"] == 0
+    assert nodes[0].metadata["end_byte"] == len(source.encode("utf-8"))
+    assert b"".join(node.text.encode("utf-8") for node in nodes) == source.encode(
+        "utf-8"
+    )
+
+
+def test_large_ast_unit_retains_complete_owner_source_and_relation_metadata():
+    splitter = ASTCodeSplitter(
+        max_chunk_size=120,
+        min_chunk_size=1,
+        chunk_overlap=10,
+    )
+    chunk = ASTChunk(
+        content="\n".join(
+            f"    value_{index} = dependency_{index}()"
+            for index in range(20)
+        ),
+        content_type=ContentType.FUNCTIONS_CLASSES,
+        language="python",
+        path="src/service.py",
+        # Source size must not remove any owning declaration metadata.
+        symbol_names=["run", *[f"nested_{index}_界" for index in range(70)]],
+        calls=[f"dependency_{index}" for index in range(20)],
+        start_line=1,
+        end_line=20,
+        node_type="function",
+    )
+
+    nodes = splitter.emitter._process_chunks(
+        [chunk],
+        Document(chunk.content, {"path": chunk.path}),
+        None,
+        chunk.path,
+    )
+
+    assert len(nodes) == 1
+    node = nodes[0]
+    assert node.text == chunk.content
+    assert node.metadata["content_type"] == ContentType.FUNCTIONS_CLASSES.value
+    assert node.metadata["primary_name"] == "run"
+    assert node.metadata["symbol_names"] == chunk.symbol_names
+    assert node.metadata["calls"] == chunk.calls
+    assert node.metadata["start_line"] == 1
+    assert node.metadata["end_line"] == 20
+    assert "is_fragment" not in node.metadata
+
+
+def test_complete_docstring_is_preserved_in_both_metadata_paths():
+    docstring = "contract evidence " + ("\U0001f9ea" * 2_000)
+    splitter = ASTCodeSplitter()
+    ast_chunk = ASTChunk(
+        content="def run():\n    pass\n",
+        content_type=ContentType.FUNCTIONS_CLASSES,
+        language="python",
+        path="src/service.py",
+        docstring=docstring,
+    )
+    extracted = ChunkMetadata(
+        content_type=ContentType.FUNCTIONS_CLASSES,
+        language="python",
+        path="src/service.py",
+        docstring=docstring,
+    )
+
+    assert splitter.emitter._build_metadata(ast_chunk, {}, 0, 1)["docstring"] == docstring
+    assert MetadataExtractor().build_metadata_dict(extracted, {})["docstring"] == docstring
+
+
+def test_plugin_runtime_remains_the_syntax_selection_boundary():
+    syntax = SyntaxContribution(
+        plugin_id="python",
+        language_id="python",
+        grammar_module="tree_sitter_python",
+        grammar_factory="language",
+        query_resource="python/resources/rag-chunks.scm",
+        builtin_tags=True,
+    )
+    capabilities = SimpleNamespace(file_plugins={"src/service.py": ("python",)})
+    runtime = MagicMock()
+    runtime.syntax_contribution.return_value = (syntax, ())
+    splitter = ASTCodeSplitter(plugin_runtime=runtime)
+    splitter._parser = MagicMock()
+    splitter._parser.is_available.return_value = False
+
+    nodes = splitter.split_documents(
+        [Document(
+            "def run():\n    return True\n",
+            {"path": "src/service.py", "language": "python"},
+        )],
+        capabilities=capabilities,
+    )
+
+    runtime.syntax_contribution.assert_called_once_with(
+        "src/service.py", capabilities
+    )
+    assert nodes
+    assert all(node.metadata["plugin_syntax"] == {
+        "plugin": "python",
+        "language": "python",
+    } for node in nodes)
 
 
 def test_resilient_splitter_quarantines_only_the_failing_file():
     splitter = ASTCodeSplitter()
-    good_node = MagicMock()
 
-    def split(documents, capabilities=None):
-        path = documents[0].metadata["path"]
-        if path == "src/bad.custom":
-            raise ValueError("invalid project syntax")
-        return [good_node]
+    def split_one(documents, capabilities=None):
+        document = documents[0]
+        if document.metadata["path"] == "broken.py":
+            raise RuntimeError("parser crashed")
+        return [TextNode(document.text, dict(document.metadata))]
 
-    splitter.split_documents = MagicMock(side_effect=split)
-    nodes, skipped_paths = splitter.split_documents_resilient([
-        Document(text="valid", metadata={"path": "src/good.custom"}),
-        Document(text="invalid", metadata={"path": "src/bad.custom"}),
+    splitter.split_documents = MagicMock(side_effect=split_one)
+    nodes, skipped = splitter.split_documents_resilient([
+        Document("value = 1", {"path": "ok.py"}),
+        Document("broken", {"path": "broken.py"}),
+        Document("value = 2", {"path": "later.py"}),
     ])
 
-    assert nodes == [good_node]
-    assert skipped_paths == ("src/bad.custom",)
+    assert [node.metadata["path"] for node in nodes] == ["ok.py", "later.py"]
+    assert skipped == ("broken.py",)
 
 
-# ── _get_text_splitter ──
+def test_python_ast_chunks_keep_source_and_structural_metadata():
+    pytest.importorskip("tree_sitter")
+    pytest.importorskip("tree_sitter_python")
+    source = (
+        "class Service:\n"
+        "    def run(self, value):\n"
+        "        return validate(value)\n"
+    )
+    splitter = ASTCodeSplitter(max_chunk_size=8000, min_chunk_size=1)
+
+    nodes = splitter.split_documents([
+        Document(source, {"path": "src/service.py", "language": "python"})
+    ])
+
+    assert nodes
+    assert all(len(node.text) <= 8000 for node in nodes)
+    assert any("class Service" in node.text for node in nodes)
+    assert {"Service", "run"}.intersection({
+        node.metadata.get("primary_name") for node in nodes
+    })
+    assert any("validate" in node.metadata.get("calls", []) for node in nodes)
+    assert all("structural_record_type" not in node.metadata for node in nodes)
 
 
-class TestGetTextSplitter:
+def test_chunk_identity_includes_complete_content():
+    prefix = "same prefix" * 100
+    assert generate_deterministic_id("src/a.py", prefix + "return 1") != generate_deterministic_id("src/a.py", prefix + "return 2")
 
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_caches_splitters(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
 
-        from langchain_text_splitters import Language
-        s1 = splitter._get_text_splitter(Language.PYTHON)
-        s2 = splitter._get_text_splitter(Language.PYTHON)
-        assert s1 is s2
+def test_large_semantic_unit_keeps_short_final_source_statement():
+    prefix = "def execute():\n" + "    work()\n" * 20
+    tail = "    return False\n"
+    chunk = ASTChunk(
+        content=prefix + tail,
+        content_type=ContentType.FUNCTIONS_CLASSES,
+        language="python", path="worker.py", start_line=1, end_line=22,
+        symbol_names=["execute"], node_type="function",
+    )
+    splitter = ASTCodeSplitter(max_chunk_size=100, min_chunk_size=50, chunk_overlap=10)
+    nodes = splitter.emitter._process_chunks([chunk], Document(chunk.content, {"path": chunk.path}), None, chunk.path)
+    assert [node.text for node in nodes] == [prefix + tail]
+    assert nodes[0].metadata["start_line"] == 1
+    assert nodes[0].metadata["end_line"] == 22
+    assert "total_sub_chunks" not in nodes[0].metadata
 
-    @patch("rag_pipeline.core.splitter.splitter.get_parser")
-    @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
-    def test_different_languages(self, mock_qr, mock_parser):
-        mock_parser.return_value = MagicMock()
-        mock_qr.return_value = MagicMock()
-        splitter = ASTCodeSplitter()
 
-        from langchain_text_splitters import Language
-        s_py = splitter._get_text_splitter(Language.PYTHON)
-        s_js = splitter._get_text_splitter(Language.JS)
-        assert s_py is not s_js
+@pytest.mark.parametrize("source", ["", "plain", "\n", "\r\n", "界\r\nalpha\nβ\n", "é\r終", "a\n\n末尾"])
+def test_query_capture_byte_points_match_prefix_scan_at_every_unicode_and_newline_boundary(monkeypatch, source):
+    from rag_pipeline.core.splitter.query_runner import QueryRunner
+    tree_sitter = pytest.importorskip("tree_sitter")
+
+    raw = source.encode("utf-8")
+    nodes = [SimpleNamespace(start_byte=offset, end_byte=offset, type="identifier")
+             for offset in range(len(raw) + 1)]
+    cursor = SimpleNamespace(matches=lambda _root: [(0, {"function": [node]}) for node in nodes])
+    monkeypatch.setattr(tree_sitter, "QueryCursor", lambda _query: cursor)
+    runner = QueryRunner()
+    monkeypatch.setattr(runner, "_get_compiled_query", lambda *_args: object())
+    matches = runner.run_query(source, "python", tree=SimpleNamespace(root_node=object()))
+    assert len(matches) == len(nodes)
+    for offset, match in enumerate(matches):
+        expected_line = raw.count(b"\n", 0, offset)
+        prior_newline = raw.rfind(b"\n", 0, offset)
+        expected_column = offset if prior_newline < 0 else offset - prior_newline - 1
+        capture = match.get("function")
+        assert capture.start_point == capture.end_point == (expected_line, expected_column)
+        assert capture.start_byte == capture.end_byte == offset

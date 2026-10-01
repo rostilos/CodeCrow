@@ -52,6 +52,8 @@ public interface AiAnalysisRequest {
 
     default boolean getRagEnabled() { return true; }
 
+    default ReviewIndexPolicy getRagIndexPolicy() { return null; }
+
     AnalysisType getAnalysisType();
 
     String getVcsProvider();
@@ -79,6 +81,16 @@ public interface AiAnalysisRequest {
 
     List<String> getDeletedFiles();
 
+    /**
+     * Complete non-deleted path set from the unfiltered base-to-head PR diff.
+     * This defines the proposed-tree overlay independently from the possibly
+     * scoped or incremental files selected for the current review pass.
+     */
+    default List<String> getProposedTreeChangedFiles() { return getChangedFiles(); }
+
+    /** Complete deleted path set from the unfiltered base-to-head PR diff. */
+    default List<String> getProposedTreeDeletedFiles() { return getDeletedFiles(); }
+
     List<String> getDiffSnippets();
 
     default String getTargetBranchName() { return null; }
@@ -92,6 +104,13 @@ public interface AiAnalysisRequest {
     String getPreviousCommitHash();
 
     String getCurrentCommitHash();
+
+    /**
+     * Immutable commit at the head of the PR target branch when its metadata
+     * was fetched. Older request implementations used the base commit for this
+     * purpose, so retain that as a compatibility fallback.
+     */
+    default String getTargetHeadCommitHash() { return getBaseCommitHash(); }
 
     default String getBaseCommitHash() { return null; }
 

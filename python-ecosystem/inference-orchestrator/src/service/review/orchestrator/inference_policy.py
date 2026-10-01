@@ -1,14 +1,15 @@
-"""
-Inference policy for the multi-stage review pipeline.
+"""Inference policy for the multi-stage review pipeline.
 
-This module only caps generated output. It does not trim the diff, RAG context,
-file outlines, or issue evidence that the model receives.
+Input packers bound the evidence sent to a model. This module limits semantic
+invocation fan-out. Stages own any narrower response policy required by their
+output contract; in particular, Stage 2 bounds its compact structured result so
+hidden reasoning cannot consume the provider's entire completion window.
 """
 
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
@@ -36,12 +37,9 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-OUTPUT_CAPS_ENABLED = _env_bool("REVIEW_OUTPUT_CAPS_ENABLED", True)
-OUTPUT_CAP_MODEL_KWARG = os.environ.get("REVIEW_OUTPUT_CAP_MODEL_KWARG", "").strip()
 FAST_CHECK_ENABLED = _env_bool("REVIEW_FAST_CHECK_ENABLED", True)
 STAGE_2_ENABLED = _env_bool("REVIEW_STAGE_2_ENABLED", True)
 LLM_DEDUP_ENABLED = _env_bool("REVIEW_LLM_DEDUP_ENABLED", True)
-
 FAST_CHECK_MAX_FILES = _env_int("REVIEW_FAST_CHECK_MAX_FILES", 4)
 FAST_CHECK_MAX_CHANGED_LINES = _env_int("REVIEW_FAST_CHECK_MAX_CHANGED_LINES", 800)
 FAST_CHECK_MAX_DIFF_BYTES = _env_int("REVIEW_FAST_CHECK_MAX_DIFF_BYTES", 120_000)
@@ -52,13 +50,12 @@ MEDIUM_REVIEW_MAX_DIFF_BYTES = _env_int("REVIEW_MEDIUM_MAX_DIFF_BYTES", 450_000)
 
 FAST_CHECK_DEDUP_MAX_ISSUES = _env_int("REVIEW_FAST_CHECK_DEDUP_MAX_ISSUES", 5)
 
-DEFAULT_STAGE_OUTPUT_CAPS = {
-    "stage_0": {"small": 6_000, "medium": 8_000, "large": 12_000},
-    "stage_1": {"small": 20_000, "medium": 30_000, "large": 40_000},
-    "verification": {"small": 5_000, "medium": 8_000, "large": 12_000},
-    "stage_2": {"small": 11_000, "medium": 18_000, "large": 25_000},
-    "dedup": {"small": 3_000, "medium": 5_000, "large": 8_000},
-    "stage_3": {"small": 8_000, "medium": 12_000, "large": 18_000},
+DEFAULT_STAGE_INVOCATION_CAPS = {
+    "stage_1_total": {"small": 4, "medium": 12, "large": 24},
+    "stage_1_per_unit": {"small": 1, "medium": 2, "large": 3},
+    "stage_2_packets": {"small": 1, "medium": 2, "large": 4},
+    "stage_3_children": {"small": 1, "medium": 2, "large": 4},
+    "branch_reconciliation_packets": {"small": 1, "medium": 2, "large": 4},
 }
 
 @dataclass(frozen=True)
@@ -69,7 +66,7 @@ class ReviewInferenceProfile:
     size_class: str
     fast_check_enabled: bool
     fast_check_reason: str
-    caps: dict[str, Optional[int]] = field(default_factory=dict)
+    invocation_caps: dict[str, int] = field(default_factory=dict)
 
     def describe(self) -> str:
         return (
@@ -78,11 +75,13 @@ class ReviewInferenceProfile:
             f"fast_check={self.fast_check_enabled} ({self.fast_check_reason})"
         )
 
-    def output_cap(self, stage: str) -> Optional[int]:
-        if not OUTPUT_CAPS_ENABLED:
-            return None
-        return self.caps.get(stage)
-
+    def invocation_cap(self, stage: str) -> int:
+        cap = (getattr(self, "invocation_caps", None) or {}).get(stage)
+        if isinstance(cap, int) and cap > 0:
+            return cap
+        defaults = DEFAULT_STAGE_INVOCATION_CAPS.get(stage, {})
+        default = defaults.get(self.size_class)
+        return default if isinstance(default, int) and default > 0 else 1
 
 def build_review_inference_profile(
     request: ReviewRequestDto,
@@ -94,11 +93,10 @@ def build_review_inference_profile(
 
     size_class = _classify_size(file_count, changed_lines, diff_bytes)
     fast_check, reason = _classify_fast_check(file_count, changed_lines, diff_bytes)
-    caps = {
-        stage: _stage_output_cap(stage, size_class)
-        for stage in DEFAULT_STAGE_OUTPUT_CAPS
+    invocation_caps = {
+        stage: _stage_invocation_cap(stage, size_class)
+        for stage in DEFAULT_STAGE_INVOCATION_CAPS
     }
-
     profile = ReviewInferenceProfile(
         file_count=file_count,
         changed_lines=changed_lines,
@@ -106,44 +104,14 @@ def build_review_inference_profile(
         size_class=size_class,
         fast_check_enabled=fast_check,
         fast_check_reason=reason,
-        caps=caps,
+        invocation_caps=invocation_caps,
     )
-    logger.info("Review inference profile: %s; output_caps=%s", profile.describe(), caps)
+    logger.info(
+        "Review inference profile: %s; invocation_caps=%s",
+        profile.describe(),
+        invocation_caps,
+    )
     return profile
-
-
-def with_stage_output_cap(llm, stage: str, profile: ReviewInferenceProfile):
-    cap = profile.output_cap(stage)
-    if not cap:
-        return llm
-
-    try:
-        update = {"max_tokens": cap}
-        if OUTPUT_CAP_MODEL_KWARG:
-            model_kwargs = dict(getattr(llm, "model_kwargs", {}) or {})
-            model_kwargs[OUTPUT_CAP_MODEL_KWARG] = cap
-            update["model_kwargs"] = model_kwargs
-
-        if hasattr(llm, "model_copy"):
-            capped = llm.model_copy(update=update)
-        elif hasattr(llm, "copy"):
-            capped = llm.copy(update=update)
-        else:
-            bind_kwargs = {"max_tokens": cap}
-            if OUTPUT_CAP_MODEL_KWARG:
-                bind_kwargs[OUTPUT_CAP_MODEL_KWARG] = cap
-            capped = llm.bind(**bind_kwargs)
-        logger.info(
-            "Using output cap for %s: max_tokens=%s, model_kwarg=%s (profile=%s)",
-            stage,
-            cap,
-            OUTPUT_CAP_MODEL_KWARG or "none",
-            profile.size_class,
-        )
-        return capped
-    except Exception as exc:
-        logger.warning("Failed to apply output cap for %s: %s", stage, exc)
-        return llm
 
 
 def should_run_stage_2(
@@ -199,7 +167,7 @@ def _count_review_files(
 ) -> int:
     if processed_diff:
         return len(processed_diff.get_included_files())
-    return len(request.changedFiles or [])
+    return len(getattr(request, "changedFiles", None) or [])
 
 
 def _count_changed_lines(
@@ -209,7 +177,12 @@ def _count_changed_lines(
     if processed_diff:
         return processed_diff.total_additions + processed_diff.total_deletions
 
-    diff = request.deltaDiff if request.analysisMode == "INCREMENTAL" and request.deltaDiff else request.rawDiff
+    delta_diff = getattr(request, "deltaDiff", None)
+    diff = (
+        delta_diff
+        if getattr(request, "analysisMode", None) == "INCREMENTAL" and delta_diff
+        else getattr(request, "rawDiff", None)
+    )
     if not diff:
         return 0
     return sum(
@@ -226,7 +199,12 @@ def _count_diff_bytes(
 ) -> int:
     if processed_diff:
         return processed_diff.processed_size_bytes or processed_diff.original_size_bytes
-    diff = request.deltaDiff if request.analysisMode == "INCREMENTAL" and request.deltaDiff else request.rawDiff
+    delta_diff = getattr(request, "deltaDiff", None)
+    diff = (
+        delta_diff
+        if getattr(request, "analysisMode", None) == "INCREMENTAL" and delta_diff
+        else getattr(request, "rawDiff", None)
+    )
     return len((diff or "").encode("utf-8"))
 
 
@@ -258,20 +236,28 @@ def _classify_fast_check(file_count: int, changed_lines: int, diff_bytes: int) -
     return True, "within small PR thresholds"
 
 
-def _stage_output_cap(stage: str, size_class: str) -> Optional[int]:
-    default = DEFAULT_STAGE_OUTPUT_CAPS[stage][size_class]
+def _stage_invocation_cap(stage: str, size_class: str) -> int:
+    default = DEFAULT_STAGE_INVOCATION_CAPS[stage][size_class]
     env_stage = stage.upper()
     env_stage_no_underscore = env_stage.replace("_", "")
     env_size = size_class.upper()
     for name in (
-        f"REVIEW_{env_stage}_MAX_OUTPUT_TOKENS",
-        f"REVIEW_{env_stage_no_underscore}_MAX_OUTPUT_TOKENS",
-        f"REVIEW_{env_stage}_{env_size}_MAX_OUTPUT_TOKENS",
-        f"REVIEW_{env_stage_no_underscore}_{env_size}_MAX_OUTPUT_TOKENS",
+        f"REVIEW_{env_stage}_MAX_INVOCATIONS",
+        f"REVIEW_{env_stage_no_underscore}_MAX_INVOCATIONS",
+        f"REVIEW_{env_stage}_{env_size}_MAX_INVOCATIONS",
+        f"REVIEW_{env_stage_no_underscore}_{env_size}_MAX_INVOCATIONS",
     ):
         value = os.environ.get(name)
         if value is None or not value.strip():
             continue
         cap = _env_int(name, default)
-        return cap if cap > 0 else None
+        if cap > 0:
+            return cap
+        logger.warning(
+            "Ignoring non-positive %s=%s; using finite default %s",
+            name,
+            value,
+            default,
+        )
+        return default
     return default

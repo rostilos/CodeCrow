@@ -1,8 +1,8 @@
 """
 Metadata extraction from AST chunks.
 
-Extracts semantic metadata like docstrings, signatures, inheritance info
-from parsed code chunks for improved RAG retrieval.
+Extracts structural metadata such as docstrings, signatures, and inheritance
+from parsed source units for exact graph indexing.
 
 Extraction strategy:
 - For languages with .scm query files (python, java, javascript, typescript,
@@ -20,6 +20,18 @@ from enum import Enum
 logger = logging.getLogger(__name__)
 
 
+def _stable_unique_strings(values: List[str]) -> List[str]:
+    """Deduplicate strings without changing their deterministic source order."""
+    seen = set()
+    result = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
 class ContentType(Enum):
     """Content type as determined by AST parsing."""
     FUNCTIONS_CLASSES = "functions_classes"
@@ -34,7 +46,7 @@ class ChunkMetadata:
     content_type: ContentType
     language: str
     path: str
-    semantic_names: List[str] = field(default_factory=list)
+    symbol_names: List[str] = field(default_factory=list)
     parent_context: List[str] = field(default_factory=list)
     docstring: Optional[str] = None
     signature: Optional[str] = None
@@ -146,8 +158,8 @@ class MetadataExtractor:
         """Extract function/method signature from code chunk using regex."""
         lines = content.split('\n')
         
-        for line in lines[:15]:
-            line = line.strip()
+        for line_index, source_line in enumerate(lines):
+            line = source_line.strip()
             
             if language == 'python':
                 if line.startswith(('def ', 'async def ', 'class ')):
@@ -155,12 +167,10 @@ class MetadataExtractor:
                     if line.startswith('class ') and ':' in line:
                         return line.split(':')[0] + ':'
                     if ')' not in sig and ':' not in sig:
-                        idx = next((i for i, l in enumerate(lines) if l.strip() == line), -1)
-                        if idx >= 0:
-                            for next_line in lines[idx+1:idx+5]:
-                                sig += ' ' + next_line.strip()
-                                if ')' in next_line:
-                                    break
+                        for next_line in lines[line_index + 1:]:
+                            sig += ' ' + next_line.strip()
+                            if ')' in next_line:
+                                break
                     if ':' in sig:
                         return sig.split(':')[0] + ':'
                     return sig
@@ -210,12 +220,12 @@ class MetadataExtractor:
                 seen.add(name)
                 unique_names.append(name)
         
-        return unique_names[:30]  # Limit to 30 names
+        return unique_names
     
     def _get_name_patterns(self, language: str) -> List[re.Pattern]:
         """Get regex patterns for extracting names by language.
         
-        Patterns allow optional leading whitespace (^\s*) to match indented code
+        Patterns allow optional leading whitespace (`^\\s*`) to match indented code
         like methods inside classes.
         """
         patterns = {
@@ -289,8 +299,9 @@ class MetadataExtractor:
                     else:
                         result['imports'].append(m.strip())
         
-        # Limit imports
-        result['imports'] = result['imports'][:50]
+        result['extends'] = _stable_unique_strings(result['extends'])
+        result['implements'] = _stable_unique_strings(result['implements'])
+        result['imports'] = _stable_unique_strings(result['imports'])
         
         return result
     
@@ -534,15 +545,22 @@ class MetadataExtractor:
         if chunk_metadata.parent_context:
             metadata['parent_context'] = chunk_metadata.parent_context
             metadata['parent_class'] = chunk_metadata.parent_context[-1]
-            full_path_parts = chunk_metadata.parent_context + chunk_metadata.semantic_names[:1]
+            # ``full_path`` has one primary leaf by definition.  The complete
+            # symbol inventory remains available in ``symbol_names`` below.
+            primary_leaf = (
+                [chunk_metadata.symbol_names[0]]
+                if chunk_metadata.symbol_names
+                else []
+            )
+            full_path_parts = chunk_metadata.parent_context + primary_leaf
             metadata['full_path'] = '.'.join(full_path_parts)
         
-        if chunk_metadata.semantic_names:
-            metadata['semantic_names'] = chunk_metadata.semantic_names
-            metadata['primary_name'] = chunk_metadata.semantic_names[0]
+        if chunk_metadata.symbol_names:
+            metadata['symbol_names'] = chunk_metadata.symbol_names
+            metadata['primary_name'] = chunk_metadata.symbol_names[0]
         
         if chunk_metadata.docstring:
-            metadata['docstring'] = chunk_metadata.docstring[:1000]
+            metadata['docstring'] = chunk_metadata.docstring
         
         if chunk_metadata.signature:
             metadata['signature'] = chunk_metadata.signature

@@ -1,25 +1,22 @@
-"""
-Stage 1: Parallel file reviews — batching, RAG context, and per-batch LLM calls.
-"""
+"""Stage 1: Parallel file reviews with exact repository context."""
+from service.review.execution_scheduler import review_model_slot
 import asyncio
-import hashlib
-import inspect
+from collections import Counter
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 import json
 import logging
 import os
 import re
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, TYPE_CHECKING
 
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
-from model.multi_stage import ReviewPlan, FileReviewBatchOutput
+from model.multi_stage import FileReviewBatchOutput, FileReviewOutput, ReviewPlan
 from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import (
     DiffChangeType,
-    DiffHunk,
-    HunkDisposition,
     ProcessedDiff,
     DiffProcessor,
 )
@@ -27,15 +24,17 @@ from utils.task_context_builder import build_task_context
 from utils.dependency_graph import create_smart_batches_async
 
 from utils.llm_response import extract_llm_response_text
-from service.review.orchestrator.json_utils import parse_llm_response
+from service.review.orchestrator.json_utils import (
+    parse_llm_response,
+    resolve_structured_output,
+)
+from service.review.orchestrator.structured_output import (
+    format_response_diagnostics,
+    invoke_structured_output,
+)
 from service.review.orchestrator.reconciliation import (
     issue_matches_files,
     format_previous_issues_for_batch,
-)
-from service.review.orchestrator.context_helpers import (
-    extract_diff_snippets,
-    format_rag_context,
-    format_duplication_context,
 )
 from utils.path_identity import (
     normalize_repository_path,
@@ -43,11 +42,87 @@ from utils.path_identity import (
 )
 from service.review.orchestrator.stage_helpers import (
     emit_progress,
+    emit_status,
     format_project_rules,
 )
-from service.review.plugin_context import review_plugin_context
+from service.review.orchestrator.inference_policy import (
+    ReviewInferenceProfile,
+    build_review_inference_profile,
+)
+from service.review.orchestrator.stage_1_local_packing import (
+    Stage1LocalPackingInput,
+    Stage1LocalPackingRuntime,
+    Stage1PreparedContext,
+    Stage1PromptMaterial,
+    Stage1ReviewUnitState,
+    _COMPLETE_ADDED_SOURCE_MARKER,
+    _DIFF_HUNK_HEADER,
+    _DiffReviewChunk,
+    _Stage1EvidenceAtom,
+    _add_path_lookup,
+    _allocate_stage1_invocation_quotas,
+    _all_stage1_hunk_ids,
+    _apply_compacted_stage_1_omission,
+    _chunk_diff_preserving_hunks,
+    _chunk_diff_with_ownership,
+    _compacted_stage_1_hunk_ids,
+    _diff_contains_complete_added_source,
+    _diff_limit_reason_allows_full_review,
+    _ensure_stage1_review_unit,
+    _exact_stage1_diff,
+    _expand_oversized_diff_batches as _pack_expand_oversized_diff_batches,
+    _expand_oversized_stage1_evidence_batches as _pack_stage1_evidence_batches,
+    _fallback_hunk_id,
+    _find_diff_file_for_path,
+    _is_compacted_stage_1_diff,
+    _item_requests_full_diff,
+    _joint_stage1_units_for_item as _pack_joint_stage1_units_for_item,
+    _lookup_by_path,
+    _partition_oversized_stage1_batch as _pack_partition_stage1_batch,
+    _path_lookup_keys,
+    _repack_stage1_batches_by_rendered_input as _pack_repack_stage1_batches,
+    _reviewable_manifest_context_chars,
+    _reviewable_manifest_hunk_ids,
+    _split_hunk_by_lines,
+    _stage1_atom_marker,
+    _stage1_evidence_atoms,
+    _stage1_item_with_overrides,
+    _stage1_unit_from_atoms,
+    pack_stage1_local_batches,
+)
+from service.review.orchestrator.stage_1_rag_retrieval import (
+    Stage1RagState,
+    STAGE1_RELATION_BRIEFING_MAX_CHARS,
+    has_exact_proposed_tree_binding,
+)
+from service.review.orchestrator.stage_1_tool_inventory import (
+    STAGE1_AGENT_TOOL_NAMES,
+    STAGE1_BRANCH_FILE_TOOL_NAME,
+    STAGE1_MINIMAL_REVIEW_CONTEXT_TOOL_NAME,
+    STAGE1_QUERY_GRAPH_TOOL_NAME,
+    STAGE1_REVIEW_CONTEXT_TOOL_NAME,
+    STAGE1_REVIEW_FILE_TOOL_NAME,
+    STAGE1_STRUCTURAL_OBSERVATION_TOOL_NAMES,
+    STAGE1_STRUCTURAL_TOOL_NAMES,
+    STAGE1_VCS_TOOL_NAMES,
+)
+from service.review.orchestrator.stage_1_agent_telemetry import (
+    Stage1AgentTelemetryRecorder,
+    stage1_agent_tool_event_failures,
+)
+
+if TYPE_CHECKING:
+    from service.agent import AgentExecutionService
+from service.review.plugin_context import (
+    apply_plugin_file_policy,
+    review_plugin_context,
+)
 from service.review.candidate_ledger import CandidateEvidenceLedger
 from service.review.prompt_diagnostics import record_prompt_diagnostic
+from service.review.snapshot_identity import (
+    resolve_exact_structural_base_revision,
+)
+from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -70,30 +145,36 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-SEMANTIC_RAG_FILLER_ENABLED = _env_bool("REVIEW_SEMANTIC_RAG_FILLER_ENABLED", True)
-DUPLICATION_RAG_ENABLED = _env_bool("REVIEW_DUPLICATION_RAG_ENABLED", True)
-STAGE1_MAX_FILES_PER_BATCH = max(1, _env_int("REVIEW_STAGE1_MAX_FILES_PER_BATCH", 7))
+STAGE1_MAX_FILES_PER_BATCH = max(1, _env_int("REVIEW_STAGE1_MAX_FILES_PER_BATCH", 15))
+STAGE1_AGENT_MAX_STEPS = 6
+STAGE1_AGENT_MAX_OUTPUT_TOKENS = 16_384
+STAGE1_AGENT_TIMEOUT_SECONDS = max(
+    1,
+    _env_int("REVIEW_STAGE1_AGENT_TIMEOUT_SECONDS", 600),
+)
 STAGE1_BATCH_TOKEN_BUDGET = max(10_000, _env_int("REVIEW_STAGE1_BATCH_TOKEN_BUDGET", 60_000))
-STAGE1_DIFF_CHUNK_TOKEN_BUDGET = max(8_000, _env_int("REVIEW_STAGE1_DIFF_CHUNK_TOKEN_BUDGET", 35_000))
-# Current source is primary evidence, not optional RAG context. Keep a bounded
+STAGE1_DIFF_CHUNK_TOKEN_BUDGET = max(
+    8_000,
+    _env_int(
+        "REVIEW_STAGE1_DIFF_CHUNK_TOKEN_BUDGET",
+        STAGE1_BATCH_TOKEN_BUDGET,
+    ),
+)
+# Current source is primary evidence, not optional structural context. Keep a bounded
 # copy in each Stage 1 prompt so small/medium files are reviewed as a coherent
 # post-change unit while the full source remains available to verification.
 STAGE1_MAX_CURRENT_FILE_CHARS = max(
     2_000,
     _env_int("REVIEW_STAGE1_MAX_CURRENT_FILE_CHARS", 12_000),
 )
-# A per-file limit alone makes prompt cost grow by that full allowance for every
-# file in a batch after smart batching has already applied its token estimate.
-# Allocate one neutral batch-wide source budget fairly across files. The complete
-# diff remains primary evidence, and verification retains full enriched source.
+# Allocate one neutral batch-wide source budget fairly across files. The
+# complete diff remains primary evidence, and verification retains full source.
 STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET = max(
     8_000,
     _env_int("REVIEW_STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET", 48_000),
 )
-# Parser metadata improves grouping and deterministic retrieval, but rendering
-# every call/import/symbol into the LLM prompt is not an authoritative cost
-# boundary. These neutral limits apply only to prompt serialization. The full
-# parser payload remains available to batching and retrieval.
+# These limits apply only to prompt serialization. Full parser metadata remains
+# available to batching and deterministic retrieval.
 STAGE1_METADATA_CHAR_BUDGET = max(
     4_000,
     _env_int("REVIEW_STAGE1_METADATA_CHAR_BUDGET", 24_000),
@@ -102,208 +183,272 @@ STAGE1_METADATA_PER_FILE_CHAR_BUDGET = max(
     1_000,
     _env_int("REVIEW_STAGE1_METADATA_PER_FILE_CHAR_BUDGET", 6_000),
 )
+STAGE1_RELATION_BRIEFING_RESERVED_TOKENS = (
+    (STAGE1_RELATION_BRIEFING_MAX_CHARS + 3) // 4
+) + 256
 STRUCTURED_OUTPUT_ENABLED = _env_bool("REVIEW_STRUCTURED_OUTPUT_ENABLED", True)
 CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED = _env_bool("REVIEW_CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED", False)
-SEMANTIC_RAG_TIMEOUT_SECONDS = max(1, _env_int("REVIEW_SEMANTIC_RAG_TIMEOUT_SECONDS", 5))
-GLOBAL_RAG_FALLBACK_TIMEOUT_SECONDS = max(1, _env_int("REVIEW_GLOBAL_RAG_FALLBACK_TIMEOUT_SECONDS", 5))
-DETERMINISTIC_RAG_MAX_CHUNKS = max(1, _env_int("REVIEW_DETERMINISTIC_RAG_MAX_CHUNKS", 80))
 FULL_DIFF_REVIEW_FOCUS = "FULL_DIFF_REVIEW"
-
-
-@dataclass
-class Stage1PreparedContext:
-    """Precomputed per-review indexes shared by all Stage 1 batches."""
-    diff_source: Optional[ProcessedDiff] = None
-    diff_by_path: Dict[str, Optional[Any]] = field(default_factory=dict)
-    full_diff_by_path: Dict[str, Optional[Any]] = field(default_factory=dict)
-    full_diff_raw: Optional[str] = None
-    full_diff_index_loaded: bool = False
-    file_content_by_path: Dict[str, Optional[str]] = field(default_factory=dict)
-    enrichment_metadata_by_path: Dict[str, Optional[Any]] = field(default_factory=dict)
-    task_context: str = "No task context available."
-
-
-@dataclass
-class Stage1RagState:
-    """Per-review RAG state shared across Stage 1 batches."""
-    context_disabled: bool = False
-    context_disable_reason: str = ""
-    semantic_disabled: bool = False
-    semantic_failures: int = 0
-    semantic_disable_reason: str = ""
-    exact_evidence_by_id: Dict[str, tuple[Dict[str, Any], ...]] = field(
-        default_factory=dict
-    )
-    deterministic_retrieval_states: List[str] = field(default_factory=list)
+_STAGE1_ESTIMATOR_SAFETY_TOKENS = 256
+_CANONICAL_STRUCTURAL_EVIDENCE_ID = re.compile(r"^relation:[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
-class _DiffReviewChunk:
-    """One prompt-sized diff unit and the immutable hunks it contains."""
+class _Stage1DirectFallbackPrompt:
+    prompt: str
+    structural_context_loaded: bool
 
-    content: str
-    hunk_ids: tuple[str, ...] = ()
+
+@dataclass(frozen=True)
+class _Stage1ReviewOrigin:
+    generation_prompt: str
+    source_phase: Optional[str]
 
 
 @dataclass
-class Stage1ReviewUnitState:
-    """Exact ownership and completion state for derived Stage 1 review units."""
+class _Stage1BatchReviewAccumulator:
+    """Keep valid per-file results while incomplete attempts are recovered."""
 
-    units_by_hunk: Dict[str, set[str]] = field(default_factory=dict)
-    unit_owner: Dict[str, int] = field(default_factory=dict)
-    completed_unit_ids: set[str] = field(default_factory=set)
-    registered: bool = False
+    expected_paths: tuple[str, ...]
+    reviews_by_path: Dict[str, FileReviewOutput] = field(default_factory=dict)
+    origins_by_path: Dict[str, _Stage1ReviewOrigin] = field(default_factory=dict)
 
-    def register_batches(self, batches: List[List[Dict[str, Any]]]) -> None:
-        if self.registered:
-            raise RuntimeError("Stage 1 review units were already registered")
-        self.registered = True
+    @classmethod
+    def for_paths(
+        cls,
+        paths: Sequence[str],
+    ) -> "_Stage1BatchReviewAccumulator":
+        return cls(expected_paths=tuple(paths))
 
-        for batch_number, batch in enumerate(batches, start=1):
-            for item in batch:
-                unit_id = item.get("_review_unit_id")
-                if not isinstance(unit_id, str) or not unit_id:
-                    raise RuntimeError(
-                        f"Stage 1 batch {batch_number} has a review unit without identity"
-                    )
-                previous_owner = self.unit_owner.get(unit_id)
-                if previous_owner is not None:
-                    raise RuntimeError(
-                        "Stage 1 review unit was assigned more than once: "
-                        f"{unit_id} belongs to batches {previous_owner} and "
-                        f"{batch_number}"
-                    )
-                self.unit_owner[unit_id] = batch_number
-                for hunk_id in item.get("_hunk_ids", ()) or ():
-                    if not isinstance(hunk_id, str) or not hunk_id:
-                        raise RuntimeError(
-                            f"Stage 1 review unit {unit_id} has an invalid hunk identity"
-                        )
-                    self.units_by_hunk.setdefault(hunk_id, set()).add(unit_id)
-
-    def unit_ids_for_batch(
+    def merge(
         self,
-        batch_number: int,
-        batch: List[Dict[str, Any]],
-    ) -> tuple[str, ...]:
-        unit_ids = tuple(item["_review_unit_id"] for item in batch)
-        if any(self.unit_owner.get(unit_id) != batch_number for unit_id in unit_ids):
-            raise RuntimeError(
-                f"Stage 1 batch {batch_number} does not own all of its review units"
-            )
-        return unit_ids
+        batch_output: FileReviewBatchOutput,
+        requested_paths: Sequence[str],
+        *,
+        generation_prompt: str,
+        source_phase: Optional[str],
+    ) -> None:
+        expected = {
+            normalize_repository_path(path)
+            for path in self.expected_paths
+            if normalize_repository_path(path)
+        }
+        requested = {
+            normalize_repository_path(path)
+            for path in requested_paths
+            if normalize_repository_path(path)
+        }
+        observed = [
+            normalize_repository_path(review.file)
+            for review in batch_output.reviews
+        ]
+        observed_counts = Counter(observed)
+        origin = _Stage1ReviewOrigin(
+            generation_prompt=generation_prompt,
+            source_phase=source_phase,
+        )
+        for review, path in zip(batch_output.reviews, observed):
+            # Unexpected, empty, and duplicate-path objects are ambiguous. Keep
+            # every unique requested object; recovery owns only the remainder.
+            if (
+                not path
+                or path not in expected
+                or path not in requested
+                or observed_counts[path] != 1
+                or path in self.reviews_by_path
+            ):
+                continue
+            self.reviews_by_path[path] = review
+            self.origins_by_path[path] = origin
 
-    def mark_completed(self, unit_ids: tuple[str, ...]) -> None:
-        unknown = sorted(set(unit_ids) - set(self.unit_owner))
-        if unknown:
-            raise RuntimeError(
-                "Stage 1 completed unknown review units: " + ", ".join(unknown)
-            )
-        repeated = sorted(set(unit_ids) & self.completed_unit_ids)
-        if repeated:
-            raise RuntimeError(
-                "Stage 1 review units completed more than once: "
-                + ", ".join(repeated)
-            )
-        self.completed_unit_ids.update(unit_ids)
+    def missing_paths(self) -> List[str]:
+        return [
+            path
+            for path in self.expected_paths
+            if normalize_repository_path(path) not in self.reviews_by_path
+        ]
 
-    def assert_complete(self) -> None:
-        missing = sorted(set(self.unit_owner) - self.completed_unit_ids)
-        if missing:
-            raise RuntimeError(
-                "Stage 1 review-unit coverage is incomplete: " + ", ".join(missing)
-            )
+    def output(self) -> FileReviewBatchOutput:
+        return FileReviewBatchOutput(reviews=[
+            self.reviews_by_path[normalized]
+            for path in self.expected_paths
+            for normalized in (normalize_repository_path(path),)
+            if normalized in self.reviews_by_path
+        ])
 
-    def assert_hunk_ownership(self, expected_hunk_ids: Iterable[str]) -> None:
-        """Prove exact hunk ownership before any paid review-model call."""
-        expected = set(expected_hunk_ids)
-        owned = set(self.units_by_hunk)
-        missing = sorted(expected - owned)
-        if missing:
-            raise RuntimeError(
-                "Stage 1 review units omitted reviewable hunk identities before "
-                "model execution: " + ", ".join(missing)
-            )
-        unexpected = sorted(owned - expected)
-        if unexpected:
-            raise RuntimeError(
-                "Stage 1 review units reported unknown hunk identities before "
-                "model execution: " + ", ".join(unexpected)
-            )
-
-    @property
-    def reviewed_hunk_ids(self) -> tuple[str, ...]:
-        return tuple(sorted(
-            hunk_id
-            for hunk_id, unit_ids in self.units_by_hunk.items()
-            if unit_ids and unit_ids.issubset(self.completed_unit_ids)
-        ))
+    def outputs_by_origin(
+        self,
+    ) -> List[tuple[FileReviewBatchOutput, _Stage1ReviewOrigin]]:
+        grouped: Dict[_Stage1ReviewOrigin, List[FileReviewOutput]] = {}
+        for path in self.expected_paths:
+            normalized = normalize_repository_path(path)
+            review = self.reviews_by_path.get(normalized)
+            origin = self.origins_by_path.get(normalized)
+            if review is None or origin is None:
+                continue
+            grouped.setdefault(origin, []).append(review)
+        return [
+            (FileReviewBatchOutput(reviews=reviews), origin)
+            for origin, reviews in grouped.items()
+        ]
 
 
-def _capture_deterministic_retrieval_state(
-    deterministic_response: Optional[Dict[str, Any]],
-    rag_state: Optional[Stage1RagState],
-) -> None:
-    """Retain the exact-retrieval state; prompt formatting captures visible facts."""
-    if rag_state is None:
-        return
-    if _rag_response_error(deterministic_response):
-        rag_state.deterministic_retrieval_states.append("failed")
-        return
-    rag_state.deterministic_retrieval_states.append(
-        _deterministic_retrieval_state(deterministic_response)
+def _salvage_stage1_schema_tool_outputs(
+    events: Sequence[Any],
+    accumulator: Optional[_Stage1BatchReviewAccumulator],
+    requested_paths: Sequence[str],
+    *,
+    generation_prompt: str,
+    source_phase: Optional[str],
+) -> int:
+    """Keep valid Stage 1 schema calls exposed as agent tool events.
+
+    LangChain's ``ToolStrategy`` can expose more than one otherwise-valid
+    schema call as ordinary tool events before rejecting the combined final
+    response. This is intentionally specific to Stage 1's output schema;
+    repository tools and other structured response schemas are ignored.
+    """
+    if accumulator is None:
+        return 0
+
+    # A schema call is an intermediate generation at its transcript position.
+    # Never credit it graph evidence returned only by a later tool event. The
+    # missing-path recovery can safely regenerate those early partial objects.
+    last_structural_event_index = max(
+        (
+            index
+            for index, event in enumerate(events)
+            if _tool_event_name(event)
+            in STAGE1_STRUCTURAL_OBSERVATION_TOOL_NAMES
+        ),
+        default=-1,
     )
-
-
-def _deterministic_retrieval_state(
-    deterministic_response: Optional[Dict[str, Any]],
-) -> str:
-    context = _unwrap_rag_context(deterministic_response)
-    metadata = context.get("_metadata") if isinstance(context, dict) else None
-    if isinstance(metadata, dict) and metadata.get("retrieval_state"):
-        return str(metadata["retrieval_state"]).strip().casefold()
-    return "unknown"
-
-
-def _rag_response_error(response: Optional[Dict[str, Any]]) -> Optional[str]:
-    """Return the sanitized failure carried by a RAG client response, if any."""
-    if not isinstance(response, dict):
-        return None
-    if str(response.get("status", "")).strip().casefold() != "error":
-        return None
-    detail = str(response.get("error") or "RAG request failed").strip()
-    return detail or "RAG request failed"
-
-
-
-def _path_lookup_keys(path: Optional[str]) -> List[str]:
-    if not path:
-        return []
-    normalized = path.lstrip("/")
-    keys = [normalized]
-    remainder = normalized
-    while "/" in remainder:
-        remainder = remainder.split("/", 1)[1]
-        keys.append(remainder)
-    return keys
-
-
-def _add_path_lookup(mapping: Dict[str, Optional[Any]], path: Optional[str], value: Any) -> None:
-    for key in _path_lookup_keys(path):
-        existing = mapping.get(key)
-        if existing is None and key in mapping:
-            continue
-        if existing is not None and existing is not value:
-            mapping[key] = None
+    salvaged = 0
+    for event_index, event in enumerate(events):
+        action = getattr(event, "action", None)
+        if isinstance(action, Mapping):
+            tool_name = action.get("tool")
+            payload = action.get("tool_input")
         else:
-            mapping[key] = value
+            tool_name = getattr(action, "tool", None)
+            payload = getattr(action, "tool_input", None)
+        if tool_name != FileReviewBatchOutput.__name__:
+            continue
+        if event_index < last_structural_event_index:
+            logger.debug(
+                "Ignoring an intermediate Stage 1 schema output that precedes "
+                "a later structural observation"
+            )
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+
+        try:
+            output = FileReviewBatchOutput.model_validate(dict(payload))
+        except (TypeError, ValueError) as batch_error:
+            # ToolStrategy keeps the rejected schema call in the transcript
+            # before asking the model for a correction. One malformed review
+            # must not discard its valid siblings: the correction frequently
+            # contains only the repaired object, not the whole original batch.
+            raw_reviews = payload.get("reviews")
+            if not isinstance(raw_reviews, (list, tuple)):
+                logger.debug(
+                    "Ignoring malformed Stage 1 schema tool output: %s",
+                    batch_error,
+                )
+                continue
+
+            raw_path_counts = Counter(
+                normalize_repository_path(
+                    raw_review.get("file")
+                    if isinstance(raw_review, Mapping)
+                    else getattr(raw_review, "file", "")
+                )
+                for raw_review in raw_reviews
+            )
+            valid_reviews: List[FileReviewOutput] = []
+            invalid_review_count = 0
+            ambiguous_review_count = 0
+            for raw_review in raw_reviews:
+                try:
+                    valid_review = FileReviewOutput.model_validate(raw_review)
+                except (TypeError, ValueError):
+                    invalid_review_count += 1
+                    continue
+                if (
+                    raw_path_counts[
+                        normalize_repository_path(valid_review.file)
+                    ]
+                    != 1
+                ):
+                    # Preserve duplicate ambiguity from the rejected raw call.
+                    # Filtering invalid siblings first must not make one of two
+                    # same-path claims appear uniquely trustworthy.
+                    ambiguous_review_count += 1
+                    continue
+                valid_reviews.append(valid_review)
+            if not valid_reviews:
+                logger.debug(
+                    "Ignoring malformed Stage 1 schema tool output: %s",
+                    batch_error,
+                )
+                continue
+
+            output = FileReviewBatchOutput(reviews=valid_reviews)
+            logger.debug(
+                "Salvaging %d individually valid Stage 1 review object(s) "
+                "from a rejected schema call; malformed=%d ambiguous=%d",
+                len(valid_reviews),
+                invalid_review_count,
+                ambiguous_review_count,
+            )
+
+        before = len(accumulator.reviews_by_path)
+        accumulator.merge(
+            output,
+            requested_paths,
+            generation_prompt=generation_prompt,
+            source_phase=source_phase,
+        )
+        salvaged += len(accumulator.reviews_by_path) - before
+
+    return salvaged
 
 
-def _lookup_by_path(mapping: Dict[str, Optional[Any]], path: Optional[str]) -> Optional[Any]:
-    for key in _path_lookup_keys(path):
-        if key in mapping and mapping[key] is not None:
-            return mapping[key]
-    return None
+def _available_stage1_agent_tools(
+    agent_service: Optional["AgentExecutionService"],
+) -> frozenset[str]:
+    """Return the Stage 1 tools actually bound to this review session.
+
+    The shared service exposes its initialized inventory. Lightweight test
+    doubles and compatible callers without that property retain the historical
+    complete tool set.
+    """
+    if agent_service is None:
+        return frozenset()
+    available = getattr(agent_service, "available_tool_names", None)
+    if available is None:
+        return STAGE1_AGENT_TOOL_NAMES
+    try:
+        return STAGE1_AGENT_TOOL_NAMES.intersection(available)
+    except TypeError:
+        return STAGE1_AGENT_TOOL_NAMES
+
+
+def _stage1_schema_declaration_bytes() -> int:
+    try:
+        schema = FileReviewBatchOutput.model_json_schema()
+    except (AttributeError, TypeError, ValueError):
+        return 0
+    return len(json.dumps(
+        schema,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8"))
+
+
+_STAGE1_SCHEMA_DECLARATION_BYTES = _stage1_schema_declaration_bytes()
 
 
 def _build_stage_1_prepared_context(
@@ -311,26 +456,17 @@ def _build_stage_1_prepared_context(
     processed_diff: Optional[ProcessedDiff],
     is_incremental: bool,
 ) -> Stage1PreparedContext:
-    # ``processed_diff`` is the host-validated review snapshot and owns the
-    # hunk identities used by coverage, candidate provenance, and publication.
-    # Re-parsing an incremental delta here can apply a later plugin projection
-    # and silently create a different hunk disposition set for Stage 1.
     diff_source = processed_diff
+    if is_incremental and request.deltaDiff:
+        diff_source = apply_plugin_file_policy(
+            request,
+            DiffProcessor().process(request.deltaDiff),
+        )
 
     diff_by_path: Dict[str, Optional[Any]] = {}
     if diff_source:
         for diff_file in diff_source.files:
             _add_path_lookup(diff_by_path, diff_file.path, diff_file)
-
-    full_diff_raw = None
-    if _needs_unbounded_stage_1_diff(diff_source):
-        delta_diff = getattr(request, "deltaDiff", None)
-        raw_diff = delta_diff if is_incremental and delta_diff else getattr(request, "rawDiff", None)
-        if raw_diff:
-            full_diff_raw = raw_diff
-            logger.info(
-                "Stage 1 deferred unbounded raw diff parsing until explicitly requested"
-            )
 
     enrichment_metadata_by_path: Dict[str, Optional[Any]] = {}
     if request.enrichmentData and request.enrichmentData.fileMetadata:
@@ -350,78 +486,13 @@ def _build_stage_1_prepared_context(
     return Stage1PreparedContext(
         diff_source=diff_source,
         diff_by_path=diff_by_path,
-        full_diff_raw=full_diff_raw,
+        full_diff_raw=None,
         file_content_by_path=file_content_by_path,
         enrichment_metadata_by_path=enrichment_metadata_by_path,
         task_context=(
-            build_task_context(request.taskContext, max_description_length=4000)
+            build_task_context(request.taskContext)
             or "No task context available."
         ),
-    )
-
-
-_DIFF_HUNK_HEADER = re.compile(
-    r"^@@\s+-\d+(?:,\d+)?\s+"
-    r"\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))?\s+@@"
-)
-_ADDED_FILE_HUNK_HEADER = re.compile(
-    r"^@@\s+-0(?:,0)?\s+"
-    r"\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))?\s+@@"
-)
-_COMPLETE_ADDED_SOURCE_MARKER = (
-    "[Complete post-change source is present once as the added side of the diff "
-    "below; the duplicate current-source copy was omitted.]"
-)
-
-
-def _diff_contains_complete_added_source(
-    content: Optional[str],
-    diff_content: str,
-) -> bool:
-    """Prove that an added-file diff contains the complete post-change source."""
-    if content is None or not diff_content:
-        return False
-
-    added_lines: List[str] = []
-    saw_hunk = False
-    expected_hunk_lines: Optional[int] = None
-    observed_hunk_lines = 0
-
-    def finish_hunk() -> bool:
-        return (
-            expected_hunk_lines is None
-            or observed_hunk_lines == expected_hunk_lines
-        )
-
-    for line in diff_content.splitlines():
-        if line.startswith("@@"):
-            if saw_hunk and not finish_hunk():
-                return False
-            match = _ADDED_FILE_HUNK_HEADER.match(line)
-            if match is None:
-                return False
-            if int(match.group("new_start")) != len(added_lines) + 1:
-                return False
-            expected_hunk_lines = int(match.group("new_count") or "1")
-            observed_hunk_lines = 0
-            saw_hunk = True
-            continue
-        if not saw_hunk:
-            continue
-        if line.startswith("+"):
-            added_lines.append(line[1:])
-            observed_hunk_lines += 1
-            continue
-        if line == r"\ No newline at end of file":
-            continue
-        # Context or removed lines mean this is not a complete added-file image.
-        if line.startswith((" ", "-")):
-            return False
-
-    return (
-        saw_hunk
-        and finish_hunk()
-        and added_lines == content.splitlines()
     )
 
 
@@ -534,53 +605,6 @@ def _needs_unbounded_stage_1_diff(diff_source: Optional[ProcessedDiff]) -> bool:
     return False
 
 
-def _diff_limit_reason_allows_full_review(reason: Optional[str]) -> bool:
-    reason_lower = (reason or "").lower()
-    return any(
-        marker in reason_lower
-        for marker in (
-            "file too large",
-            "too many lines",
-            "would exceed total size limit",
-            "exceeds max files limit",
-        )
-    )
-
-
-def _find_diff_file_for_path(
-    prepared_context: Optional[Stage1PreparedContext],
-    file_path: str,
-    use_full_diff: bool = False,
-) -> Optional[Any]:
-    if not prepared_context or not prepared_context.diff_source:
-        return None
-
-    bounded_match = _lookup_by_path(prepared_context.diff_by_path, file_path)
-    # Compaction is a prompt-size concern, never a review-scope decision. Once
-    # the host has identified that a planned file contains compacted evidence,
-    # restore its exact diff automatically and let the hunk-preserving splitter
-    # create bounded review units. This must not depend on an LLM focus flag.
-    restore_exact_diff = use_full_diff or (
-        bounded_match is not None
-        and _diff_limit_reason_allows_full_review(bounded_match.skip_reason)
-    )
-    if restore_exact_diff:
-        _ensure_full_diff_index(prepared_context)
-        matched_full_diff = _lookup_by_path(prepared_context.full_diff_by_path, file_path)
-        if matched_full_diff is not None:
-            return matched_full_diff
-
-    if bounded_match is not None:
-        return bounded_match
-
-    # Accept an absolute checkout prefix, but never use a bare basename as file
-    # identity; framework repositories contain many repeated configuration names.
-    for diff_file in prepared_context.diff_source.files:
-        if repository_paths_match(diff_file.path, file_path):
-            return diff_file
-    return None
-
-
 def _ensure_full_diff_index(prepared_context: Stage1PreparedContext) -> None:
     if prepared_context.full_diff_index_loaded:
         return
@@ -592,29 +616,13 @@ def _ensure_full_diff_index(prepared_context: Stage1PreparedContext) -> None:
 
     # Stage 1 can split very large diffs into multiple bounded prompts. Parse
     # the original hunks only when Stage 0 explicitly asks for full-diff review.
-    raw_diff_size = max(len(raw_diff.encode("utf-8")) + 1, 1)
-    raw_diff_source = DiffProcessor(
-        max_file_size=raw_diff_size,
-        max_files=10_000,
-        max_total_size=raw_diff_size,
-        max_lines_per_file=max(raw_diff.count("\n") + 1, 1),
-    ).process(raw_diff)
+    raw_diff_source = DiffProcessor().process(raw_diff)
     for diff_file in raw_diff_source.files:
         _add_path_lookup(prepared_context.full_diff_by_path, diff_file.path, diff_file)
     logger.info(
         "Stage 1 prepared unbounded raw diff index for %d file(s)",
         len(raw_diff_source.files),
     )
-
-
-def _item_requests_full_diff(item: Dict[str, Any]) -> bool:
-    file_info = item.get("file")
-    focus_areas = getattr(file_info, "focus_areas", None) or []
-    for focus_area in focus_areas:
-        normalized = str(focus_area or "").strip().upper().replace("-", "_").replace(" ", "_")
-        if normalized == FULL_DIFF_REVIEW_FOCUS:
-            return True
-    return False
 
 
 def _iter_batch_enrichment_metadata(
@@ -659,9 +667,9 @@ def _format_batch_metadata_json(
 ) -> str:
     """Serialize arbitrary parser metadata within a deterministic prompt budget.
 
-    This projection is deliberately schema-neutral so analysis-plugin
-    fields do not require host-side dispatch. Omission markers distinguish a
-    bounded prompt view from evidence that a metadata value is absent.
+    This projection is deliberately schema-neutral so analysis-plugin fields do
+    not require host-side dispatch. Omission markers distinguish a bounded
+    prompt view from evidence that a metadata value is absent.
     """
     if not batch_metadata:
         return ""
@@ -689,8 +697,8 @@ def _format_batch_metadata_json(
         default=str,
     )
 
-    # The per-entry cap normally makes this unnecessary, but enforce the total
-    # boundary independently of JSON punctuation and unusual payload shapes.
+    # Enforce the total boundary independently of JSON punctuation and unusual
+    # payload shapes.
     while len(rendered) > total_budget and per_file_budget > 256:
         overflow_per_file = max(
             1,
@@ -711,8 +719,6 @@ def _format_batch_metadata_json(
         )
 
     if len(rendered) > total_budget:
-        # At the absolute floor, retain one bounded identity per file. Default
-        # production budgets never reach this path for the seven-file batch cap.
         projected = [
             _metadata_identity_fallback(payload, per_file_budget)
             for payload in metadata_payload
@@ -744,9 +750,6 @@ def _bounded_metadata_payload(payload: Dict[str, Any], max_chars: int) -> Dict[s
     if _json_char_length(canonical) <= max_chars:
         return canonical
 
-    # A single generic detail limit controls strings and sequences across
-    # arbitrary plugin-defined fields. Binary search gives deterministic output
-    # without knowing a concrete plugin schema.
     low = 1
     high = max(1, _metadata_detail_ceiling(payload))
     best: Optional[Dict[str, Any]] = None
@@ -774,12 +777,14 @@ def _project_metadata_detail(value: Any, detail_limit: Optional[int]) -> Any:
     if isinstance(value, (list, tuple, set)):
         items = list(value)
         if isinstance(value, set):
-            items.sort(key=lambda item: json.dumps(
-                item,
-                ensure_ascii=False,
-                sort_keys=True,
-                default=str,
-            ))
+            items.sort(
+                key=lambda item: json.dumps(
+                    item,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                )
+            )
         selected = items if detail_limit is None else items[:detail_limit]
         result = [
             _project_metadata_detail(item, detail_limit)
@@ -838,7 +843,9 @@ def _metadata_identity_fallback(
         best = ""
         while low <= high:
             prefix_chars = (low + high) // 2
-            bounded_text = text[:prefix_chars] + ("…" if prefix_chars < len(text) else "")
+            bounded_text = text[:prefix_chars] + (
+                "…" if prefix_chars < len(text) else ""
+            )
             candidate = dict(identity)
             candidate[key] = bounded_text
             if _json_char_length(candidate) <= max_chars:
@@ -852,13 +859,15 @@ def _metadata_identity_fallback(
 
 
 def _json_char_length(value: Any) -> int:
-    return len(json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ))
+    return len(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    )
 
 
 def _count_metadata_omission_markers(value: Any) -> int:
@@ -894,11 +903,25 @@ def _metadata_to_payload(meta: Any) -> Dict[str, Any]:
     }
 
 
-def _extract_metadata_identifiers(batch_metadata: List[Any], limit: int = 200) -> Optional[List[str]]:
+def _extract_metadata_identifiers(
+    batch_metadata: List[Any],
+    limit: int = 200,
+) -> Optional[List[str]]:
+    """Collect only parser fields that prove a symbol relationship.
+
+    Paths, languages, namespaces, diagnostics, and arbitrary plugin strings are
+    not definition lookup keys. Framework-specific relations reach the prompt
+    through typed plugin graph facts instead of this generic symbol expansion.
     """
-    Collect raw string identifiers from parser metadata without assigning
-    meaning to specific metadata fields.
-    """
+    identifier_fields = (
+        "imports",
+        "extends",
+        "extendsClasses",
+        "implements",
+        "implementsInterfaces",
+        "parent_class",
+        "parentClass",
+    )
     seen = set()
     identifiers: List[str] = []
 
@@ -911,271 +934,20 @@ def _extract_metadata_identifiers(batch_metadata: List[Any], limit: int = 200) -
                 seen.add(text)
                 identifiers.append(text)
             return
-        if isinstance(value, dict):
-            for nested in value.values():
-                visit(nested)
-            return
         if isinstance(value, (list, tuple, set)):
             for nested in value:
                 visit(nested)
             return
 
     for meta in batch_metadata:
-        visit(_metadata_to_payload(meta))
+        payload = _metadata_to_payload(meta)
+        for field_name in identifier_fields:
+            if field_name in payload:
+                visit(payload[field_name])
 
     return identifiers or None
 
 
-def _unwrap_rag_context(response: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    if not isinstance(response, dict):
-        return {}
-    context = response.get("context")
-    if isinstance(context, dict):
-        return context
-    return response
-
-
-def _flatten_deterministic_context(
-    deterministic_response: Optional[Dict[str, Any]],
-    max_chunks: int = DETERMINISTIC_RAG_MAX_CHUNKS,
-) -> List[Dict[str, Any]]:
-    """
-    Flatten all deterministic RAG evidence into prompt chunks.
-
-    The RAG API returns several grouped views. Stage 1 should not silently drop
-    any of those groups; semantic interpretation remains with the LLM.
-    """
-    det_context = _unwrap_rag_context(deterministic_response)
-    if not det_context:
-        return []
-
-    flattened: List[Dict[str, Any]] = []
-    seen = set()
-
-    def content_digest(value: Any) -> str:
-        return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
-
-    def add_chunk(chunk: Any, source_group: str, group_key: str = "") -> None:
-        if not isinstance(chunk, dict):
-            return
-        text = chunk.get("text") or chunk.get("content") or ""
-        metadata = chunk.get("metadata") or {}
-        path = metadata.get("path") or chunk.get("path") or chunk.get("file_path") or ""
-        content_key = (
-            path,
-            content_digest(text),
-        )
-        if content_key in seen:
-            return
-        seen.add(content_key)
-
-        merged = dict(chunk)
-        merged.setdefault("text", text)
-        merged.setdefault("content", text)
-        merged.setdefault("metadata", metadata)
-        merged.setdefault("file_path", path)
-        merged.setdefault("path", path)
-        merged.setdefault("score", _deterministic_score(source_group))
-        # Preserve the freshness authority from the exact retrieval payload.
-        # Without this, PR-scoped architecture packets are mislabeled as branch
-        # data and the stale-evidence guard removes them before prompt assembly.
-        merged["_source"] = (
-            "pr_indexed" if metadata.get("pr") is True else "deterministic"
-        )
-        merged["_match_type"] = source_group
-        if group_key:
-            merged["definition_name"] = group_key
-        flattened.append(merged)
-
-    grouped_sources = (
-        ("architecture_relation", det_context.get("architecture_context", {})),
-        ("architecture_related", det_context.get("architecture_related", {})),
-        ("changed_file", det_context.get("changed_files", {})),
-        ("definition", det_context.get("related_definitions", {})),
-        ("class_context", det_context.get("class_context", {})),
-        ("namespace_context", det_context.get("namespace_context", {})),
-    )
-    for source_group, grouped in grouped_sources:
-        if isinstance(grouped, dict):
-            for group_key, chunks in grouped.items():
-                for chunk in chunks or []:
-                    add_chunk(chunk, source_group, str(group_key))
-
-    for chunk in det_context.get("chunks", []) or []:
-        add_chunk(chunk, chunk.get("_match_type") or "deterministic")
-
-    def stable_key(chunk: Dict[str, Any]) -> tuple:
-        metadata = chunk.get("metadata") or {}
-        fact_payloads = metadata.get("plugin_graph_facts")
-        semantic_priority = 2
-        if isinstance(fact_payloads, list):
-            valid_facts = [
-                fact for fact in fact_payloads
-                if isinstance(fact, dict)
-            ]
-            if any(
-                isinstance(fact.get("attributes"), dict)
-                and fact["attributes"].get("semanticRole") == "diagnostic"
-                for fact in valid_facts
-            ):
-                semantic_priority = 0
-            elif any(
-                fact.get("related_paths")
-                or (
-                    isinstance(fact.get("attributes"), dict)
-                    and fact["attributes"]
-                )
-                for fact in valid_facts
-            ):
-                semantic_priority = 1
-        return (
-            semantic_priority,
-            str(metadata.get("architecture_kind", "")),
-            str(chunk.get("_matched_on", "")),
-            str(metadata.get("path", chunk.get("path", ""))),
-            str(metadata.get("architecture_key", "")),
-            content_digest(chunk.get("text", "")),
-        )
-
-    def round_robin_architecture(
-        chunks: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        def matched_review_paths(chunk: Dict[str, Any]) -> tuple[str, ...]:
-            raw = str(chunk.get("_matched_on") or "")
-            normalized_paths = set()
-            for path in raw.split(","):
-                normalized = normalize_repository_path(path.strip())
-                if normalized:
-                    normalized_paths.add(normalized)
-            return tuple(sorted(normalized_paths))
-
-        ordered_chunks = sorted(chunks, key=stable_key)
-        matched_paths_by_id = {
-            id(chunk): matched_review_paths(chunk)
-            for chunk in ordered_chunks
-        }
-        uncovered_paths = {
-            path
-            for chunk in ordered_chunks
-            for path in matched_paths_by_id[id(chunk)]
-        }
-        coverage_first: List[Dict[str, Any]] = []
-        coverage_ids = set()
-        while uncovered_paths:
-            candidates = [
-                chunk for chunk in ordered_chunks
-                if id(chunk) not in coverage_ids
-                and uncovered_paths.intersection(
-                    matched_paths_by_id[id(chunk)]
-                )
-            ]
-            if not candidates:
-                break
-            selected = min(
-                candidates,
-                key=lambda chunk: (
-                    stable_key(chunk)[0],
-                    -len(
-                        uncovered_paths.intersection(
-                            matched_paths_by_id[id(chunk)]
-                        )
-                    ),
-                    stable_key(chunk),
-                ),
-            )
-            coverage_first.append(selected)
-            coverage_ids.add(id(selected))
-            uncovered_paths.difference_update(matched_paths_by_id[id(selected)])
-
-        by_kind: Dict[str, List[Dict[str, Any]]] = {}
-        for chunk in ordered_chunks:
-            if id(chunk) in coverage_ids:
-                continue
-            metadata = chunk.get("metadata") or {}
-            kind = str(metadata.get("architecture_kind") or "architecture")
-            by_kind.setdefault(kind, []).append(chunk)
-        ordered = list(coverage_first)
-        while by_kind:
-            # Every changed path with exact architecture evidence gets one
-            # candidate before repeats. After that coverage pass, preserve kind
-            # fairness and use the best remaining semantic fact in each kind.
-            # This prevents both a relationship-heavy file and a large set of
-            # coarse topology kinds from consuming the bounded prompt input.
-            for kind in sorted(
-                tuple(by_kind),
-                key=lambda value: (
-                    stable_key(by_kind[value][0])[0],
-                    value,
-                ),
-            ):
-                ordered.append(by_kind[kind].pop(0))
-                if not by_kind[kind]:
-                    del by_kind[kind]
-        return ordered
-
-    architecture_relations = round_robin_architecture([
-        chunk for chunk in flattened
-        if chunk.get("_match_type") == "architecture_relation"
-    ])
-    supporting_structural = sorted([
-        chunk for chunk in flattened
-        if chunk.get("_match_type") in {
-            "architecture_related",
-            "definition",
-            "transitive_parent",
-        }
-    ], key=stable_key)
-    direct = sorted([
-        chunk for chunk in flattened
-        if chunk.get("_match_type") in {"changed_file", "class_context"}
-    ], key=stable_key)
-    broader = sorted([
-        chunk for chunk in flattened
-        if chunk.get("_match_type") not in {
-            "architecture_relation",
-            "architecture_related",
-            "definition",
-            "transitive_parent",
-            "changed_file",
-            "class_context",
-        }
-    ], key=stable_key)
-
-    relation_quota = max(1, (max_chunks * 3) // 4)
-    support_quota = max(1, max_chunks // 5)
-    direct_quota = max(0, max_chunks - relation_quota - support_quota)
-    selected = (
-        architecture_relations[:relation_quota]
-        + supporting_structural[:support_quota]
-        + direct[:direct_quota]
-    )
-    selected_ids = {id(chunk) for chunk in selected}
-    fill = (
-        architecture_relations[relation_quota:]
-        + supporting_structural[support_quota:]
-        + direct[direct_quota:]
-        + broader
-    )
-    selected.extend(
-        chunk for chunk in fill
-        if id(chunk) not in selected_ids
-    )
-    return selected[:max_chunks]
-
-
-def _deterministic_score(source_group: str) -> float:
-    if source_group in {
-        "architecture_relation",
-        "architecture_related",
-        "definition",
-        "transitive_parent",
-    }:
-        return 0.95
-    if source_group in {"changed_file", "class_context"}:
-        return 0.92
-    if source_group == "namespace_context":
-        return 0.86
-    return 0.84
 
 
 def _supports_structured_output(llm) -> bool:
@@ -1193,6 +965,8 @@ def _supports_structured_output(llm) -> bool:
 
 
 def _positive_int_or_default(value: Any, default: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return default
     try:
         parsed = int(value)
     except (TypeError, ValueError):
@@ -1200,15 +974,404 @@ def _positive_int_or_default(value: Any, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def _relationship_type_text(relationship: Any) -> str:
+    value = getattr(relationship, "relationshipType", "DEPENDENCY")
+    return str(getattr(value, "value", value) or "DEPENDENCY")
+
+
+def _stage1_boundary_context(
+    request: ReviewRequestDto,
+    batch_items: Sequence[Dict[str, Any]],
+    batch_file_paths: Sequence[str],
+) -> str:
+    """Render exact graph edges cut by input packing, without source guessing."""
+    batch_paths = {
+        normalize_repository_path(path)
+        for path in batch_file_paths
+        if normalize_repository_path(path)
+    }
+    changed_paths = {
+        normalize_repository_path(path)
+        for path in (getattr(request, "changedFiles", None) or [])
+        if normalize_repository_path(path)
+    }
+    records: Dict[tuple[str, str, str, str], Dict[str, str]] = {}
+    enrichment = getattr(request, "enrichmentData", None)
+    for relationship in getattr(enrichment, "relationships", None) or []:
+        source = normalize_repository_path(
+            getattr(relationship, "sourceFile", "")
+        )
+        target = normalize_repository_path(
+            getattr(relationship, "targetFile", "")
+        )
+        if not source or not target:
+            continue
+        if (source in batch_paths) == (target in batch_paths):
+            continue
+        if changed_paths and not ({source, target} <= changed_paths):
+            continue
+        relation_type = _relationship_type_text(relationship)
+        matched_on = str(getattr(relationship, "matchedOn", "") or "")
+        key = (source, target, relation_type, matched_on)
+        records[key] = {
+            "source": source,
+            "target": target,
+            "type": relation_type,
+            "matchedOn": matched_on,
+        }
+
+    # Structurally discovered graph edges may not exist in enrichment. Preserve their
+    # endpoints as neutral dependency facts rather than silently losing them.
+    for item in batch_items:
+        file_info = item.get("file")
+        source = normalize_repository_path(getattr(file_info, "path", ""))
+        for related_path in item.get("related_files", ()) or ():
+            target = normalize_repository_path(related_path)
+            if not source or not target or target in batch_paths:
+                continue
+            ordered = tuple(sorted((source, target)))
+            key = (ordered[0], ordered[1], "DEPENDENCY", "")
+            records.setdefault(key, {
+                "source": ordered[0],
+                "target": ordered[1],
+                "type": "DEPENDENCY",
+                "matchedOn": "",
+            })
+
+    parts: List[str] = []
+    if records:
+        parts.append(
+            "Exact cross-pack relationship records (deterministic; no source "
+            "was inferred or truncated):\n"
+            + json.dumps(
+                [records[key] for key in sorted(records)],
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    diagnostics = sorted({
+        str(item.get("_stage1_budget_diagnostic") or "")
+        for item in batch_items
+        if item.get("_stage1_budget_diagnostic")
+    })
+    parts.extend(diagnostics)
+    return "\n\n".join(parts)
+
+
+def _prepare_stage1_prompt_material(
+    request: ReviewRequestDto,
+    batch_items: List[Dict[str, Any]],
+    prepared_context: Stage1PreparedContext,
+    is_incremental: bool,
+) -> Stage1PromptMaterial:
+    """Build exact local prompt material once for packing and review."""
+    batch_files_data: List[Dict[str, Any]] = []
+    batch_file_paths: List[str] = []
+    complete_current_file_paths: set[str] = set()
+    available_current_source_count = sum(
+        1
+        for item in batch_items
+        if _lookup_by_path(
+            prepared_context.file_content_by_path,
+            item["file"].path,
+        )
+    )
+    current_source_per_file_budget = min(
+        STAGE1_MAX_CURRENT_FILE_CHARS,
+        max(
+            1,
+            STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET
+            // max(1, available_current_source_count),
+        ),
+    )
+
+    for item in batch_items:
+        file_info = item["file"]
+        batch_file_paths.append(file_info.path)
+        current_file_content = _lookup_by_path(
+            prepared_context.file_content_by_path,
+            file_info.path,
+        )
+        diff_file = _find_diff_file_for_path(
+            prepared_context,
+            file_info.path,
+            use_full_diff=_item_requests_full_diff(item),
+        )
+        if "_diff_override" in item:
+            file_diff = str(item.get("_diff_override") or "")
+        else:
+            file_diff = ""
+        if "_diff_override" not in item and diff_file:
+            file_diff = diff_file.content
+        if file_diff:
+            chunk_total = int(item.get("_diff_chunk_total") or 0)
+            if chunk_total > 1:
+                chunk_index = int(item.get("_diff_chunk_index") or 1)
+                file_diff = (
+                    f"[Large diff segment {chunk_index}/{chunk_total} for "
+                    f"{file_info.path}. All segments are reviewed independently "
+                    "and merged after Stage 1.]\n"
+                    f"{file_diff}"
+                )
+        change_type = (
+            diff_file.change_type
+            if diff_file is not None
+            else DiffChangeType.MODIFIED
+        )
+        source_override = item.get("_current_source_override")
+        if isinstance(source_override, str):
+            current_code = source_override
+        else:
+            complete_added_source_in_diff = (
+                change_type is DiffChangeType.ADDED
+                and int(item.get("_diff_chunk_total") or 0) <= 1
+                and _diff_contains_complete_added_source(
+                    current_file_content,
+                    file_diff,
+                )
+            )
+            if complete_added_source_in_diff:
+                current_code = _COMPLETE_ADDED_SOURCE_MARKER
+                complete_current_file_paths.add(file_info.path)
+            else:
+                current_code = _bounded_current_file_context(
+                    current_file_content,
+                    file_diff,
+                    max_chars=current_source_per_file_budget,
+                )
+                if (
+                    current_file_content
+                    and len(current_file_content) <= current_source_per_file_budget
+                ):
+                    complete_current_file_paths.add(file_info.path)
+
+        batch_files_data.append({
+            "path": file_info.path,
+            "type": change_type.value.upper(),
+            "focus_areas": file_info.focus_areas,
+            "current_code": current_code,
+            "diff": file_diff or "(Diff unavailable)",
+            "is_incremental": is_incremental,
+        })
+
+    singleton_item = batch_items[0] if len(batch_items) == 1 else None
+    if singleton_item is not None and "_project_rules_override" in singleton_item:
+        project_rules = str(singleton_item.get("_project_rules_override") or "")
+    else:
+        project_rules = format_project_rules(request.projectRules, batch_file_paths)
+    batch_metadata = _iter_batch_enrichment_metadata(
+        request,
+        batch_file_paths,
+        prepared_context,
+    )
+    enrichment_identifiers = (
+        _extract_metadata_identifiers(batch_metadata)
+        if batch_metadata
+        else None
+    )
+    previous_issues_for_batch = ""
+    previous_issues = getattr(request, "previousCodeAnalysisIssues", None)
+    if isinstance(previous_issues, (list, tuple)) and previous_issues:
+        relevant_previous_issues = [
+            issue
+            for issue in previous_issues
+            if issue_matches_files(issue, batch_file_paths)
+        ]
+        if relevant_previous_issues:
+            previous_issues_for_batch = format_previous_issues_for_batch(
+                relevant_previous_issues
+            )
+
+    if singleton_item is not None and "_previous_issues_override" in singleton_item:
+        previous_issues_for_batch = str(
+            singleton_item.get("_previous_issues_override") or ""
+        )
+    if singleton_item is not None and "_metadata_override" in singleton_item:
+        file_metadata_text = str(singleton_item.get("_metadata_override") or "")
+    else:
+        file_metadata_text = _format_batch_metadata_json(batch_metadata)
+    if singleton_item is not None and "_task_context_override" in singleton_item:
+        task_context = str(singleton_item.get("_task_context_override") or "")
+    else:
+        task_context = prepared_context.task_context
+    plugin_context_override = None
+    if singleton_item is not None and "_plugin_context_override" in singleton_item:
+        plugin_context_override = str(
+            singleton_item.get("_plugin_context_override") or ""
+        )
+    if singleton_item is not None and "_boundary_context_override" in singleton_item:
+        boundary_context = str(
+            singleton_item.get("_boundary_context_override") or ""
+        )
+    else:
+        boundary_context = _stage1_boundary_context(
+            request,
+            batch_items,
+            batch_file_paths,
+        )
+
+    return Stage1PromptMaterial(
+        request=request,
+        batch_items=batch_items,
+        batch_files_data=batch_files_data,
+        batch_file_paths=batch_file_paths,
+        complete_current_file_paths=complete_current_file_paths,
+        current_source_per_file_budget=current_source_per_file_budget,
+        batch_metadata=batch_metadata,
+        enrichment_identifiers=enrichment_identifiers,
+        project_rules=project_rules,
+        previous_issues_for_batch=previous_issues_for_batch,
+        file_metadata_text=file_metadata_text,
+        task_context=task_context,
+        plugin_context_override=plugin_context_override,
+        prepared_context=prepared_context,
+        is_incremental=is_incremental,
+        boundary_context=boundary_context,
+    )
+
+
+def _render_stage1_prompt(
+    material: Stage1PromptMaterial,
+    structural_context_text: str,
+    *,
+    visible_evidence_by_id: Optional[
+        Dict[str, tuple[Dict[str, Any], ...]]
+    ] = None,
+    use_mcp_tools: Optional[bool] = None,
+    structural_tools_available: Optional[bool] = None,
+    review_file_tool_available: bool = False,
+) -> tuple[str, str]:
+    if material.plugin_context_override is not None:
+        plugin_context_text = material.plugin_context_override
+    else:
+        try:
+            plugin_context_text = review_plugin_context(
+                material.request,
+                material.batch_file_paths,
+                visible_evidence_by_id=visible_evidence_by_id or {},
+            )
+        except Exception as exception:
+            logger.warning(
+                "Optional Stage 1 plugin prompt context is unavailable; "
+                "continuing with local and structural evidence: %s",
+                exception,
+            )
+            plugin_context_text = ""
+    mcp_tools_enabled = (
+        bool(getattr(material.request, "useMcpTools", False))
+        if use_mcp_tools is None
+        else use_mcp_tools
+    )
+    prompt = PromptBuilder.build_stage_1_batch_prompt(
+        files=material.batch_files_data,
+        priority=(
+            material.batch_items[0]["priority"]
+            if material.batch_items
+            else "MEDIUM"
+        ),
+        project_rules=material.project_rules,
+        file_outlines=material.file_metadata_text,
+        structural_context=structural_context_text,
+        is_incremental=material.is_incremental,
+        previous_issues=material.previous_issues_for_batch,
+        all_pr_files=getattr(material.request, "changedFiles", None),
+        deleted_files=getattr(material.request, "deletedFiles", None),
+        task_context=material.task_context,
+        use_mcp_tools=mcp_tools_enabled,
+        structural_tools_available=(
+            mcp_tools_enabled
+            if structural_tools_available is None
+            else structural_tools_available
+        ),
+        review_file_tool_available=review_file_tool_available,
+        target_branch=str(
+            getattr(material.request, "localRepoRevision", None)
+            or material.request.get_target_head_commit_hash()
+            or getattr(material.request, "targetBranchName", "")
+            or ""
+        ),
+        vcs_workspace=str(
+            getattr(material.request, "projectVcsWorkspace", "") or ""
+        ),
+        vcs_repo_slug=str(
+            getattr(material.request, "projectVcsRepoSlug", "") or ""
+        ),
+        plugin_context=plugin_context_text,
+        batch_boundary_context=material.boundary_context,
+    )
+    return prompt, plugin_context_text
+
+
+def _estimated_prompt_tokens(prompt: str) -> int:
+    """Estimate rendered UTF-8 input plus the structured-output declaration."""
+    request_bytes = (
+        len(prompt.encode("utf-8"))
+        + _STAGE1_SCHEMA_DECLARATION_BYTES
+    )
+    return max(
+        1,
+        (request_bytes + 3) // 4 + _STAGE1_ESTIMATOR_SAFETY_TOKENS,
+    )
+
+
 # ── Batching ──────────────────────────────────────────────────
 
 
-def chunk_files(file_groups: List[Any], max_files_per_batch: int = 5) -> List[List[Dict[str, Any]]]:
-    all_files = []
+def chunk_files(
+    file_groups: List[Any],
+    max_files_per_batch: int = STAGE1_MAX_FILES_PER_BATCH,
+    processed_diff: Optional[ProcessedDiff] = None,
+    max_allowed_tokens: int = STAGE1_BATCH_TOKEN_BUDGET,
+    token_cost_by_path: Optional[Dict[str, int]] = None,
+) -> List[List[Dict[str, Any]]]:
+    estimated_cost_by_path = {
+        diff_file.path: (len(diff_file.content.encode("utf-8")) // 4) + 1000
+        for diff_file in getattr(processed_diff, "files", [])
+    }
+    estimated_cost_by_path.update(token_cost_by_path or {})
+    batches: List[List[Dict[str, Any]]] = []
+    current: List[Dict[str, Any]] = []
+    current_tokens = 0
     for group in file_groups:
         for f in group.files:
-            all_files.append({"file": f, "priority": group.priority})
-    return [all_files[i:i + max_files_per_batch] for i in range(0, len(all_files), max_files_per_batch)]
+            file_tokens = estimated_cost_by_path.get(f.path, 2000)
+            if current and (
+                len(current) >= max_files_per_batch
+                or current_tokens + file_tokens > max_allowed_tokens
+            ):
+                batches.append(current)
+                current = []
+                current_tokens = 0
+            current.append({"file": f, "priority": group.priority})
+            current_tokens += file_tokens
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _stage1_batch_token_limit(request: ReviewRequestDto) -> int:
+    model_context_tokens = _positive_int_or_default(
+        getattr(request, "maxAllowedTokens", None),
+        200000,
+    )
+    return min(
+        max(10_000, model_context_tokens - 20_000),
+        STAGE1_BATCH_TOKEN_BUDGET,
+    )
+
+
+def _stage1_packing_token_limit(request: ReviewRequestDto) -> int:
+    """Reserve prompt space for the deterministic relation briefing."""
+    full_limit = _stage1_batch_token_limit(request)
+    if not (
+        getattr(request, "ragEnabled", True)
+        and _has_exact_proposed_tree_binding(request)
+    ):
+        return full_limit
+    return max(
+        8_000,
+        full_limit - STAGE1_RELATION_BRIEFING_RESERVED_TOKENS,
+    )
 
 
 async def create_smart_batches_wrapper(
@@ -1217,6 +1380,8 @@ async def create_smart_batches_wrapper(
     request: ReviewRequestDto,
     rag_client,
     max_files_per_batch: int = 15,
+    prepared_context: Optional[Stage1PreparedContext] = None,
+    is_incremental: bool = False,
 ) -> List[List[Dict[str, Any]]]:
     branches = []
     rag_branch = request.get_rag_branch()
@@ -1225,42 +1390,84 @@ async def create_smart_batches_wrapper(
         branches.append(rag_branch)
     if base_branch and base_branch not in branches:
         branches.append(base_branch)
-    batching_rag_client = rag_client
+    structural_binding = {
+        "repository_revision": resolve_exact_structural_base_revision(request),
+        "repository_generation_manifest_sha256": getattr(
+            request,
+            "ragBaseGenerationManifestSha256",
+            None,
+        ),
+        "collection_target": getattr(request, "ragCollectionTarget", None),
+    }
+    exact_structural_binding = all(
+        isinstance(value, str) and bool(value.strip())
+        for value in structural_binding.values()
+    )
+    structural_tools_enabled = bool(getattr(request, "useMcpTools", False))
+    batching_rag_client = (
+        rag_client
+        if branches and exact_structural_binding and structural_tools_enabled
+        else None
+    )
     if not branches:
         logger.warning(
             "Stage 1 batching has no authoritative target branch; "
-            "using local/enrichment grouping without a repository RAG lookup"
+            "using local/enrichment grouping without a structural lookup"
         )
-        batching_rag_client = None
-    exact_receipt_values = tuple(
-        value
-        for value in (
-            getattr(request, "ragBaseGenerationManifestSha256", None),
-            getattr(request, "ragPrGenerationFingerprint", None),
-            getattr(
-                request,
-                "ragPrOverlayGenerationManifestSha256",
-                None,
-            ),
-        )
-        if isinstance(value, str) and value
-    )
-    if any(exact_receipt_values):
+    elif (
+        structural_tools_enabled
+        and rag_client is not None
+        and not exact_structural_binding
+    ):
         logger.info(
-            "Stage 1 smart-batching RAG discovery disabled while exact "
-            "base/overlay generation receipts are active"
+            "Stage 1 structural smart-batching is unavailable because the "
+            "request has no complete exact-generation binding"
         )
-        batching_rag_client = None
 
     enrichment_data = getattr(request, 'enrichmentData', None)
+    token_cost_by_path: Optional[Dict[str, int]] = None
+    shared_prompt_tokens = 0
+    if prepared_context is not None:
+        token_cost_by_path = {}
+        shared_material = _prepare_stage1_prompt_material(
+            request,
+            [],
+            prepared_context,
+            is_incremental,
+        )
+        shared_prompt, _ = _render_stage1_prompt(shared_material, "")
+        shared_prompt_tokens = _estimated_prompt_tokens(shared_prompt)
+        for group in file_groups:
+            for review_file in group.files:
+                material = _prepare_stage1_prompt_material(
+                    request,
+                    [{"file": review_file, "priority": group.priority}],
+                    prepared_context,
+                    is_incremental,
+                )
+                local_prompt, _ = _render_stage1_prompt(material, "")
+                token_cost_by_path[review_file.path] = (
+                    max(
+                        1,
+                        _estimated_prompt_tokens(local_prompt)
+                        - shared_prompt_tokens,
+                    )
+                )
 
     try:
-        # Keep Stage 1 prompts latency-sized instead of filling the model window.
-        # This does not reduce coverage: every file is still reviewed, but large
-        # PRs are split into more independently parallelizable batches.
-        max_tokens = _positive_int_or_default(getattr(request, "maxAllowedTokens", None), 200000)
-        model_safe_limit = max(10_000, max_tokens - 20_000)
-        batch_token_limit = min(model_safe_limit, STAGE1_BATCH_TOKEN_BUDGET)
+        # Preserve coherent small/medium PRs while keeping every prompt inside
+        # the configured model budget. Large components split only when their
+        # actual diff cost or the explicit file ceiling requires it.
+        model_context_tokens = _positive_int_or_default(
+            getattr(request, "maxAllowedTokens", None),
+            200000,
+        )
+        model_safe_limit = max(10_000, model_context_tokens - 20_000)
+        batch_token_limit = _stage1_packing_token_limit(request)
+        graph_content_limit = max(
+            1_000,
+            batch_token_limit - shared_prompt_tokens,
+        )
         if batch_token_limit < model_safe_limit:
             logger.info(
                 "Stage 1 batch token budget capped at %d tokens "
@@ -1277,250 +1484,69 @@ async def create_smart_batches_wrapper(
             rag_client=batching_rag_client,
             max_batch_size=max_files_per_batch,
             enrichment_data=enrichment_data,
-            max_allowed_tokens=batch_token_limit,
+            max_allowed_tokens=graph_content_limit,
             processed_diff=processed_diff,
+            token_cost_by_path=token_cost_by_path,
+            structural_binding=(
+                structural_binding if exact_structural_binding else None
+            ),
         )
         total_files = sum(len(b) for b in batches)
         related_files = sum(1 for b in batches for f in b if f.get('has_relationships'))
-        enrichment_source = "enrichment data" if enrichment_data else "RAG discovery"
+        enrichment_source = (
+            "enrichment data" if enrichment_data else "structural graph discovery"
+        )
         logger.info(
             f"Smart batching ({enrichment_source}): {total_files} files in "
             f"{len(batches)} batches, {related_files} files have cross-file relationships"
         )
         return batches
     except Exception as e:
-        logger.warning(f"Smart batching failed, falling back to simple batching: {e}")
-        return chunk_files(file_groups, max_files_per_batch)
-
-
-_UNIFIED_HUNK_HEADER = re.compile(
-    r"^@@\s+-(?P<old_start>\d+)(?:,(?P<old_count>\d+))?\s+"
-    r"\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))?\s+@@(?P<suffix>.*)$"
-)
-
-
-def _split_hunk_by_lines(hunk: str, max_chars: int) -> List[str]:
-    if len(hunk) <= max_chars:
-        return [hunk]
-
-    lines = hunk.splitlines(keepends=True)
-    if not lines:
-        return [hunk]
-
-    hunk_header = lines[0] if lines[0].startswith("@@ ") else ""
-    body_lines = lines[1:] if hunk_header else lines
-    header_text = hunk_header.rstrip("\r\n")
-    header_newline = hunk_header[len(header_text):]
-    match = _UNIFIED_HUNK_HEADER.match(header_text) if hunk_header else None
-    if match is None:
-        chunks: List[str] = []
-        current = hunk_header
-        for line in body_lines:
-            if current != hunk_header and len(current) + len(line) > max_chars:
-                chunks.append(current)
-                current = hunk_header + line
-            else:
-                current += line
-        if current.strip():
-            chunks.append(current)
-        return chunks or [hunk]
-
-    body_chunks: List[List[str]] = []
-    current_lines: List[str] = []
-    current_size = len(hunk_header)
-
-    for line in body_lines:
-        # Keep "\ No newline at end of file" attached to the line it describes.
-        if (
-            current_lines
-            and not line.startswith("\\")
-            and current_size + len(line) > max_chars
-        ):
-            body_chunks.append(current_lines)
-            current_lines = [line]
-            current_size = len(hunk_header) + len(line)
-        else:
-            current_lines.append(line)
-            current_size += len(line)
-    if current_lines:
-        body_chunks.append(current_lines)
-
-    old_cursor = int(match.group("old_start"))
-    new_cursor = int(match.group("new_start"))
-    suffix = match.group("suffix")
-    chunks = []
-    for fragment_lines in body_chunks:
-        old_count = sum(
-            1
-            for line in fragment_lines
-            if line.startswith((" ", "-"))
+        logger.warning(
+            "Smart batching failed, falling back to isolated-file batches: %s",
+            e,
         )
-        new_count = sum(
-            1
-            for line in fragment_lines
-            if line.startswith((" ", "+"))
-        )
-        fragment_header = (
-            f"@@ -{old_cursor},{old_count} +{new_cursor},{new_count} "
-            f"@@{suffix}{header_newline}"
-        )
-        chunks.append(fragment_header + "".join(fragment_lines))
-        old_cursor += old_count
-        new_cursor += new_count
-
-    return chunks or [hunk]
-
-
-def _fallback_hunk_id(path: str, hunk: str) -> str:
-    lines = hunk.splitlines()
-    header = lines[0] if lines else ""
-    content = "\n".join(lines)
-    digest = hashlib.sha256(
-        f"{path}\0{header}\0{content}".encode("utf-8")
-    ).hexdigest()
-    return "sha256:" + digest
-
-
-def _chunk_diff_with_ownership(
-    diff_content: str,
-    max_tokens: int,
-    *,
-    known_hunks: tuple[DiffHunk, ...] = (),
-    path: str = "",
-) -> List[_DiffReviewChunk]:
-    if not diff_content:
-        return [_DiffReviewChunk(diff_content)]
-
-    max_chars = max(1, max_tokens * 4)
-    lines = diff_content.splitlines(keepends=True)
-    header_lines: List[str] = []
-    hunks: List[str] = []
-    current_hunk: List[str] = []
-
-    for line in lines:
-        if line.startswith("@@ "):
-            if current_hunk:
-                hunks.append("".join(current_hunk))
-            current_hunk = [line]
-        elif current_hunk:
-            current_hunk.append(line)
-        else:
-            header_lines.append(line)
-
-    if current_hunk:
-        hunks.append("".join(current_hunk))
-
-    header = "".join(header_lines)
-    body_budget = max(1, max_chars - len(header))
-    if known_hunks and len(known_hunks) != len(hunks):
-        raise RuntimeError(
-            f"Diff hunk manifest mismatch for {path or '<unknown>'}: "
-            f"parsed {len(hunks)}, manifest has {len(known_hunks)}"
-        )
-    if not hunks:
-        chunks: List[_DiffReviewChunk] = []
-        current = ""
-        for line in lines:
-            if current and len(current) + len(line) > max_chars:
-                chunks.append(_DiffReviewChunk(current))
-                current = line
-            else:
-                current += line
-        if current:
-            chunks.append(_DiffReviewChunk(current))
-        return chunks or [_DiffReviewChunk(diff_content)]
-
-    hunk_ids: List[Optional[str]] = []
-    for index, hunk in enumerate(hunks):
-        if known_hunks:
-            known = known_hunks[index]
-            parsed_header = hunk.splitlines()[0] if hunk.splitlines() else ""
-            if known.header != parsed_header:
-                raise RuntimeError(
-                    f"Diff hunk order mismatch for {path or '<unknown>'}: "
-                    f"expected {known.header!r}, found {parsed_header!r}"
-                )
-            hunk_ids.append(
-                known.id
-                if known.disposition is HunkDisposition.REVIEWABLE
-                else None
-            )
-        else:
-            hunk_ids.append(_fallback_hunk_id(path, hunk))
-
-    normalized_hunks: List[tuple[str, Optional[str]]] = []
-    for hunk, hunk_id in zip(hunks, hunk_ids):
-        normalized_hunks.extend(
-            (fragment, hunk_id)
-            for fragment in _split_hunk_by_lines(hunk, body_budget)
+        return chunk_files(
+            file_groups,
+            1,
+            processed_diff=processed_diff,
+            max_allowed_tokens=max(
+                1_000,
+                _stage1_packing_token_limit(request) - shared_prompt_tokens,
+            ),
+            token_cost_by_path=token_cost_by_path,
         )
 
-    chunks: List[_DiffReviewChunk] = []
-    current = ""
-    current_hunk_ids: set[str] = set()
-    for hunk, hunk_id in normalized_hunks:
-        if current and len(header) + len(current) + len(hunk) > max_chars:
-            chunks.append(_DiffReviewChunk(
-                header + current,
-                tuple(sorted(current_hunk_ids)),
-            ))
-            current = hunk
-            current_hunk_ids = {hunk_id} if hunk_id else set()
-        else:
-            current += hunk
-            if hunk_id:
-                current_hunk_ids.add(hunk_id)
 
-    if current:
-        chunks.append(_DiffReviewChunk(
-            header + current,
-            tuple(sorted(current_hunk_ids)),
-        ))
-
-    return chunks or [_DiffReviewChunk(
-        diff_content,
-        tuple(sorted(hunk_id for hunk_id in hunk_ids if hunk_id)),
-    )]
+def _complete_stage1_plugin_context(
+    request: ReviewRequestDto,
+    path: str,
+) -> str:
+    try:
+        # Packing needs the complete deterministic contribution. Evidence visibility
+        # may later reduce evidence targets, but it must never reveal a larger
+        # plugin block than the packer measured.
+        return review_plugin_context(request, [path])
+    except Exception as exception:
+        logger.warning(
+            "Optional Stage 1 plugin prompt context is unavailable during "
+            "lossless packing; continuing without it: %s",
+            exception,
+        )
+        return ""
 
 
-def _chunk_diff_preserving_hunks(diff_content: str, max_tokens: int) -> List[str]:
-    return [
-        chunk.content
-        for chunk in _chunk_diff_with_ownership(diff_content, max_tokens)
-    ]
+def _stage1_material_prompt_tokens(material: Stage1PromptMaterial) -> int:
+    prompt, _ = _render_stage1_prompt(material, "")
+    return _estimated_prompt_tokens(prompt)
 
 
-def _review_unit_id(path: str, chunk: _DiffReviewChunk) -> str:
-    digest = hashlib.sha256(
-        (
-            normalize_repository_path(path)
-            + "\0"
-            + "\0".join(chunk.hunk_ids)
-            + "\0"
-            + chunk.content
-        ).encode("utf-8")
-    ).hexdigest()
-    return "sha256:" + digest
-
-
-def _render_hunk_manifest_diff(diff_file: Any) -> str:
-    """Rebuild prompt evidence from the lossless manifest after compaction."""
-    path = normalize_repository_path(getattr(diff_file, "path", ""))
-    old_path = normalize_repository_path(
-        getattr(diff_file, "old_path", None) or path
+def _stage1_local_packing_runtime() -> Stage1LocalPackingRuntime:
+    return Stage1LocalPackingRuntime(
+        prepare_material=_prepare_stage1_prompt_material,
+        material_prompt_tokens=_stage1_material_prompt_tokens,
+        complete_plugin_context=_complete_stage1_plugin_context,
     )
-    old_marker = (
-        "/dev/null"
-        if getattr(diff_file, "change_type", None) is DiffChangeType.ADDED
-        else f"a/{old_path}"
-    )
-    parts = [
-        f"diff --git a/{old_path} b/{path}",
-        f"--- {old_marker}",
-        f"+++ b/{path}",
-    ]
-    parts.extend(hunk.content for hunk in diff_file.hunks)
-    return "\n".join(parts) + "\n"
 
 
 def _expand_oversized_diff_batches(
@@ -1528,692 +1554,961 @@ def _expand_oversized_diff_batches(
     prepared_context: Stage1PreparedContext,
     diff_chunk_token_budget: int = STAGE1_DIFF_CHUNK_TOKEN_BUDGET,
 ) -> List[List[Dict[str, Any]]]:
-    expanded_batches: List[List[Dict[str, Any]]] = []
-    split_files = 0
-    added_segments = 0
-
-    for batch in batches:
-        current_batch: List[Dict[str, Any]] = []
-
-        for item in batch:
-            file_info = item.get("file")
-            file_path = getattr(file_info, "path", "")
-            diff_file = _find_diff_file_for_path(
-                prepared_context,
-                file_path,
-                use_full_diff=_item_requests_full_diff(item),
-            )
-            diff_content = diff_file.content if diff_file else ""
-            reconstructed_from_manifest = bool(
-                diff_file
-                and diff_file.hunks
-                and _diff_limit_reason_allows_full_review(diff_file.skip_reason)
-            )
-            if reconstructed_from_manifest:
-                # The raw request diff may be unavailable to a direct caller,
-                # but DiffProcessor retains every original hunk before replacing
-                # oversized file content with a compact planning summary.
-                diff_content = _render_hunk_manifest_diff(diff_file)
-            chunks = _chunk_diff_with_ownership(
-                diff_content,
-                diff_chunk_token_budget,
-                known_hunks=tuple(diff_file.hunks) if diff_file else (),
-                path=file_path,
-            )
-
-            if len(chunks) <= 1:
-                chunk = chunks[0]
-                review_item = dict(item)
-                review_item["_review_unit_id"] = _review_unit_id(file_path, chunk)
-                review_item["_hunk_ids"] = chunk.hunk_ids
-                if reconstructed_from_manifest:
-                    review_item["_diff_override"] = chunk.content
-                current_batch.append(review_item)
-                continue
-
-            if current_batch:
-                expanded_batches.append(current_batch)
-                current_batch = []
-
-            split_files += 1
-            added_segments += len(chunks)
-            for idx, chunk in enumerate(chunks, start=1):
-                segment_item = dict(item)
-                segment_item["_diff_override"] = chunk.content
-                segment_item["_diff_chunk_index"] = idx
-                segment_item["_diff_chunk_total"] = len(chunks)
-                segment_item["_review_unit_id"] = _review_unit_id(
-                    file_path,
-                    chunk,
-                )
-                segment_item["_hunk_ids"] = chunk.hunk_ids
-                expanded_batches.append([segment_item])
-
-        if current_batch:
-            expanded_batches.append(current_batch)
-
-    if split_files:
-        logger.info(
-            "Stage 1 split %d oversized file diff(s) into %d hunk-preserving segment batch(es)",
-            split_files,
-            added_segments,
-        )
-
-    return expanded_batches
-
-
-# ── RAG Context ───────────────────────────────────────────────
-
-def _is_exact_revision_bound(
-    request: ReviewRequestDto,
-    pr_indexed: bool,
-) -> bool:
-    pr_number = getattr(request, "pullRequestId", None)
-    return bool(
-        pr_indexed
-        and isinstance(pr_number, int)
-        and pr_number > 0
-        and all(
-            isinstance(value, str) and bool(value.strip())
-            for value in (
-                getattr(request, "currentCommitHash", None)
-                or getattr(request, "commitHash", None),
-                getattr(request, "baseCommitHash", None),
-                getattr(request, "ragCollectionTarget", None),
-                getattr(request, "ragBaseGenerationManifestSha256", None),
-                getattr(request, "ragPrGenerationFingerprint", None),
-                getattr(
-                    request,
-                    "ragPrOverlayGenerationManifestSha256",
-                    None,
-                ),
-            )
-        )
+    return _pack_expand_oversized_diff_batches(
+        batches,
+        prepared_context,
+        diff_chunk_token_budget=diff_chunk_token_budget,
     )
 
 
-def _has_exact_base_binding(request: ReviewRequestDto) -> bool:
-    return all(
-        isinstance(value, str) and bool(value.strip())
-        for value in (
-            getattr(request, "baseCommitHash", None),
-            getattr(request, "ragCollectionTarget", None),
-            getattr(request, "ragBaseGenerationManifestSha256", None),
-        )
-    )
-
-
-def _disable_rag_context(
-    rag_state: Optional[Stage1RagState],
-    reason: str,
-) -> bool:
-    """Open the optional-context circuit once and report whether it changed."""
-    if rag_state is None:
-        return True
-    if rag_state.context_disabled:
-        return False
-    rag_state.context_disabled = True
-    rag_state.context_disable_reason = reason
-    rag_state.semantic_disabled = True
-    rag_state.semantic_disable_reason = reason
-    return True
-
-
-def _disable_semantic_rag(
-    rag_state: Optional[Stage1RagState],
-    reason: str,
-) -> bool:
-    """Open the semantic-filler circuit once across concurrent batches."""
-    if rag_state is None:
-        return True
-    if rag_state.semantic_disabled:
-        return False
-    rag_state.semantic_failures += 1
-    rag_state.semantic_disabled = True
-    rag_state.semantic_disable_reason = reason
-    return True
-
-
-async def fetch_batch_rag_context(
-    rag_client,
+def _joint_stage1_units_for_item(
+    item: Dict[str, Any],
     request: ReviewRequestDto,
-    batch_file_paths: List[str],
-    batch_diff_snippets: List[str],
-    pr_indexed: bool = False,
-    llm_reranker=None,
-    use_llm_rerank: bool = True,
-    batch_priority: str = "MEDIUM",
-    enrichment_identifiers: Optional[List[str]] = None,
-    batch_raw_diffs: Optional[List[str]] = None,
-    rag_state: Optional[Stage1RagState] = None,
-) -> Optional[Dict[str, Any]]:
-    exact_revision_bound = _is_exact_revision_bound(request, pr_indexed)
-    exact_base_bound = _has_exact_base_binding(request)
-    exact_context_bound = exact_revision_bound or exact_base_bound
-    if rag_state and rag_state.context_disabled:
-        logger.debug(
-            "Per-batch RAG context skipped after an earlier optional-context "
-            "failure: %s",
-            rag_state.context_disable_reason,
-        )
-        return None
-    if not rag_client:
-        if exact_context_bound and _disable_rag_context(
-            rag_state,
-            "revision-bound Stage 1 retrieval has no RAG client",
-        ):
-            logger.info(
-                "Optional revision-bound RAG context is unavailable; "
-                "continuing with local review evidence"
-            )
-        return None
-
-    duplication_task: Optional[asyncio.Task] = None
-
-    try:
-        rag_branch = request.get_rag_branch()
-        base_branch = request.get_rag_base_branch()
-        if not rag_branch:
-            message = "Missing authoritative target branch for Stage 1 RAG retrieval"
-            _capture_deterministic_retrieval_state(
-                {"status": "error", "error": message},
-                rag_state,
-            )
-            if _disable_rag_context(rag_state, message):
-                (logger.info if exact_context_bound else logger.warning)(
-                    "%s; disabling optional RAG context for the remaining "
-                    "Stage 1 batches",
-                    message,
-                )
-            return None
-
-        # Scale top_k based on batch priority to ensure adequate context
-        priority_upper = (batch_priority or "MEDIUM").upper()
-        top_k = {"HIGH": 15, "MEDIUM": 10, "LOW": 8}.get(priority_upper, 10)
-
-        logger.info(f"Fetching per-batch RAG context for {len(batch_file_paths)} files "
-                     f"(priority={priority_upper}, top_k={top_k})")
-
-        pr_number = request.pullRequestId if exact_revision_bound else None
-        all_pr_files = request.changedFiles if exact_revision_bound else None
-        source_revision = (
-            request.currentCommitHash or request.commitHash
-            if exact_revision_bound
-            else None
-        )
-        base_revision = (
-            request.baseCommitHash if exact_context_bound else None
-        )
-        base_generation_receipt = (
-            request.ragBaseGenerationManifestSha256
-            if exact_context_bound
-            else None
-        )
-        pr_generation_fingerprint = (
-            request.ragPrGenerationFingerprint
-            if exact_revision_bound
-            else None
-        )
-        pr_overlay_generation_manifest_sha256 = (
-            request.ragPrOverlayGenerationManifestSha256
-            if exact_revision_bound
-            else None
-        )
-        collection_target = (
-            request.ragCollectionTarget if exact_context_bound else None
-        )
-
-        context = None
-
-        async def _fetch_deterministic_context() -> Optional[Dict[str, Any]]:
-            try:
-                return await rag_client.get_deterministic_context(
-                    workspace=request.projectWorkspace,
-                    project=request.projectNamespace,
-                    branches=(
-                        [rag_branch]
-                        if exact_context_bound
-                        else list(dict.fromkeys(
-                            branch
-                            for branch in (rag_branch, base_branch)
-                            if branch
-                        ))
-                    ),
-                    file_paths=batch_file_paths,
-                    limit_per_file=5,
-                    pr_number=pr_number,
-                    pr_changed_files=all_pr_files,
-                    additional_identifiers=enrichment_identifiers,
-                    source_revision=source_revision,
-                    base_revision=base_revision,
-                    base_generation_manifest_sha256=(
-                        base_generation_receipt
-                    ),
-                    pr_generation_fingerprint=pr_generation_fingerprint,
-                    pr_overlay_generation_manifest_sha256=(
-                        pr_overlay_generation_manifest_sha256
-                    ),
-                    collection_target=collection_target,
-                )
-            except Exception as det_err:
-                return {
-                    "status": "error",
-                    "error": f"{type(det_err).__name__}: {det_err}",
-                }
-
-        async def _fetch_semantic_context() -> Optional[Dict[str, Any]]:
-            if not SEMANTIC_RAG_FILLER_ENABLED:
-                logger.info("Semantic RAG filler skipped by REVIEW_SEMANTIC_RAG_FILLER_ENABLED")
-                return None
-
-            semantic_top_k = min(top_k, 8)
-            logger.info(
-                f"Semantic RAG filler: prefetching up to {semantic_top_k} chunks "
-                f"(target={top_k})"
-            )
-            return await rag_client.get_pr_context(
-                workspace=request.projectWorkspace,
-                project=request.projectNamespace,
-                branch=rag_branch,
-                changed_files=batch_file_paths,
-                diff_snippets=batch_diff_snippets,
-                pr_title=request.prTitle,
-                pr_description=request.prDescription,
-                top_k=semantic_top_k,
-                base_branch=(base_branch if pr_number else None),
-                pr_number=pr_number,
-                all_pr_changed_files=all_pr_files,
-                deleted_files=(request.deletedFiles or None) if pr_number else None,
-                source_revision=source_revision,
-                base_revision=base_revision,
-                base_generation_manifest_sha256=base_generation_receipt,
-                pr_generation_fingerprint=pr_generation_fingerprint,
-                pr_overlay_generation_manifest_sha256=(
-                    pr_overlay_generation_manifest_sha256
-                ),
-                collection_target=collection_target,
-            )
-
-        async def _fetch_duplication_context() -> Optional[List[Dict[str, Any]]]:
-            if not DUPLICATION_RAG_ENABLED:
-                logger.info("Duplication search skipped by REVIEW_DUPLICATION_RAG_ENABLED")
-                return None
-
-            try:
-                # Build per-file enrichment metadata for duplication queries.
-                # Pass the full parser payload through; do not select semantic
-                # fields in Python.
-                enrichment_metadata = None
-                if request.enrichmentData and request.enrichmentData.fileMetadata:
-                    enrichment_metadata = {}
-                    for meta in request.enrichmentData.fileMetadata:
-                        if any(
-                            repository_paths_match(meta.path, batch_path)
-                            for batch_path in batch_file_paths
-                        ):
-                            enrichment_metadata[meta.path] = _metadata_to_payload(meta)
-
-                duplication_queries = _build_duplication_queries_from_diff(
-                    batch_diff_snippets, batch_file_paths,
-                    enrichment_metadata=enrichment_metadata,
-                )
-
-                if not duplication_queries:
-                    return None
-
-                return await rag_client.search_for_duplicates(
-                    workspace=request.projectWorkspace,
-                    project=request.projectNamespace,
-                    branch=rag_branch,
-                    queries=duplication_queries,
-                    top_k=8,
-                    base_branch=base_branch,
-                    repository_revision=base_revision,
-                    repository_generation_manifest_sha256=(
-                        base_generation_receipt
-                    ),
-                    collection_target=collection_target,
-                )
-            except Exception as dup_err:
-                logger.debug("Duplication search skipped: %s", dup_err)
-                return None
-
-        deterministic_task = asyncio.create_task(_fetch_deterministic_context())
-        duplication_task = asyncio.create_task(_fetch_duplication_context())
-
-        # 1. Deterministic lookup FIRST — structural deps are highest-value context
-        deterministic_response = await deterministic_task
-        deterministic_error = _rag_response_error(deterministic_response)
-        deterministic_chunks = _flatten_deterministic_context(deterministic_response)
-        _capture_deterministic_retrieval_state(
-            deterministic_response,
-            rag_state,
-        )
-        deterministic_retrieval_state = _deterministic_retrieval_state(
-            deterministic_response
-        )
-        context_error = (
-            deterministic_error
-            or (
-                f"deterministic retrieval state is {deterministic_retrieval_state}"
-                if exact_context_bound
-                and deterministic_retrieval_state != "complete"
-                else None
-            )
-        )
-        if context_error:
-            if duplication_task is not None and not duplication_task.done():
-                duplication_task.cancel()
-            if duplication_task is not None:
-                await asyncio.gather(duplication_task, return_exceptions=True)
-            if _disable_rag_context(rag_state, context_error):
-                (logger.info if exact_context_bound else logger.warning)(
-                    "Optional %sRAG context is unavailable; disabling it for "
-                    "the remaining Stage 1 batches and continuing with local "
-                    "review evidence: %s",
-                    "revision-bound " if exact_context_bound else "",
-                    context_error,
-                )
-            return None
-        if deterministic_chunks:
-            context = {"relevant_code": deterministic_chunks}
-            logger.info(
-                "Deterministic RAG: included %d chunk(s) from all deterministic context groups",
-                len(deterministic_chunks),
-            )
-
-        # 2. Semantic search as FILLER — only fills remaining budget after deterministic
-        det_count = len(context.get("relevant_code", [])) if context else 0
-        semantic_fill = max(0, top_k - det_count)
-
-        rag_response = None
-        semantic_fill_enabled = (
-            semantic_fill > 0 and SEMANTIC_RAG_FILLER_ENABLED
-        )
-        if semantic_fill > 0 and not SEMANTIC_RAG_FILLER_ENABLED:
-            logger.info(
-                "Semantic RAG filler skipped by "
-                "REVIEW_SEMANTIC_RAG_FILLER_ENABLED"
-            )
-        elif semantic_fill_enabled and rag_state and rag_state.semantic_disabled:
-            logger.info("Semantic RAG filler skipped: %s", rag_state.semantic_disable_reason)
-        elif semantic_fill_enabled:
-            try:
-                rag_response = await asyncio.wait_for(
-                    _fetch_semantic_context(),
-                    timeout=SEMANTIC_RAG_TIMEOUT_SECONDS,
-                )
-                semantic_error = _rag_response_error(rag_response)
-                if semantic_error:
-                    raise RuntimeError(semantic_error)
-            except asyncio.TimeoutError:
-                rag_response = None
-                reason = f"timed out after {SEMANTIC_RAG_TIMEOUT_SECONDS}s"
-                if _disable_semantic_rag(rag_state, reason):
-                    logger.warning(
-                        "Semantic RAG filler timed out after %ss; disabling "
-                        "for remaining Stage 1 batches",
-                        SEMANTIC_RAG_TIMEOUT_SECONDS,
-                    )
-            except Exception as sem_err:
-                rag_response = None
-                if _disable_semantic_rag(rag_state, str(sem_err)):
-                    logger.warning(
-                        "Semantic RAG filler failed; disabling for remaining "
-                        "Stage 1 batches: %s",
-                        sem_err,
-                    )
-
-        if semantic_fill > 0 and rag_response:
-            sem_context = _unwrap_rag_context(rag_response)
-            sem_chunks = sem_context.get("relevant_code", [])
-            if context is None:
-                context = {"relevant_code": []}
-            added = 0
-            for chunk in sem_chunks:
-                if added >= semantic_fill:
-                    break
-                context["relevant_code"].append(chunk)
-                added += 1
-            logger.info(f"Semantic RAG: added {added}/{len(sem_chunks)} chunks")
-        elif semantic_fill > 0:
-            logger.info("Semantic RAG filler produced no chunks")
-        else:
-            logger.info(f"Deterministic yielded {det_count} chunks — semantic search skipped")
-
-        # 3. Duplication search
-        dup_results = await duplication_task
-        if dup_results:
-            if context is None:
-                context = {"relevant_code": []}
-
-            dup_added = 0
-            seen_paths = {
-                existing.get("file_path", existing.get("path", ""))
-                for existing in context.get("relevant_code", [])
-                if existing.get("file_path", existing.get("path", ""))
-            }
-
-            for dup in dup_results:
-                dup_path = dup.get("metadata", {}).get("path", "")
-                dup_text = dup.get("text", "")
-
-                if dup_path in batch_file_paths or not dup_text:
-                    continue
-                if dup_path in seen_paths:
-                    continue
-                seen_paths.add(dup_path)
-
-                context["relevant_code"].append({
-                    "file_path": dup_path,
-                    "text": dup_text,
-                    "content": dup_text,
-                    "score": max(dup.get("score", 0.8), 0.80),
-                    "_source": "duplication",
-                    "metadata": dup.get("metadata", {}),
-                    "_query": dup.get("_query", ""),
-                })
-                dup_added += 1
-                if dup_added >= 5:
-                    break
-
-            if dup_added > 0:
-                logger.info(f"Duplication search: added {dup_added} similar implementation chunks")
-
-        if context:
-            total_chunks = len(context.get("relevant_code", []))
-
-            if pr_indexed and all_pr_files:
-                context["relevant_code"] = _deduplicate_pr_stale_chunks(
-                    context.get("relevant_code", []),
-                    pr_changed_files=all_pr_files,
-                    batch_file_paths=batch_file_paths,
-                )
-                deduped_count = total_chunks - len(context.get("relevant_code", []))
-                if deduped_count > 0:
-                    logger.info(f"Post-merge dedup: removed {deduped_count} stale branch chunks")
-                total_chunks = len(context.get("relevant_code", []))
-
-            logger.info(f"Total RAG context: {total_chunks} chunks for files {batch_file_paths}")
-
-            if llm_reranker and total_chunks > 0:
-                try:
-                    chunks = context.get("relevant_code", [])
-                    if not use_llm_rerank:
-                        logger.info("Fast check: using structural per-batch RAG ordering")
-                    reranked, rerank_result = await llm_reranker.rerank(
-                        chunks,
-                        pr_title=request.prTitle,
-                        pr_description=request.prDescription,
-                        changed_files=request.changedFiles,
-                        use_llm=use_llm_rerank,
-                    )
-                    context["relevant_code"] = reranked
-                    logger.info(
-                        f"Per-batch reranking: {rerank_result.method} "
-                        f"({rerank_result.processing_time_ms:.0f}ms, "
-                        f"{rerank_result.original_count}→{rerank_result.reranked_count} chunks)"
-                    )
-                except Exception as rerank_err:
-                    logger.info(f"Per-batch reranking skipped (non-critical): {rerank_err}")
-
-            return context
-
-        return None
-
-    except Exception as e:
-        if duplication_task is not None and not duplication_task.done():
-            duplication_task.cancel()
-        if duplication_task is not None:
-            await asyncio.gather(duplication_task, return_exceptions=True)
-        if _disable_rag_context(rag_state, str(e)):
-            logger.warning(
-                "Failed to fetch optional per-batch RAG context; disabling it "
-                "for the remaining Stage 1 batches: %s",
-                e,
-            )
-        return None
-
-
-def _deduplicate_pr_stale_chunks(
-    chunks: List[Dict[str, Any]],
-    pr_changed_files: List[str],
-    batch_file_paths: List[str],
+    prepared_context: Stage1PreparedContext,
+    is_incremental: bool,
+    token_budget: int,
+    max_units: int = 3,
 ) -> List[Dict[str, Any]]:
-    if not chunks or not pr_changed_files:
-        return chunks
+    """Backward-compatible facade over the local-packing runtime boundary."""
+    return _pack_joint_stage1_units_for_item(
+        item,
+        request,
+        prepared_context,
+        is_incremental,
+        token_budget,
+        max_units=max_units,
+        runtime=_stage1_local_packing_runtime(),
+    )
 
-    pr_changed_set = {
-        normalize_repository_path(path)
-        for path in pr_changed_files
-        if normalize_repository_path(path)
-    }
-    batch_set = {
-        normalize_repository_path(path)
-        for path in batch_file_paths
-        if normalize_repository_path(path)
-    }
 
-    by_path: Dict[str, List[Dict[str, Any]]] = {}
-    for chunk in chunks:
-        metadata = chunk.get("metadata", {})
-        path = normalize_repository_path(
-            metadata.get("path")
-            or chunk.get("path")
-            or chunk.get("file_path", "")
+def _expand_oversized_stage1_evidence_batches(
+    batches: List[List[Dict[str, Any]]],
+    request: ReviewRequestDto,
+    prepared_context: Stage1PreparedContext,
+    is_incremental: bool,
+    token_budget: int,
+    max_units_per_item: int = 3,
+    max_total_batches: Optional[int] = None,
+) -> List[List[Dict[str, Any]]]:
+    """Preserve the historical adapter while using typed packing inputs."""
+    return pack_stage1_local_batches(
+        batches,
+        Stage1LocalPackingInput(
+            request=request,
+            prepared_context=prepared_context,
+            is_incremental=is_incremental,
+            token_budget=token_budget,
+        ),
+        _stage1_local_packing_runtime(),
+        max_units_per_item=max_units_per_item,
+        max_total_batches=max_total_batches,
+    )
+
+
+def _expand_oversized_current_source_batches(
+    batches: List[List[Dict[str, Any]]],
+    request: ReviewRequestDto,
+    prepared_context: Stage1PreparedContext,
+    is_incremental: bool,
+    token_budget: int,
+) -> List[List[Dict[str, Any]]]:
+    """Compatibility wrapper for the joint local-evidence packer."""
+    return _expand_oversized_stage1_evidence_batches(
+        batches,
+        request,
+        prepared_context,
+        is_incremental,
+        token_budget,
+    )
+
+
+def _repack_stage1_batches_by_rendered_input(
+    batches: List[List[Dict[str, Any]]],
+    request: ReviewRequestDto,
+    prepared_context: Stage1PreparedContext,
+    is_incremental: bool,
+    token_budget: int,
+) -> List[List[Dict[str, Any]]]:
+    return _pack_repack_stage1_batches(
+        batches,
+        request,
+        prepared_context,
+        is_incremental,
+        token_budget,
+        runtime=_stage1_local_packing_runtime(),
+    )
+
+
+def _partition_oversized_stage1_batch(
+    batch_items: List[Dict[str, Any]],
+    request: ReviewRequestDto,
+    prepared_context: Stage1PreparedContext,
+    is_incremental: bool,
+    token_budget: int,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    return _pack_partition_stage1_batch(
+        batch_items,
+        request,
+        prepared_context,
+        is_incremental,
+        token_budget,
+        runtime=_stage1_local_packing_runtime(),
+    )
+
+
+# ── Structural Context ────────────────────────────────────────
+
+def _has_exact_proposed_tree_binding(request: ReviewRequestDto) -> bool:
+    """Return whether the host supplied every proposed-tree graph input."""
+    return has_exact_proposed_tree_binding(request)
+
+
+def _bounded_nonnegative_int(value: Any, default: int = 0) -> int:
+    """Parse optional graph counters without letting enrichment fail Stage 1."""
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(0, min(parsed, 1_000_000))
+
+
+def _exact_json_projection(
+    value: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Copy one server JSON object without truncating identity-bearing facts."""
+    try:
+        encoded = json.dumps(
+            dict(value),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
         )
-        if not path:
-            path = "__unknown__"
-        by_path.setdefault(path, []).append(chunk)
+        decoded = json.loads(encoded)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
 
-    result = []
-    for path, path_chunks in by_path.items():
-        is_pr_file = any(
-            repository_paths_match(path, changed_path)
-            for changed_path in pr_changed_set
-        )
-        is_batch_file = any(
-            repository_paths_match(path, batch_path)
-            for batch_path in batch_set
-        )
 
-        if not is_pr_file or is_batch_file:
-            result.extend(path_chunks)
+def _bounded_relation_briefing_value(value: Any) -> Any:
+    """Bound non-evidence navigation hints before model admission."""
+    if isinstance(value, Mapping):
+        return {
+            str(key)[:160]: _bounded_relation_briefing_value(nested)
+            for key, nested in list(value.items())[:24]
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _bounded_relation_briefing_value(nested)
+            for nested in list(value)[:24]
+        ]
+    if isinstance(value, str):
+        return value[:1_200]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:1_200]
+
+def _focused_relation_briefing_continuations(
+    response: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    """Expose only model-callable, focused continuations in the capsule.
+
+    The composite backend historically points its frontier back to
+    ``exploreReviewContext``. Stage 1 now performs that broad orientation on
+    the host, so repeating it would reintroduce the large observation that the
+    capsule is intended to replace. Convert named frontier symbols to the
+    source-compatible precise graph query and retain already-focused calls.
+    """
+    raw_continuations = (
+        response.get("continuations")
+        or evidence.get("frontier")
+        or response.get("omittedFollowups")
+        or ()
+    )
+    selected: List[Dict[str, Any]] = []
+    for raw_item in raw_continuations:
+        if not isinstance(raw_item, Mapping):
             continue
+        nested_next = raw_item.get("next")
+        nested_next = nested_next if isinstance(nested_next, Mapping) else {}
+        tool = str(
+            raw_item.get("tool") or nested_next.get("tool") or ""
+        ).strip()
+        arguments = raw_item.get("arguments")
+        if not isinstance(arguments, Mapping):
+            arguments = nested_next.get("arguments")
+        arguments = arguments if isinstance(arguments, Mapping) else {}
+        if tool == STAGE1_REVIEW_CONTEXT_TOOL_NAME:
+            focus_symbols = arguments.get("focusSymbols")
+            symbol = str(raw_item.get("symbol") or "").strip()
+            if not symbol and isinstance(focus_symbols, (list, tuple)):
+                symbol = str(next(iter(focus_symbols), "")).strip()
+            if not symbol:
+                continue
+            selected.append({
+                "tool": STAGE1_QUERY_GRAPH_TOOL_NAME,
+                "reason": "Continue from the bounded relation frontier.",
+                "arguments": {
+                    "pattern": "relations_of",
+                    "target": symbol,
+                    "detailLevel": "standard",
+                },
+            })
+        elif tool in STAGE1_STRUCTURAL_TOOL_NAMES:
+            item = {
+                "tool": tool,
+                "arguments": _bounded_relation_briefing_value(arguments),
+            }
+            reason = str(raw_item.get("reason") or "").strip()
+            if reason:
+                item["reason"] = reason[:600]
+            selected.append(item)
+        if len(selected) >= 4:
+            break
+    return selected
 
-        pr_chunks = [c for c in path_chunks if c.get("_source") == "pr_indexed"]
-        non_pr_chunks = [c for c in path_chunks if c.get("_source") != "pr_indexed"]
 
-        if pr_chunks and non_pr_chunks:
-            result.extend(pr_chunks)
-            logger.info(
-                f"Dedup: replaced {len(non_pr_chunks)} stale branch chunk(s) "
-                f"with {len(pr_chunks)} PR-indexed chunk(s) for {path}"
+def _stage1_relation_briefing_capsule(
+    response: Optional[Dict[str, Any]],
+    *,
+    max_characters: int = STAGE1_RELATION_BRIEFING_MAX_CHARS,
+) -> tuple[str, Dict[str, Any]]:
+    """Select the exact relation facts that are guaranteed prompt-visible."""
+    if not isinstance(response, dict):
+        return "", {}
+    status = str(response.get("status") or "").strip().casefold()
+    snapshot = response.get("snapshot")
+    if (
+        status not in {"ready", "ok", "complete"}
+        or not isinstance(snapshot, Mapping)
+        or snapshot.get("kind") != "proposed_tree"
+    ):
+        return "", {}
+
+    evidence = response.get("evidence")
+    evidence = evidence if isinstance(evidence, Mapping) else {}
+    raw_edges = response.get("edges")
+    if not isinstance(raw_edges, list):
+        raw_edges = (
+            evidence.get("relations")
+            or response.get("relations")
+            or response.get("results")
+        )
+    edges = []
+    for raw_edge in raw_edges or ():
+        if not isinstance(raw_edge, Mapping):
+            continue
+        evidence_id = str(
+            raw_edge.get("evidenceId")
+            or raw_edge.get("evidence_id")
+            or ""
+        ).strip()
+        if (
+            not _CANONICAL_STRUCTURAL_EVIDENCE_ID.fullmatch(evidence_id)
+            or not isinstance(raw_edge.get("kind"), str)
+            or not raw_edge.get("kind")
+            or not isinstance(raw_edge.get("relation"), str)
+            or not raw_edge.get("relation")
+            or not isinstance(raw_edge.get("source"), str)
+            or not raw_edge.get("source")
+            or not isinstance(raw_edge.get("target"), str)
+            or not raw_edge.get("target")
+        ):
+            continue
+        edge = _exact_json_projection({
+            key: raw_edge[key]
+            for key in (
+                "evidenceId",
+                "kind",
+                "relation",
+                "source",
+                "target",
+                "sourceUnitId",
+                "targetUnitId",
+                "origin",
+                "relatedPaths",
+                "attributes",
+                "hop",
+                "depth",
             )
-        elif pr_chunks:
-            result.extend(pr_chunks)
-        else:
-            for c in non_pr_chunks:
-                c["_potentially_stale"] = True
-            result.extend(non_pr_chunks)
+            if raw_edge.get(key) not in (None, "", [], {})
+        })
+        if edge is None:
+            continue
+        edge["evidenceId"] = evidence_id
+        # Standard graph-query records expose endpoint units rather than the
+        # compact endpoint IDs. Derive only these navigation hints; canonical
+        # relation fact fields above remain byte-for-byte JSON projections.
+        for unit_key, id_key in (
+            ("sourceUnit", "sourceUnitId"),
+            ("targetUnit", "targetUnitId"),
+        ):
+            unit = raw_edge.get(unit_key)
+            if id_key not in edge and isinstance(unit, Mapping):
+                unit_id = unit.get("unitId")
+                if isinstance(unit_id, str) and unit_id:
+                    edge[id_key] = unit_id
+        if "hop" in edge:
+            edge["hop"] = _bounded_nonnegative_int(edge["hop"])
+        if "depth" in edge:
+            edge["depth"] = _bounded_nonnegative_int(edge["depth"])
+        edges.append(edge)
 
-    return result
+    if not edges:
+        return "", {}
+
+    node_by_id: Dict[str, Dict[str, Any]] = {}
+    raw_nodes = response.get("nodes")
+    if not isinstance(raw_nodes, list):
+        raw_nodes = evidence.get("nodes")
+    for raw_node in raw_nodes or ():
+        if not isinstance(raw_node, Mapping):
+            continue
+        unit_id = raw_node.get("unitId")
+        if not isinstance(unit_id, str) or not unit_id:
+            continue
+        node = _exact_json_projection({
+            key: raw_node[key]
+            for key in (
+                "unitId",
+                "path",
+                "kind",
+                "name",
+                "qualifiedName",
+                "startLine",
+                "endLine",
+                "language",
+                "depth",
+            )
+            if raw_node.get(key) not in (None, "", [], {})
+        })
+        if node is not None:
+            node_by_id[unit_id] = node
+
+    source_candidates: List[Dict[str, Any]] = []
+    for raw_window in response.get("sourceWindows") or ():
+        if not isinstance(raw_window, Mapping):
+            continue
+        path = raw_window.get("path")
+        content = raw_window.get("content")
+        if (
+            not isinstance(path, str)
+            or not path
+            or not isinstance(content, str)
+            or not content
+        ):
+            continue
+        source_window = _exact_json_projection({
+            key: raw_window[key]
+            for key in (
+                "evidenceId",
+                "unitId",
+                "path",
+                "startLine",
+                "endLine",
+                "content",
+                "contentSha256",
+                "changedFile",
+                "truncated",
+                "relationEvidenceIds",
+            )
+            if raw_window.get(key) not in (None, "", [], {})
+        })
+        if source_window is None:
+            continue
+        # Capsule admission skips a whole exact window when it does not fit; it
+        # never slices or relabels source while retaining stale integrity data.
+        source_candidates.append(source_window)
+
+    coverage = response.get("coverage")
+    coverage = coverage if isinstance(coverage, Mapping) else {}
+    selected_edges: List[Dict[str, Any]] = []
+    selected_windows: List[Dict[str, Any]] = []
+
+    def build_payload(
+        candidate_edges: Sequence[Dict[str, Any]],
+        candidate_windows: Sequence[Dict[str, Any]] = (),
+    ) -> Dict[str, Any]:
+        referenced_ids = {
+            str(edge.get(key) or "")
+            for edge in candidate_edges
+            for key in ("sourceUnitId", "targetUnitId")
+            if edge.get(key)
+        }
+        candidate_nodes = [
+            node_by_id[unit_id]
+            for unit_id in sorted(referenced_ids)
+            if unit_id in node_by_id
+        ]
+        changed = response.get("changed")
+        changed = changed if isinstance(changed, Mapping) else {}
+        return {
+            "kind": "proposed_tree_relation_briefing",
+            "focusPaths": list(
+                response.get("focusPaths")
+                or changed.get("focusPaths")
+                or ()
+            ),
+            "relations": list(candidate_edges),
+            "nodes": candidate_nodes,
+            "sourceWindows": list(candidate_windows),
+            "coverage": {
+                "state": str(
+                    coverage.get("graphState")
+                    or coverage.get("state")
+                    or "unknown"
+                ),
+                "serverTruncated": bool(
+                    coverage.get("truncated")
+                    or coverage.get("partialReasons")
+                ),
+                "depthReached": max(
+                    (
+                        _bounded_nonnegative_int(
+                            edge.get("hop", edge.get("depth", 0))
+                        )
+                        for edge in candidate_edges
+                    ),
+                    default=0,
+                ),
+                "sourceIncluded": bool(candidate_windows),
+                "availableRelations": len(edges),
+                "shownRelations": len(candidate_edges),
+                "omittedFromBriefing": max(0, len(edges) - len(candidate_edges)),
+                "partialReasons": list(coverage.get("partialReasons") or ()),
+            },
+            "focusedFollowUps": list(
+                response.get("nextOperations")
+                or ("queryCodeGraph", "getImpactRadius", "traverseCodeGraph", "getStructuralUnit")
+            )[:6],
+            "continuations": list(
+                _focused_relation_briefing_continuations(response, evidence)
+            ),
+        }
+
+    prefix = (
+        "RELATION-FIRST PROPOSED-TREE BRIEFING (bounded exact related source "
+        "may be included):\n"
+        "These exact typed relations are already visible; do not repeat the "
+        "orientation call. Use their unit IDs/continuations for a focused graph "
+        "follow-up. Use a complete source window directly and read another source "
+        "range only for a concrete unresolved code question.\n"
+    )
+    relation_character_limit = max_characters
+    if source_candidates:
+        relation_character_limit -= min(4_000, max_characters // 3)
+    # Preserve the backend ranking while guaranteeing that a returned deeper
+    # hop is not hidden behind a relation-dense direct neighborhood.
+    ordered_edges: List[Dict[str, Any]] = []
+    promoted_indexes: set[int] = set()
+    for hop in sorted({
+        _bounded_nonnegative_int(
+            edge.get("hop", edge.get("depth", 0))
+        )
+        for edge in edges
+    }):
+        for index, edge in enumerate(edges):
+            if _bounded_nonnegative_int(
+                edge.get("hop", edge.get("depth", 0))
+            ) == hop:
+                ordered_edges.append(edge)
+                promoted_indexes.add(index)
+                break
+    ordered_edges.extend(
+        edge for index, edge in enumerate(edges) if index not in promoted_indexes
+    )
+    for edge in ordered_edges:
+        candidate = build_payload((*selected_edges, edge))
+        serialized = json.dumps(
+            candidate,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        if len(prefix) + len(serialized) > relation_character_limit:
+            # A canonical evidence ID names the complete relation fact. Skip an
+            # oversized edge as a whole instead of removing attributes or
+            # truncating paths while retaining that ID.
+            continue
+        selected_edges.append(edge)
+
+    if not selected_edges:
+        return "", {}
+    selected_evidence_ids = {
+        str(edge.get("evidenceId") or "") for edge in selected_edges
+    }
+    ordered_source_candidates = sorted(
+        source_candidates,
+        key=lambda window: (
+            not bool(selected_evidence_ids.intersection(
+                str(value)
+                for value in window.get("relationEvidenceIds") or ()
+            )),
+            str(window.get("path") or ""),
+            _bounded_nonnegative_int(window.get("startLine")),
+        ),
+    )
+    for window in ordered_source_candidates:
+        candidate = build_payload(
+            selected_edges,
+            (*selected_windows, window),
+        )
+        serialized = json.dumps(
+            candidate,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        if len(prefix) + len(serialized) > max_characters:
+            continue
+        selected_windows.append(window)
+    payload = build_payload(selected_edges, selected_windows)
+    selected_nodes = list(payload["nodes"])
+    text = prefix + json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    visible_response = {
+        "status": "ready",
+        "snapshot": dict(snapshot),
+        "focusPaths": list(payload["focusPaths"]),
+        "nodes": selected_nodes,
+        "edges": list(selected_edges),
+        "sourceWindows": list(selected_windows),
+        "coverage": dict(payload["coverage"]),
+        "nextOperations": list(payload["focusedFollowUps"]),
+        "continuations": list(payload["continuations"]),
+    }
+    return text, visible_response
 
 
-def _build_duplication_queries_from_diff(
-    diff_snippets: List[str],
-    file_paths: List[str],
-    enrichment_metadata: Optional[Dict[str, Any]] = None,
-) -> List[str]:
+def _safe_stage1_relation_briefing_capsule(
+    response: Optional[Dict[str, Any]],
+    *,
+    max_characters: int = STAGE1_RELATION_BRIEFING_MAX_CHARS,
+) -> tuple[str, Dict[str, Any]]:
+    """Keep malformed optional graph output from aborting the core review."""
+    try:
+        return _stage1_relation_briefing_capsule(
+            response,
+            max_characters=max_characters,
+        )
+    except Exception as exception:
+        logger.warning(
+            "Optional Stage 1 relation briefing was malformed; continuing "
+            "without it: %s",
+            exception,
+        )
+        return "", {}
+
+
+def _bounded_proposed_review_context(
+    response: Optional[Dict[str, Any]],
+    *,
+    max_characters: int,
+) -> tuple[str, Dict[str, Any]]:
+    """Return one whole bounded recovery observation and its visible facts."""
+    if max_characters <= 0 or not isinstance(response, dict):
+        return "", {}
+    if response.get("status") not in {None, "ok", "complete", "ready"}:
+        return "", {}
+    snapshot = response.get("snapshot")
+    if not isinstance(snapshot, dict) or snapshot.get("kind") != "proposed_tree":
+        return "", {}
+
+    capsule, visible_response = _safe_stage1_relation_briefing_capsule(
+        response,
+        max_characters=max_characters,
+    )
+    if capsule:
+        return capsule, visible_response
+
+    # A structural-unit response may contain exact source but no relation. It
+    # is useful in recovery only when the entire JSON observation fits; slicing
+    # it could detach content from its integrity and offset metadata.
+    if not response.get("unit"):
+        return "", {}
+    prefix = (
+        "EXACT PROPOSED-TREE STRUCTURAL UNIT RETRIEVED BEFORE AGENT "
+        "DEGRADATION:\n"
+    )
+    try:
+        serialized = json.dumps(
+            response,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError, OverflowError):
+        return "", {}
+    text = prefix + serialized
+    return (text, {}) if len(text) <= max_characters else ("", {})
+
+
+def format_proposed_review_context(
+    response: Optional[Dict[str, Any]],
+    *,
+    max_characters: int = STAGE1_RELATION_BRIEFING_MAX_CHARS,
+) -> str:
+    """Serialize one bounded, exact proposed-tree recovery observation."""
+    text, _visible_response = _bounded_proposed_review_context(
+        response,
+        max_characters=max_characters,
+    )
+    return text
+
+
+def structural_relation_evidence(
+    response: Optional[Dict[str, Any]],
+) -> Dict[str, tuple[Dict[str, Any], ...]]:
+    """Expose only canonical relation facts under their stable evidence IDs."""
+    if not isinstance(response, dict):
+        return {}
+    context = response.get("context")
+    data = context if isinstance(context, dict) else response
+    evidence = data.get("evidence")
+    relations = (
+        evidence.get("relations")
+        if isinstance(evidence, dict)
+        else None
+    ) or data.get("relations") or data.get("edges") or data.get("results")
+    if not isinstance(relations, list):
+        return {}
+
+    visible: Dict[str, tuple[Dict[str, Any], ...]] = {}
+    for relation in relations:
+        if not isinstance(relation, dict):
+            continue
+        evidence_id = str(
+            relation.get("evidenceId")
+            or relation.get("evidence_id")
+            or ""
+        ).strip()
+        if not _CANONICAL_STRUCTURAL_EVIDENCE_ID.fullmatch(evidence_id):
+            continue
+        if not all(
+            isinstance(relation.get(key), str) and relation.get(key)
+            for key in ("kind", "source", "relation", "target")
+        ):
+            continue
+        origin = relation.get("origin")
+        if not isinstance(origin, dict):
+            continue
+        path = origin.get("path") or relation.get("path")
+        line = origin.get("line") or relation.get("line")
+        if (
+            not isinstance(path, str)
+            or not path
+            or isinstance(line, bool)
+            or not isinstance(line, int)
+            or line < 1
+        ):
+            continue
+        attributes = relation.get("attributes")
+        if attributes is not None and not isinstance(attributes, dict):
+            continue
+        attributes = attributes or {}
+        related_paths = (
+            relation.get("relatedPaths")
+            or relation.get("related_paths")
+            or ()
+        )
+        if (
+            not isinstance(related_paths, (list, tuple))
+            or any(not isinstance(path, str) for path in related_paths)
+        ):
+            continue
+        fact = {
+            "kind": relation["kind"],
+            "source": relation["source"],
+            "relation": relation["relation"],
+            "target": relation["target"],
+            "path": path,
+            "line": line,
+            "attributes": dict(attributes),
+            "related_paths": tuple(
+                path
+                for path in related_paths
+                if path
+            ),
+        }
+        _merge_structural_evidence(visible, {evidence_id: (fact,)})
+    return visible
+
+
+def _decoded_tool_observation(observation: Any) -> Any:
+    """Decode structured MCP observations without extracting IDs from prose."""
+    if isinstance(observation, str):
+        try:
+            return json.loads(observation)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(observation, (Mapping, list, tuple)):
+        return observation
+    model_dump = getattr(observation, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return model_dump(mode="json")
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _proposed_tree_tool_observation(observation: Any) -> Optional[Dict[str, Any]]:
+    """Unwrap only a successful request-bound proposed-tree tool envelope."""
+    decoded = _decoded_tool_observation(observation)
+    if not isinstance(decoded, Mapping):
+        return None
+    payload: Mapping[str, Any] = decoded
+    for wrapper_key in (
+        "structuredContent",
+        "structured_content",
+        "context",
+        "data",
+        "result",
+    ):
+        nested = payload.get(wrapper_key)
+        if isinstance(nested, Mapping):
+            payload = nested
+    status = str(payload.get("status") or "").strip().casefold()
+    snapshot = payload.get("snapshot")
+    if (
+        status not in {"ready", "ok", "complete"}
+        or not isinstance(snapshot, Mapping)
+        or snapshot.get("kind") != "proposed_tree"
+    ):
+        return None
+    return dict(payload)
+
+
+def _structural_relations_in_observation(observation: Any) -> List[Dict[str, Any]]:
+    """Read relation records only from trusted structural response envelopes.
+
+    Source windows and structural units contain repository-controlled text. We
+    deliberately never recurse through arbitrary values or decode nested
+    strings, so JSON source cannot impersonate a graph-store relation record.
     """
-    Build duplication-oriented retrieval queries without semantic hardcoding.
+    decoded = _decoded_tool_observation(observation)
+    relations: List[Dict[str, Any]] = []
 
-    Metadata and diff snippets are passed through as structured/raw evidence.
-    The retrieval layer and LLM decide whether the content indicates duplicate
-    behavior; Python does not infer classes/functions/events/tables here.
+    def add_relation(value: Any) -> None:
+        if not isinstance(value, Mapping):
+            return
+        evidence_id = str(
+            value.get("evidenceId") or value.get("evidence_id") or ""
+        ).strip()
+        if (
+            _CANONICAL_STRUCTURAL_EVIDENCE_ID.fullmatch(evidence_id)
+            and all(key in value for key in ("kind", "source", "relation", "target"))
+        ):
+            relations.append(dict(value))
+
+    def visit_envelope(value: Any) -> None:
+        if not isinstance(value, Mapping):
+            if isinstance(value, (list, tuple)):
+                for candidate in value:
+                    add_relation(candidate)
+            return
+        add_relation(value)
+        for key in ("relations", "edges", "results"):
+            collection = value.get(key)
+            if isinstance(collection, (list, tuple)):
+                for candidate in collection:
+                    add_relation(candidate)
+        for key in (
+            "structuredContent",
+            "structured_content",
+            "context",
+            "data",
+            "result",
+            "evidence",
+        ):
+            nested = value.get(key)
+            if isinstance(nested, Mapping):
+                visit_envelope(nested)
+
+    visit_envelope(decoded)
+    return relations
+
+
+def structural_tool_observation_evidence(
+    tool_name: str,
+    observation: Any,
+) -> Dict[str, tuple[Dict[str, Any], ...]]:
+    """Return canonical relation evidence exposed by a structural MCP call.
+
+    VCS reads and arbitrary identifier-shaped fields are deliberately excluded:
+    only observations from the request-bound structural tools are inspected, and
+    only the graph store's ``relation:<sha256>`` identity is accepted.
     """
-    queries = []
-    seen = set()
+    if tool_name not in STAGE1_STRUCTURAL_OBSERVATION_TOOL_NAMES:
+        return {}
+    payload = _proposed_tree_tool_observation(observation)
+    if payload is None:
+        return {}
+    relations = _structural_relations_in_observation(payload)
+    if not relations:
+        return {}
+    return structural_relation_evidence({"relations": relations})
 
-    def _add(q: str):
-        q = q.strip()
-        if q and len(q) > 10 and q not in seen:
-            seen.add(q)
-            queries.append(q)
 
-    if enrichment_metadata:
-        for fp, meta in enrichment_metadata.items():
-            payload = {"path": fp, "metadata": meta}
-            _add("duplicate search structured metadata:\n" + json.dumps(
-                payload,
+def _merge_structural_evidence(
+    target: Dict[str, tuple[Dict[str, Any], ...]],
+    incoming: Dict[str, tuple[Dict[str, Any], ...]],
+) -> None:
+    """Merge bounded relation facts without depending on batch completion order."""
+    for evidence_id, facts in incoming.items():
+        canonical: Dict[str, Dict[str, Any]] = {}
+        for fact in (*target.get(evidence_id, ()), *facts):
+            key = json.dumps(
+                fact,
                 ensure_ascii=False,
                 sort_keys=True,
+                separators=(",", ":"),
                 default=str,
-            ))
-
-    for snippet in diff_snippets or []:
-        _add("duplicate search diff evidence:\n" + snippet)
-
-    return list(queries)[:10]
+            )
+            canonical[key] = fact
+        target[evidence_id] = tuple(canonical[key] for key in sorted(canonical))
 
 
-def _scope_deterministic_to_diff(
-    related_defs: Dict[str, List[Dict]],
-    batch_diff_snippets: List[str],
-    batch_raw_diffs: Optional[List[str]] = None,
-    max_per_def: int = 2,
-    max_file_level: int = 2,
-) -> List[Dict]:
-    """
-    Flatten deterministic definition chunks without semantic token filtering.
+def _record_structural_retrieval_state(
+    rag_state: Optional[Stage1RagState],
+    response: Optional[Dict[str, Any]],
+) -> None:
+    if rag_state is None:
+        return
+    state = _structural_retrieval_state(response)
+    if state not in rag_state.deterministic_retrieval_states:
+        rag_state.deterministic_retrieval_states.append(state)
 
-    Deterministic RAG has already selected related definitions. This function
-    only normalizes/caps provider output; it does not decide relevance from
-    hardcoded keywords, filename labels, or regex-derived token matches.
 
-    Returns list of chunk dicts with added keys:
-        _def_name: str — the definition name this chunk belongs to
-        _diff_relevant: bool — compatibility flag, always True here
-    """
-    if not related_defs:
-        return []
+def _structural_retrieval_state(
+    response: Optional[Dict[str, Any]],
+) -> str:
+    """Return truthful graph coverage for one structural tool observation."""
+    if not isinstance(response, dict):
+        return "unavailable"
 
-    scoped = []
+    top_status = str(response.get("status") or "").strip().casefold()
+    if top_status in {"error", "failed"} or response.get("error"):
+        return "unavailable"
+    if (
+        top_status in {"unavailable", "disabled"}
+        or response.get("unavailable") is True
+    ):
+        return "unavailable"
 
-    for def_name, def_chunks in related_defs.items():
-        for chunk in def_chunks[:max_per_def]:
-            annotated = dict(chunk)
-            annotated["_def_name"] = def_name
-            annotated["_diff_relevant"] = True
-            scoped.append(annotated)
+    context = response.get("context")
+    data = context if isinstance(context, dict) else response
+    nested_status = str(data.get("status") or "").strip().casefold()
+    if nested_status in {"error", "failed"} or data.get("error"):
+        return "unavailable"
+    if (
+        nested_status in {"unavailable", "disabled"}
+        or data.get("unavailable") is True
+    ):
+        return "unavailable"
 
-    logger.info(
-        "Deterministic RAG scope: normalized %d chunk(s) from %d definition(s) without keyword filtering",
-        len(scoped),
-        len(related_defs),
+    coverage = data.get("coverage")
+    if isinstance(coverage, dict):
+        coverage_state = str(
+            coverage.get("graphState") or coverage.get("state") or ""
+        ).strip().casefold()
+        if coverage_state == "complete_for_query":
+            return "complete"
+        if coverage_state:
+            return coverage_state
+
+    successful_status = nested_status or top_status
+    if successful_status in {"ok", "complete", "ready"}:
+        return "complete"
+    if successful_status:
+        return successful_status
+    return "unavailable"
+
+
+def _tool_event_name(event: Any) -> str:
+    action = getattr(event, "action", None)
+    value = (
+        action.get("tool", "")
+        if isinstance(action, Mapping)
+        else getattr(action, "tool", "")
     )
+    return str(value or "unknown")
 
-    return scoped
+
+def _consume_stage1_agent_tool_events(
+    events: Sequence[Any],
+    *,
+    visible_evidence_by_id: Optional[
+        Dict[str, tuple[Dict[str, Any], ...]]
+    ],
+    rag_state: Optional[Stage1RagState],
+    context_holder: Optional[Dict[str, Any]],
+) -> Counter:
+    """Account completed tool results, including a transcript before failure."""
+    tool_counts: Counter = Counter()
+    observed_evidence: Dict[str, tuple[Dict[str, Any], ...]] = {}
+    structural_observations: List[Dict[str, Any]] = []
+    for event in events:
+        normalized_tool_name = _tool_event_name(event)
+        tool_counts[normalized_tool_name] += 1
+        observation = getattr(event, "observation", None)
+        _merge_structural_evidence(
+            observed_evidence,
+            structural_tool_observation_evidence(
+                normalized_tool_name,
+                observation,
+            ),
+        )
+        if normalized_tool_name in STAGE1_STRUCTURAL_OBSERVATION_TOOL_NAMES:
+            decoded = _decoded_tool_observation(observation)
+            if isinstance(decoded, Mapping):
+                payload: Mapping[str, Any] = decoded
+                for wrapper_key in (
+                    "structuredContent",
+                    "structured_content",
+                    "context",
+                    "data",
+                    "result",
+                ):
+                    nested = payload.get(wrapper_key)
+                    if isinstance(nested, Mapping):
+                        payload = nested
+                structural_observations.append(dict(payload))
+                snapshot = payload.get("snapshot")
+                if (
+                    context_holder is not None
+                    and isinstance(snapshot, Mapping)
+                    and snapshot.get("kind") == "proposed_tree"
+                ):
+                    context_holder["response"] = dict(payload)
+                    responses = context_holder.setdefault("responses", [])
+                    if isinstance(responses, list) and len(responses) < 8:
+                        responses.append(dict(payload))
+
+    if visible_evidence_by_id is not None:
+        _merge_structural_evidence(
+            visible_evidence_by_id,
+            observed_evidence,
+        )
+    if rag_state is not None:
+        _merge_structural_evidence(
+            rag_state.exact_evidence_by_id,
+            observed_evidence,
+        )
+        for observation in structural_observations:
+            _record_structural_retrieval_state(rag_state, observation)
+    return tool_counts
 
 
 # ── Batch Review ──────────────────────────────────────────────
@@ -2224,20 +2519,22 @@ async def execute_stage_1_file_reviews(
     request: ReviewRequestDto,
     plan: ReviewPlan,
     rag_client,
-    rag_context: Optional[Dict[str, Any]] = None,
     processed_diff: Optional[ProcessedDiff] = None,
     is_incremental: bool = False,
     max_parallel: int = 5,
     event_callback: Optional[Callable[[Dict], None]] = None,
-    pr_indexed: bool = False,
-    llm_reranker=None,
-    use_llm_rerank: bool = True,
     fallback_llm=None,
     rag_state: Optional[Stage1RagState] = None,
     review_unit_state: Optional[Stage1ReviewUnitState] = None,
     candidate_ledger: Optional[CandidateEvidenceLedger] = None,
+    inference_profile: Optional[ReviewInferenceProfile] = None,
+    agent_service: Optional["AgentExecutionService"] = None,
 ) -> List[CodeReviewIssue]:
     prepared_context = _build_stage_1_prepared_context(request, processed_diff, is_incremental)
+    inference_profile = inference_profile or build_review_inference_profile(
+        request,
+        processed_diff,
+    )
     rag_state = rag_state or Stage1RagState()
     review_unit_state = review_unit_state or Stage1ReviewUnitState()
     batches = await create_smart_batches_wrapper(
@@ -2246,21 +2543,88 @@ async def execute_stage_1_file_reviews(
         request=request,
         rag_client=rag_client,
         max_files_per_batch=STAGE1_MAX_FILES_PER_BATCH,
+        prepared_context=prepared_context,
+        is_incremental=is_incremental,
     )
-    batches = _expand_oversized_diff_batches(batches, prepared_context)
-    review_unit_state.register_batches(batches)
-    if prepared_context.diff_source is not None:
-        expected_hunk_ids = tuple(
-            hunk.id
-            for hunk in prepared_context.diff_source.hunk_manifest()
-            if hunk.disposition is HunkDisposition.REVIEWABLE
-        )
-        review_unit_state.assert_hunk_ownership(expected_hunk_ids)
+    stage1_token_budget = _stage1_packing_token_limit(request)
+    batches = _repack_stage1_batches_by_rendered_input(
+        batches,
+        request,
+        prepared_context,
+        is_incremental,
+        stage1_token_budget,
+    )
+    configured_stage1_invocation_cap = inference_profile.invocation_cap(
+        "stage_1_total"
+    )
+    # Every graph component batch owns changed-file/hunk coverage and must run
+    # at least once. The profile cap limits supplemental oversized-evidence
+    # passes; it must never discard a core file-review prompt.
+    stage1_invocation_cap = max(
+        configured_stage1_invocation_cap,
+        len(batches),
+    )
+    if stage1_invocation_cap > configured_stage1_invocation_cap:
         logger.info(
-            "Stage 1 review-unit ownership preflight complete: %d reviewable "
-            "hunk(s) assigned before model execution",
-            len(expected_hunk_ids),
+            "Stage 1 raised the invocation allowance from %d to %d so every "
+            "core dependency batch is reviewed",
+            configured_stage1_invocation_cap,
+            stage1_invocation_cap,
         )
+    batches = _expand_oversized_stage1_evidence_batches(
+        batches,
+        request,
+        prepared_context,
+        is_incremental,
+        stage1_token_budget,
+        max_units_per_item=inference_profile.invocation_cap(
+            "stage_1_per_unit"
+        ),
+        max_total_batches=stage1_invocation_cap,
+    )
+    admitted_stage1_invocations = _allocate_stage1_invocation_quotas(
+        batches,
+        stage1_invocation_cap,
+        inference_profile.invocation_cap("stage_1_per_unit"),
+    )
+    if (
+        agent_service is not None
+        and getattr(request, "mcpLocalOnly", False) is True
+    ):
+        stage1_agent_call_limit = STAGE1_AGENT_MAX_STEPS + 2
+        logger.info(
+            "Stage 1 provider-call ceiling: semantic_invocations=%d, "
+            "repository_agent_invocations<=%d, agent_model_calls<=%d, "
+            "direct_recovery_calls=0, total_calls<=%d",
+            admitted_stage1_invocations,
+            admitted_stage1_invocations * 2,
+            admitted_stage1_invocations * stage1_agent_call_limit * 2,
+            admitted_stage1_invocations * stage1_agent_call_limit * 2,
+        )
+    elif agent_service is not None:
+        stage1_agent_call_limit = STAGE1_AGENT_MAX_STEPS + 2
+        logger.info(
+            "Stage 1 provider-call ceiling: semantic_invocations=%d, "
+            "agent_model_calls<=%d, direct_recovery_calls<=%d, "
+            "total_calls<=%d",
+            admitted_stage1_invocations,
+            admitted_stage1_invocations * stage1_agent_call_limit,
+            admitted_stage1_invocations * 2,
+            admitted_stage1_invocations * (
+                stage1_agent_call_limit + 2
+            ),
+        )
+    else:
+        logger.info(
+            "Stage 1 provider-call ceiling: semantic_invocations=%d, "
+            "primary_calls=%d, direct_output_recovery_calls<=%d, "
+            "total_calls<=%d",
+            admitted_stage1_invocations,
+            admitted_stage1_invocations,
+            admitted_stage1_invocations,
+            admitted_stage1_invocations * 2,
+        )
+    review_unit_state.register_batches(batches)
 
     total_review_units = sum(len(batch) for batch in batches)
     unique_file_paths = {
@@ -2305,12 +2669,12 @@ async def execute_stage_1_file_reviews(
             logger.debug(f"Batch {batch_idx}: {batch_paths} (cross-file relationships: {has_rels})")
             result = await _review_batch_with_timing(
                 batch_idx, llm, request, batch, rag_client, prepared_context,
-                is_incremental, rag_context, pr_indexed,
-                llm_reranker=llm_reranker,
-                use_llm_rerank=use_llm_rerank,
+                is_incremental,
                 fallback_llm=fallback_llm,
                 rag_state=rag_state,
                 candidate_ledger=candidate_ledger,
+                agent_service=agent_service,
+                event_callback=event_callback,
             )
             return batch_idx, result, unit_ids
 
@@ -2319,32 +2683,45 @@ async def execute_stage_1_file_reviews(
         for batch_idx, batch in enumerate(batches, start=1)
     ]
 
-    for completed_task in asyncio.as_completed(tasks):
-        try:
-            batch_num, res, unit_ids = await completed_task
-            review_unit_state.mark_completed(unit_ids)
-            batch_results[batch_num] = res or []
-            if res:
-                logger.info(f"Batch {batch_num} completed: {len(res)} issues found")
-            else:
-                logger.info(f"Batch {batch_num} completed: no issues found")
-        except Exception as exc:
-            logger.debug("Stage 1 batch failed; cancelling sibling batches: %s", exc)
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise RuntimeError(
-                "Stage 1 review is incomplete because at least one batch failed"
-            ) from exc
-        finally:
-            completed_batches += 1
-            progress = 10 + int((completed_batches / len(batches)) * 50)
-            emit_progress(
-                event_callback,
-                progress,
-                f"Stage 1: Reviewed {completed_batches}/{len(batches)} batches",
-            )
+    try:
+        for completed_task in asyncio.as_completed(tasks):
+            try:
+                batch_num, res, unit_ids = await completed_task
+                review_unit_state.mark_completed(unit_ids)
+                batch_results[batch_num] = res or []
+                if res:
+                    logger.info(
+                        f"Batch {batch_num} completed: {len(res)} issues found"
+                    )
+                else:
+                    logger.info(f"Batch {batch_num} completed: no issues found")
+            except Exception as exc:
+                logger.debug(
+                    "Stage 1 batch failed; cancelling sibling batches: %s",
+                    exc,
+                )
+                raise RuntimeError(
+                    "Stage 1 review is incomplete because at least one batch "
+                    "failed"
+                ) from exc
+            finally:
+                completed_batches += 1
+                progress = 10 + int((completed_batches / len(batches)) * 50)
+                emit_progress(
+                    event_callback,
+                    progress,
+                    f"Stage 1: Reviewed {completed_batches}/{len(batches)} "
+                    "batches",
+                )
+    finally:
+        # A streaming disconnect cancels the owning review coroutine. Join all
+        # prompt agents before ReviewService closes their request-owned MCP
+        # sessions, otherwise an orphaned batch can write to a closed stdio
+        # transport while it is still unwinding.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     review_unit_state.assert_complete()
     for batch_idx in range(1, len(batches) + 1):
@@ -2366,35 +2743,52 @@ async def _review_batch_with_timing(
     rag_client,
     prepared_context: Optional[Stage1PreparedContext],
     is_incremental: bool,
-    fallback_rag_context: Optional[Any],
-    pr_indexed: bool,
-    llm_reranker=None,
-    use_llm_rerank: bool = True,
     fallback_llm=None,
     rag_state: Optional[Stage1RagState] = None,
     candidate_ledger: Optional[CandidateEvidenceLedger] = None,
+    agent_service: Optional["AgentExecutionService"] = None,
+    event_callback: Optional[Callable[[Dict], None]] = None,
 ) -> List[CodeReviewIssue]:
-    start_time = time.time()
+    start_time = time.monotonic()
     batch_paths = [item["file"].path for item in batch]
+    telemetry = Stage1AgentTelemetryRecorder(
+        batch_number=batch_idx,
+        batch_paths=tuple(batch_paths),
+        review_unit_ids=tuple(
+            unit_id
+            for item in batch
+            if isinstance(
+                unit_id := item.get("_review_unit_id"),
+                str,
+            ) and unit_id
+        ),
+        agent_requested=bool(agent_service is not None and request.useMcpTools),
+        source_revision=request.currentCommitHash or request.commitHash,
+    )
     logger.info(f"[Batch {batch_idx}] STARTED - files: {batch_paths}")
 
     try:
         result = await review_file_batch(
             llm, request, batch, rag_client, prepared_context, is_incremental,
-            fallback_rag_context=fallback_rag_context, pr_indexed=pr_indexed,
-            llm_reranker=llm_reranker,
-            use_llm_rerank=use_llm_rerank,
             fallback_llm=fallback_llm,
             rag_state=rag_state,
             candidate_ledger=candidate_ledger,
+            agent_service=agent_service,
+            event_callback=event_callback,
+            agent_telemetry=telemetry,
         )
-        elapsed = time.time() - start_time
+        telemetry.record_issues(result)
+        telemetry.finish(status="completed")
+        elapsed = time.monotonic() - start_time
         logger.info(f"[Batch {batch_idx}] FINISHED in {elapsed:.2f}s - {len(result)} issues")
         return result
-    except Exception as e:
-        elapsed = time.time() - start_time
+    except BaseException as e:
+        telemetry.finish(status="failed", error=e)
+        elapsed = time.monotonic() - start_time
         logger.debug(f"[Batch {batch_idx}] FAILED after {elapsed:.2f}s: {e}")
         raise
+    finally:
+        telemetry.emit(event_callback)
 
 
 async def review_file_batch(
@@ -2404,448 +2798,1116 @@ async def review_file_batch(
     rag_client,
     prepared_context: Optional[Stage1PreparedContext] = None,
     is_incremental: bool = False,
-    fallback_rag_context: Optional[Any] = None,
-    pr_indexed: bool = False,
-    llm_reranker=None,
-    use_llm_rerank: bool = True,
     fallback_llm=None,
     rag_state: Optional[Stage1RagState] = None,
     candidate_ledger: Optional[CandidateEvidenceLedger] = None,
+    agent_service: Optional["AgentExecutionService"] = None,
+    event_callback: Optional[Callable[[Dict], None]] = None,
+    agent_telemetry: Optional[Stage1AgentTelemetryRecorder] = None,
 ) -> List[CodeReviewIssue]:
-    batch_files_data = []
-    batch_file_paths = []
-    batch_diff_snippets = []
-    batch_raw_diffs = []
-    complete_current_file_paths = set()
-
     if prepared_context is not None and not isinstance(prepared_context, Stage1PreparedContext):
         # Backwards compatibility for older direct callers/tests that pass
         # ProcessedDiff as the fifth positional argument.
         prepared_context = _build_stage_1_prepared_context(request, prepared_context, is_incremental)
     elif prepared_context is None:
         prepared_context = _build_stage_1_prepared_context(request, None, is_incremental)
-
-    available_current_source_count = sum(
-        bool(_lookup_by_path(
-            prepared_context.file_content_by_path,
-            item["file"].path,
-        ))
-        for item in batch_items
+    material = _prepare_stage1_prompt_material(
+        request,
+        batch_items,
+        prepared_context,
+        is_incremental,
     )
-    current_source_per_file_budget = min(
-        STAGE1_MAX_CURRENT_FILE_CHARS,
-        max(
-            1_000,
-            STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET
-            // max(1, available_current_source_count),
-        ),
+    batch_file_paths = material.batch_file_paths
+    requested_agentic_mode = (
+        agent_service is not None and bool(request.useMcpTools)
     )
-
-    for item in batch_items:
-        file_info = item["file"]
-        batch_file_paths.append(file_info.path)
-        current_file_content = _lookup_by_path(
-            prepared_context.file_content_by_path,
-            file_info.path,
-        )
-
-        diff_file = _find_diff_file_for_path(
-            prepared_context,
-            file_info.path,
-            use_full_diff=_item_requests_full_diff(item),
-        )
-        file_diff = item.get("_diff_override") or ""
-        if not file_diff and diff_file:
-            file_diff = diff_file.content
-        if file_diff:
-            chunk_total = int(item.get("_diff_chunk_total") or 0)
-            if chunk_total > 1:
-                chunk_index = int(item.get("_diff_chunk_index") or 1)
-                file_diff = (
-                    f"[Large diff segment {chunk_index}/{chunk_total} for {file_info.path}. "
-                    "All segments are reviewed independently and merged after Stage 1.]\n"
-                    f"{file_diff}"
-            )
-            batch_diff_snippets.extend(extract_diff_snippets(file_diff))
-            batch_raw_diffs.append(file_diff)
-
-        change_type = (
-            diff_file.change_type
-            if diff_file is not None
-            else DiffChangeType.MODIFIED
-        )
-        complete_added_source_in_diff = (
-            change_type is DiffChangeType.ADDED
-            and int(item.get("_diff_chunk_total") or 0) <= 1
-            and _diff_contains_complete_added_source(
-                current_file_content,
-                file_diff,
-            )
-        )
-        if complete_added_source_in_diff:
-            current_code = _COMPLETE_ADDED_SOURCE_MARKER
-            complete_current_file_paths.add(file_info.path)
-        else:
-            current_code = _bounded_current_file_context(
-                current_file_content,
-                file_diff,
-                max_chars=current_source_per_file_budget,
-            )
-            if (
-                current_file_content
-                and len(current_file_content) <= current_source_per_file_budget
-            ):
-                complete_current_file_paths.add(file_info.path)
-
-        batch_files_data.append({
-            "path": file_info.path,
-            "type": change_type.value.upper(),
-            "focus_areas": file_info.focus_areas,
-            "current_code": current_code,
-            "diff": file_diff or "(Diff unavailable)",
-            "is_incremental": is_incremental,
+    available_agent_tools = (
+        _available_stage1_agent_tools(agent_service)
+        if requested_agentic_mode
+        else frozenset()
+    )
+    repository_agent_tools = STAGE1_VCS_TOOL_NAMES.intersection(
+        available_agent_tools
+    )
+    review_overlay_path = getattr(request, "localReviewOverlayPath", None)
+    review_file_tool_available = bool(
+        STAGE1_REVIEW_FILE_TOOL_NAME in repository_agent_tools
+        and isinstance(review_overlay_path, str)
+        and review_overlay_path.strip()
+    )
+    if not review_file_tool_available:
+        repository_agent_tools = repository_agent_tools.difference({
+            STAGE1_REVIEW_FILE_TOOL_NAME,
         })
-
-    project_rules = format_project_rules(request.projectRules, batch_file_paths)
-
-    # ── Extract neutral metadata identifiers for targeted RAG queries ──
-    # The parser metadata is passed to the LLM in full below. For retrieval, use
-    # raw string values from the same payload without field-specific semantics.
-    enrichment_identifiers: Optional[List[str]] = None
-    batch_metadata = _iter_batch_enrichment_metadata(request, batch_file_paths, prepared_context)
-    if batch_metadata:
-        enrichment_identifiers = _extract_metadata_identifiers(batch_metadata)
-        if enrichment_identifiers:
-            logger.info(
-                f"Metadata identifiers for batch retrieval: {len(enrichment_identifiers)}"
-            )
-
-    rag_context_text = ""
-    batch_rag_context = None
-    batch_visible_evidence_by_id: Dict[
+    else:
+        # One request-bound read tool covers both proposed and unchanged paths.
+        # Removing the target-only alternative prevents a model from silently
+        # selecting stale source for a changed path discovered through the graph.
+        repository_agent_tools = repository_agent_tools.difference({
+            STAGE1_BRANCH_FILE_TOOL_NAME,
+        })
+    agentic_mode = bool(requested_agentic_mode and repository_agent_tools)
+    available_structural_tools = STAGE1_STRUCTURAL_TOOL_NAMES.intersection(
+        available_agent_tools
+    )
+    structural_agent_mode = bool(
+        agentic_mode
+        and available_structural_tools
+        and _has_exact_proposed_tree_binding(request)
+    )
+    local_only_agent_required = getattr(request, "mcpLocalOnly", False) is True
+    if local_only_agent_required and (
+        not requested_agentic_mode
+        or not review_file_tool_available
+        or not agentic_mode
+    ):
+        raise RuntimeError(
+            "Local-only Stage 1 requires getReviewFileContent with its exact "
+            "request binding; "
+            "direct review fallback is disabled"
+        )
+    agent_tool_names = frozenset(
+        repository_agent_tools
+        | (available_structural_tools if structural_agent_mode else frozenset())
+    )
+    token_budget = _stage1_batch_token_limit(request)
+    # Proposed-tree mutation is completed once before MCP startup. Stage 1 does
+    # not issue a hidden per-batch graph request: eligible batches make one
+    # observable required model tool call against the sealed read-only receipt.
+    preloaded_structural_context = ""
+    preloaded_structural_evidence: Dict[
         str, tuple[Dict[str, Any], ...]
     ] = {}
+    relation_briefing_response: Optional[Dict[str, Any]] = None
+    visible_briefing_response: Dict[str, Any] = {}
+    relation_briefing_eligible = False
+    relation_briefing_attempted = False
 
-    exact_context_bound = (
-        _is_exact_revision_bound(request, pr_indexed)
-        or _has_exact_base_binding(request)
-    )
-    if rag_client or exact_context_bound:
-        batch_rag_context = await fetch_batch_rag_context(
-            rag_client, request, batch_file_paths, batch_diff_snippets, pr_indexed,
-            llm_reranker=llm_reranker,
-            use_llm_rerank=use_llm_rerank,
-            batch_priority=batch_items[0]["priority"] if batch_items else "MEDIUM",
-            enrichment_identifiers=enrichment_identifiers,
-            batch_raw_diffs=batch_raw_diffs,
-            rag_state=rag_state,
-        )
-
-    if _rag_context_has_chunks(batch_rag_context):
-        logger.info(f"Using per-batch RAG context for: {batch_file_paths}")
-        rag_context_text = format_rag_context(
-            batch_rag_context,
-            set(batch_file_paths),
-            pr_changed_files=request.changedFiles,
-            deleted_files=request.deletedFiles,
-            current_file_complete_paths=complete_current_file_paths,
-            visible_evidence_by_id=batch_visible_evidence_by_id,
-        )
-    else:
-        fallback_context_allowed = not (
-            exact_context_bound
-            or (rag_state is not None and rag_state.context_disabled)
-        )
-        if fallback_context_allowed:
-            resolved_fallback_rag_context = await _resolve_fallback_rag_context(
-                fallback_rag_context
-            )
-            if resolved_fallback_rag_context:
-                scoped_fallback_rag_context = _scope_fallback_rag_context_to_batch(
-                    resolved_fallback_rag_context,
-                    batch_file_paths,
-                )
-            else:
-                scoped_fallback_rag_context = None
-        else:
-            # Global fallback is alias/branch scoped and cannot satisfy an
-            # immutable generation receipt. It must not be awaited after an
-            # exact-context failure, because doing so could inject stale code.
-            scoped_fallback_rag_context = None
-
-        if scoped_fallback_rag_context:
-            scoped_context = _unwrap_rag_context(scoped_fallback_rag_context)
-            scoped_chunks = scoped_context.get("relevant_code") or scoped_context.get("chunks") or []
-            logger.info(
-                f"Using batch-scoped fallback RAG context for batch: {batch_file_paths} "
-                f"({len(scoped_chunks)} chunks)"
-            )
-            rag_context_text = format_rag_context(
-                scoped_fallback_rag_context,
-                set(batch_file_paths),
-                pr_changed_files=request.changedFiles,
-                deleted_files=request.deletedFiles,
-                current_file_complete_paths=complete_current_file_paths,
-                visible_evidence_by_id=batch_visible_evidence_by_id,
-            )
-
-    if rag_state and batch_visible_evidence_by_id:
-        for evidence_id in sorted(batch_visible_evidence_by_id):
-            combined = list(rag_state.exact_evidence_by_id.get(evidence_id, ()))
-            for fact in batch_visible_evidence_by_id[evidence_id]:
-                if fact not in combined:
-                    combined.append(fact)
-            rag_state.exact_evidence_by_id[evidence_id] = tuple(sorted(
-                combined,
-                key=lambda fact: json.dumps(
-                    fact,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    default=str,
-                ),
-            ))
-
-    logger.info(f"RAG context for batch: {len(rag_context_text)} chars")
-
-    previous_issues_for_batch = ""
-    has_previous_issues = request.previousCodeAnalysisIssues and len(request.previousCodeAnalysisIssues) > 0
-    if has_previous_issues:
-        relevant_prev_issues = [
-            issue for issue in request.previousCodeAnalysisIssues
-            if issue_matches_files(issue, batch_file_paths)
-        ]
-        if relevant_prev_issues:
-            previous_issues_for_batch = format_previous_issues_for_batch(relevant_prev_issues)
-
-    file_metadata_text = _format_batch_metadata_json(batch_metadata)
-    if not file_metadata_text:
+    if not material.file_metadata_text:
         logger.debug(f"No structured parser metadata for batch {batch_file_paths}")
+    invocations = _build_stage1_invocations(
+        material,
+        use_mcp_tools=agentic_mode,
+        structural_tools_available=structural_agent_mode,
+        review_file_tool_available=review_file_tool_available,
+        preloaded_structural_context=preloaded_structural_context,
+        preloaded_structural_evidence=preloaded_structural_evidence,
+    )
+    prompt = invocations[0][0]
+    estimated_tokens = _estimated_prompt_tokens(prompt)
 
-    plugin_context_text = review_plugin_context(
-        request,
-        batch_file_paths,
-        visible_evidence_by_id=batch_visible_evidence_by_id,
-    )
-    prompt = PromptBuilder.build_stage_1_batch_prompt(
-        files=batch_files_data,
-        priority=batch_items[0]["priority"] if batch_items else "MEDIUM",
-        project_rules=project_rules,
-        file_outlines=file_metadata_text,
-        rag_context=rag_context_text,
-        is_incremental=is_incremental,
-        previous_issues=previous_issues_for_batch,
-        all_pr_files=request.changedFiles,
-        deleted_files=request.deletedFiles,
-        task_context=prepared_context.task_context,
-        plugin_context=plugin_context_text,
-    )
-    logger.info(
-        "Stage 1 prompt assembled: total=%d chars, metadata=%d, rag=%d, "
-        "plugin=%d, files=%d, current_source_per_file_budget=%d",
-        len(prompt),
-        len(file_metadata_text),
-        len(rag_context_text),
-        len(plugin_context_text),
-        len(batch_file_paths),
-        current_source_per_file_budget,
-    )
-    record_prompt_diagnostic({
-        "stage": "stage_1",
-        "batchPaths": sorted(batch_file_paths),
-        "fileCount": len(batch_file_paths),
-        "totalPromptChars": len(prompt),
-        "currentSourceChars": sum(
-            len(str(item.get("current_code") or ""))
-            for item in batch_files_data
-        ),
-        "diffChars": sum(
-            len(str(item.get("diff") or ""))
-            for item in batch_files_data
-        ),
-        "metadataChars": len(file_metadata_text),
-        "ragChars": len(rag_context_text),
-        "pluginChars": len(plugin_context_text),
-        "projectRulesChars": len(project_rules),
-        "taskContextChars": len(prepared_context.task_context),
-        "previousIssuesChars": len(previous_issues_for_batch),
-        "currentSourcePerFileBudget": current_source_per_file_budget,
-    })
-
-    issues = await _invoke_stage_1_batch_llm(llm, prompt, batch_file_paths, label="capped")
-    if issues is not None:
-        _register_stage_1_candidates(
-            issues,
-            batch_items,
-            candidate_ledger,
-            prompt,
-            batch_visible_evidence_by_id,
+    if rag_state is not None:
+        _merge_structural_evidence(
+            rag_state.exact_evidence_by_id,
+            preloaded_structural_evidence,
         )
-        return issues
-
-    if fallback_llm is not None and fallback_llm is not llm:
+    if agent_telemetry is not None:
+        agent_telemetry.record_generation_preparation(
+            status=getattr(request, "ragReviewGenerationStatus", None),
+            collection_target=getattr(
+                request,
+                "ragReviewCollectionTarget",
+                None,
+            ),
+            generation_manifest_sha256=getattr(
+                request,
+                "ragReviewGenerationManifestSha256",
+                None,
+            ),
+            error=getattr(request, "ragReviewGenerationError", None),
+        )
+        agent_telemetry.record_relation_briefing(
+            eligible=relation_briefing_eligible,
+            attempted=relation_briefing_attempted,
+            response=relation_briefing_response,
+            visible_response=visible_briefing_response,
+            prompt_context=preloaded_structural_context,
+            visible_evidence_ids=tuple(preloaded_structural_evidence),
+        )
+    if estimated_tokens > token_budget and len(batch_items) > 1:
+        logger.warning(
+            "Stage 1 final multi-file prompt exceeded the packing target; "
+            "retaining the admitted core batch: paths=%s "
+            "estimated_tokens=%d target_tokens=%d",
+            batch_file_paths,
+            estimated_tokens,
+            token_budget,
+        )
+    all_issues: List[CodeReviewIssue] = []
+    for invocation_index, (
+        invocation_prompt,
+        invocation_structural_context,
+        invocation_plugin_context,
+        invocation_visible_evidence,
+    ) in enumerate(invocations, start=1):
+        invocation_tokens = _estimated_prompt_tokens(invocation_prompt)
         logger.info(
-            "Stage 1 batch failed with capped LLM for %s; retrying without output cap",
-            batch_file_paths,
+            "Stage 1 prompt assembled: total=%d chars, estimated_tokens=%d, "
+            "target_tokens=%d, metadata=%d, structural=%d, plugin=%d, "
+            "files=%d",
+            len(invocation_prompt),
+            invocation_tokens,
+            token_budget,
+            len(material.file_metadata_text),
+            len(invocation_structural_context),
+            len(invocation_plugin_context),
+            len(batch_file_paths),
         )
-        issues = await _invoke_stage_1_batch_llm(
-            fallback_llm,
-            prompt,
-            batch_file_paths,
-            label="uncapped retry",
+        record_prompt_diagnostic({
+            "stage": "stage_1",
+            "agentPhase": (
+                "agent" if agentic_mode else "direct"
+            ),
+            "batchPaths": sorted(batch_file_paths),
+            "fileCount": len(batch_file_paths),
+            "totalPromptChars": len(invocation_prompt),
+            "currentSourceChars": sum(
+                len(str(item.get("current_code") or ""))
+                for item in material.batch_files_data
+            ),
+            "currentSourcePerFileBudget": material.current_source_per_file_budget,
+            "diffChars": sum(
+                len(str(item.get("diff") or ""))
+                for item in material.batch_files_data
+            ),
+            "metadataChars": len(material.file_metadata_text),
+            "structuralContextChars": len(invocation_structural_context),
+            "pluginChars": len(invocation_plugin_context),
+            "projectRulesChars": len(material.project_rules),
+            "taskContextChars": len(material.task_context),
+            "previousIssuesChars": len(material.previous_issues_for_batch),
+            "boundaryContextChars": len(material.boundary_context),
+            "estimatedInputTokens": invocation_tokens,
+            "inputPackingTargetTokens": token_budget,
+            "omittedStage1Units": sum(
+                int(item.get("_omitted_stage1_unit_count", 0) or 0)
+                for item in batch_items
+            ),
+            "omittedStage1Hunks": sum(
+                len(item.get("_omitted_hunk_ids", ()) or ())
+                for item in batch_items
+            ),
+        })
+
+        fallback_cache: Dict[
+            tuple[str, ...],
+            _Stage1DirectFallbackPrompt,
+        ] = {}
+        agent_context_holder: Dict[str, Any] = {
+            "response": None,
+            "responses": [],
+        }
+        base_visible_evidence = dict(invocation_visible_evidence)
+        primary_visible_evidence = dict(base_visible_evidence)
+        visible_evidence_by_generation_prompt: Dict[
+            str,
+            Dict[str, tuple[Dict[str, Any], ...]],
+        ] = {
+            invocation_prompt: primary_visible_evidence,
+        }
+
+        def prepare_recovery_material(
+            recovery_paths: Sequence[str],
+        ) -> Stage1PromptMaterial:
+            recovery_path_set = {
+                normalize_repository_path(path)
+                for path in recovery_paths
+            }
+            recovery_batch_items = [
+                item
+                for item in batch_items
+                if normalize_repository_path(
+                    getattr(item.get("file"), "path", "")
+                ) in recovery_path_set
+            ]
+            return (
+                material
+                if len(recovery_batch_items) == len(batch_items)
+                else _prepare_stage1_prompt_material(
+                    request,
+                    recovery_batch_items,
+                    prepared_context,
+                    is_incremental,
+                )
+            )
+
+        async def prepare_direct_fallback_prompt(
+            recovery_paths: Sequence[str],
+        ) -> _Stage1DirectFallbackPrompt:
+            cache_key = tuple(
+                normalize_repository_path(path)
+                for path in recovery_paths
+            )
+            cached = fallback_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            structural_context_parts = (
+                [invocation_structural_context]
+                if invocation_structural_context
+                else []
+            )
+            fallback_visible_evidence = (
+                dict(base_visible_evidence)
+                if invocation_structural_context
+                else {}
+            )
+            raw_responses = agent_context_holder.get("responses")
+            responses = (
+                list(raw_responses)
+                if isinstance(raw_responses, list)
+                else []
+            )
+            latest_response = agent_context_holder.get("response")
+            if isinstance(latest_response, dict) and not responses:
+                responses.append(latest_response)
+            for response in responses:
+                if not isinstance(response, dict):
+                    continue
+                separator_characters = 2 if structural_context_parts else 0
+                remaining_characters = max(
+                    0,
+                    STAGE1_RELATION_BRIEFING_MAX_CHARS
+                    - sum(len(part) for part in structural_context_parts)
+                    - separator_characters * len(structural_context_parts),
+                )
+                observed_context, visible_response = (
+                    _bounded_proposed_review_context(
+                        response,
+                        max_characters=remaining_characters,
+                    )
+                )
+                if (
+                    not observed_context
+                    or observed_context in structural_context_parts
+                ):
+                    continue
+                structural_context_parts.append(observed_context)
+                _merge_structural_evidence(
+                    fallback_visible_evidence,
+                    structural_relation_evidence(visible_response),
+                )
+            structural_context = "\n\n".join(structural_context_parts)
+            recovery_material = prepare_recovery_material(recovery_paths)
+            def render_fallback() -> str:
+                return _render_stage1_prompt(
+                    recovery_material,
+                    structural_context,
+                    visible_evidence_by_id=fallback_visible_evidence,
+                    use_mcp_tools=False,
+                    structural_tools_available=False,
+                    review_file_tool_available=False,
+                )[0]
+
+            fallback_prompt = render_fallback()
+            if (
+                _estimated_prompt_tokens(fallback_prompt) > token_budget
+                and len(structural_context_parts) > 1
+            ):
+                structural_context_parts = (
+                    [invocation_structural_context]
+                    if invocation_structural_context
+                    else []
+                )
+                structural_context = "\n\n".join(structural_context_parts)
+                fallback_visible_evidence = (
+                    dict(base_visible_evidence)
+                    if invocation_structural_context
+                    else {}
+                )
+                fallback_prompt = render_fallback()
+            if (
+                _estimated_prompt_tokens(fallback_prompt) > token_budget
+                and structural_context
+            ):
+                structural_context = ""
+                fallback_visible_evidence = {}
+                fallback_prompt = render_fallback()
+            visible_evidence_by_generation_prompt[fallback_prompt] = dict(
+                fallback_visible_evidence
+            )
+            prepared_fallback = _Stage1DirectFallbackPrompt(
+                prompt=fallback_prompt,
+                structural_context_loaded=bool(structural_context),
+            )
+            fallback_cache[cache_key] = prepared_fallback
+            logger.info(
+                "Stage 1 degraded direct proposed-tree context: paths=%s chars=%d "
+                "available=%s",
+                list(recovery_paths),
+                len(structural_context),
+                bool(structural_context),
+            )
+            return prepared_fallback
+
+        direct_invocation_prompt = (
+            None
+            if agentic_mode
+            else _render_stage1_prompt(
+                material,
+                invocation_structural_context,
+                visible_evidence_by_id=base_visible_evidence,
+                use_mcp_tools=False,
+                structural_tools_available=False,
+                review_file_tool_available=False,
+            )[0]
         )
-        if issues is not None:
+        if direct_invocation_prompt is not None:
+            visible_evidence_by_generation_prompt[
+                direct_invocation_prompt
+            ] = dict(base_visible_evidence)
+        invocation_trace = {"generation_prompt": invocation_prompt}
+        retry_llm = (
+            fallback_llm
+            if fallback_llm is not None and fallback_llm is not llm
+            else llm
+        )
+        review_accumulator = _Stage1BatchReviewAccumulator.for_paths(
+            batch_file_paths
+        )
+
+        primary_agent_error: Optional[Exception] = None
+        try:
+            issues = await _invoke_stage_1_batch_llm(
+                llm,
+                invocation_prompt,
+                batch_file_paths,
+                label=(
+                    "agentic primary" if agentic_mode else "structured primary"
+                ),
+                agent_service=agent_service if agentic_mode else None,
+                event_callback=event_callback,
+                direct_fallback_prompt=direct_invocation_prompt,
+                direct_fallback_prompt_factory=prepare_direct_fallback_prompt,
+                agent_allowed_tool_names=agent_tool_names,
+                agent_max_steps=STAGE1_AGENT_MAX_STEPS,
+                agent_phase="primary",
+                agent_complete_current_source_paths=tuple(sorted(
+                    material.complete_current_file_paths
+                )),
+                agent_visible_evidence_by_id=primary_visible_evidence,
+                rag_state=rag_state,
+                invocation_trace=invocation_trace,
+                agent_context_holder=agent_context_holder,
+                agent_telemetry=agent_telemetry,
+                review_accumulator=review_accumulator,
+                fail_closed_agent=local_only_agent_required,
+            )
+        except Exception as error:
+            if not local_only_agent_required:
+                raise
+            primary_agent_error = error
+            issues = None
+        if issues is None:
+            if local_only_agent_required:
+                recovery_paths = review_accumulator.missing_paths()
+                if not recovery_paths:
+                    raise RuntimeError(
+                        "Local-only Stage 1 primary agent failed after complete "
+                        "schema coverage; no missing-path recovery was eligible"
+                    ) from primary_agent_error
+
+                recovery_material = prepare_recovery_material(recovery_paths)
+                recovery_visible_evidence = dict(base_visible_evidence)
+                recovery_prompt, recovery_plugin_context = _render_stage1_prompt(
+                    recovery_material,
+                    invocation_structural_context,
+                    visible_evidence_by_id=recovery_visible_evidence,
+                    use_mcp_tools=True,
+                    structural_tools_available=structural_agent_mode,
+                    review_file_tool_available=review_file_tool_available,
+                )
+                visible_evidence_by_generation_prompt[
+                    recovery_prompt
+                ] = recovery_visible_evidence
+                recovery_context_holder: Dict[str, Any] = {
+                    "response": None,
+                    "responses": [],
+                }
+                if agent_telemetry is not None:
+                    agent_telemetry.begin_repository_agent_recovery()
+                logger.warning(
+                    "Local-only Stage 1 primary agent did not complete batch "
+                    "coverage; retrying exactly once through the repository "
+                    "agent for missing paths=%s (preserved=%d, prompt_chars=%d, "
+                    "plugin_chars=%d): %s",
+                    recovery_paths,
+                    len(review_accumulator.reviews_by_path),
+                    len(recovery_prompt),
+                    len(recovery_plugin_context),
+                    primary_agent_error or "empty primary result",
+                )
+                try:
+                    issues = await _invoke_stage_1_batch_llm(
+                        llm,
+                        recovery_prompt,
+                        recovery_paths,
+                        label="agentic missing-path recovery",
+                        agent_service=agent_service,
+                        event_callback=event_callback,
+                        agent_allowed_tool_names=agent_tool_names,
+                        agent_max_steps=STAGE1_AGENT_MAX_STEPS,
+                        agent_phase="missing_path_recovery",
+                        agent_complete_current_source_paths=tuple(sorted(
+                            recovery_material.complete_current_file_paths
+                        )),
+                        agent_visible_evidence_by_id=recovery_visible_evidence,
+                        rag_state=rag_state,
+                        invocation_trace=invocation_trace,
+                        agent_context_holder=recovery_context_holder,
+                        agent_telemetry=agent_telemetry,
+                        review_accumulator=review_accumulator,
+                        fail_closed_agent=True,
+                    )
+                except Exception as recovery_error:
+                    raise RuntimeError(
+                        "Local-only Stage 1 failed after one bounded "
+                        "repository-agent recovery for missing paths: "
+                        + ", ".join(recovery_paths)
+                    ) from recovery_error
+                if issues is None or review_accumulator.missing_paths():
+                    raise RuntimeError(
+                        "Local-only Stage 1 repository-agent recovery returned "
+                        "incomplete coverage; direct output recovery is disabled"
+                    )
+            else:
+                recovery_paths = review_accumulator.missing_paths()
+                logger.info(
+                    "Stage 1 structured response was unusable for %s evidence "
+                    "shard %d/%d; retrying once as a reasoning-free direct "
+                    "output request",
+                    recovery_paths,
+                    invocation_index,
+                    len(invocations),
+                )
+                recovery_prompt = (
+                    await prepare_direct_fallback_prompt(recovery_paths)
+                ).prompt
+                issues = await _invoke_stage_1_batch_llm(
+                    retry_llm,
+                    invocation_prompt,
+                    recovery_paths,
+                    label="direct-output recovery",
+                    force_unstructured=True,
+                    event_callback=event_callback,
+                    direct_fallback_prompt=recovery_prompt,
+                    invocation_trace=invocation_trace,
+                    agent_telemetry=agent_telemetry,
+                    review_accumulator=review_accumulator,
+                )
+        if issues is None:
+            logger.debug(
+                "Batch review parse failure for %s evidence shard %d/%d. "
+                "The batch will fail so missing results cannot be published "
+                "as a clean review.",
+                batch_file_paths,
+                invocation_index,
+                len(invocations),
+            )
+            raise RuntimeError(
+                "Stage 1 batch produced no valid result after all configured "
+                "attempts: " + ", ".join(batch_file_paths)
+            )
+        if review_accumulator.reviews_by_path:
+            merged_issues: List[CodeReviewIssue] = []
+            for review_output, origin in review_accumulator.outputs_by_origin():
+                origin_issues = _extract_calibrated_issues(review_output)
+                _register_stage_1_candidates(
+                    origin_issues,
+                    batch_items,
+                    candidate_ledger,
+                    origin.generation_prompt,
+                    visible_evidence_by_generation_prompt.get(
+                        origin.generation_prompt,
+                        {},
+                    ),
+                    source_phase=origin.source_phase,
+                )
+                merged_issues.extend(origin_issues)
+            all_issues.extend(merged_issues)
+        else:
+            # Preserve compatibility with injected invocation doubles that
+            # return issues directly rather than filling the accumulator.
             _register_stage_1_candidates(
                 issues,
                 batch_items,
                 candidate_ledger,
-                prompt,
-                batch_visible_evidence_by_id,
+                invocation_trace["generation_prompt"],
+                visible_evidence_by_generation_prompt.get(
+                    invocation_trace["generation_prompt"],
+                    {},
+                ),
+                source_phase="agent" if agentic_mode else None,
             )
-            return issues
+            all_issues.extend(issues)
 
-    logger.debug(
-        "Batch review parse failure for %s after capped%s attempts. "
-        "The batch will fail so missing results cannot be published as a clean review.",
-        batch_file_paths,
-        " and uncapped" if fallback_llm is not None and fallback_llm is not llm else "",
-    )
-    raise RuntimeError(
-        "Stage 1 batch produced no valid result after all configured attempts: "
-        + ", ".join(batch_file_paths)
-    )
+    return all_issues
 
 
-async def _resolve_fallback_rag_context(fallback_rag_context: Optional[Any]) -> Optional[Dict[str, Any]]:
-    """
-    Resolve a global RAG fallback only if a batch needs it.
-
-    Per-batch RAG is the primary path. The fallback can be a normal context dict
-    or an asyncio Task started earlier so its latency is hidden behind planning
-    and PR indexing.
-    """
-    if not fallback_rag_context:
-        return None
-    if isinstance(fallback_rag_context, dict):
-        return fallback_rag_context
-    if inspect.isawaitable(fallback_rag_context):
-        try:
-            resolved = await asyncio.wait_for(
-                asyncio.shield(fallback_rag_context),
-                timeout=GLOBAL_RAG_FALLBACK_TIMEOUT_SECONDS,
-            )
-            return resolved if isinstance(resolved, dict) else None
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Fallback RAG context did not resolve within %ss; continuing without it",
-                GLOBAL_RAG_FALLBACK_TIMEOUT_SECONDS,
-            )
-            return None
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("Fallback RAG context failed: %s", exc)
-            return None
-
-    logger.debug(
-        "Ignoring unsupported fallback RAG context type: %s",
-        type(fallback_rag_context).__name__,
-    )
-    return None
-
-
-def _scope_fallback_rag_context_to_batch(
-    fallback_rag_context: Optional[Dict[str, Any]],
-    batch_file_paths: List[str],
-) -> Optional[Dict[str, Any]]:
-    """
-    Keep only fallback chunks that point at the current batch files.
-
-    This is intentionally path-scoping, not semantic filtering. Per-batch RAG is
-    still the primary source for related files and dependencies.
-    """
-    context = _unwrap_rag_context(fallback_rag_context)
-    chunks = context.get("relevant_code") or context.get("chunks") or []
-    if not chunks:
-        return None
-
-    scoped_chunks = [
-        chunk
-        for chunk in chunks
-        if _chunk_matches_batch_path(chunk, batch_file_paths)
+def _build_stage1_invocations(
+    material: Stage1PromptMaterial,
+    *,
+    use_mcp_tools: bool,
+    structural_tools_available: bool = True,
+    review_file_tool_available: bool = False,
+    preloaded_structural_context: str = "",
+    preloaded_structural_evidence: Optional[
+        Dict[str, tuple[Dict[str, Any], ...]]
+    ] = None,
+) -> List[
+    tuple[
+        str,
+        str,
+        str,
+        Dict[str, tuple[Dict[str, Any], ...]],
     ]
-    if not scoped_chunks:
-        return None
-
-    scoped_context = dict(context)
-    if "relevant_code" in scoped_context:
-        scoped_context["relevant_code"] = scoped_chunks
-    else:
-        scoped_context["chunks"] = scoped_chunks
-    return scoped_context
-
-
-def _chunk_matches_batch_path(chunk: Dict[str, Any], batch_file_paths: List[str]) -> bool:
-    if not isinstance(chunk, dict):
-        return False
-
-    metadata = chunk.get("metadata") or {}
-    chunk_path = (
-        metadata.get("path")
-        or chunk.get("path")
-        or chunk.get("file_path")
-        or ""
+]:
+    """Build one prompt with the host-selected relation briefing, if any."""
+    trusted_preloaded_context = bool(
+        preloaded_structural_context.startswith(
+            "RELATION-FIRST PROPOSED-TREE BRIEFING"
+        )
+        or not use_mcp_tools
     )
-    if not chunk_path:
-        return False
-
-    normalized_chunk_path = normalize_repository_path(chunk_path)
-
-    for file_path in batch_file_paths:
-        normalized_file_path = normalize_repository_path(file_path)
-        if not normalized_file_path:
-            continue
-        if repository_paths_match(normalized_chunk_path, normalized_file_path):
-            return True
-    return False
-
-
-def _rag_context_has_chunks(rag_context: Optional[Dict[str, Any]]) -> bool:
-    context = _unwrap_rag_context(rag_context)
-    chunks = context.get("relevant_code") or context.get("chunks") or []
-    return bool(chunks)
+    structural_context = (
+        preloaded_structural_context if trusted_preloaded_context else ""
+    )
+    visible_evidence = (
+        dict(preloaded_structural_evidence or {})
+        if trusted_preloaded_context
+        else {}
+    )
+    prompt, plugin_context = _render_stage1_prompt(
+        material,
+        structural_context,
+        visible_evidence_by_id=visible_evidence,
+        use_mcp_tools=use_mcp_tools,
+        structural_tools_available=structural_tools_available,
+        review_file_tool_available=review_file_tool_available,
+    )
+    return [(
+        prompt,
+        structural_context,
+        plugin_context,
+        visible_evidence,
+    )]
 
 
 async def _invoke_stage_1_batch_llm(
     llm,
     prompt: str,
     batch_file_paths: List[str],
-    label: str,
+    label: str = "primary",
+    force_unstructured: bool = False,
+    agent_service: Optional["AgentExecutionService"] = None,
+    event_callback: Optional[Callable[[Dict], None]] = None,
+    direct_fallback_prompt: Optional[str] = None,
+    direct_fallback_prompt_factory: Optional[
+        Callable[[Sequence[str]], Awaitable[_Stage1DirectFallbackPrompt]]
+    ] = None,
+    agent_allowed_tool_names: Optional[frozenset[str]] = None,
+    agent_max_steps: Optional[int] = None,
+    agent_phase: str = "primary",
+    agent_complete_current_source_paths: Sequence[str] = (),
+    agent_visible_evidence_by_id: Optional[
+        Dict[str, tuple[Dict[str, Any], ...]]
+    ] = None,
+    rag_state: Optional[Stage1RagState] = None,
+    invocation_trace: Optional[Dict[str, str]] = None,
+    agent_context_holder: Optional[
+        Dict[str, Any]
+    ] = None,
+    agent_telemetry: Optional[Stage1AgentTelemetryRecorder] = None,
+    review_accumulator: Optional[_Stage1BatchReviewAccumulator] = None,
+    fail_closed_agent: bool = False,
 ) -> Optional[List[CodeReviewIssue]]:
-    if _supports_structured_output(llm):
+    if invocation_trace is not None:
+        invocation_trace["generation_prompt"] = prompt
+    recovery_paths = list(batch_file_paths)
+
+    def accept_review_output(
+        data: FileReviewBatchOutput,
+        requested_paths: Sequence[str],
+        *,
+        generation_prompt: str,
+        source_phase: Optional[str],
+    ) -> List[CodeReviewIssue]:
+        if review_accumulator is None:
+            _validate_batch_review_coverage(data, list(requested_paths))
+            return _extract_calibrated_issues(data)
+
+        review_accumulator.merge(
+            data,
+            requested_paths,
+            generation_prompt=generation_prompt,
+            source_phase=source_phase,
+        )
+        missing_paths = review_accumulator.missing_paths()
+        if missing_paths:
+            try:
+                _validate_batch_review_coverage(data, list(requested_paths))
+            except ValueError as coverage_error:
+                raise coverage_error
+            raise ValueError(
+                "Stage 1 merged review coverage remains incomplete "
+                f"(missing={','.join(missing_paths)})"
+            )
+        return _extract_calibrated_issues(review_accumulator.output())
+
+    agent_degraded = False
+    agent_degradation_emitted = False
+    if agent_service is not None:
+        from service.agent import AgentExecutionRequest
+
+        resolved_agent_tools = (
+            STAGE1_AGENT_TOOL_NAMES
+            if agent_allowed_tool_names is None
+            else agent_allowed_tool_names
+        )
+        structural_tools = STAGE1_STRUCTURAL_TOOL_NAMES.intersection(
+            resolved_agent_tools
+        )
+        initial_required_tool_name = (
+            STAGE1_MINIMAL_REVIEW_CONTEXT_TOOL_NAME
+            if (
+                agent_phase == "primary"
+                and STAGE1_MINIMAL_REVIEW_CONTEXT_TOOL_NAME
+                in structural_tools
+            )
+            else (
+                STAGE1_REVIEW_CONTEXT_TOOL_NAME
+                if (
+                    agent_phase == "primary"
+                    and STAGE1_REVIEW_CONTEXT_TOOL_NAME in structural_tools
+                )
+                else None
+            )
+        )
+        agent_started_at = (
+            agent_telemetry.begin_agent(initial_required_tool_name)
+            if agent_telemetry is not None
+            else time.monotonic()
+        )
+        events_recorded = False
         try:
-            structured_llm = llm.with_structured_output(FileReviewBatchOutput)
-            result = await structured_llm.ainvoke(prompt)
+            relation_briefing_loaded = (
+                "RELATION-FIRST PROPOSED-TREE BRIEFING" in prompt
+            )
+            exploration_instruction = (
+                "Use the host-loaded relation-first briefing as the structural "
+                "orientation baseline. If it leaves a concrete relationship "
+                "question, deepen from a named unit, path, or frontier with the "
+                "smallest focused proposed-tree tool. Do not repeat the broad "
+                "orientation. Prefer a precise graph query or exact structural "
+                "unit when its target is known, and use broad traversal only "
+                "when a fixed relationship query cannot answer the question. "
+                if structural_tools and relation_briefing_loaded
+                else (
+                    "The host has sealed one exact proposed-tree generation. "
+                    "Begin with the required getMinimalReviewContext call, use "
+                    "its bounded exact source directly, and follow only the "
+                    "smallest graph continuation needed for this batch. "
+                    if structural_tools
+                    else "Use the supplied repository file tool when it resolves "
+                    "a concrete context gap. "
+                )
+            )
+            source_authority_instruction = (
+                "Exact source returned by getStructuralUnit or in any focused "
+                "graph operation's sourceWindows comes from the request-bound "
+                "proposed tree; use it directly without rereading that range. "
+                "Use getReviewFileContent for code unrepresented by the graph, "
+                "or a concrete required range that was omitted or truncated. "
+                "Request the smallest useful line range by default. It selects "
+                "proposed source for PR-modified "
+                "paths (including paths in another batch) and pinned target-head "
+                "source for unchanged paths. "
+                if STAGE1_REVIEW_FILE_TOOL_NAME in resolved_agent_tools
+                else "Treat getBranchFileContent as target-head-only source; "
+                "the prompt's diff/current content remains authoritative for "
+                "every PR-modified path. "
+            )
+            tool_argument_bindings: Dict[str, Dict[str, Any]] = {
+                tool_name: {
+                    "focusPaths": tuple(batch_file_paths),
+                }
+                for tool_name in sorted(structural_tools)
+            }
+            if STAGE1_REVIEW_FILE_TOOL_NAME in resolved_agent_tools:
+                tool_argument_bindings[STAGE1_REVIEW_FILE_TOOL_NAME] = {
+                    "contextSuppliedPaths": tuple(sorted({
+                        normalize_repository_path(path)
+                        for path in agent_complete_current_source_paths
+                        if normalize_repository_path(path)
+                    })),
+                }
+            execution = await agent_service.execute(AgentExecutionRequest(
+                prompt=prompt,
+                allowed_tool_names=resolved_agent_tools,
+                max_steps=agent_max_steps or STAGE1_AGENT_MAX_STEPS,
+                reasoning_effort=ReasoningEffort.MEDIUM,
+                max_output_tokens=STAGE1_AGENT_MAX_OUTPUT_TOKENS,
+                timeout_seconds=STAGE1_AGENT_TIMEOUT_SECONDS,
+                # Bind the complete batch schema inside the agent graph so the
+                # reserved final call returns validated JSON without mcp-use's
+                # separate post-formatting model call.
+                output_schema=FileReviewBatchOutput,
+                additional_instructions=(
+                    "Return the complete structured file-review response "
+                    "required by the prompt, with one review object for every "
+                    "requested file. "
+                    + exploration_instruction
+                    + source_authority_instruction
+                ),
+                metadata={
+                    "stage": "stage_1",
+                    "label": label,
+                    "phase": agent_phase,
+                    "batchPaths": tuple(batch_file_paths),
+                },
+                initial_required_tool_name=initial_required_tool_name,
+                tool_argument_bindings=tool_argument_bindings,
+            ))
+            tool_events = tuple(getattr(execution, "tool_events", ()) or ())
+            salvaged_review_count = _salvage_stage1_schema_tool_outputs(
+                tool_events,
+                review_accumulator,
+                batch_file_paths,
+                generation_prompt=prompt,
+                source_phase="agent",
+            )
+            tool_counts = _consume_stage1_agent_tool_events(
+                tool_events,
+                visible_evidence_by_id=agent_visible_evidence_by_id,
+                rag_state=rag_state,
+                context_holder=agent_context_holder,
+            )
+            if agent_telemetry is not None:
+                tool_event_failures = agent_telemetry.record_agent_events(
+                    tool_events,
+                    started_at=agent_started_at,
+                )
+            else:
+                tool_event_failures = stage1_agent_tool_event_failures(
+                    tool_events,
+                )
+            events_recorded = True
+            if tool_event_failures:
+                failed_tool_names = sorted({
+                    _tool_event_name(event)
+                    for event in tool_events
+                    if stage1_agent_tool_event_failures((event,))
+                })
+                emit_status(
+                    event_callback,
+                    "stage_1_agent_degraded",
+                    "Repository-agent tool enrichment returned an error for "
+                    "one file-review batch; the diff, current source, and "
+                    "other available context remained available "
+                    f"(tools: {', '.join(failed_tool_names)})",
+                )
+                agent_degradation_emitted = True
+            logger.info(
+                "Stage 1 agent phase completed: phase=%s paths=%s "
+                "tool_calls=%d tools=%s",
+                agent_phase,
+                batch_file_paths,
+                sum(tool_counts.values()),
+                dict(sorted(tool_counts.items())),
+            )
+            if (
+                review_accumulator is not None
+                and not review_accumulator.missing_paths()
+            ):
+                data = review_accumulator.output()
+                calibrated_issues = _extract_calibrated_issues(data)
+                if agent_telemetry is not None:
+                    agent_telemetry.record_issues(calibrated_issues)
+                logger.info(
+                    "Stage 1 agent phase result salvaged from schema tool "
+                    "events: phase=%s paths=%s salvaged_review_objects=%d "
+                    "issue_count=%d",
+                    agent_phase,
+                    batch_file_paths,
+                    salvaged_review_count,
+                    len(calibrated_issues),
+                )
+                return calibrated_issues
+            output = execution.output
+            if isinstance(output, FileReviewBatchOutput):
+                data = output
+            elif isinstance(output, dict):
+                data = FileReviewBatchOutput.model_validate(output)
+            else:
+                content = extract_llm_response_text(output)
+                if not content.strip():
+                    raise ValueError("Stage 1 agent returned no review content")
+                data = await parse_llm_response(
+                    content,
+                    FileReviewBatchOutput,
+                    llm,
+                    max_provider_repairs=0,
+                )
+            calibrated_issues = accept_review_output(
+                data,
+                batch_file_paths,
+                generation_prompt=prompt,
+                source_phase="agent",
+            )
+            if agent_telemetry is not None:
+                agent_telemetry.record_issues(calibrated_issues)
+            logger.info(
+                "Stage 1 agent phase result: phase=%s paths=%s "
+                "structured_review_objects=%d issue_count=%d",
+                agent_phase,
+                batch_file_paths,
+                len(data.reviews),
+                len(calibrated_issues),
+            )
+            return calibrated_issues
+        except Exception as agent_error:
+            if not events_recorded:
+                partial_events = tuple(
+                    getattr(agent_error, "tool_events", ()) or ()
+                )
+                _salvage_stage1_schema_tool_outputs(
+                    partial_events,
+                    review_accumulator,
+                    batch_file_paths,
+                    generation_prompt=prompt,
+                    source_phase="agent",
+                )
+                _consume_stage1_agent_tool_events(
+                    partial_events,
+                    visible_evidence_by_id=agent_visible_evidence_by_id,
+                    rag_state=rag_state,
+                    context_holder=agent_context_holder,
+                )
+                if agent_telemetry is not None:
+                    agent_telemetry.record_agent_events(
+                        partial_events,
+                        started_at=agent_started_at,
+                        failed=True,
+                        error=agent_error,
+                    )
+            elif agent_telemetry is not None:
+                agent_telemetry.mark_agent_failure(agent_error)
+            if fail_closed_agent:
+                raise RuntimeError(
+                    "Local-only Stage 1 repository-agent execution failed; "
+                    "direct review fallback is disabled"
+                ) from agent_error
+            # Repository exploration is optional. Preserve complete file-review
+            # coverage by retrying the same diff/current-source evidence through
+            # the direct structured path when the agent or its tools fail.
+            logger.warning(
+                "Stage 1 agent did not produce a complete review for batch %s "
+                "(%s); preserved=%d missing=%s; continuing through the direct "
+                "recovery path: %s",
+                batch_file_paths,
+                label,
+                len(review_accumulator.reviews_by_path)
+                if review_accumulator is not None
+                else 0,
+                review_accumulator.missing_paths()
+                if review_accumulator is not None
+                else batch_file_paths,
+                agent_error,
+            )
+            agent_degraded = True
+            if review_accumulator is not None:
+                recovery_paths = review_accumulator.missing_paths()
+
+    if review_accumulator is not None and not recovery_paths:
+        return _extract_calibrated_issues(review_accumulator.output())
+
+    direct_prompt = direct_fallback_prompt
+    structural_context_loaded = False
+    if direct_prompt is None and direct_fallback_prompt_factory is not None:
+        try:
+            prepared_fallback = await direct_fallback_prompt_factory(
+                recovery_paths
+            )
+            direct_prompt = prepared_fallback.prompt
+            structural_context_loaded = (
+                prepared_fallback.structural_context_loaded
+            )
+        except Exception as fallback_error:
+            logger.info(
+                "Optional Stage 1 direct fallback context could not be "
+                "prepared for %s: %s",
+                recovery_paths,
+                fallback_error,
+            )
+    direct_prompt = direct_prompt or prompt
+    if agent_degraded:
+        if agent_telemetry is not None:
+            agent_telemetry.record_fallback(
+                structural_context_loaded=structural_context_loaded,
+            )
+        fallback_detail = (
+            "diff, current source, and the already-retrieved exact "
+            "proposed-tree context"
+            if structural_context_loaded
+            else (
+                "diff and current source; no exact proposed-tree context was "
+                "available"
+            )
+        )
+        if not agent_degradation_emitted:
+            emit_status(
+                event_callback,
+                "stage_1_agent_degraded",
+                "Repository-agent analysis did not produce a complete result "
+                "for one file-review batch; valid file results were preserved "
+                "and analysis continued for only the missing files with its "
+                + fallback_detail,
+            )
+    if invocation_trace is not None:
+        invocation_trace["generation_prompt"] = direct_prompt
+
+    if _supports_structured_output(llm) and not force_unstructured:
+        try:
+            invocation = await invoke_structured_output(
+                llm,
+                direct_prompt,
+                FileReviewBatchOutput,
+                effort=ReasoningEffort.LOW,
+                label=f"stage-1-{label}",
+            )
+            result = await resolve_structured_output(
+                invocation,
+                FileReviewBatchOutput,
+                llm,
+            )
             if result:
-                return _extract_calibrated_issues(result)
-            logger.debug("Structured output returned empty Stage 1 result for %s (%s)", batch_file_paths, label)
+                return accept_review_output(
+                    result,
+                    recovery_paths,
+                    generation_prompt=direct_prompt,
+                    source_phase=(
+                        "direct_recovery" if agent_degraded else None
+                    ),
+                )
+            logger.debug(
+                "Structured output returned empty Stage 1 result for %s (%s)",
+                recovery_paths,
+                label,
+            )
         except Exception as e:
-            logger.debug("Structured output failed for Stage 1 batch %s (%s): %s", batch_file_paths, label, e)
+            # The batch owner emits the single exhausted-attempt warning. Keep
+            # attempt detail at DEBUG to avoid duplicating one failure for every
+            # nested batch call; raw-response shape failures are already logged
+            # by the structured-output adapter.
+            logger.debug(
+                "Structured output failed for Stage 1 batch %s (%s): "
+                "error_type=%s",
+                recovery_paths,
+                label,
+                type(e).__name__,
+            )
+        # A direct-output parse is the one configured recovery call, not an
+        # implicit second primary call. The caller owns that recovery so total
+        # provider attempts remain primary + one finite recovery attempt.
+        return None
     else:
         logger.info(
             "Structured output skipped for Stage 1 batch %s (%s); using prompt JSON parsing",
-            batch_file_paths,
+            recovery_paths,
             label,
         )
 
     try:
-        response = await llm.ainvoke(prompt)
+        async with review_model_slot("stage_1_file_review"):
+            response = await llm.ainvoke(
+                direct_prompt,
+                **reasoning_request_kwargs(
+                    llm,
+                    ReasoningEffort.NONE
+                    if force_unstructured
+                    else ReasoningEffort.LOW,
+                ),
+            )
         content = extract_llm_response_text(response)
-        data = await parse_llm_response(content, FileReviewBatchOutput, llm)
-        return _extract_calibrated_issues(data)
+        if not content.strip():
+            logger.warning(
+                "Stage 1 raw fallback returned no content for %s (%s): %s",
+                recovery_paths,
+                label,
+                format_response_diagnostics(response),
+            )
+        data = await parse_llm_response(
+            content,
+            FileReviewBatchOutput,
+            llm,
+            max_provider_repairs=0,
+        )
+        return accept_review_output(
+            data,
+            recovery_paths,
+            generation_prompt=direct_prompt,
+            source_phase=(
+                "direct_recovery"
+                if agent_degraded or force_unstructured
+                else None
+            ),
+        )
     except Exception as parse_err:
-        logger.debug("Stage 1 batch parse failed for %s (%s): %s", batch_file_paths, label, parse_err)
+        logger.debug(
+            "Stage 1 batch parse failed for %s (%s): %s",
+            recovery_paths,
+            label,
+            parse_err,
+        )
         return None
+
+
+def _validate_batch_review_coverage(
+    batch_output: FileReviewBatchOutput,
+    batch_file_paths: List[str],
+) -> None:
+    """Validate that the agent returned exactly one result for every file."""
+    expected = [normalize_repository_path(path) for path in batch_file_paths]
+    observed = [
+        normalize_repository_path(review.file)
+        for review in batch_output.reviews
+    ]
+    expected_counts = Counter(expected)
+    observed_counts = Counter(observed)
+    missing = sorted(
+        path
+        for path in expected_counts
+        if not observed_counts[path]
+    )
+    unexpected = sorted(
+        path for path in observed_counts if path not in expected_counts
+    )
+    duplicates = sorted(
+        path for path, count in observed_counts.items() if path and count > 1
+    )
+    empty_count = observed_counts.get("", 0)
+
+    if (
+        not expected
+        or "" in expected_counts
+        or len(observed) != len(expected)
+        or missing
+        or unexpected
+        or duplicates
+        or empty_count
+    ):
+        details = [f"expected={len(expected)}", f"received={len(observed)}"]
+        if missing:
+            details.append("missing=" + ",".join(missing))
+        if unexpected:
+            details.append("unexpected=" + ",".join(unexpected))
+        if duplicates:
+            details.append("duplicates=" + ",".join(duplicates))
+        if empty_count:
+            details.append(f"empty_paths={empty_count}")
+        raise ValueError(
+            "Stage 1 batch review coverage mismatch (" + "; ".join(details) + ")"
+        )
 
 
 def _extract_calibrated_issues(batch_output: FileReviewBatchOutput) -> List[CodeReviewIssue]:
@@ -2897,6 +3959,7 @@ def _register_stage_1_candidates(
     visible_evidence_by_id: Optional[
         Dict[str, tuple[Dict[str, Any], ...]]
     ] = None,
+    source_phase: Optional[str] = None,
 ) -> None:
     if candidate_ledger is None:
         return
@@ -2904,12 +3967,17 @@ def _register_stage_1_candidates(
         str(item.get("_review_unit_id") or "")
         for item in batch_items
     ))
+    phase = str(source_phase or "").strip()
     for index, issue in enumerate(issues):
         owner = _candidate_owner_item(issue, batch_items)
         candidate_ledger.register(
             issue,
             stage="stage_1",
-            source_key=f"{batch_identity}:{index}",
+            source_key=(
+                f"{batch_identity}:{phase}:{index}"
+                if phase
+                else f"{batch_identity}:{index}"
+            ),
             review_unit_ids=(
                 (str(owner.get("_review_unit_id")),)
                 if owner is not None and owner.get("_review_unit_id")

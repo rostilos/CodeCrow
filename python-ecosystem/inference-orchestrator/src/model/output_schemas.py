@@ -73,7 +73,7 @@ class CodeReviewIssue(BaseModel):
     evidenceRefs: List[str] = Field(
         default_factory=list,
         description=(
-            "Stable Evidence ID values copied from retrieved context that the "
+            "Stable structural Evidence IDs visible to the invocation that the "
             "finding relies on. Leave empty when the finding relies only on "
             "the current file/diff."
         ),
@@ -105,6 +105,24 @@ class CodeReviewIssue(BaseModel):
         if v is None:
             return ""
         return str(v).strip()
+
+    @field_validator('isResolved', mode='before')
+    @classmethod
+    def normalize_null_resolution_state(cls, v):
+        """Treat an explicit JSON null like the field's existing false default."""
+        return False if v is None else v
+
+    @field_validator('evidenceRefs', 'relatedLocations', mode='before')
+    @classmethod
+    def normalize_null_empty_lists(cls, v):
+        """Treat an explicit JSON null like the fields' existing empty defaults."""
+        return [] if v is None else v
+
+    @field_validator('claimKind', mode='before')
+    @classmethod
+    def normalize_null_claim_kind(cls, v):
+        """Keep the internal claim-kind contract string-only for tolerant input."""
+        return "" if v is None else v
 
 
 class CodeReviewOutput(BaseModel):

@@ -1,8 +1,10 @@
 """
 Stage 0: Planning & Prioritization — analyze PR metadata and build a review plan.
 """
+from service.review.execution_scheduler import review_model_slot
 import json
 import logging
+import os
 from typing import Any, Dict, Optional
 
 from model.dtos import ReviewRequestDto
@@ -11,11 +13,79 @@ from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import HunkDisposition, ProcessedDiff
 from utils.task_context_builder import build_task_context
 from service.review.plugin_context import review_plugin_context
+from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
 
 from utils.llm_response import extract_llm_response_text
-from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
+from service.review.orchestrator.json_utils import (
+    parse_llm_response,
+    resolve_structured_output,
+    supports_structured_output,
+)
+from service.review.orchestrator.structured_output import (
+    format_response_diagnostics,
+    invoke_structured_output,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Invalid integer for %s=%r; using %s", name, value, default)
+        return default
+
+
+STAGE0_INPUT_TOKEN_TARGET = max(
+    10_000,
+    _env_int("REVIEW_STAGE1_BATCH_TOKEN_BUDGET", 60_000),
+)
+_STAGE0_CONTEXT_RESERVE_TOKENS = 20_000
+_STAGE0_ESTIMATOR_SAFETY_TOKENS = 256
+
+
+def _positive_int_or_default(value: Any, default: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return default
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return default
+    return normalized if normalized > 0 else default
+
+
+def _stage_0_input_token_budget(request: ReviewRequestDto) -> int:
+    """Reserve context space without setting a generation-output ceiling."""
+    model_context_tokens = _positive_int_or_default(
+        getattr(request, "maxAllowedTokens", None),
+        200_000,
+    )
+    return min(
+        STAGE0_INPUT_TOKEN_TARGET,
+        max(4_000, model_context_tokens - _STAGE0_CONTEXT_RESERVE_TOKENS),
+    )
+
+
+def _estimated_stage_0_request_tokens(prompt: str) -> int:
+    """Estimate the rendered prompt and structured-output declaration."""
+    try:
+        schema_bytes = len(json.dumps(
+            ReviewPlan.model_json_schema(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8"))
+    except (AttributeError, TypeError, ValueError):
+        schema_bytes = 0
+    request_bytes = len(prompt.encode("utf-8")) + schema_bytes
+    return max(
+        1,
+        (request_bytes + 2) // 3 + _STAGE0_ESTIMATOR_SAFETY_TOKENS,
+    )
 
 
 def _build_diff_lookup(processed_diff: Optional[ProcessedDiff]) -> Dict[str, Any]:
@@ -122,7 +192,7 @@ async def execute_stage_0_planning(
         target_branch=request.targetBranchName or "",
         commit_hash=request.currentCommitHash or request.commitHash or "",
         task_context=(
-            build_task_context(request.taskContext, max_description_length=4000)
+            build_task_context(request.taskContext)
             or ""
         ),
         changed_files_json=json.dumps(changed_files_summary, indent=2) + refactoring_context,
@@ -133,22 +203,75 @@ async def execute_stage_0_planning(
         ),
     )
 
+    input_token_budget = _stage_0_input_token_budget(request)
+    estimated_input_tokens = _estimated_stage_0_request_tokens(prompt)
+    if estimated_input_tokens > input_token_budget:
+        # Planning is optional orchestration, not the code-analysis authority.
+        # Sending a partial planner prompt would create exactly the misleading
+        # global assumptions that semantic packing is meant to avoid. Preserve
+        # every file in a deterministic plan and let the lossless Stage 1/2
+        # paths consume the actual source, diff, and dependency evidence.
+        logger.warning(
+            "Stage 0 provider call skipped without truncating planner input: "
+            "estimated_tokens=%d target_tokens=%d files=%d; using the local "
+            "all-files plan",
+            estimated_input_tokens,
+            input_token_budget,
+            len(planning_paths),
+        )
+        return _build_fallback_review_plan(
+            request,
+            processed_diff,
+            analysis_summary=(
+                "Deterministic all-files plan used because the optional planning "
+                "request exceeded the semantic input target; no review evidence "
+                "was truncated."
+            ),
+        )
+
     if supports_structured_output(llm):
         try:
-            structured_llm = llm.with_structured_output(ReviewPlan)
-            result = await structured_llm.ainvoke(prompt)
+            invocation = await invoke_structured_output(
+                llm,
+                prompt,
+                ReviewPlan,
+                effort=ReasoningEffort.LOW,
+                label="stage-0-planning",
+            )
+            result = await resolve_structured_output(
+                invocation,
+                ReviewPlan,
+                llm,
+            )
             if result:
                 logger.info("Stage 0 planning completed with structured output")
                 return result
         except Exception as e:
-            logger.debug("Structured output failed for Stage 0: %s", e)
+            logger.warning(
+                "Structured output failed for Stage 0: error_type=%s",
+                type(e).__name__,
+            )
     else:
         logger.info("Structured output skipped for Stage 0; using prompt JSON parsing")
 
     try:
-        response = await llm.ainvoke(prompt)
+        async with review_model_slot("stage_0_planning"):
+            response = await llm.ainvoke(
+                prompt,
+                **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
+            )
         content = extract_llm_response_text(response)
-        return await parse_llm_response(content, ReviewPlan, llm)
+        if not content.strip():
+            logger.warning(
+                "Stage 0 raw fallback returned no content: %s",
+                format_response_diagnostics(response),
+            )
+        return await parse_llm_response(
+            content,
+            ReviewPlan,
+            llm,
+            max_provider_repairs=0,
+        )
     except Exception as e:
         logger.info("Stage 0 planning unavailable; using local fallback plan: %s", e)
         return _build_fallback_review_plan(request, processed_diff)
@@ -337,7 +460,10 @@ def _mechanical_skip_reason(diff_file: Any = None) -> Optional[str]:
     return None
 
 
-def _representative_hunk_headers(diff_content: str, limit: int = 12) -> list[str]:
+def _representative_hunk_headers(
+    diff_content: str,
+    limit: int = 12,
+) -> list[str]:
     headers = []
     for line in (diff_content or "").splitlines():
         if line.startswith("@@"):

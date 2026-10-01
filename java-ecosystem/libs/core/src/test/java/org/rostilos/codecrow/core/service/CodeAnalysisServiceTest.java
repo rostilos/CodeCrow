@@ -1347,8 +1347,8 @@ class CodeAnalysisServiceTest {
         @Test
         @DisplayName("should compute stats correctly")
         void shouldComputeStats() {
-            when(codeAnalysisRepository.countByProjectId(1L)).thenReturn(10L);
-            when(codeAnalysisRepository.getAverageIssuesPerAnalysis(1L)).thenReturn(5.5);
+            when(codeAnalysisRepository.countReportableByProjectId(1L)).thenReturn(10L);
+            when(codeAnalysisRepository.getAverageIssuesPerReportableAnalysis(1L)).thenReturn(5.5);
             when(issueRepository.countByProjectIdAndSeverity(1L, IssueSeverity.HIGH)).thenReturn(3L);
             when(issueRepository.countByProjectIdAndSeverity(1L, IssueSeverity.MEDIUM)).thenReturn(7L);
             when(issueRepository.countByProjectIdAndSeverity(1L, IssueSeverity.LOW)).thenReturn(5L);
@@ -1369,8 +1369,8 @@ class CodeAnalysisServiceTest {
         @Test
         @DisplayName("should handle null average")
         void shouldHandleNullAverage() {
-            when(codeAnalysisRepository.countByProjectId(1L)).thenReturn(0L);
-            when(codeAnalysisRepository.getAverageIssuesPerAnalysis(1L)).thenReturn(null);
+            when(codeAnalysisRepository.countReportableByProjectId(1L)).thenReturn(0L);
+            when(codeAnalysisRepository.getAverageIssuesPerReportableAnalysis(1L)).thenReturn(null);
             when(issueRepository.countByProjectIdAndSeverity(eq(1L), any())).thenReturn(0L);
             when(issueRepository.findMostProblematicFilesByProjectId(1L)).thenReturn(List.of());
 

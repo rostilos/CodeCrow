@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+BUILD_ONLY=false
+case "${1:-}" in
+    "") ;;
+    --build-only) BUILD_ONLY=true ;;
+    *) echo "Usage: $0 [--build-only]" >&2; exit 2 ;;
+esac
+
 FRONTEND_DIR="frontend"
 DOCKER_PATH="deployment"
 CONFIG_PATH="deployment/config"
@@ -11,19 +18,17 @@ cd "$(dirname "$0")/../../"
 
 echo "=========================================="
 echo "  CodeCrow local production build"
-echo "  Mirrors the CI/CD verification pipeline"
+echo "  CI verification with local observability disabled"
 echo "=========================================="
 
-echo "--- 1. Synchronizing the frontend submodule with origin/main ---"
-git submodule update --init --recursive --remote -- "$FRONTEND_DIR"
-
-ACTUAL_FRONTEND_COMMIT="$(git -C "$FRONTEND_DIR" rev-parse HEAD)"
-FRONTEND_WORKTREE_STATUS="$(git -C "$FRONTEND_DIR" status --porcelain --untracked-files=normal)"
-if [ -n "$FRONTEND_WORKTREE_STATUS" ]; then
-    echo "Frontend submodule has non-ignored local changes; refusing a non-reproducible production build." >&2
+echo "--- 1. Using the current frontend workspace ---"
+if [ ! -f "$FRONTEND_DIR/package.json" ]; then
+    echo "Frontend submodule is not initialized: $FRONTEND_DIR/package.json is missing." >&2
+    echo "Run: git submodule update --init --recursive -- $FRONTEND_DIR" >&2
     exit 1
 fi
-echo "Frontend at latest origin/main commit: $ACTUAL_FRONTEND_COMMIT"
+ACTUAL_FRONTEND_COMMIT="$(git -C "$FRONTEND_DIR" rev-parse HEAD)"
+echo "Frontend workspace commit: $ACTUAL_FRONTEND_COMMIT"
 
 echo "--- 2. Injecting Environment Configurations ---"
 
@@ -63,16 +68,21 @@ run_python_ci_group inference
 
 echo "--- 4. Running the shared Java, plugin, and Docker CI build ---"
 CODECROW_DOCKER_OUTPUT=load \
+CODECROW_DOCKER_OBSERVABILITY=disabled \
 CODECROW_LOCAL_IMAGE_PREFIX=codecrow-local \
 CODECROW_DEPLOY_SERVICES=all \
 deployment/ci/ci-build.sh
 
-echo "--- 5. Shutting down existing services cleanly ---"
-cd "$DOCKER_PATH"
-docker compose down --remove-orphans
+if [ "$BUILD_ONLY" = true ]; then
+    echo "--- Build complete. Tests passed and images loaded; services were not restarted. ---"
+    exit 0
+fi
 
-echo "--- 6. Starting the locally loaded CI-equivalent images ---"
-docker compose up -d --no-build --wait
+echo "--- 5. Starting the locally loaded CI-equivalent images ---"
+cd "$DOCKER_PATH"
+# The local database may contain migrations from another pre-release checkout.
+# Keep migrations enabled while allowing that existing local history.
+docker compose -f docker-compose.yml -f docker-compose.local-build.yml up -d --no-build --wait
 
 echo "--- Deployment Complete! Services are up and healthy. ---"
-docker compose ps
+docker compose -f docker-compose.yml -f docker-compose.local-build.yml ps

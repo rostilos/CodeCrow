@@ -50,7 +50,7 @@ class TestAnalysisMode:
 class TestRelationshipType:
 
     def test_all_values(self):
-        expected = {"IMPORTS", "EXTENDS", "IMPLEMENTS", "CALLS", "SAME_PACKAGE", "REFERENCES"}
+        expected = {"IMPORTS", "EXTENDS", "IMPLEMENTS", "CALLS"}
         assert {e.value for e in RelationshipType} == expected
 
     def test_is_str_enum(self):
@@ -61,8 +61,6 @@ class TestRelationshipType:
         ("EXTENDS", "EXTENDS"),
         ("IMPLEMENTS", "IMPLEMENTS"),
         ("CALLS", "CALLS"),
-        ("SAME_PACKAGE", "SAME_PACKAGE"),
-        ("REFERENCES", "REFERENCES"),
     ])
     def test_each_member(self, name, value):
         assert RelationshipType[name].value == value

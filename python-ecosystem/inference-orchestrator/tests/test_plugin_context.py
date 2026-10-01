@@ -373,7 +373,7 @@ def test_file_policy_failure_aborts_before_prompt_construction(monkeypatch):
         plugin_context.apply_plugin_file_policy(_request(), processed)
 
 
-def test_review_context_fails_before_prompt_when_plugin_contribution_is_incomplete(
+def test_review_context_degrades_with_observable_plugin_diagnostic(
     monkeypatch,
 ):
     from codecrow_plugins import PluginDiagnostic, ReviewContribution
@@ -400,10 +400,23 @@ def test_review_context_fails_before_prompt_when_plugin_contribution_is_incomple
         lambda _request: MagicMock(),
     )
 
-    with pytest.raises(RuntimeError, match=(
+    captured = []
+    with plugin_context.capture_plugin_diagnostics(captured.append):
+        context = plugin_context.review_plugin_context(
+            _request(),
+            ["example.py"],
+        )
+
+    assert (
         "python:plugin-review-exception: ValueError: broken contribution"
-    )):
-        plugin_context.review_plugin_context(_request(), ["example.py"])
+        in context
+    )
+    assert captured == [{
+        "scope": "review",
+        "pluginId": "python",
+        "code": "plugin-review-exception",
+        "message": "ValueError: broken contribution",
+    }]
 
 
 def test_magento_does_not_group_by_path_shape_without_graph_evidence():
@@ -1234,7 +1247,6 @@ def test_review_context_groups_repeated_evidence_and_preserves_line_boundaries()
 
     context = plugin_context.review_plugin_context(request, paths)
 
-    assert len(context) <= plugin_context.PLUGIN_CONTEXT_CHAR_BUDGET
     assert context.count(
         "exact Java declarations, imports, inheritance, and call facts"
     ) == 1
@@ -1244,12 +1256,21 @@ def test_review_context_groups_repeated_evidence_and_preserves_line_boundaries()
     ) == 1
     assert "set claimKind to its exact evidence class" in context
     assert "Service000.java" in context
+    assert "Service039.java" in context
+    assert "Service040.java" not in context
+    assert "Service099.java" not in context
+    assert "review contribution admitted 80 of 100 owned paths" in context
+    assert "review contribution omitted 0 rule(s) and 80 evidence request(s)" in context
     assert (
-        "60 review path(s) have no plugin evidence request; do not treat this "
-        "omission as proof"
+        "[60 review path(s) have no plugin evidence request; do not treat "
+        "this omission as proof"
     ) in context
+    assert all(f"  - {path} — E1, E2" in context for path in paths[:40])
+    assert all(f"  - {path} — E1, E2" not in context for path in paths[40:])
+    assert len(context) <= plugin_context.PLUGIN_CONTEXT_CHAR_BUDGET
     assert all(
         line.startswith((
+            "Plugin ",
             "Deterministic ",
                 "Exact ",
                 "Evidence ",

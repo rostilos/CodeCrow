@@ -15,6 +15,7 @@ from codecrow_plugins import (
     FileArtifact,
     GraphFact,
     PluginDescriptor,
+    PluginDiagnostic,
     PluginOutcome,
     RepositoryAnalysis,
     RepositorySnapshot,
@@ -40,7 +41,6 @@ _CONTRACT_SUFFIXES = (
 )
 _RELATION_KINDS = {
     "data-contract-reference",
-    "data-contract-pr-removed-reference",
 }
 _JSON_REF = re.compile(
     r'(?<!\\)"\$ref"\s*:\s*(?P<value>"(?:\\.|[^"\\])*")',
@@ -77,6 +77,7 @@ class ContractFileRecord:
     root_types: tuple[tuple[str, str], ...] = ()
     declarations: tuple[FieldOccurrence, ...] = ()
     references: tuple[ReferenceOccurrence, ...] = ()
+    partial_reasons: tuple[str, ...] = ()
 
 
 def _is_contract_path(path: str) -> bool:
@@ -98,7 +99,7 @@ def _graphql_declarations(content: str) -> tuple[FieldOccurrence, ...]:
         )
         for definition in parse_schema(content)
         for field in definition.fields
-    )[:_MAX_CANDIDATES_PER_FILE])
+    ))
 
 
 def _graphql_references(
@@ -111,7 +112,7 @@ def _graphql_references(
         for item in parse_operations(
             content,
             embedded_only=embedded_only,
-        )[:_MAX_CANDIDATES_PER_FILE]
+        )
     )
 
 
@@ -146,7 +147,7 @@ def _record(artifact: FileArtifact) -> ContractFileRecord | None:
         return None
     contract = _is_contract_path(artifact.path)
     lowered = artifact.path.casefold()
-    declarations = (
+    all_declarations = (
         _graphql_declarations(artifact.content)
         if lowered.endswith((".graphqls", ".graphql")) and contract
         else ()
@@ -170,6 +171,17 @@ def _record(artifact: FileArtifact) -> ContractFileRecord | None:
         references = tuple(sorted({*references, *_json_references(artifact.content)}))
     if not contract and not references:
         return None
+    partial_reasons = []
+    declarations = all_declarations[:_MAX_CANDIDATES_PER_FILE]
+    if len(all_declarations) > len(declarations):
+        partial_reasons.append(
+            f"declarations:{len(all_declarations) - len(declarations)}"
+        )
+    admitted_references = references[:_MAX_CANDIDATES_PER_FILE]
+    if len(references) > len(admitted_references):
+        partial_reasons.append(
+            f"references:{len(references) - len(admitted_references)}"
+        )
     return ContractFileRecord(
         path=artifact.path,
         is_contract=contract,
@@ -179,7 +191,8 @@ def _record(artifact: FileArtifact) -> ContractFileRecord | None:
             else ()
         ),
         declarations=tuple(declarations),
-        references=tuple(references),
+        references=tuple(admitted_references),
+        partial_reasons=tuple(sorted(partial_reasons)),
     )
 
 
@@ -207,6 +220,7 @@ def _record_mapping(record: ContractFileRecord) -> dict[str, object]:
             }
             for item in record.references
         ],
+        "partialReasons": list(record.partial_reasons),
     }
 
 
@@ -269,6 +283,9 @@ def _record_from_mapping(value: object) -> ContractFileRecord:
         )),
         declarations=declarations(),
         references=references(),
+        partial_reasons=tuple(sorted(
+            str(reason) for reason in value.get("partialReasons", [])
+        )),
     )
 
 
@@ -277,8 +294,6 @@ class ContractGraphSession:
     plugin_id: str
     revision: str
     records: dict[str, ContractFileRecord] = field(default_factory=dict)
-    baseline_records: dict[str, ContractFileRecord] = field(default_factory=dict)
-    changed_paths: set[str] = field(default_factory=set)
 
     @classmethod
     def restore(
@@ -314,12 +329,10 @@ class ContractGraphSession:
             plugin_id=plugin_id,
             revision=revision,
             records=dict(records),
-            baseline_records=dict(records),
         )
 
     def ingest(self, artifacts: tuple[FileArtifact, ...]) -> None:
         for artifact in artifacts:
-            self.changed_paths.add(artifact.path)
             self.records.pop(artifact.path, None)
             record = _record(artifact)
             if record is not None:
@@ -494,79 +507,6 @@ class ContractGraphSession:
                 ))
         return tuple(sorted(packets))
 
-    @staticmethod
-    def _fact_identity(fact: GraphFact) -> tuple[object, ...]:
-        return (
-            fact.kind,
-            fact.source,
-            fact.relation,
-            fact.target,
-            fact.path,
-            fact.attributes,
-            fact.related_paths,
-        )
-
-    def _removed_packets(
-        self,
-        current: tuple[ArchitecturePacket, ...],
-    ) -> tuple[ArchitecturePacket, ...]:
-        if not self.baseline_records or not self.changed_paths:
-            return ()
-        baseline = self._packets_for(self.baseline_records)
-        current_identities = {
-            self._fact_identity(fact)
-            for packet in current
-            for fact in packet.facts
-        }
-        removed: dict[str, set[GraphFact]] = {}
-        for packet in baseline:
-            for fact in packet.facts:
-                if not self.changed_paths.intersection(
-                    {fact.path, *fact.related_paths}
-                ):
-                    continue
-                if self._fact_identity(fact) in current_identities:
-                    continue
-                attributes = dict(fact.attributes)
-                field_name = attributes.get("field", attributes.get("reference", ""))
-                related_paths = fact.related_paths
-                removed.setdefault(fact.path, set()).add(GraphFact(
-                    "data-contract-pr-removed-reference",
-                    fact.source,
-                    "removed-declared-field-reference",
-                    fact.target,
-                    fact.path,
-                    fact.line,
-                    attributes=(
-                        ("field", field_name),
-                        ("originalKind", fact.kind),
-                        ("state", "absent-in-pr-overlay"),
-                    ),
-                    related_paths=related_paths,
-                ))
-        return tuple(sorted(
-            ArchitecturePacket(
-                plugin_id=self.plugin_id,
-                kind="data-contract-reference-delta",
-                key=f"removed:{path}",
-                paths=tuple(sorted({
-                    path,
-                    *(
-                        related_path
-                        for fact in facts
-                        for related_path in fact.related_paths
-                    ),
-                })),
-                facts=tuple(sorted(facts)),
-                attributes=(
-                    ("evidenceRole", "navigation"),
-                    ("state", "base-to-pr-transition"),
-                ),
-            )
-            for path, facts in sorted(removed.items())
-            if facts
-        ))
-
     def _snapshot(self) -> RepositorySnapshot:
         raw = json.dumps(
             [
@@ -587,9 +527,25 @@ class ContractGraphSession:
 
     def finish(self, dependencies: RepositoryAnalysis):
         current = self._packets_for(self.records)
+        diagnostics = tuple(
+            PluginDiagnostic(
+                code="data-contract-candidate-limit",
+                message=(
+                    "data-contract candidates were omitted beyond the "
+                    f"{_MAX_CANDIDATES_PER_FILE}-candidate file admission: "
+                    + ", ".join(record.partial_reasons)
+                ),
+                plugin_id=self.plugin_id,
+                path=record.path,
+                recoverable=True,
+            )
+            for record in sorted(self.records.values())
+            if record.partial_reasons
+        )
         return PluginOutcome.handled(RepositoryAnalysis(
-            packets=tuple(sorted((*current, *self._removed_packets(current)))),
+            packets=current,
             snapshots=(self._snapshot(),),
+            diagnostics=diagnostics,
         ))
 
 
@@ -614,7 +570,6 @@ class DataContractsPlugin:
         if not paths:
             return PluginOutcome.abstained()
         return PluginOutcome.handled(ReviewContribution(rules=(
-            "A data-contract-pr-removed-reference is base-to-PR navigation evidence only; require changed-hunk proof of harm.",
             "Data-contract facts require typed GraphQL traversal or an explicit schema reference; only current source, tests, or an exact diagnostic can prove incompatibility.",
         )))
 

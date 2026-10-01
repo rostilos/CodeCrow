@@ -34,7 +34,7 @@ def process_review_evidence_scopes(
 ) -> ProcessedReviewEvidenceScopes:
     """Parse delta review evidence and full PR state independently.
 
-    This helper performs no VCS, RAG, embedding, or model call. The full PR
+    This helper performs no VCS, repository retrieval, or model call. The full PR
     parse is used only by the fixed-budget Stage 2 ledger.
     """
     review_raw_diff = select_review_evidence_diff(request)

@@ -252,3 +252,15 @@ def create_user_friendly_error(error: Exception) -> str:
     
     # Return sanitized message
     return sanitize_error_for_display(error_str)
+
+
+def create_error_response(error_message: str, exception_str: str = "") -> dict:
+    """Return the existing HTTP review error envelope without synthetic issues."""
+    full_message = f"{error_message}: {exception_str}" if exception_str else error_message
+    return {
+        "status": "error",
+        "comment": full_message,
+        "issues": [],
+        "error": True,
+        "error_message": full_message,
+    }

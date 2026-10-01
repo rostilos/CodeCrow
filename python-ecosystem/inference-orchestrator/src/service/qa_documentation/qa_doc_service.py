@@ -83,7 +83,7 @@ class QaDocumentationService:
             ai_model=ai_model,
             ai_api_key=ai_api_key,
             ai_base_url=ai_base_url,
-            max_tokens=16_384,  # QA docs need room for structured JSON output
+            max_tokens=16_384,
         )
 
         orchestrator = QaDocOrchestrator(llm=llm)
@@ -123,7 +123,14 @@ class QaDocumentationService:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _create_llm(self, ai_provider=None, ai_model=None, ai_api_key=None, ai_base_url=None, max_tokens=None):
+    def _create_llm(
+        self,
+        ai_provider=None,
+        ai_model=None,
+        ai_api_key=None,
+        ai_base_url=None,
+        max_tokens=None,
+    ):
         """Create LLM instance. Prefers per-request credentials over server-level env vars."""
         provider = ai_provider or self._ai_provider
         model = ai_model or self._ai_model

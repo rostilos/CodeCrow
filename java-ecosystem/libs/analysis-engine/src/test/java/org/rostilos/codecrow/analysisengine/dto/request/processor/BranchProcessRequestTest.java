@@ -63,30 +63,6 @@ class BranchProcessRequestTest {
     }
 
     @Nested
-    @DisplayName("Archive")
-    class Archive {
-
-        @Test
-        @DisplayName("should get and set archive")
-        void shouldGetAndSetArchive() {
-            BranchProcessRequest request = new BranchProcessRequest();
-            byte[] archive = new byte[]{1, 2, 3, 4, 5};
-            
-            request.setArchive(archive);
-            
-            assertThat(request.getArchive()).isEqualTo(archive);
-        }
-
-        @Test
-        @DisplayName("should handle null archive")
-        void shouldHandleNullArchive() {
-            BranchProcessRequest request = new BranchProcessRequest();
-            
-            assertThat(request.getArchive()).isNull();
-        }
-    }
-
-    @Nested
     @DisplayName("Default Values")
     class DefaultValues {
 
@@ -100,7 +76,6 @@ class BranchProcessRequestTest {
             assertThat(request.getCommitHash()).isNull();
             assertThat(request.getAnalysisType()).isNull();
             assertThat(request.getSourcePrNumber()).isNull();
-            assertThat(request.getArchive()).isNull();
         }
     }
 

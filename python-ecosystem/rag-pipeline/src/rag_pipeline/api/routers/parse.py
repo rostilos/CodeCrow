@@ -2,14 +2,64 @@
 import logging
 from fastapi import APIRouter
 
+from ...core.loader import REPOSITORY_FILE_SIZE_LIMIT_CODE
+from ...models.config import DEFAULT_MAX_FILE_SIZE_BYTES
 from ..models import ParseFileRequest, ParseBatchRequest, ParsedFileMetadata
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["parse"])
 
 
-@router.post("/parse", response_model=ParsedFileMetadata)
-def parse_file(request: ParseFileRequest):
+def _configured_max_file_size_bytes() -> int:
+    """Read the lifecycle-owned ceiling without request-local configuration."""
+    from ..api import config, index_manager
+
+    runtime_config = config or getattr(index_manager, "config", None)
+    configured = getattr(
+        runtime_config,
+        "max_file_size_bytes",
+        DEFAULT_MAX_FILE_SIZE_BYTES,
+    )
+    if (
+        isinstance(configured, bool)
+        or not isinstance(configured, int)
+        or configured < 1
+    ):
+        return DEFAULT_MAX_FILE_SIZE_BYTES
+    return configured
+
+
+def _oversized_parse_result(
+    request: ParseFileRequest,
+) -> ParsedFileMetadata | None:
+    """Return an observable whole-file skip before document/parser work."""
+    max_file_size_bytes = _configured_max_file_size_bytes()
+    size_bytes = len(request.content.encode("utf-8"))
+    if size_bytes <= max_file_size_bytes:
+        return None
+
+    logger.warning(
+        "Parse source exceeds the configured repository-index ceiling; "
+        "skipping it without truncation: code=%s path=%s bytes=%d max_bytes=%d",
+        REPOSITORY_FILE_SIZE_LIMIT_CODE,
+        request.path,
+        size_bytes,
+        max_file_size_bytes,
+    )
+    return ParsedFileMetadata(
+        path=request.path,
+        language=request.language,
+        success=False,
+        error=(
+            f"{REPOSITORY_FILE_SIZE_LIMIT_CODE}: file omitted as a whole "
+            "without truncation; "
+            f"size_bytes={size_bytes} "
+            f"max_file_size_bytes={max_file_size_bytes}"
+        ),
+    )
+
+
+def _parse_admitted_file(request: ParseFileRequest) -> ParsedFileMetadata:
     """
     Parse a single file and extract AST metadata WITHOUT indexing.
 
@@ -17,7 +67,7 @@ def parse_file(request: ParseFileRequest):
     - imports: Import statements
     - extends: Parent classes/interfaces
     - implements: Implemented interfaces
-    - semantic_names: Function/class/method names defined
+    - symbol_names: Function/class/method names defined
     - namespace: Package/namespace
     - calls: Called functions/methods
 
@@ -38,17 +88,16 @@ def parse_file(request: ParseFileRequest):
 
         splitter = ASTCodeSplitter(
             max_chunk_size=50000,
-            enrich_embedding_text=False
         )
 
-        from llama_index.core.schema import Document as LlamaDocument
-        doc = LlamaDocument(text=request.content, metadata={'path': request.path})
+        from ...core.documents import Document
+        doc = Document(text=request.content, metadata={'path': request.path})
         nodes = splitter.split_documents([doc])
 
         imports = set()
         extends = set()
         implements = set()
-        semantic_names = set()
+        symbol_names = set()
         calls = set()
         namespace = None
         parent_classes = set()
@@ -61,8 +110,8 @@ def parse_file(request: ParseFileRequest):
                 extends.update(meta['extends'])
             if meta.get('implements'):
                 implements.update(meta['implements'])
-            if meta.get('semantic_names'):
-                semantic_names.update(meta['semantic_names'])
+            if meta.get('symbol_names'):
+                symbol_names.update(meta['symbol_names'])
             if meta.get('calls'):
                 calls.update(meta['calls'])
             if meta.get('namespace') and not namespace:
@@ -78,7 +127,7 @@ def parse_file(request: ParseFileRequest):
             imports=sorted(list(imports)),
             extends=sorted(list(extends)),
             implements=sorted(list(implements)),
-            semantic_names=sorted(list(semantic_names)),
+            symbol_names=sorted(symbol_names),
             parent_class=parent_class,
             namespace=namespace,
             calls=sorted(list(calls)),
@@ -92,6 +141,15 @@ def parse_file(request: ParseFileRequest):
             success=False,
             error=str(e)
         )
+
+
+@router.post("/parse", response_model=ParsedFileMetadata)
+def parse_file(request: ParseFileRequest):
+    """Apply whole-file admission, then extract bounded AST metadata."""
+    oversized_result = _oversized_parse_result(request)
+    if oversized_result is not None:
+        return oversized_result
+    return _parse_admitted_file(request)
 
 
 @router.post("/parse/batch")

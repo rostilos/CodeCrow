@@ -677,6 +677,7 @@ public class GitLabClient implements VcsClient {
         if (baseCommit == null || baseCommit.isBlank()) {
             baseCommit = metadata.path("diff_refs").path("start_sha").asText(null);
         }
+        String targetHeadCommit = metadata.path("diff_refs").path("start_sha").asText(null);
         String headCommit = metadata.path("diff_refs").path("head_sha").asText(null);
         if (headCommit == null || headCommit.isBlank()) {
             headCommit = metadata.path("sha").asText(null);
@@ -687,6 +688,7 @@ public class GitLabClient implements VcsClient {
                 getTextOrNull(metadata, "description"),
                 getTextOrNull(metadata, "source_branch"),
                 getTextOrNull(metadata, "target_branch"),
+                targetHeadCommit,
                 baseCommit,
                 headCommit,
                 state,

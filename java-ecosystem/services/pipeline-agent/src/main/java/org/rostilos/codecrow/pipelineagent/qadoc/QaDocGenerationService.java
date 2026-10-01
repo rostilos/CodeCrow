@@ -345,8 +345,8 @@ public class QaDocGenerationService {
      * replacing the previous "No analysis summary available." fallback.
      * <p>
      * The output is Markdown-formatted and grouped by file, with severity breakdown,
-     * issue titles, reasons, and suggested fixes. Truncated to ~10 KB to avoid
-     * exceeding LLM context limits.
+     * issue titles, reasons, and suggested fixes. Every active issue record is retained;
+     * request-aware prompt packing is handled by the inference orchestrator.
      */
     static String buildAnalysisSummary(CodeAnalysis analysis) {
         if (analysis == null) {
@@ -404,12 +404,12 @@ public class QaDocGenerationService {
 
                 // Reason / description
                 if (issue.getReason() != null && !issue.getReason().isBlank()) {
-                    sb.append("  ").append(truncate(issue.getReason(), 400)).append('\n');
+                    sb.append("  ").append(issue.getReason()).append('\n');
                 }
 
                 // Suggested fix
                 if (issue.getSuggestedFixDescription() != null && !issue.getSuggestedFixDescription().isBlank()) {
-                    sb.append("  **Suggested fix**: ").append(truncate(issue.getSuggestedFixDescription(), 300)).append('\n');
+                    sb.append("  **Suggested fix**: ").append(issue.getSuggestedFixDescription()).append('\n');
                 }
 
                 // Line location
@@ -424,18 +424,6 @@ public class QaDocGenerationService {
             sb.append('\n');
         }
 
-        // Truncate to prevent prompt bloat
-        String result = sb.toString();
-        if (result.length() > 10_000) {
-            result = result.substring(0, 10_000)
-                    + "\n\n... (truncated — " + activeIssues.size() + " total active issues across "
-                    + byFile.size() + " files)";
-        }
-        return result;
-    }
-
-    private static String truncate(String text, int maxLength) {
-        if (text == null || text.length() <= maxLength) return text;
-        return text.substring(0, maxLength) + "…";
+        return sb.toString();
     }
 }

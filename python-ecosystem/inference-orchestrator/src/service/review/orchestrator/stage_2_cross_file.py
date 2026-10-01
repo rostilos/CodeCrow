@@ -1,57 +1,113 @@
-"""
-Stage 2: Cross-file & architectural analysis — duplication, conflicts, data flow.
-"""
+"""Stage 2: Cross-file and architectural analysis."""
+from service.review.execution_scheduler import review_model_slot
 import json
 import hashlib
 import logging
-import os
-from collections import Counter
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, replace
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from model.enrichment import PrEnrichmentDataDto
 from model.multi_stage import ReviewPlan, CrossFileAnalysisResult
-from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import ProcessedDiff
 from utils.task_context_builder import build_task_context
 
 from utils.llm_response import extract_llm_response_text
-from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
-from service.review.orchestrator.context_helpers import format_duplication_context
-from service.review.orchestrator.stage_helpers import format_project_rules_digest
+from service.review.orchestrator.json_utils import (
+    parse_llm_response,
+    resolve_structured_output,
+    supports_structured_output,
+)
+from service.review.orchestrator.structured_output import (
+    format_response_diagnostics,
+    invoke_structured_output,
+    output_token_request_kwargs,
+)
 from service.review.pr_evidence import (
     PrEvidenceLedger,
     build_pr_evidence_ledger,
 )
+from service.review.orchestrator.inference_policy import (
+    ReviewInferenceProfile,
+    build_review_inference_profile,
+)
+from service.review.orchestrator.stage_2_semantic_packets import (
+    STAGE2_INPUT_TOKEN_TARGET,
+    STAGE_2_ARCHITECTURE_CONTEXT_CHAR_BUDGET,
+    Stage2SemanticPacketInput,
+    Stage2Prompt,
+    _Stage2Prompt,
+    _architecture_payload,
+    _estimated_prompt_tokens,
+    _format_complete_project_rules,
+    _stage_2_input_token_budget,
+    build_stage_2_prompts,
+)
+from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
+from utils.llm_delegate import unwrap_llm_delegate
 
 logger = logging.getLogger(__name__)
 
 
-def _env_int(name: str, default: int) -> int:
-    value = os.environ.get(name)
-    if value is None or not value.strip():
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        logger.warning("Invalid integer for %s=%r; using %s", name, value, default)
-        return default
+# Stage 2 returns a compact typed finding list. A finite stage-local completion
+# budget prevents reasoning models from spending the provider's entire context
+# window without emitting the schema. The reasoning-free recovery gets the same
+# bound so a malformed direct response cannot run away either.
+STAGE2_MAX_OUTPUT_TOKENS = 16_384
 
 
-STAGE_2_ARCHITECTURE_CONTEXT_CHAR_BUDGET = max(
-    8_000,
-    _env_int("REVIEW_STAGE_2_ARCHITECTURE_CONTEXT_CHAR_BUDGET", 64_000),
-)
-STAGE_2_FINDINGS_CHAR_BUDGET = max(
-    16_000,
-    _env_int("REVIEW_STAGE_2_FINDINGS_CHAR_BUDGET", 96_000),
-)
+def _stage_2_output_token_limit(llm: Any) -> int:
+    """Respect a provider/model cap that is lower than the Stage 2 ceiling."""
+    limits = [STAGE2_MAX_OUTPUT_TOKENS]
+    for candidate in (llm, unwrap_llm_delegate(llm)):
+        for attribute in ("max_tokens", "max_output_tokens"):
+            configured = getattr(candidate, attribute, None)
+            if (
+                isinstance(configured, int)
+                and not isinstance(configured, bool)
+                and configured > 0
+            ):
+                limits.append(configured)
+    return min(limits)
 
-_STAGE_2_STRIP_FIELDS = {
-    'suggestedFixDiff', 'suggestedFixDescription',
-    'resolutionReason', 'resolutionExplanation', 'resolvedInCommit', 'visibility',
-}
+
+class Stage2GenerationError(ValueError):
+    """All core Stage 2 responses were exhausted without a valid result."""
+
+
+def _build_stage_2_prompts(
+    *,
+    repo_slug: str,
+    pr_title: str,
+    commit_hash: str,
+    stage_1_findings_json: str,
+    architecture_context: str,
+    migrations: str,
+    cross_file_concerns: Sequence[str],
+    project_rules: str,
+    task_context: str,
+    task_history_context: str,
+    evidence_ledger: PrEvidenceLedger,
+    token_budget: int = STAGE2_INPUT_TOKEN_TARGET,
+    max_packets: int = 4,
+) -> List[str]:
+    """Compatibility facade over the typed semantic-packet boundary."""
+    return build_stage_2_prompts(Stage2SemanticPacketInput(
+        repo_slug=repo_slug,
+        pr_title=pr_title,
+        commit_hash=commit_hash,
+        stage_1_findings_json=stage_1_findings_json,
+        architecture_context=architecture_context,
+        migrations=migrations,
+        cross_file_concerns=cross_file_concerns,
+        project_rules=project_rules,
+        task_context=task_context,
+        task_history_context=task_history_context,
+        evidence_ledger=evidence_ledger,
+        token_budget=token_budget,
+        max_packets=max_packets,
+    ))
 
 
 async def execute_stage_2_cross_file(
@@ -60,21 +116,31 @@ async def execute_stage_2_cross_file(
     stage_1_issues: List[CodeReviewIssue],
     plan: ReviewPlan,
     processed_diff: Optional[ProcessedDiff] = None,
-    rag_client=None,
     fallback_llm=None,
-    prefetched_cross_module_context: Optional[str] = None,
-    visible_evidence_by_id: Optional[
-        Dict[str, tuple[Dict[str, Any], ...]]
-    ] = None,
     visible_prompt_hunk_ids: Optional[set[str]] = None,
     prompt_provenance: Optional[Dict[str, str]] = None,
     pr_evidence_ledger: Optional[PrEvidenceLedger] = None,
+    inference_profile: Optional[ReviewInferenceProfile] = None,
 ) -> CrossFileAnalysisResult:
-    issues_json = _slim_issues_for_stage_2(stage_1_issues)
-    architecture_context = _build_architecture_context(
-        enrichment=request.enrichmentData,
-        changed_files=request.changedFiles,
+    inference_profile = inference_profile or build_review_inference_profile(
+        request,
+        processed_diff,
     )
+    issues_json = _slim_issues_for_stage_2(stage_1_issues)
+    try:
+        architecture_context = _build_architecture_context(
+            enrichment=request.enrichmentData,
+            changed_files=request.changedFiles,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Optional Stage 2 architecture enrichment could not be rendered; "
+            "continuing with core PR evidence: %s",
+            exc,
+        )
+        architecture_context = (
+            "No architecture context available (enrichment rendering failed)."
+        )
     migrations = _detect_migration_paths(processed_diff)
     evidence_ledger = pr_evidence_ledger or build_pr_evidence_ledger(
         processed_diff,
@@ -94,20 +160,8 @@ async def execute_stage_2_cross_file(
             else ""
         ),
     )
-    if visible_prompt_hunk_ids is not None:
-        visible_prompt_hunk_ids.clear()
-        visible_prompt_hunk_ids.update(evidence_ledger.delta_hunk_ids)
-    if prefetched_cross_module_context is not None:
-        cross_module_context = prefetched_cross_module_context
-    else:
-        cross_module_context = await prefetch_stage_2_cross_module_context(
-            rag_client=rag_client,
-            request=request,
-            processed_diff=processed_diff,
-            visible_evidence_by_id=visible_evidence_by_id,
-        )
-
-    prompt = PromptBuilder.build_stage_2_cross_file_prompt(
+    input_token_budget = _stage_2_input_token_budget(request)
+    prompts = _build_stage_2_prompts(
         repo_slug=request.projectVcsRepoSlug,
         pr_title=request.prTitle or "",
         commit_hash=request.currentCommitHash or request.commitHash or "",
@@ -115,72 +169,420 @@ async def execute_stage_2_cross_file(
         architecture_context=architecture_context,
         migrations=migrations,
         cross_file_concerns=plan.cross_file_concerns,
-        cross_module_context=cross_module_context,
-        project_rules=format_project_rules_digest(request.projectRules),
+        project_rules=_format_complete_project_rules(request.projectRules),
         task_context=(
-            build_task_context(request.taskContext, max_description_length=4000)
+            build_task_context(request.taskContext)
             or "No task context available."
         ),
         task_history_context=_build_task_history_context(request),
-        pr_change_summary=evidence_ledger.full_pr_context,
-        incremental_delta_summary=evidence_ledger.incremental_delta_context,
+        evidence_ledger=evidence_ledger,
+        token_budget=input_token_budget,
+        max_packets=inference_profile.invocation_cap("stage_2_packets"),
     )
+    if visible_prompt_hunk_ids is not None:
+        visible_prompt_hunk_ids.clear()
+        for prompt in prompts:
+            visible_prompt_hunk_ids.update(
+                getattr(prompt, "visible_hunk_ids", ())
+            )
+
+    prompt_digests = [_prompt_digest(prompt) for prompt in prompts]
     if prompt_provenance is not None:
         prompt_provenance.clear()
-        prompt_provenance["generationPromptDigest"] = (
-            "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        prompt_provenance["generationPromptDigests"] = json.dumps(
+            prompt_digests,
+            separators=(",", ":"),
+        )
+        prompt_provenance["generationPromptCount"] = str(len(prompts))
+        prompt_provenance["omittedPacketCount"] = str(max(
+            (getattr(prompt, "omitted_packet_count", 0) for prompt in prompts),
+            default=0,
+        ))
+        prompt_provenance["omittedUnitCount"] = str(max(
+            (getattr(prompt, "omitted_unit_count", 0) for prompt in prompts),
+            default=0,
+        ))
+        prompt_provenance["omittedHunkCount"] = str(max(
+            (getattr(prompt, "omitted_hunk_count", 0) for prompt in prompts),
+            default=0,
+        ))
+        prompt_provenance["completePrEvidenceVisible"] = (
+            "true"
+            if len(prompts) == 1
+            and bool(getattr(prompts[0], "complete_pr_evidence_visible", False))
+            else "false"
+        )
+        if len(prompts) == 1:
+            prompt_provenance["generationPromptDigest"] = prompt_digests[0]
+
+    successful_results: List[
+        tuple[CrossFileAnalysisResult, _Stage2Prompt]
+    ] = []
+    optional_failures = 0
+    core_failures = 0
+    core_successes = 0
+    for index, prompt in enumerate(prompts, start=1):
+        estimated_tokens = _estimated_prompt_tokens(prompt)
+        logger.info(
+            "Stage 2 prompt assembled: shard=%d/%d chars=%d "
+            "estimated_tokens=%d target_tokens=%d",
+            index,
+            len(prompts),
+            len(prompt),
+            estimated_tokens,
+            input_token_budget,
+        )
+        result = await _invoke_stage_2_llm(
+            llm,
+            prompt,
+            label=(
+                "structured primary"
+                if len(prompts) == 1
+                else (
+                    f"structured primary semantic-shard-{index}-of-"
+                    f"{len(prompts)}"
+                )
+            ),
+        )
+        retry_llm = (
+            fallback_llm
+            if fallback_llm is not None and fallback_llm is not llm
+            else llm
+        )
+        if result is None:
+            logger.info(
+                "Stage 2 structured response was unusable for semantic shard "
+                "%d/%d; retrying once as a reasoning-free direct output "
+                "request",
+                index,
+                len(prompts),
+            )
+            result = await _invoke_stage_2_llm(
+                retry_llm,
+                prompt,
+                label=(
+                    "direct-output recovery"
+                    if len(prompts) == 1
+                    else (
+                        f"direct-output recovery semantic-shard-{index}-of-"
+                        f"{len(prompts)}"
+                    )
+                ),
+                force_unstructured=True,
+            )
+        if result is None:
+            if bool(getattr(prompt, "optional_enrichment_only", False)):
+                optional_failures += 1
+                logger.warning(
+                    "Optional Stage 2 enrichment shard failed open: "
+                    "shard=%d/%d digest=%s",
+                    index,
+                    len(prompts),
+                    prompt_digests[index - 1],
+                )
+                continue
+            core_failures += 1
+            logger.warning(
+                "Core Stage 2 semantic shard exhausted its response attempts; "
+                "continuing with remaining shards: shard=%d/%d digest=%s",
+                index,
+                len(prompts),
+                prompt_digests[index - 1],
+            )
+            continue
+        if not bool(getattr(prompt, "optional_enrichment_only", False)):
+            core_successes += 1
+        successful_results.append((
+            result,
+            prompt
+            if isinstance(prompt, _Stage2Prompt)
+            else _Stage2Prompt(
+                prompt,
+                visible_hunk_ids=evidence_ledger.delta_hunk_ids,
+            ),
+        ))
+
+    if prompt_provenance is not None:
+        prompt_provenance["optionalEnrichmentShardFailures"] = str(
+            optional_failures
+        )
+        prompt_provenance["coreSemanticShardFailures"] = str(core_failures)
+        if core_failures:
+            prompt_provenance["completePrEvidenceVisible"] = "false"
+
+    if core_successes == 0:
+        raise Stage2GenerationError(
+            "Stage 2 exhausted every core semantic shard response "
+            f"({core_failures} failed core shard(s))"
         )
 
-    result = await _invoke_stage_2_llm(llm, prompt, label="capped")
-    if result is not None:
-        return result
-
-    if fallback_llm is not None and fallback_llm is not llm:
-        logger.info("Stage 2 failed with capped LLM; retrying without output cap")
-        result = await _invoke_stage_2_llm(fallback_llm, prompt, label="uncapped retry")
-        if result is not None:
-            return result
-
-    raise ValueError("Stage 2 cross-file analysis failed after capped and fallback attempts")
-
-
-async def prefetch_stage_2_cross_module_context(
-    rag_client,
-    request: ReviewRequestDto,
-    processed_diff: Optional[ProcessedDiff] = None,
-    visible_evidence_by_id: Optional[
-        Dict[str, tuple[Dict[str, Any], ...]]
-    ] = None,
-) -> str:
-    return await _fetch_cross_module_context(
-        rag_client=rag_client,
-        request=request,
-        processed_diff=processed_diff,
-        visible_evidence_by_id=visible_evidence_by_id,
+    merged, issue_provenance = _merge_stage_2_results_with_provenance(
+        successful_results
     )
+    if core_failures:
+        merged.confidence = "LOW"
+        logger.warning(
+            "Stage 2 produced a partial cross-file result: successful_core=%d "
+            "failed_core=%d; aggregate confidence forced to LOW",
+            core_successes,
+            core_failures,
+        )
+    if prompt_provenance is not None:
+        prompt_provenance["issuePromptDigests"] = json.dumps(
+            {
+                issue_id: provenance.prompt_digest
+                for issue_id, provenance in sorted(issue_provenance.items())
+            },
+            separators=(",", ":"),
+        )
+        prompt_provenance["issuePromptHunkIds"] = json.dumps(
+            {
+                issue_id: sorted(provenance.visible_hunk_ids)
+                for issue_id, provenance in sorted(issue_provenance.items())
+            },
+            separators=(",", ":"),
+        )
+        prompt_provenance["issuePromptEvidenceIds"] = json.dumps(
+            {
+                issue_id: sorted(provenance.visible_evidence_ids)
+                for issue_id, provenance in sorted(issue_provenance.items())
+            },
+            separators=(",", ":"),
+        )
+
+    return merged
 
 
-async def _invoke_stage_2_llm(llm, prompt: str, label: str) -> Optional[CrossFileAnalysisResult]:
-    if supports_structured_output(llm):
+async def _invoke_stage_2_llm(
+    llm,
+    prompt: str,
+    label: str,
+    force_unstructured: bool = False,
+) -> Optional[CrossFileAnalysisResult]:
+    output_token_limit = _stage_2_output_token_limit(llm)
+    if supports_structured_output(llm) and not force_unstructured:
         try:
-            structured_llm = llm.with_structured_output(CrossFileAnalysisResult)
-            result = await structured_llm.ainvoke(prompt)
+            invocation = await invoke_structured_output(
+                llm,
+                prompt,
+                CrossFileAnalysisResult,
+                effort=ReasoningEffort.LOW,
+                label=f"stage-2-{label}",
+                max_tokens=output_token_limit,
+            )
+            result = await resolve_structured_output(
+                invocation,
+                CrossFileAnalysisResult,
+                llm,
+            )
             if result:
                 logger.info("Stage 2 cross-file analysis completed with structured output (%s)", label)
                 return result
             logger.debug("Structured output returned empty Stage 2 result (%s)", label)
         except Exception as e:
-            logger.debug("Structured output failed for Stage 2 (%s): %s", label, e)
+            logger.warning(
+                "Structured output failed for Stage 2 (%s): error_type=%s",
+                label,
+                type(e).__name__,
+            )
+        return None
     else:
         logger.info("Structured output skipped for Stage 2 (%s); using prompt JSON parsing", label)
 
     try:
-        response = await llm.ainvoke(prompt)
+        async with review_model_slot("stage_2_cross_file"):
+            response = await llm.ainvoke(
+                prompt,
+                **output_token_request_kwargs(llm, output_token_limit),
+                **reasoning_request_kwargs(
+                    llm,
+                    ReasoningEffort.NONE
+                    if force_unstructured
+                    else ReasoningEffort.LOW,
+                ),
+            )
         content = extract_llm_response_text(response)
-        return await parse_llm_response(content, CrossFileAnalysisResult, llm)
+        if not content.strip():
+            logger.warning(
+                "Stage 2 raw fallback returned no content (%s): %s",
+                label,
+                format_response_diagnostics(response),
+            )
+        return await parse_llm_response(
+            content,
+            CrossFileAnalysisResult,
+            llm,
+            max_provider_repairs=0,
+        )
     except Exception as e:
         logger.debug("Stage 2 cross-file analysis failed (%s): %s", label, e)
         return None
+
+
+def _prompt_digest(prompt: str) -> str:
+    return "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class _IssueProvenance:
+    prompt_digest: str
+    visible_hunk_ids: frozenset[str]
+    visible_evidence_ids: frozenset[str]
+
+
+def _issue_identity(issue: Any) -> str:
+    payload = issue.model_dump()
+    payload.pop("id", None)
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _issue_has_visible_evidence(
+    issue: Any,
+    provenance: _IssueProvenance,
+) -> bool:
+    evidence_refs = {
+        str(evidence_id).strip()
+        for evidence_id in (getattr(issue, "evidenceRefs", ()) or ())
+        if str(evidence_id).strip()
+    }
+    return evidence_refs.issubset(provenance.visible_evidence_ids)
+
+
+def _issue_provenance_rank(
+    issue: Any,
+    provenance: _IssueProvenance,
+) -> tuple[Any, ...]:
+    """Prefer a citation-valid generating shard, then the stable tie-break."""
+    return (
+        not _issue_has_visible_evidence(issue, provenance),
+        provenance.prompt_digest,
+        tuple(sorted(provenance.visible_hunk_ids)),
+        tuple(sorted(provenance.visible_evidence_ids)),
+    )
+
+
+def _merge_stage_2_results_with_provenance(
+    result_prompts: Sequence[tuple[CrossFileAnalysisResult, _Stage2Prompt]],
+) -> tuple[CrossFileAnalysisResult, Dict[str, _IssueProvenance]]:
+    if not result_prompts:
+        raise ValueError("Stage 2 produced no semantic shard results")
+    if len(result_prompts) == 1:
+        result, prompt = result_prompts[0]
+        provenance = _IssueProvenance(
+            prompt_digest=_prompt_digest(prompt),
+            visible_hunk_ids=prompt.visible_hunk_ids,
+            visible_evidence_ids=prompt.visible_evidence_ids,
+        )
+        return result, {
+            issue.id: provenance
+            for issue in result.cross_file_issues
+        }
+
+    unique: Dict[str, tuple[Any, _IssueProvenance]] = {}
+    for result, prompt in result_prompts:
+        provenance = _IssueProvenance(
+            prompt_digest=_prompt_digest(prompt),
+            visible_hunk_ids=prompt.visible_hunk_ids,
+            visible_evidence_ids=prompt.visible_evidence_ids,
+        )
+        for issue in result.cross_file_issues:
+            key = _issue_identity(issue)
+            existing = unique.get(key)
+            if existing is None or _issue_provenance_rank(
+                issue,
+                provenance,
+            ) < _issue_provenance_rank(existing[0], existing[1]):
+                unique[key] = (issue, provenance)
+
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+    ordered_issues = sorted(
+        unique.items(),
+        key=lambda entry: (
+            severity_order.get(str(entry[1][0].severity).upper(), 5),
+            entry[1][0].primary_file,
+            entry[1][0].line if entry[1][0].line is not None else -1,
+            entry[1][0].title,
+            entry[0],
+        ),
+    )
+    renumbered = [
+        entry[1][0].model_copy(update={"id": f"CROSS_{index:03d}"})
+        for index, entry in enumerate(ordered_issues, start=1)
+    ]
+    issue_provenance = {
+        f"CROSS_{index:03d}": entry[1][1]
+        for index, entry in enumerate(ordered_issues, start=1)
+    }
+
+    def select(values: Iterable[str], ranking: Mapping[str, int], default: str) -> str:
+        normalized = [str(value).upper() for value in values]
+        if not normalized:
+            return default
+        return max(
+            normalized,
+            key=lambda value: (ranking.get(value, -1), value),
+        )
+
+    risk = select(
+        (result.pr_risk_level for result, _ in result_prompts),
+        {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3},
+        "LOW",
+    )
+    recommendations = [
+        "PASS"
+        if str(result.pr_recommendation).upper() in {"PASS", "APPROVE"}
+        else str(result.pr_recommendation).upper()
+        for result, _ in result_prompts
+    ]
+    recommendation = select(
+        recommendations,
+        {"PASS": 0, "APPROVE": 0, "PASS_WITH_WARNINGS": 1, "FAIL": 2},
+        "PASS",
+    )
+    # Confidence is conservative across shards: one low-confidence semantic
+    # component lowers the confidence of the aggregate statement.
+    confidence = select(
+        (result.confidence for result, _ in result_prompts),
+        {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "INFO": 3},
+        "INFO",
+    )
+    return CrossFileAnalysisResult(
+        pr_risk_level=risk,
+        cross_file_issues=renumbered,
+        pr_recommendation=recommendation,
+        confidence=confidence,
+    ), issue_provenance
+
+
+def _merge_stage_2_results(
+    results: Sequence[CrossFileAnalysisResult],
+) -> CrossFileAnalysisResult:
+    result, _ = _merge_stage_2_results_with_provenance([
+        (
+            item,
+            _Stage2Prompt(
+                f"deterministic-direct-merge:{index}",
+                visible_hunk_ids=(),
+            ),
+        )
+        for index, item in enumerate(results)
+    ])
+    return result
+
+
+def stage_2_coverage_ledger(
+    ledger: PrEvidenceLedger,
+    prompt_provenance: Mapping[str, str],
+) -> PrEvidenceLedger:
+    """Prevent partial Stage 2 shards from proving full-review omissions."""
+    if prompt_provenance.get("completePrEvidenceVisible") == "true":
+        return ledger
+    return replace(ledger, full_evidence_complete=False)
 
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -196,8 +598,6 @@ def _build_task_history_context(request: ReviewRequestDto) -> str:
 def _build_architecture_context(
     enrichment: Optional[PrEnrichmentDataDto],
     changed_files: Optional[List[str]],
-    *,
-    max_chars: Optional[int] = None,
 ) -> str:
     if not enrichment or not (
         getattr(enrichment, "relationships", None)
@@ -205,12 +605,6 @@ def _build_architecture_context(
     ):
         return "No architecture context available (enrichment data not provided)."
 
-    context_budget = max(
-        2_000,
-        max_chars
-        if max_chars is not None
-        else STAGE_2_ARCHITECTURE_CONTEXT_CHAR_BUDGET,
-    )
     relationships = sorted(
         (
             item
@@ -231,10 +625,10 @@ def _build_architecture_context(
             )
             if item
         ),
-        key=lambda item: (
-            0 if _has_structural_metadata(item) else 1,
-            item["path"],
-        ),
+        # Stable sort retains parser/provider order within the structural
+        # authority tier; lexical path order distorts numbered source order at
+        # a finite admission boundary.
+        key=lambda item: (0 if _has_structural_metadata(item) else 1,),
     )
     path_references = {
         path: f"P{index:03d}"
@@ -270,98 +664,29 @@ def _build_architecture_context(
         for item in metadata
     ]
 
-    # Relationship edges carry the direct cross-file proof, so reserve most of
-    # the section for them. Metadata still gets an independent allocation so a
-    # dense call graph cannot erase inheritance/parser state for every file.
-    empty_payload = _architecture_payload(
-        referenced_relationships,
-        [],
-        referenced_metadata,
-        [],
-        {},
-    )
-    fixed_chars = len(
-        "Structured enrichment context (bounded JSON):\n"
-        + json.dumps(
-            empty_payload,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-    )
-    entry_budget = max(1_000, context_budget - fixed_chars)
-    relationships_selected = _pack_json_entries(
-        referenced_relationships,
-        int(entry_budget * 0.72),
-    )
-    metadata_selected = _pack_json_entries(
-        referenced_metadata,
-        int(entry_budget * 0.28),
-    )
     payload = _architecture_payload(
         referenced_relationships,
-        relationships_selected,
         referenced_metadata,
-        metadata_selected,
-        _selected_path_table(
-            path_table,
-            relationships_selected,
-            metadata_selected,
-        ),
+        path_table,
     )
-    result = "Structured enrichment context (bounded JSON):\n" + json.dumps(
+    inventory = payload.get("inventory", {})
+    detail_complete = bool(inventory.get("metadata_detail_complete", True))
+    payload_label = (
+        "complete JSON"
+        if detail_complete
+        else "bounded JSON; omitted metadata counts are explicit"
+    )
+    result = f"Structured enrichment context ({payload_label}):\n" + json.dumps(
         payload,
         ensure_ascii=False,
         separators=(",", ":"),
     )
-
-    # Account for inventory/punctuation exactly. Remove low-priority complete
-    # entries rather than slicing JSON or returning an unterminated object.
-    while len(result) > context_budget and metadata_selected:
-        metadata_selected.pop()
-        payload = _architecture_payload(
-            referenced_relationships,
-            relationships_selected,
-            referenced_metadata,
-            metadata_selected,
-            _selected_path_table(
-                path_table,
-                relationships_selected,
-                metadata_selected,
-            ),
-        )
-        result = "Structured enrichment context (bounded JSON):\n" + json.dumps(
-            payload,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-    while len(result) > context_budget and relationships_selected:
-        relationships_selected.pop()
-        payload = _architecture_payload(
-            referenced_relationships,
-            relationships_selected,
-            referenced_metadata,
-            metadata_selected,
-            _selected_path_table(
-                path_table,
-                relationships_selected,
-                metadata_selected,
-            ),
-        )
-        result = "Structured enrichment context (bounded JSON):\n" + json.dumps(
-            payload,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-
     logger.info(
-        "Stage 2 architecture prompt budget: relationships=%d/%d, "
-        "metadata=%d/%d, chars=%d/%d",
-        len(relationships_selected),
+        "Stage 2 architecture prompt payload: relationships=%d, "
+        "metadata=%d, chars=%d",
         len(referenced_relationships),
-        len(metadata_selected),
         len(referenced_metadata),
         len(result),
-        context_budget,
     )
     return result
 
@@ -387,9 +712,6 @@ def _compact_relationship(value: Any) -> Dict[str, Any]:
     matched_on = getattr(value, "matchedOn", None)
     if isinstance(matched_on, str) and matched_on:
         result["matched_on"] = matched_on
-    strength = getattr(value, "strength", None)
-    if isinstance(strength, int):
-        result["strength"] = strength
     return result
 
 
@@ -417,11 +739,14 @@ def _compact_file_metadata(value: Any) -> Dict[str, Any]:
         field_value = getattr(value, source_field, None)
         if not isinstance(field_value, (list, tuple)):
             continue
-        normalized = sorted({
+        # Parser order is deterministic and carries locality (declared/base
+        # types first). Preserve that priority while removing exact repeats;
+        # lexical sorting would retain Type10 before Type2 at the cap boundary.
+        normalized = list(dict.fromkeys(
             item
             for item in field_value
             if isinstance(item, str) and item
-        })
+        ))
         if normalized:
             result[output_field] = normalized[:8]
             if len(normalized) > 8:
@@ -442,91 +767,12 @@ def _relationship_priority(item: Dict[str, Any]) -> tuple:
         "IMPLEMENTS": 0,
         "IMPORTS": 1,
         "CALLS": 2,
-        "SAME_PACKAGE": 3,
     }
     relationship_type = str(item.get("type", "")).upper()
-    strength = item.get("strength")
-    return (
-        type_priority.get(relationship_type, 2),
-        -(strength if isinstance(strength, int) else 0),
-        item.get("source", ""),
-        item.get("target", ""),
-        item.get("matched_on", ""),
-    )
-
-
-def _pack_json_entries(
-    entries: List[Dict[str, Any]],
-    char_budget: int,
-) -> List[Dict[str, Any]]:
-    selected: List[Dict[str, Any]] = []
-    used = 0
-    for entry in entries:
-        entry_chars = len(json.dumps(
-            entry,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )) + (1 if selected else 0)
-        if used + entry_chars > char_budget:
-            continue
-        selected.append(entry)
-        used += entry_chars
-    return selected
-
-
-def _selected_path_table(
-    path_table: Dict[str, str],
-    relationships: List[Dict[str, Any]],
-    metadata: List[Dict[str, Any]],
-) -> Dict[str, str]:
-    references = {
-        item[key]
-        for item in relationships
-        for key in ("source", "target")
-    } | {
-        item["path"]
-        for item in metadata
-    }
-    return {
-        reference: path_table[reference]
-        for reference in sorted(references)
-    }
-
-
-def _architecture_payload(
-    relationships: List[Dict[str, Any]],
-    relationships_selected: List[Dict[str, Any]],
-    metadata: List[Dict[str, Any]],
-    metadata_selected: List[Dict[str, Any]],
-    path_table: Dict[str, str],
-) -> Dict[str, Any]:
-    relationship_types = Counter(
-        str(item.get("type", "UNKNOWN"))
-        for item in relationships
-    )
-    return {
-        "inventory": {
-            "relationship_count": len(relationships),
-            "relationship_types": dict(sorted(relationship_types.items())),
-            "included_relationship_count": len(relationships_selected),
-            "omitted_relationship_count": (
-                len(relationships) - len(relationships_selected)
-            ),
-            "metadata_file_count": len(metadata),
-            "included_metadata_file_count": len(metadata_selected),
-            "omitted_metadata_file_count": len(metadata) - len(metadata_selected),
-            "omission_semantics": (
-                "Omitted bounded entries are unknown, not evidence that a "
-                "relationship is absent."
-            ),
-            "path_reference_semantics": (
-                "source, target, and metadata path values reference path_table."
-            ),
-        },
-        "path_table": path_table,
-        "relationships": relationships_selected,
-        "file_metadata": metadata_selected,
-    }
+    # ``sorted`` is stable: retain provider/source order within the same
+    # authority tier instead of lexically admitting component_10 before
+    # component_2 at a finite packet boundary.
+    return (type_priority.get(relationship_type, 2),)
 
 
 def _detect_migration_paths(processed_diff: Optional[ProcessedDiff]) -> str:
@@ -537,12 +783,9 @@ def _detect_migration_paths(processed_diff: Optional[ProcessedDiff]) -> str:
     )
 
 
-def _slim_issues_for_stage_2(
-    issues: List[CodeReviewIssue],
-    *,
-    max_chars: Optional[int] = None,
-) -> str:
-    slim: List[Dict[str, Any]] = []
+def _slim_issues_for_stage_2(issues: List[CodeReviewIssue]) -> str:
+    """Serialize every current Stage 1 finding without clipping its fields."""
+    current_findings: List[Dict[str, Any]] = []
     for issue in issues:
         d = issue.model_dump()
         # Resolved lifecycle records are returned so Java can update historical
@@ -550,247 +793,15 @@ def _slim_issues_for_stage_2(
         # architecture concerns.
         if d.get('isResolved') is True:
             continue
-        for key in _STAGE_2_STRIP_FIELDS:
-            d.pop(key, None)
         d = {
             key: value
             for key, value in d.items()
             if value is not None and value != "" and value is not False
         }
-        for key, limit in (
-            ("id", 200),
-            ("file", 500),
-            ("title", 300),
-            ("reason", 1_200),
-            ("codeSnippet", 600),
-        ):
-            value = d.get(key)
-            if isinstance(value, str) and len(value) > limit:
-                d[key] = (
-                    value[:limit].rstrip()
-                    + " [field truncated by deterministic Stage 2 budget]"
-                )
-        slim.append(d)
+        current_findings.append(d)
 
-    if not slim:
-        return "[]"
-
-    context_budget = max(
-        2_000,
-        max_chars if max_chars is not None else STAGE_2_FINDINGS_CHAR_BUDGET,
-    )
-    by_file: Dict[str, List[Dict[str, Any]]] = {}
-    for item in slim:
-        file_path = item.get("file")
-        group_key = file_path if isinstance(file_path, str) else "cross-file"
-        by_file.setdefault(group_key, []).append(item)
-    for values in by_file.values():
-        values.sort(key=_stage_2_issue_priority)
-
-    # First expose the highest-priority finding from every affected file, then
-    # consume remaining findings by severity and per-file offset. This avoids a
-    # noisy file erasing the PR-wide shape needed for cross-file reasoning.
-    candidates: List[Dict[str, Any]] = [
-        by_file[path][0]
-        for path in sorted(by_file)
-    ]
-    remaining = [
-        (offset, path, item)
-        for path, values in by_file.items()
-        for offset, item in enumerate(values[1:], start=1)
-    ]
-    candidates.extend(
-        item
-        for _, _, item in sorted(
-            remaining,
-            key=lambda value: (
-                _stage_2_issue_priority(value[2]),
-                value[0],
-                value[1],
-            ),
-        )
-    )
-
-    selected: List[Dict[str, Any]] = []
-    # Reserve enough space for a typed omission inventory if the cap is hit.
-    payload_budget = max(1_000, context_budget - 512)
-    used = 2
-    for item in candidates:
-        encoded = json.dumps(
-            item,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        added = len(encoded) + (1 if selected else 0)
-        if used + added > payload_budget:
-            continue
-        selected.append(item)
-        used += added
-
-    omitted = len(slim) - len(selected)
-    if omitted:
-        selected.append({
-            "_codecrow_prompt_inventory": {
-                "total_current_findings": len(slim),
-                "included_findings": len(selected),
-                "omitted_findings": omitted,
-                "omission_semantics": (
-                    "Omitted bounded findings remain valid Stage 1 findings; "
-                    "their absence here is not proof that a cross-file relation "
-                    "does not exist."
-                ),
-            }
-        })
-    result = json.dumps(
-        selected,
+    return json.dumps(
+        current_findings,
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    logger.info(
-        "Stage 2 findings prompt budget: included=%d/%d, chars=%d/%d",
-        len(slim) - omitted,
-        len(slim),
-        len(result),
-        context_budget,
-    )
-    return result
-
-
-def _stage_2_issue_priority(issue: Dict[str, Any]) -> tuple:
-    severity_rank = {
-        "CRITICAL": 0,
-        "HIGH": 1,
-        "MEDIUM": 2,
-        "LOW": 3,
-        "INFO": 4,
-    }
-    severity = str(issue.get("severity", "")).upper()
-    line = issue.get("line")
-    return (
-        severity_rank.get(severity, 5),
-        str(issue.get("category", "")),
-        line if isinstance(line, int) else 0,
-        str(issue.get("title", "")),
-        str(issue.get("reason", "")),
-    )
-
-
-async def _fetch_cross_module_context(
-    rag_client,
-    request: ReviewRequestDto,
-    processed_diff: Optional[ProcessedDiff] = None,
-    visible_evidence_by_id: Optional[
-        Dict[str, tuple[Dict[str, Any], ...]]
-    ] = None,
-) -> str:
-    if not rag_client:
-        return ""
-
-    base_revision_value = getattr(request, "baseCommitHash", None)
-    base_generation_receipt_value = getattr(
-        request,
-        "ragBaseGenerationManifestSha256",
-        None,
-    )
-    base_revision = (
-        base_revision_value
-        if isinstance(base_revision_value, str) and base_revision_value
-        else None
-    )
-    base_generation_receipt = (
-        base_generation_receipt_value
-        if (
-            isinstance(base_generation_receipt_value, str)
-            and base_generation_receipt_value
-        )
-        else None
-    )
-    if not base_revision and not base_generation_receipt:
-        logger.info(
-            "Stage 2 cross-module RAG skipped: no exact target-generation lease"
-        )
-        return ""
-    if not base_revision or not base_generation_receipt:
-        logger.info(
-            "Stage 2 cross-module RAG requires both immutable target revision "
-            "and generation receipt"
-        )
-        return ""
-
-    try:
-        rag_branch = request.get_rag_branch()
-        base_branch = request.get_rag_base_branch()
-        if not rag_branch:
-            logger.info(
-                "Stage 2 cross-module RAG skipped: missing authoritative target branch"
-            )
-            return ""
-        changed_files = request.changedFiles or []
-
-        queries = []
-        changed_files_json = json.dumps(changed_files, ensure_ascii=False)
-
-        if request.prTitle:
-            queries.append(
-                "cross-module duplicate search PR title:\n"
-                f"{request.prTitle}\nChanged files: {changed_files_json}"
-            )
-
-        if processed_diff:
-            for f in processed_diff.get_included_files():
-                queries.append(
-                    "cross-module duplicate search diff evidence:\n"
-                    f"File: {f.path}\n"
-                    f"{f.content}"
-                )
-
-        if not queries:
-            return ""
-
-        seen = set()
-        unique_queries = []
-        for q in queries:
-            if q not in seen and len(q) > 10:
-                seen.add(q)
-                unique_queries.append(q)
-        unique_queries = unique_queries[:10]
-
-        logger.info(f"Stage 2 cross-module RAG: {len(unique_queries)} queries")
-
-        dup_results = await rag_client.search_for_duplicates(
-            workspace=request.projectWorkspace,
-            project=request.projectNamespace,
-            branch=rag_branch,
-            queries=unique_queries,
-            top_k=6,
-            base_branch=base_branch,
-            repository_revision=base_revision,
-            repository_generation_manifest_sha256=(
-                base_generation_receipt
-            ),
-            collection_target=getattr(request, "ragCollectionTarget", None),
-        )
-
-        if not dup_results:
-            return ""
-
-        changed_set = set(changed_files)
-        formatted = format_duplication_context(
-            duplication_results=dup_results,
-            batch_file_paths=list(changed_set),
-            max_chunks=10,
-            visible_evidence_by_id=visible_evidence_by_id,
-        )
-
-        if formatted:
-            logger.info(f"Stage 2 cross-module context: {len(formatted)} chars")
-
-        return formatted
-
-    except Exception as e:
-        logger.info(
-            "Revision-bound cross-module context unavailable for Stage 2: %s: %s",
-            type(e).__name__,
-            e,
-        )
-        return ""

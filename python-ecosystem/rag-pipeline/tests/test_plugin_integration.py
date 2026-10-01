@@ -1,8 +1,6 @@
 from pathlib import Path
-from unittest.mock import patch
-
 import pytest
-from llama_index.core.schema import Document
+from rag_pipeline.core.documents import Document
 
 from codecrow_plugins import (
     FileArtifact,
@@ -12,52 +10,10 @@ from codecrow_plugins import (
     ProjectSelector,
     RepositoryFacts,
 )
-from rag_pipeline.core.splitter import ASTCodeSplitter
-from rag_pipeline.core.repository_overlay import build_overlay_capabilities
+from rag_pipeline.core.splitter import ASTCodeSplitter, ContentType
 
 
 PLUGINS_ROOT = Path(__file__).resolve().parents[3] / "analysis-plugins"
-
-
-def test_overlay_projects_complete_repository_plugins_for_inference():
-    catalog = PluginCatalog.discover(PLUGINS_ROOT)
-    effective_ids = tuple(
-        descriptor.id
-        for descriptor in catalog.registry.resolve(
-            ("data-contracts", "java", "python", "typescript")
-        )
-    )
-    evidence = {
-        plugin_id: (
-            f"indexed-target:main:sha256:target:{plugin_id}",
-        )
-        for plugin_id in effective_ids
-    }
-
-    capabilities = build_overlay_capabilities(
-        catalog.registry,
-        effective_ids,
-        "ignored-legacy-fingerprint",
-        (
-            "backend/Invoice.java",
-            "web/invoice.ts",
-            "worker/invoice.py",
-        ),
-        revision="0123456789abcdef",
-        detection_evidence=evidence,
-    )
-
-    assert ProjectSelector(catalog.registry).validate(
-        capabilities,
-        "0123456789abcdef",
-    ) == capabilities
-    assert capabilities.repository_plugins == effective_ids
-    assert capabilities.file_plugins == {
-        "backend/Invoice.java": ("java",),
-        "web/invoice.ts": ("typescript",),
-        "worker/invoice.py": ("python",),
-    }
-
 
 @pytest.mark.parametrize(
     ("path", "language_id", "source"),
@@ -94,7 +50,7 @@ def test_overlay_projects_complete_repository_plugins_for_inference():
         ),
     ),
 )
-def test_selected_language_plugins_produce_semantic_chunks(
+def test_selected_language_plugins_produce_complete_semantic_units(
     path,
     language_id,
     source,
@@ -113,17 +69,12 @@ def test_selected_language_plugins_produce_semantic_chunks(
     )
 
     assert chunks
-    assert any(
-        chunk.metadata.get("content_type") == "functions_classes"
-        for chunk in chunks
-    )
-    assert all(
-        chunk.metadata.get("plugin_syntax") == {
-            "plugin": language_id,
-            "language": language_id,
-        }
-        for chunk in chunks
-    )
+    assert all(not chunk.metadata.get("is_fragment") for chunk in chunks)
+    assert all(chunk.metadata["plugin_syntax"] == {
+        "plugin": language_id,
+        "language": language_id,
+    } for chunk in chunks)
+    assert all("structural_record_type" not in chunk.metadata for chunk in chunks)
 
 
 def test_magento_polyglot_repository_indexes_htaccess_with_neutral_fallback():
@@ -144,7 +95,7 @@ def test_magento_polyglot_repository_indexes_htaccess_with_neutral_fallback():
             "composer.json": '{"require":{"magento/framework":"*"}}',
         },
     ))
-    splitter = ASTCodeSplitter(parser_threshold=1000, plugin_runtime=runtime)
+    splitter = ASTCodeSplitter(plugin_runtime=runtime)
 
     chunks = splitter.split_documents(
         [Document(
@@ -158,11 +109,13 @@ def test_magento_polyglot_repository_indexes_htaccess_with_neutral_fallback():
         capabilities.repository_plugins
     )
     assert ".htaccess" not in capabilities.file_plugins
-    assert chunks
-    assert all("plugin_syntax" not in chunk.metadata for chunk in chunks)
+    assert len(chunks) == 1
+    assert chunks[0].metadata["content_type"] == ContentType.FALLBACK.value
+    assert chunks[0].text.startswith("RewriteEngine on")
+    assert "plugin_syntax" not in chunks[0].metadata
 
 
-def test_magento_config_uses_repository_graph_not_semantic_chunk_injection():
+def test_magento_config_uses_first_class_repository_graph_records():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)
     capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
@@ -176,7 +129,7 @@ def test_magento_config_uses_repository_graph_not_semantic_chunk_injection():
         ),
         marker_contents={"composer.json": '{"require":{"magento/framework":"*"}}'},
     ))
-    splitter = ASTCodeSplitter(parser_threshold=1000, plugin_runtime=runtime)
+    splitter = ASTCodeSplitter(plugin_runtime=runtime)
     document = Document(
         text=(
             '<config><preference for="Acme\\Api\\CartInterface" '
@@ -220,14 +173,14 @@ def test_magento_config_uses_repository_graph_not_semantic_chunk_injection():
     )
 
 
-def test_language_facts_stay_in_metadata_without_polluting_semantic_text():
+def test_ast_source_chunks_do_not_inline_repository_graph_packets():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)
     capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
         revision="0123456789abcdef",
         paths=("src/service.py",),
     ))
-    splitter = ASTCodeSplitter(parser_threshold=1000, plugin_runtime=runtime)
+    splitter = ASTCodeSplitter(plugin_runtime=runtime)
     source = """\
 def review():
     validate()
@@ -244,8 +197,8 @@ def validate():
 
     assert chunks
     assert "python" in capabilities.repository_plugins
-    assert any(
-        chunk.metadata.get("plugin_graph_facts")
+    assert all(
+        not chunk.metadata.get("plugin_graph_facts")
         for chunk in chunks
     )
     assert all(
@@ -255,9 +208,11 @@ def validate():
     rendered_source = "\n".join(chunk.text for chunk in chunks)
     assert "def review():" in rendered_source
     assert "def validate():" in rendered_source
+    assert all(not chunk.metadata.get("is_fragment") for chunk in chunks)
+    assert all("structural_record_type" not in chunk.metadata for chunk in chunks)
 
 
-def test_selected_language_syntax_does_not_depend_on_legacy_language_selection():
+def test_selected_language_syntax_uses_project_capabilities():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)
     capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
@@ -274,24 +229,17 @@ class Service:
         metadata={"path": "src/service.py", "language": "python"},
     )
 
-    with patch(
-        "rag_pipeline.core.splitter.splitter.get_language_from_path",
-        return_value=None,
-    ):
-        chunks = splitter.split_documents(
-            [document],
-            capabilities=capabilities,
-        )
+    chunks = splitter.split_documents(
+        [document],
+        capabilities=capabilities,
+    )
 
     assert chunks
     assert any(
-        chunk.metadata.get("plugin_syntax") == {
-            "plugin": "python",
-            "language": "python",
-        }
+        chunk.metadata.get("primary_name") == "Service"
         for chunk in chunks
     )
-    assert any(
-        chunk.metadata.get("content_type") == "functions_classes"
-        for chunk in chunks
-    )
+    assert all(chunk.metadata.get("plugin_syntax") == {
+        "plugin": "python",
+        "language": "python",
+    } for chunk in chunks)

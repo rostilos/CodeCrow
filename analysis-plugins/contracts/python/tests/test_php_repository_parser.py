@@ -190,7 +190,7 @@ class Converter
     ]
 
 
-def test_php_repository_parser_preserves_bounded_literal_instance_call_arguments():
+def test_php_repository_parser_preserves_literal_instance_call_arguments():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     plugin = catalog.implementation("php")
     started = plugin.start_repository_analysis(
@@ -263,6 +263,45 @@ class ConfigReader
             ),
         },
     ]
+
+
+def test_php_repository_parser_rejects_long_direct_and_local_literals():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    plugin = catalog.implementation("php")
+    started = plugin.start_repository_analysis("php-long-literal-call-topology")
+    direct = "direct/" + ("x" * 300)
+    local = "local/" + ("y" * 300)
+    started.value.ingest((FileArtifact(
+        "app/code/Acme/Checkout/Model/ConfigReader.php",
+        fr"""<?php
+namespace Acme\Checkout\Model;
+
+use Magento\Framework\App\Config\ScopeConfigInterface;
+
+class ConfigReader
+{{
+    public function __construct(
+        private ScopeConfigInterface $scopeConfig
+    ) {{}}
+
+    public function mode(): void
+    {{
+        $local = '{local}';
+        $this->scopeConfig->getValue('{direct}');
+        $this->scopeConfig->getValue($local);
+    }}
+}}
+""",
+    ),))
+
+    analysis = started.value.finish(RepositoryAnalysis()).value
+    references = [
+        json.loads(value)
+        for key, value in analysis.symbols[0].attributes
+        if key.startswith("php-literal-instance-call-reference:")
+    ]
+
+    assert references == []
 
 
 def test_php_repository_parser_resolves_only_unconditional_unique_local_literals():

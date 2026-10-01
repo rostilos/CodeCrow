@@ -72,7 +72,8 @@ class AiCommandClientTest {
                 return new AiCommandClient.AskRequest(
                                 1L, "workspace", "repo-slug", "project-workspace", "namespace",
                                 "openai", "gpt-4", "api-key", null, "What is this code doing?",
-                                42L, "abc123", "oauth-client", "oauth-secret", "access-token",
+                                42L, "main", "abc123", "manifest", "collection",
+                                "oauth-client", "oauth-secret", "access-token",
                                 4096, "bitbucket", null, null, null);
         }
 

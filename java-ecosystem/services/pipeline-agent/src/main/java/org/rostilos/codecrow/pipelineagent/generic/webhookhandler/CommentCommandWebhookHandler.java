@@ -186,7 +186,7 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
         boolean promptDryRun = PromptDryRunMode.isEnabledForProject(project.getId());
         if (promptDryRun) {
             // A full-pipeline capture must traverse immutable PR acquisition,
-            // enrichment, overlay indexing, retrieval, and Stage 0-3 even when this
+            // enrichment, structural retrieval, and Stage 0-3 even when this
             // commit already has an analysis. PullRequestAnalysisProcessor also
             // bypasses its persistence caches; bypass this command-level shortcut so
             // the normal user trigger reaches that processor.

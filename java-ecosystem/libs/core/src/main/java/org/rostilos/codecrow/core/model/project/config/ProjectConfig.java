@@ -16,10 +16,9 @@ import java.util.Objects;
  * (LocalRepoClient)
  * when a local repository path is available (for example when analysis is
  * executed from an uploaded archive).
- * - useMcpTools: when true, enables the LLM to call VCS MCP tools during PR
- * review stages
- * (Stage 1 for context gap filling, Stage 3 for issue re-verification).
- * Disabled by default.
+ * - useMcpTools: when true, enables agentic MCP tool use during PR review.
+ * Enabled by default; projects can disable it to reduce cost and latency when
+ * accepting potentially lower review quality.
  * - mainBranch: the primary branch (master/main) used as base for RAG training
  * and analysis.
  * IMPORTANT: This is the single source of truth for the project's main branch.
@@ -60,6 +59,7 @@ import java.util.Objects;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class ProjectConfig {
     public static final int DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT = 200000;
+    public static final boolean DEFAULT_USE_MCP_TOOLS = true;
 
     @JsonProperty("useLocalMcp")
     private boolean useLocalMcp;
@@ -107,7 +107,7 @@ public class ProjectConfig {
 
     public ProjectConfig() {
         this.useLocalMcp = false;
-        this.useMcpTools = false;
+        this.useMcpTools = DEFAULT_USE_MCP_TOOLS;
         this.prAnalysisEnabled = true;
         this.branchAnalysisEnabled = true;
         this.taskContextAnalysisEnabled = true;
@@ -117,7 +117,8 @@ public class ProjectConfig {
     public ProjectConfig(boolean useLocalMcp, String mainBranch, BranchAnalysisConfig branchAnalysis,
             RagConfig ragConfig, Boolean prAnalysisEnabled, Boolean branchAnalysisEnabled,
             InstallationMethod installationMethod, CommentCommandsConfig commentCommands) {
-        this(useLocalMcp, false, mainBranch, branchAnalysis, ragConfig, prAnalysisEnabled, branchAnalysisEnabled,
+        this(useLocalMcp, DEFAULT_USE_MCP_TOOLS, mainBranch, branchAnalysis, ragConfig, prAnalysisEnabled,
+                branchAnalysisEnabled,
                 installationMethod, commentCommands, DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT);
     }
 
@@ -133,7 +134,8 @@ public class ProjectConfig {
             RagConfig ragConfig, Boolean prAnalysisEnabled, Boolean branchAnalysisEnabled,
             InstallationMethod installationMethod, CommentCommandsConfig commentCommands,
             Integer maxAnalysisTokenLimit) {
-        this(useLocalMcp, false, mainBranch, branchAnalysis, ragConfig, prAnalysisEnabled, branchAnalysisEnabled,
+        this(useLocalMcp, DEFAULT_USE_MCP_TOOLS, mainBranch, branchAnalysis, ragConfig, prAnalysisEnabled,
+                branchAnalysisEnabled,
                 installationMethod, commentCommands, maxAnalysisTokenLimit);
     }
 
@@ -282,11 +284,7 @@ public class ProjectConfig {
                     this.ragConfig.enabled(),
                     mainBranch, // Use main branch for RAG
                     this.ragConfig.includePatterns(),
-                    this.ragConfig.excludePatterns(),
-                    this.ragConfig.multiBranchEnabled(),
-                    this.ragConfig.branchRetentionDays(),
-                    this.ragConfig.indexedBranches(),
-                    this.ragConfig.transientBranchIndexesEnabled());
+                    this.ragConfig.excludePatterns());
         }
     }
 

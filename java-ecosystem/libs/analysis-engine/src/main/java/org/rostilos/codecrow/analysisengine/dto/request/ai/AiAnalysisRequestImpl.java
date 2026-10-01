@@ -37,6 +37,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final boolean useLocalMcp;
     protected final boolean useMcpTools;
     protected final boolean ragEnabled;
+    protected final ReviewIndexPolicy ragIndexPolicy;
     protected final AnalysisType analysisType;
     protected final String prTitle;
     protected final String prDescription;
@@ -44,6 +45,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String taskHistoryContext;
     protected final List<String> changedFiles;
     protected final List<String> deletedFiles;
+    protected final List<String> proposedTreeChangedFiles;
+    protected final List<String> proposedTreeDeletedFiles;
     protected final List<String> diffSnippets;
     protected final String targetBranchName;
     protected final String sourceBranchName;
@@ -56,6 +59,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String deltaDiff;
     protected final String previousCommitHash;
     protected final String currentCommitHash;
+    protected final String targetHeadCommitHash;
     protected final String baseCommitHash;
 
     // File enrichment data (full file contents + dependency graph)
@@ -86,6 +90,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.useLocalMcp = builder.useLocalMcp;
         this.useMcpTools = builder.useMcpTools;
         this.ragEnabled = builder.ragEnabled;
+        this.ragIndexPolicy = builder.ragIndexPolicy;
         this.analysisType = builder.analysisType;
         this.prTitle = builder.prTitle;
         this.prDescription = builder.prDescription;
@@ -93,6 +98,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.taskHistoryContext = builder.taskHistoryContext;
         this.changedFiles = builder.changedFiles;
         this.deletedFiles = builder.deletedFiles;
+        this.proposedTreeChangedFiles = builder.proposedTreeChangedFiles;
+        this.proposedTreeDeletedFiles = builder.proposedTreeDeletedFiles;
         this.diffSnippets = builder.diffSnippets;
         this.projectWorkspace = builder.projectWorkspace;
         this.projectNamespace = builder.projectNamespace;
@@ -106,6 +113,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.deltaDiff = builder.deltaDiff;
         this.previousCommitHash = builder.previousCommitHash;
         this.currentCommitHash = builder.currentCommitHash;
+        this.targetHeadCommitHash = builder.targetHeadCommitHash;
         this.baseCommitHash = builder.baseCommitHash;
         // File enrichment data
         this.enrichmentData = builder.enrichmentData;
@@ -208,6 +216,16 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return deletedFiles;
     }
 
+    @Override
+    public List<String> getProposedTreeChangedFiles() {
+        return proposedTreeChangedFiles != null ? proposedTreeChangedFiles : changedFiles;
+    }
+
+    @Override
+    public List<String> getProposedTreeDeletedFiles() {
+        return proposedTreeDeletedFiles != null ? proposedTreeDeletedFiles : deletedFiles;
+    }
+
     public List<String> getDiffSnippets() {
         return diffSnippets;
     }
@@ -259,6 +277,13 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     }
 
     @Override
+    public String getTargetHeadCommitHash() {
+        return targetHeadCommitHash != null && !targetHeadCommitHash.isBlank()
+                ? targetHeadCommitHash
+                : baseCommitHash;
+    }
+
+    @Override
     public String getBaseCommitHash() {
         return baseCommitHash;
     }
@@ -307,6 +332,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private boolean useLocalMcp;
         private boolean useMcpTools;
         private boolean ragEnabled = true;
+        private ReviewIndexPolicy ragIndexPolicy;
         private AnalysisType analysisType;
         private String prTitle;
         private String prDescription;
@@ -314,6 +340,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String taskHistoryContext;
         private List<String> changedFiles;
         private List<String> deletedFiles;
+        private List<String> proposedTreeChangedFiles;
+        private List<String> proposedTreeDeletedFiles;
         private List<String> diffSnippets;
         private String targetBranchName;
         private String sourceBranchName;
@@ -325,6 +353,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String deltaDiff;
         private String previousCommitHash;
         private String currentCommitHash;
+        private String targetHeadCommitHash;
         private String baseCommitHash;
         // File enrichment data
         private PrEnrichmentDataDto enrichmentData;
@@ -413,8 +442,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
          * This provides the LLM with complete issue history including resolved issues,
          * helping it understand what was already found and fixed.
          * 
-         * Issues are deduplicated by fingerprint (file + line ±3 + severity + truncated
-         * reason).
+         * Issues are deduplicated by fingerprint (file + line ±3 + severity + complete
+         * normalized reason).
          * When duplicates exist across versions, we keep the most recent version's data
          * but preserve resolved status if ANY version marked it resolved.
          * 
@@ -479,19 +508,19 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         /**
          * Compute a fingerprint for an issue to detect duplicates across PR versions.
-         * Uses: file + normalized line (±3 tolerance) + severity + first 50 chars of
-         * reason.
+         * Uses: file + normalized line (±3 tolerance) + severity + complete normalized
+         * reason. A prefix-only reason would merge distinct findings and discard one.
          */
         private String computeIssueFingerprint(AiRequestPreviousIssueDTO issue) {
             String file = issue.file() != null ? issue.file() : "";
             // Normalize line to nearest multiple of 3 for tolerance
             int lineGroup = issue.line() != null ? (issue.line() / 3) : 0;
             String severity = issue.severity() != null ? issue.severity() : "";
-            String reasonPrefix = issue.reason() != null
-                    ? issue.reason().substring(0, Math.min(50, issue.reason().length())).toLowerCase().trim()
+            String normalizedReason = issue.reason() != null
+                    ? issue.reason().toLowerCase().trim()
                     : "";
 
-            return file + "::" + lineGroup + "::" + severity + "::" + reasonPrefix;
+            return file + "::" + lineGroup + "::" + severity + "::" + normalizedReason;
         }
 
         /**
@@ -543,6 +572,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             return self();
         }
 
+        public T withRagIndexPolicy(ReviewIndexPolicy ragIndexPolicy) {
+            this.ragIndexPolicy = ragIndexPolicy;
+            return self();
+        }
+
         public T withRagEnabled(boolean ragEnabled) {
             this.ragEnabled = ragEnabled;
             return self();
@@ -583,6 +617,16 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             return self();
         }
 
+        public T withProposedTreeChangedFiles(List<String> proposedTreeChangedFiles) {
+            this.proposedTreeChangedFiles = proposedTreeChangedFiles;
+            return self();
+        }
+
+        public T withProposedTreeDeletedFiles(List<String> proposedTreeDeletedFiles) {
+            this.proposedTreeDeletedFiles = proposedTreeDeletedFiles;
+            return self();
+        }
+
         public T withDiffSnippets(List<String> diffSnippets) {
             this.diffSnippets = diffSnippets;
             return self();
@@ -590,6 +634,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withBaseCommitHash(String baseCommitHash) {
             this.baseCommitHash = baseCommitHash;
+            return self();
+        }
+
+        public T withTargetHeadCommitHash(String targetHeadCommitHash) {
+            this.targetHeadCommitHash = targetHeadCommitHash;
             return self();
         }
 
@@ -676,6 +725,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     @Override
     public boolean getUseMcpTools() {
         return useMcpTools;
+    }
+
+    @Override
+    public ReviewIndexPolicy getRagIndexPolicy() {
+        return ragIndexPolicy;
     }
 
     @Override

@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.core.model.project.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -36,6 +37,33 @@ class ProjectConfigTest {
         void shouldDefaultUseLocalMcpToFalse() {
             ProjectConfig config = new ProjectConfig();
             assertThat(config.useLocalMcp()).isFalse();
+        }
+
+        @Test
+        @DisplayName("should default MCP review tools to true")
+        void shouldDefaultMcpReviewToolsToTrue() {
+            ProjectConfig config = new ProjectConfig();
+            assertThat(config.useMcpTools()).isTrue();
+        }
+
+        @Test
+        @DisplayName("should use the enabled default when legacy JSON omits MCP review tools")
+        void shouldDefaultMcpReviewToolsForLegacyJson() throws Exception {
+            ProjectConfig config = new ObjectMapper().readValue(
+                    "{\"mainBranch\":\"main\"}",
+                    ProjectConfig.class);
+
+            assertThat(config.useMcpTools()).isTrue();
+        }
+
+        @Test
+        @DisplayName("should preserve an explicit disabled MCP review setting")
+        void shouldPreserveExplicitDisabledMcpReviewSetting() throws Exception {
+            ProjectConfig config = new ObjectMapper().readValue(
+                    "{\"mainBranch\":\"main\",\"useMcpTools\":false}",
+                    ProjectConfig.class);
+
+            assertThat(config.useMcpTools()).isFalse();
         }
 
         @Test
@@ -94,7 +122,7 @@ class ProjectConfigTest {
         @Test
         @DisplayName("should create with ragConfig")
         void shouldCreateWithRagConfig() {
-            RagConfig ragConfig = new RagConfig(true, "main", null, List.of("*.log"), true, 30);
+            RagConfig ragConfig = new RagConfig(true, "main", null, List.of("*.log"));
             ProjectConfig config = new ProjectConfig(false, "main", null, ragConfig);
             
             assertThat(config.ragConfig()).isEqualTo(ragConfig);
@@ -105,7 +133,7 @@ class ProjectConfigTest {
         void shouldCreateWithAllParams() {
             BranchAnalysisConfig branchConfig = new BranchAnalysisConfig(
                 List.of("main"), List.of("*"));
-            RagConfig ragConfig = new RagConfig(true, "main", null, List.of(), true, 14);
+            RagConfig ragConfig = new RagConfig(true, "main", null, List.of());
             CommentCommandsConfig commentConfig = new CommentCommandsConfig();
             
             ProjectConfig config = new ProjectConfig(
@@ -167,7 +195,7 @@ class ProjectConfigTest {
         @DisplayName("should sync RAG config branch when set")
         void shouldSyncRagConfigBranch() {
             ProjectConfig config = new ProjectConfig();
-            RagConfig ragConfig = new RagConfig(true, "old-branch", null, List.of(), false, 7);
+            RagConfig ragConfig = new RagConfig(true, "old-branch", null, List.of());
             config.setRagConfig(ragConfig);
             
             config.setMainBranch("new-branch");
@@ -456,7 +484,7 @@ class ProjectConfigTest {
         @DisplayName("should set ragConfig")
         void shouldSetRagConfig() {
             ProjectConfig config = new ProjectConfig();
-            RagConfig ragConfig = new RagConfig(true, "main", null, List.of(), false, 7);
+            RagConfig ragConfig = new RagConfig(true, "main", null, List.of());
             config.setRagConfig(ragConfig);
             assertThat(config.ragConfig()).isSameAs(ragConfig);
         }
