@@ -84,11 +84,26 @@ async def test_provider_request_options_are_bound_before_structured_runnable():
     assert llm.binding["max_tokens"] == 16_384
     assert llm.binding["extra_body"] == {
         "reasoning": {"effort": "low"},
-        "provider": {"require_parameters": True},
     }
     # LangChain's include_raw runnable does not forward these invocation kwargs
     # to its internal model branch, so they must no longer be call-time options.
     assert llm.calls == [("prompt", {})]
+
+
+@pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("require_parameters", [False, True])
+async def test_schema_requests_preserve_explicit_openrouter_routing(require_parameters):
+    llm = BindingAwareChatOpenRouter(
+        _Payload(value="bounded"),
+        model_name="openai/gpt-6-luna",
+        extra_body={"provider": {"require_parameters": require_parameters}},
+    )
+    invocation = await invoke_structured_output(
+        llm, "prompt", _Payload, effort=ReasoningEffort.MEDIUM,
+        label="explicit-routing", max_tokens=16_384,
+    )
+    assert invocation.parsed == _Payload(value="bounded")
+    assert llm.binding["extra_body"]["provider"] == {"require_parameters": require_parameters}
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -246,7 +261,6 @@ async def test_deepseek_openrouter_uses_function_calling_and_compatible_route():
         "extra_body": {
             "provider": {
                 "order": ["DeepInfra"],
-                "require_parameters": True,
             },
             "reasoning": {"effort": "high"},
         }
@@ -305,9 +319,7 @@ async def test_one_argument_legacy_delegate_receives_request_options_at_invoke()
     assert delegate.schema is _Payload
     assert delegate.calls[0][1]["max_tokens"] == 16_384
     assert "max_completion_tokens" not in delegate.calls[0][1]
-    assert delegate.calls[0][1]["extra_body"]["provider"] == {
-        "require_parameters": True,
-    }
+    assert "provider" not in delegate.calls[0][1]["extra_body"]
 
 
 @pytest.mark.asyncio(loop_scope="function")

@@ -884,7 +884,6 @@ async def test_no_tool_structured_request_uses_one_provider_aware_call():
     assert kwargs == {
         "extra_body": {
             "reasoning": {"effort": "low"},
-            "provider": {"require_parameters": True},
         },
         "max_tokens": 16_384,
     }
@@ -1280,7 +1279,7 @@ async def test_initial_required_tool_discards_parallel_response_with_wrong_name(
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_initial_required_tool_keeps_openrouter_provider_preferences_and_capability_requirement():
+async def test_initial_required_tool_keeps_explicit_openrouter_provider_preferences():
     class ChatOpenRouter:
         extra_body = {
             "provider": {
@@ -1354,7 +1353,6 @@ async def test_initial_required_tool_keeps_openrouter_provider_preferences_and_c
                 "order": ["preferred-provider"],
                 "allow_fallbacks": False,
                 "data_collection": "deny",
-                "require_parameters": True,
             },
         },
         "parallel_tool_calls": False,
@@ -1578,7 +1576,6 @@ async def test_structured_exploration_disables_parallel_schema_tool_calls():
             "provider": {
                 "order": ["preferred-provider"],
                 "allow_fallbacks": False,
-                "require_parameters": True,
             },
             "trace": "review-7",
         },
@@ -1818,7 +1815,6 @@ async def test_request_settings_reach_exploration_and_reserved_final_calls():
         "temperature": 0,
         "extra_body": {
             "reasoning": {"effort": "low"},
-            "provider": {"require_parameters": True},
         },
         "max_tokens": 16_384,
     }
@@ -2309,6 +2305,26 @@ async def test_named_server_empty_tool_inventory_is_not_silent():
     assert optional_service.available_tool_names == frozenset({
         "getBranchFileContent",
     })
+
+
+@pytest.mark.parametrize("require_parameters", [False, True])
+def test_agent_preserves_explicit_openrouter_parameter_routing(require_parameters):
+    class ChatOpenRouter:
+        extra_body = {"provider": {"require_parameters": require_parameters, "order": ["chosen"]}}
+
+    request = _FakeModelRequest(
+        state={"run_model_call_count": 0},
+        tools=[], tool_choice=None, system_message=_FakeSystemMessage("review"),
+        messages=[], response_format=None, model=ChatOpenRouter(), model_settings={},
+    )
+    prepared = ModelRequestSettingsMiddleware(settings={
+        "extra_body": {"reasoning": {"effort": "medium"}},
+    })._prepare_request(request)
+
+    assert prepared.model_settings["extra_body"] == {
+        "provider": {"require_parameters": require_parameters, "order": ["chosen"]},
+        "reasoning": {"effort": "medium"},
+    }
 
 
 def test_review_package_exports_the_canonical_agent():

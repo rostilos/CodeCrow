@@ -104,11 +104,18 @@ def _supports_parallel_tool_control(model: Any) -> bool:
     }
 
 
-def _require_openrouter_request_parameters(
+def _openrouter_model_settings(
         model: Any,
         model_settings: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Keep OpenRouter agent turns on endpoints supporting their controls."""
+    """Merge configured OpenRouter options without imposing strict routing.
+
+    Some tool-capable routes do not advertise optional controls such as
+    temperature or parallel_tool_calls. Requiring every parameter would exclude
+    those routes before the model can call a repository tool. Explicit provider
+    preferences remain authoritative, including an explicitly configured
+    require_parameters value.
+    """
     settings = dict(model_settings)
     if "ChatOpenRouter" not in llm_class_names(model):
         return settings
@@ -136,8 +143,8 @@ def _require_openrouter_request_parameters(
     if isinstance(request_provider, Mapping):
         provider.update(request_provider)
     extra_body.update(request_extra_body)
-    provider["require_parameters"] = True
-    extra_body["provider"] = provider
+    if provider:
+        extra_body["provider"] = provider
     settings["extra_body"] = extra_body
     return settings
 
@@ -336,7 +343,7 @@ class ModelRequestSettingsMiddleware(AgentMiddleware):
             else:
                 model_settings[key] = value
         return request.override(model_settings=(
-            _require_openrouter_request_parameters(
+            _openrouter_model_settings(
                 request.model,
                 model_settings,
             )
@@ -390,7 +397,7 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
         completed_calls = request.state.get("run_model_call_count", 0)
         synthesis_start = self._state_synthesis_start(request.state)
         response_format = request.response_format
-        model_settings = _require_openrouter_request_parameters(
+        model_settings = _openrouter_model_settings(
             request.model,
             request.model_settings,
         )

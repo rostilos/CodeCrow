@@ -1013,8 +1013,8 @@ public class CodeAnalysisService {
     }
 
     public AnalysisStats getProjectAnalysisStats(Long projectId) {
-        long totalAnalyses = codeAnalysisRepository.countByProjectId(projectId);
-        Double avgIssues = codeAnalysisRepository.getAverageIssuesPerAnalysis(projectId);
+        long totalAnalyses = codeAnalysisRepository.countReportableByProjectId(projectId);
+        Double avgIssues = codeAnalysisRepository.getAverageIssuesPerReportableAnalysis(projectId);
 
         long highSeverityCount = issueRepository.countByProjectIdAndSeverity(projectId, IssueSeverity.HIGH);
         long mediumSeverityCount = issueRepository.countByProjectIdAndSeverity(projectId, IssueSeverity.MEDIUM);

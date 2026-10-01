@@ -19,6 +19,10 @@
 #                                  rag-pipeline, web-frontend
 #   CODECROW_DOCKER_OUTPUT      — push (CI default) or load (local validation)
 #   CODECROW_LOCAL_IMAGE_PREFIX — image prefix used by load mode
+#   CODECROW_REGISTRY_IMAGE_PREFIX — GHCR package prefix (default: codecrow)
+#   CODECROW_IMAGE_TAG         — release tag (default: latest)
+#   CODECROW_IMAGE_ALIAS       — optional additional tag (e.g. stage)
+#   CODECROW_BUILD_CACHE_PREFIX — optional cache isolation (e.g. stage-)
 ###############################################################################
 set -euo pipefail
 
@@ -37,6 +41,10 @@ DOCKER_BUILD_PROGRESS="${DOCKER_BUILD_PROGRESS:-auto}"
 DOCKER_BUILD_RETRIES="${DOCKER_BUILD_RETRIES:-3}"
 DOCKER_BUILD_OUTPUT="${CODECROW_DOCKER_OUTPUT:-push}"
 LOCAL_IMAGE_PREFIX="${CODECROW_LOCAL_IMAGE_PREFIX:-codecrow-local}"
+REGISTRY_IMAGE_PREFIX="${CODECROW_REGISTRY_IMAGE_PREFIX:-codecrow}"
+IMAGE_TAG="${CODECROW_IMAGE_TAG:-latest}"
+IMAGE_ALIAS="${CODECROW_IMAGE_ALIAS:-}"
+BUILD_CACHE_PREFIX="${CODECROW_BUILD_CACHE_PREFIX:-}"
 DOCKER_OBSERVABILITY="${CODECROW_DOCKER_OBSERVABILITY:-enabled}"
 # GITHUB_REPOSITORY_OWNER is assumed to be provided for ghcr.io paths
 REPO_OWNER=${GITHUB_REPOSITORY_OWNER:-codecrow}
@@ -264,15 +272,15 @@ echo "--- 4. Building Docker images ---"
 for SERVICE in "${SELECTED_SERVICES[@]}"; do
   set_image_definition "$SERVICE"
   # Scope cache per image to avoid collisions
-  SCOPE="$(echo "$IMAGE_NAME" | tr '/' '-')"
+  SCOPE="${BUILD_CACHE_PREFIX}$(echo "$IMAGE_NAME" | tr '/' '-')"
   
   # Map codecrow to ghcr.io/<repo-owner>/codecrow-<service>
   # E.g. codecrow/web-server -> ghcr.io/username/codecrow-web-server:latest
   SERVICE_NAME=$(echo "$IMAGE_NAME" | cut -d'/' -f2)
   if [ "$DOCKER_BUILD_OUTPUT" = "push" ]; then
-    FULL_IMAGE_NAME="ghcr.io/$REPO_OWNER/codecrow-$SERVICE_NAME:latest"
+    FULL_IMAGE_NAME="ghcr.io/$REPO_OWNER/$REGISTRY_IMAGE_PREFIX-$SERVICE_NAME:$IMAGE_TAG"
   else
-    FULL_IMAGE_NAME="${LOCAL_IMAGE_PREFIX}-${SERVICE_NAME}:latest"
+    FULL_IMAGE_NAME="${LOCAL_IMAGE_PREFIX}-${SERVICE_NAME}:$IMAGE_TAG"
   fi
 
   if [ -n "$DOCKERFILE" ]; then
@@ -289,6 +297,9 @@ for SERVICE in "${SELECTED_SERVICES[@]}"; do
   )
 
   if [ "$DOCKER_BUILD_OUTPUT" = "push" ]; then
+    if [ -n "$IMAGE_ALIAS" ] && [ "$IMAGE_ALIAS" != "$IMAGE_TAG" ]; then
+      BUILD_ARGS+=(-t "ghcr.io/$REPO_OWNER/$REGISTRY_IMAGE_PREFIX-$SERVICE_NAME:$IMAGE_ALIAS")
+    fi
     BUILD_ARGS+=(
       --cache-from "type=gha,scope=$SCOPE"
       --cache-to "type=gha,mode=max,scope=$SCOPE"

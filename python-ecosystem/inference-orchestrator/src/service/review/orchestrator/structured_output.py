@@ -74,23 +74,13 @@ def structured_request_kwargs(
     llm: Any,
     effort: ReasoningEffort,
 ) -> dict[str, Any]:
-    """Build invocation kwargs and require an OpenRouter-compatible endpoint."""
+    """Build invocation kwargs using the configured provider routing.
 
-    kwargs = reasoning_request_kwargs(llm, effort)
-    if "ChatOpenRouter" not in llm_class_names(llm):
-        return kwargs
-
-    extra_body = dict(kwargs.get("extra_body") or {})
-    configured_provider = extra_body.get("provider")
-    provider = (
-        dict(configured_provider)
-        if isinstance(configured_provider, Mapping)
-        else {}
-    )
-    provider["require_parameters"] = True
-    extra_body["provider"] = provider
-    kwargs["extra_body"] = extra_body
-    return kwargs
+    Schema and tool declarations select their compatible routes through
+    OpenRouter's normal routing. Do not additionally require support for every
+    optional request control; that can reject otherwise tool-capable endpoints.
+    """
+    return reasoning_request_kwargs(llm, effort)
 
 
 def _structured_output_model_and_token_kwargs(

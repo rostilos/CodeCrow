@@ -33,12 +33,14 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
                                                        @Param("filePath") String filePath);
 
     @Query("SELECT COUNT(cai) FROM CodeAnalysisIssue cai WHERE cai.analysis.project.id = :projectId " +
-            "AND cai.severity = :severity AND cai.resolved = false")
+            "AND cai.severity = :severity AND cai.resolved = false " +
+            "AND cai.analysis.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL")
     long countByProjectIdAndSeverity(@Param("projectId") Long projectId,
                                      @Param("severity") IssueSeverity severity);
 
     @Query("SELECT cai.filePath, COUNT(cai) FROM CodeAnalysisIssue cai " +
             "WHERE cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL " +
             "GROUP BY cai.filePath ORDER BY COUNT(cai) DESC")
     List<Object[]> findMostProblematicFilesByProjectId(@Param("projectId") Long projectId);
 
@@ -194,11 +196,13 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
     // ── Aggregate queries (for analytics — avoid loading full entity graphs) ──
 
     @Query("SELECT COUNT(cai) FROM CodeAnalysisIssue cai " +
-            "WHERE cai.analysis.project.id = :projectId AND cai.resolved = true")
+            "WHERE cai.analysis.project.id = :projectId AND cai.resolved = true " +
+            "AND cai.analysis.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL")
     long countResolvedByProjectId(@Param("projectId") Long projectId);
 
     @Query("SELECT COUNT(cai) FROM CodeAnalysisIssue cai " +
-            "WHERE cai.analysis.project.id = :projectId AND cai.resolved = false")
+            "WHERE cai.analysis.project.id = :projectId AND cai.resolved = false " +
+            "AND cai.analysis.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL")
     long countOpenByProjectId(@Param("projectId") Long projectId);
 
     /**
@@ -207,6 +211,7 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
      */
     @Query("SELECT cai.issueCategory, COUNT(cai) FROM CodeAnalysisIssue cai " +
             "WHERE cai.analysis.project.id = :projectId AND cai.resolved = false " +
+            "AND cai.analysis.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL " +
             "GROUP BY cai.issueCategory")
     List<Object[]> countOpenByProjectIdGroupedByCategory(@Param("projectId") Long projectId);
 
@@ -217,6 +222,7 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
      */
     @Query("SELECT DISTINCT cai.filePath, cai.severity FROM CodeAnalysisIssue cai " +
             "WHERE cai.analysis.project.id = :projectId AND cai.resolved = false " +
+            "AND cai.analysis.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL " +
             "AND cai.filePath IN :filePaths")
     List<Object[]> findSeveritiesByProjectIdAndFilePaths(
             @Param("projectId") Long projectId,

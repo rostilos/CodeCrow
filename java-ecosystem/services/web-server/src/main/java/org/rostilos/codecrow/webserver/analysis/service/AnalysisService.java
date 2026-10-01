@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.webserver.analysis.service;
 
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
@@ -53,6 +54,10 @@ public class AnalysisService {
         this.qualityGateEvaluator = new QualityGateEvaluator(qualityGateRepository);
     }
 
+    public List<CodeAnalysis> getPrAnalyses(Long projectId, Long prNumber) {
+        return codeAnalysisRepository.findByProjectIdAndPrNumberOrderByPrVersionDescIdDesc(projectId, prNumber);
+    }
+
     /**
      * Find issues for a project with optional filters.
      * - If pullRequestId is provided, prefer the analysis attached to that PR (prNumber).
@@ -89,6 +94,8 @@ public class AnalysisService {
 
         // collect issues from selected analyses
         List<CodeAnalysisIssue> issues = analyses.stream()
+                .filter(a -> (pullRequestId != null && !pullRequestId.isBlank())
+                        || a.getStatus() != AnalysisStatus.PARTIAL)
                 .flatMap(a -> a.getIssues().stream())
                 .toList();
 

@@ -1,0 +1,228 @@
+# Staging is independent of deploy.yml, production packages and production secrets.
+# Setup and all STAGE_* keys: /docs/developer/configuration#staging-deployment
+name: Deploy to Stage
+run-name: Stage ${{ inputs.branch || 'stage' }} (${{ inputs.services || 'all' }})
+
+on:
+  push:
+    branches: [stage]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Backend branch to deploy
+        type: string
+        default: stage
+      frontend_branch:
+        description: Optional frontend branch (empty uses the backend's pinned submodule)
+        type: string
+        default: ""
+      services:
+        description: all, java, python, frontend, or comma-separated service names
+        type: string
+        default: all
+      skip_build:
+        description: Redeploy existing staging images without building or testing
+        type: boolean
+        default: false
+      image_tag:
+        description: Existing staging tag for skip_build (empty reuses deployed service tags)
+        type: string
+        default: ""
+
+concurrency:
+  group: stage-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  resolve:
+    name: Resolve staging source
+    runs-on: ubuntu-latest
+    environment: stage
+    timeout-minutes: 10
+    outputs:
+      source_sha: ${{ steps.release.outputs.source_sha }}
+      frontend_sha: ${{ steps.release.outputs.frontend_sha }}
+      image_tag: ${{ steps.release.outputs.image_tag }}
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.sha || inputs.branch || 'stage' }}
+          submodules: ${{ inputs.skip_build && 'false' || 'recursive' }}
+          token: ${{ secrets.STAGE_SOURCE_TOKEN || github.token }}
+      - name: Resolve exact revisions and release tag
+        id: release
+        env:
+          FRONTEND_BRANCH: ${{ inputs.frontend_branch }}
+          SKIP_BUILD: ${{ inputs.skip_build || false }}
+          EXISTING_IMAGE_TAG: ${{ inputs.image_tag }}
+          DEPLOY_SERVICES: ${{ inputs.services || 'all' }}
+        run: |
+          source deployment/ci/service-selection.sh
+          codecrow_resolve_services "$DEPLOY_SERVICES"
+          if [[ "$SKIP_BUILD" != true ]]; then
+            if [[ -n "$FRONTEND_BRANCH" ]]; then
+              git check-ref-format "refs/heads/$FRONTEND_BRANCH"
+              git -C frontend fetch --no-tags origin "refs/heads/$FRONTEND_BRANCH"
+              git -C frontend checkout --detach FETCH_HEAD
+            fi
+            echo "frontend_sha=$(git -C frontend rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+          SOURCE_SHA=$(git rev-parse HEAD)
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          if [[ "$SKIP_BUILD" == true ]]; then
+            echo "image_tag=$EXISTING_IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_tag=stage-${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          fi
+
+  python-tests:
+    name: Stage Python Tests (${{ matrix.test_group }})
+    needs: resolve
+    if: ${{ !inputs.skip_build }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - test_group: rag
+            requirements: python-ecosystem/rag-pipeline/requirements.txt
+          - test_group: inference
+            requirements: python-ecosystem/inference-orchestrator/src/requirements.test.txt
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ${{ matrix.requirements }}
+      - name: Install dependencies and run existing Python suites
+        env:
+          PYTHON_TEST_GROUP: ${{ matrix.test_group }}
+        run: |
+          bash deployment/ci/install-python-test-dependencies.sh
+          bash deployment/ci/python-tests.sh
+      - name: Upload Python test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-python-reports-${{ matrix.test_group }}
+          path: .ci-test-results/python/
+          retention-days: 7
+
+  build:
+    name: Build staging images
+    needs: [resolve, python-tests]
+    if: ${{ !inputs.skip_build }}
+    runs-on: ubuntu-latest
+    environment: stage
+    permissions:
+      contents: read
+      packages: write
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          submodules: recursive
+          token: ${{ secrets.STAGE_SOURCE_TOKEN || github.token }}
+      - name: Checkout resolved frontend revision
+        env:
+          FRONTEND_SHA: ${{ needs.resolve.outputs.frontend_sha }}
+        run: |
+          git -C frontend fetch --no-tags origin "$FRONTEND_SHA"
+          git -C frontend checkout --detach "$FRONTEND_SHA"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Verify staging deployment tooling
+        run: python3 -m unittest discover -s deployment/ci/tests -v
+      - name: Build, test and push selected services
+        env:
+          ENV_WEB_FRONTEND: ${{ secrets.STAGE_ENV_WEB_FRONTEND }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          CODECROW_DEPLOY_SERVICES: ${{ inputs.services || 'all' }}
+          CODECROW_REGISTRY_IMAGE_PREFIX: codecrow-stage
+          CODECROW_IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
+          CODECROW_IMAGE_ALIAS: stage
+          CODECROW_BUILD_CACHE_PREFIX: stage-
+          CODECROW_DOCKER_OBSERVABILITY: disabled
+        run: |
+          source deployment/ci/service-selection.sh
+          codecrow_resolve_services "$CODECROW_DEPLOY_SERVICES"
+          if codecrow_includes_service web-frontend "${CODECROW_RESOLVED_SERVICES[@]}" && [[ -z "$ENV_WEB_FRONTEND" ]]; then
+            echo "::error::STAGE_ENV_WEB_FRONTEND is required to build the staging frontend."
+            exit 1
+          fi
+          bash deployment/ci/ci-build.sh
+      - name: Upload build logs and Java test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-build-reports
+          path: |
+            .ci-logs/
+            java-ecosystem/**/target/surefire-reports/
+            java-ecosystem/**/target/failsafe-reports/
+          retention-days: 7
+
+  deploy:
+    name: Deploy staging release
+    needs: [resolve, python-tests, build]
+    if: >-
+      always() && !cancelled() && needs.resolve.result == 'success' &&
+      ((inputs.skip_build && needs.build.result == 'skipped' && needs.python-tests.result == 'skipped') ||
+       (needs.build.result == 'success' && needs.python-tests.result == 'success'))
+    runs-on: ubuntu-latest
+    environment: stage
+    permissions:
+      contents: read
+      packages: read
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+      - name: Upload staging configuration and deploy
+        env:
+          STAGE_DEPLOY_SSH_KEY: ${{ secrets.STAGE_DEPLOY_SSH_KEY }}
+          STAGE_DEPLOY_HOST: ${{ secrets.STAGE_DEPLOY_HOST }}
+          STAGE_DEPLOY_USER: ${{ secrets.STAGE_DEPLOY_USER }}
+          STAGE_DEPLOY_HOST_FINGERPRINT: ${{ secrets.STAGE_DEPLOY_HOST_FINGERPRINT }}
+          STAGE_DEPLOY_PORT: ${{ vars.STAGE_DEPLOY_PORT || '22' }}
+          STAGE_DEPLOY_PATH: ${{ vars.STAGE_DEPLOY_PATH || '/opt/codecrow-stage' }}
+          STAGE_ENV_DEPLOYMENT: ${{ secrets.STAGE_ENV_DEPLOYMENT }}
+          STAGE_ENV_JAVA_SHARED: ${{ secrets.STAGE_ENV_JAVA_SHARED }}
+          STAGE_ENV_INFERENCE_ORCHESTRATOR: ${{ secrets.STAGE_ENV_INFERENCE_ORCHESTRATOR }}
+          STAGE_ENV_RAG_PIPELINE: ${{ secrets.STAGE_ENV_RAG_PIPELINE }}
+          STAGE_GITHUB_APP_PRIVATE_KEY: ${{ secrets.STAGE_GITHUB_APP_PRIVATE_KEY }}
+          STAGE_GHCR_PAT: ${{ secrets.STAGE_GHCR_PAT }}
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          CODECROW_DEPLOY_SERVICES: ${{ inputs.services || 'all' }}
+          CODECROW_IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
+        run: bash deployment/ci/deploy-stage.sh
