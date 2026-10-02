@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import re
 import shutil
 import subprocess
 import sys
@@ -218,7 +219,13 @@ class BuildTagTests(StageTestCase):
     def test_build_preserves_production_defaults(self):
         self.assert_build_tags(stage=False)
 
-    def assert_build_tags(self, stage):
+    def test_stage_workflow_builds_rag_with_new_relic(self):
+        self.assert_build_tags(stage=True, service="rag-pipeline")
+
+    def test_production_builds_rag_with_new_relic(self):
+        self.assert_build_tags(stage=False, service="rag-pipeline")
+
+    def assert_build_tags(self, stage, service="web-frontend"):
         repo = self.work / "repo"
         scripts = repo / "deployment/ci"
         scripts.mkdir(parents=True)
@@ -227,22 +234,30 @@ class BuildTagTests(StageTestCase):
         (repo / "tools/validate_plugin_boundaries.py").write_text("pass\n")
         for name in ("ci-build.sh", "service-selection.sh"):
             shutil.copy(ROOT / "deployment/ci" / name, scripts)
-        env = dict(self.env, CODECROW_DEPLOY_SERVICES="frontend")
-        for key in ("CODECROW_REGISTRY_IMAGE_PREFIX", "CODECROW_IMAGE_TAG", "CODECROW_IMAGE_ALIAS", "CODECROW_BUILD_CACHE_PREFIX", "CODECROW_DOCKER_OUTPUT"):
+        env = dict(self.env, CODECROW_DEPLOY_SERVICES=service)
+        for key in ("CODECROW_REGISTRY_IMAGE_PREFIX", "CODECROW_IMAGE_TAG", "CODECROW_IMAGE_ALIAS", "CODECROW_BUILD_CACHE_PREFIX", "CODECROW_DOCKER_OUTPUT", "CODECROW_DOCKER_OBSERVABILITY"):
             env.pop(key, None)
         if stage:
             env.update(CODECROW_REGISTRY_IMAGE_PREFIX="codecrow-stage", CODECROW_IMAGE_TAG="stage-exact-sha", CODECROW_IMAGE_ALIAS="stage", CODECROW_BUILD_CACHE_PREFIX="stage-")
+            # Exercise the setting actually passed by CI, not a hard-coded
+            # enabled value that would miss a workflow selecting bare images.
+            workflow = (ROOT / ".github/workflows/deploy-stage.yml").read_text()
+            observability = re.search(r"^\s+CODECROW_DOCKER_OBSERVABILITY:\s*(\w+)\s*$", workflow, re.MULTILINE)
+            if observability:
+                env["CODECROW_DOCKER_OBSERVABILITY"] = observability.group(1)
         result = subprocess.run(["bash", str(scripts / "ci-build.sh")], env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         args = self.calls()[0]["args"]
         if stage:
-            self.assertIn("ghcr.io/exampleowner/codecrow-stage-web-frontend:stage-exact-sha", args)
-            self.assertIn("ghcr.io/exampleowner/codecrow-stage-web-frontend:stage", args)
-            self.assertIn("type=gha,scope=stage-codecrow-web-frontend", args)
-            self.assertNotIn("ghcr.io/exampleowner/codecrow-web-frontend:latest", args)
+            self.assertIn(f"ghcr.io/exampleowner/codecrow-stage-{service}:stage-exact-sha", args)
+            self.assertIn(f"ghcr.io/exampleowner/codecrow-stage-{service}:stage", args)
+            self.assertIn(f"type=gha,scope=stage-codecrow-{service}", args)
+            self.assertNotIn(f"ghcr.io/exampleowner/codecrow-{service}:latest", args)
         else:
-            self.assertIn("ghcr.io/exampleowner/codecrow-web-frontend:latest", args)
-            self.assertIn("type=gha,scope=codecrow-web-frontend", args)
+            self.assertIn(f"ghcr.io/exampleowner/codecrow-{service}:latest", args)
+            self.assertIn(f"type=gha,scope=codecrow-{service}", args)
+        if service == "rag-pipeline":
+            self.assertEqual(args[args.index("-f") + 1], "python-ecosystem/rag-pipeline/Dockerfile.observable")
         self.assertIn("--push", args)
 
 

@@ -109,8 +109,8 @@ services:
     volumes:
       - source_code_tmp:/tmp
       - web_logs:/app/logs
-      - ./config/java-shared/application.properties:/run/codecrow-config/application.properties:ro
-      - ./config/java-shared/github-private-key/github-app-private-key.pem:/run/codecrow-config/github-app-private-key.pem:ro
+      - ./config/java-shared/application.properties:/app/codecrow-config/application.properties:ro
+      - ./config/java-shared/github-private-key/github-app-private-key.pem:/app/codecrow-config/github-app-private-key.pem:ro
       - ./config/java-shared/newrelic-web-server.yml:/usr/local/newrelic/newrelic.yml:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8081/actuator/health"]
@@ -178,8 +178,8 @@ services:
     volumes:
       - source_code_tmp:/tmp
       - pipeline_agent_logs:/app/logs
-      - ./config/java-shared/application.properties:/run/codecrow-config/application.properties:ro
-      - ./config/java-shared/github-private-key/github-app-private-key.pem:/run/codecrow-config/github-app-private-key.pem:ro
+      - ./config/java-shared/application.properties:/app/codecrow-config/application.properties:ro
+      - ./config/java-shared/github-private-key/github-app-private-key.pem:/app/codecrow-config/github-app-private-key.pem:ro
       - ./config/java-shared/newrelic-pipeline-agent.yml:/usr/local/newrelic/newrelic.yml:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8082/actuator/health"]
@@ -230,7 +230,7 @@ services:
       - codecrow-network
     volumes:
       - source_code_tmp:/tmp
-      - ./config/inference-orchestrator/.env:/run/codecrow-config/inference-orchestrator.env:ro
+      - ./config/inference-orchestrator/.env:/app/codecrow-config/inference-orchestrator.env:ro
       - ./config/inference-orchestrator/newrelic.ini:/app/newrelic.ini:ro
       - inference_orchestrator_logs:/app/logs
     healthcheck:
@@ -273,8 +273,8 @@ services:
       - source_code_tmp:/tmp
       - structural_index_data:/var/lib/codecrow/structural-index
       - rag_logs:/app/logs
-      - ./config/rag-pipeline/.env:/run/codecrow-config/rag-pipeline.env:ro
-      - ./config/rag-pipeline/newrelic.ini:/run/codecrow-config/rag-pipeline-newrelic.ini:ro
+      - ./config/rag-pipeline/.env:/app/codecrow-config/rag-pipeline.env:ro
+      - ./config/rag-pipeline/newrelic.ini:/app/codecrow-config/rag-pipeline-newrelic.ini:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s

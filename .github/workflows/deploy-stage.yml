@@ -178,7 +178,7 @@ jobs:
           CODECROW_IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
           CODECROW_IMAGE_ALIAS: stage
           CODECROW_BUILD_CACHE_PREFIX: stage-
-          CODECROW_DOCKER_OBSERVABILITY: disabled
+          CODECROW_DOCKER_OBSERVABILITY: enabled
         run: |
           source deployment/ci/service-selection.sh
           codecrow_resolve_services "$CODECROW_DEPLOY_SERVICES"
