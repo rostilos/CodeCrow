@@ -1,4 +1,4 @@
-"""Offline deployment checks: Compose isolation and shell orchestration failures.
+"""Offline deployment checks: Compose release selection and shell orchestration failures.
 
 These exercise the real scripts with a recording Docker stub. They do not deploy
 containers, run database migrations, or verify a remote staging environment.
@@ -164,39 +164,51 @@ class StageDeploymentTests(StageTestCase):
         self.assertEqual(self.calls(), [])
 
     @unittest.skipUnless(shutil.which("docker"), "Docker Compose CLI is required for config rendering")
-    def test_rendered_compose_isolated_from_live_and_supports_sqlite(self):
+    def test_rendered_compose_uses_stage_releases_and_supports_sqlite(self):
         env_file = self.work / "render.env"
         env_file.write_text(ENV)
-        # Use the real CLI to prove interpolation and project resource naming.
-        def render(filename):
+        # Match server-deploy-stage.sh: the CLI sets the project name. Stage
+        # runs on a separate VPS and can use production container/volume names
+        # and ports; image packages and per-service release tags remain separate.
+        def render(image_env=None):
+            command = [shutil.which("docker"), "compose", "--project-name", "codecrow-stage", "--env-file", str(env_file)]
+            if image_env is not None:
+                command.extend(["--env-file", str(image_env)])
+            command.extend(["-f", str(ROOT / "deployment/docker-compose.stage.yml"), "config", "--format", "json"])
+            env = dict(os.environ, GITHUB_REPOSITORY_OWNER="example")
+            for service in SERVICES:
+                env.pop(f"{service.upper().replace('-', '_')}_IMAGE_TAG", None)
             result = subprocess.run(
-                [shutil.which("docker"), "compose", "--env-file", str(env_file), "-f", str(ROOT / "deployment" / filename), "config", "--format", "json"],
-                env=dict(os.environ, GITHUB_REPOSITORY_OWNER="example"), capture_output=True, text=True,
+                command, env=env, capture_output=True, text=True,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             return json.loads(result.stdout)
 
-        stage = render("docker-compose.stage.yml")
-        live = render("docker-compose.prod.yml")
+        stage = render()
         self.assertEqual(stage["name"], "codecrow-stage")
-        self.assertFalse(set(v["name"] for v in stage["volumes"].values()) & set(v["name"] for v in live["volumes"].values()))
-        self.assertFalse(set(n["name"] for n in stage["networks"].values()) & set(n["name"] for n in live["networks"].values()))
-        live_ports = {p["published"] for s in live["services"].values() for p in s.get("ports", [])}
         for service, definition in stage["services"].items():
-            self.assertNotIn("container_name", definition)
             for port in definition.get("ports", []):
                 self.assertEqual(port["host_ip"], "127.0.0.1")
-                self.assertNotIn(port["published"], live_ports)
             if service in SERVICES:
-                self.assertIn(f"/codecrow-stage-{service}:stage", definition["image"])
+                self.assertEqual(definition["image"], f"ghcr.io/example/codecrow-stage-{service}:stage")
         self.assertNotIn("qdrant", stage["services"])
         rag = stage["services"]["rag-pipeline"]
         self.assertEqual(rag["environment"]["STRUCTURAL_INDEX_ROOT"], "/var/lib/codecrow/structural-index")
         self.assertTrue(any(v.get("source") == "structural_index_data" for v in rag["volumes"]))
-        self.assertEqual(rag["environment"]["UVICORN_WORKERS"], "1")
-        self.assertEqual(stage["services"]["web-server"]["depends_on"]["fix-permissions"]["condition"], "service_completed_successfully")
-        self.assertNotIn("rag-pipeline", stage["services"]["inference-orchestrator"]["depends_on"])
-        self.assertEqual(stage["services"]["redis"]["command"], ["redis-server", "--appendonly", "yes"])
+        self.assertEqual(rag["depends_on"]["fix-permissions"]["condition"], "service_completed_successfully")
+        self.assertEqual(stage["services"]["web-server"]["environment"]["SPRING_FLYWAY_ENABLED"], "true")
+        self.assertEqual(stage["services"]["pipeline-agent"]["environment"]["SPRING_FLYWAY_ENABLED"], "false")
+        self.assertEqual(stage["services"]["inference-orchestrator"]["depends_on"]["web-server"]["condition"], "service_healthy")
+
+        # Render the actual release file produced by a partial deployment so
+        # literal :latest or :stage references cannot silently ignore its tags.
+        self.seed_tags()
+        result = self.run_deploy("frontend")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        pinned = render(self.deploy / ".images.env")
+        for service in SERVICES:
+            tag = "stage-test-release" if service == "web-frontend" else "stage-old"
+            self.assertEqual(pinned["services"][service]["image"], f"ghcr.io/example/codecrow-stage-{service}:{tag}")
 
 
 class BuildTagTests(StageTestCase):
