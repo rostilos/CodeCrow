@@ -33,7 +33,9 @@ class WebhookJobRecoverySchedulerTest {
     private final WebhookHandlerFactory handlerFactory = mock(WebhookHandlerFactory.class);
     private final WebhookAsyncProcessor asyncProcessor = mock(WebhookAsyncProcessor.class);
     private final WebhookJobRecoveryScheduler scheduler = new WebhookJobRecoveryScheduler(
-            jobService, objectMapper, handlerFactory, asyncProcessor);
+            jobService, objectMapper, handlerFactory, asyncProcessor,
+            mock(PipelineJobService.class),
+            mock(org.rostilos.codecrow.pipelineagent.generic.processor.PipelineActionProcessor.class), Runnable::run);
 
     @Test
     void replaysPersistedWebhookPayloadAfterLostDispatch() throws Exception {

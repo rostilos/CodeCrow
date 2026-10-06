@@ -433,6 +433,8 @@ class TestConvertCrossFileIssues:
         assert issue.claimKind == "python-file"
         assert issue.evidenceRefs == ["RAG-python"]
         assert "Also affects: b.py" in issue.reason
+        assert issue.relatedLocations == ["b.py"]
+        assert not issue.reason.startswith(issue.title + "\n")
 
     def test_no_primary_file_uses_first_affected(self):
         cfi = CrossFileIssue(
@@ -748,7 +750,7 @@ class TestPartitionIssueLifecycle:
         )
         fresh_duplicate = CodeReviewIssue(
             file="a.py", line=10, severity="MEDIUM", category="BUG_RISK",
-            reason="The null guard is missing.",
+            reason="Null guard is missing.",
             suggestedFixDescription="Add a null guard.",
             codeSnippet="value = payload.get('value')",
         )

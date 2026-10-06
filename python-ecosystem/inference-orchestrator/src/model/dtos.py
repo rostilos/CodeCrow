@@ -1,4 +1,4 @@
-from typing import Optional, Any, List, Dict
+from typing import Literal, Optional, Any, List, Dict
 from pydantic import BaseModel, Field, AliasChoices, ValidationError, field_validator
 import logging
 from datetime import datetime
@@ -45,6 +45,12 @@ class IssueDTO(BaseModel):
     # Content-based line anchoring — verbatim source line, Java persists it and
     # passes it back so Python reconciliation can carry it forward
     codeSnippet: Optional[str] = None
+    anchorSide: Literal["HEAD", "BASE"] = "HEAD"
+
+    @field_validator("anchorSide", mode="before")
+    @classmethod
+    def normalize_anchor_side(cls, value):
+        return "BASE" if str(value or "").upper() == "BASE" else "HEAD"
 
 
 class ReviewIndexPolicyDto(BaseModel):

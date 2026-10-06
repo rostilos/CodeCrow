@@ -85,8 +85,8 @@ class ProviderWebhookControllerIT extends BasePipelineAgentIT {
     class WebhookWithoutAuthToken {
 
         @Test
-        @DisplayName("GitHub webhook without token — no matching project — ignored")
-        void webhook_githubNoToken_noProject_ignored() {
+        @DisplayName("GitHub webhook without authentication — rejected")
+        void webhook_githubNoToken_unauthorized() {
             given()
                 .contentType("application/json")
                 .header("X-GitHub-Event", "push")
@@ -103,8 +103,8 @@ class ProviderWebhookControllerIT extends BasePipelineAgentIT {
             .when()
                 .post("/api/webhooks/github")
             .then()
-                .statusCode(200)
-                .body("status", equalTo("ignored"));
+                .statusCode(401)
+                .body("error", equalTo("unauthorized"));
         }
 
         @Test

@@ -9,10 +9,14 @@ import asyncio
 from collections import deque
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import logging
+import math
+import os
 import time
 from typing import Any, Callable, Iterator
+
+from service.review.inference_usage import InferenceUsage, _ACTIVE_USAGE, _ACTIVE_CALL
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +89,38 @@ class _ReviewExecution:
     project_id: Any
     pull_request_id: Any
     owner: object = field(default_factory=object)
+    deadline: float | None = None
 
 
 _EXECUTION: ContextVar[_ReviewExecution | None] = ContextVar("review_execution", default=None)
+
+
+def set_review_deadline(deadline: float | None) -> None:
+    execution = _EXECUTION.get()
+    if execution is not None:
+        _EXECUTION.set(replace(execution, deadline=deadline))
+
+
+def optional_work_budget(configured_seconds: float) -> float:
+    """Optional work gets at most a fifth of remaining time; core can finalize."""
+    execution = _EXECUTION.get()
+    if execution is None or execution.deadline is None:
+        return configured_seconds
+    remaining = max(0.0, execution.deadline - asyncio.get_running_loop().time())
+    return min(configured_seconds, remaining * 0.2)
+
+
+def optional_timeout_seconds(name: str, default: float) -> float:
+    """Malformed optional configuration falls back without breaking imports."""
+    raw = os.getenv(name, str(default))
+    try:
+        value = float(raw)
+        if not math.isfinite(value):
+            raise ValueError("timeout must be finite")
+        return max(0.0, value)
+    except (ValueError, TypeError):
+        logger.warning("Invalid optional timeout %s=%r; using %.1fs", name, raw, default)
+        return default
 
 
 @contextmanager
@@ -102,9 +135,17 @@ def review_execution(
         scheduler, source_semaphore, preparation_semaphore or source_semaphore,
         event_callback, project_id, pull_request_id,
     ))
+    usage_token = _ACTIVE_USAGE.set(InferenceUsage())
     try:
         yield
     finally:
+        usage = _ACTIVE_USAGE.get()
+        if event_callback and usage is not None:
+            try:
+                event_callback({"type": "status", "state": "inference_usage", "inferenceUsage": usage.summary()})
+            except Exception:
+                logger.warning("Could not emit optional inference usage event", exc_info=True)
+        _ACTIVE_USAGE.reset(usage_token)
         _EXECUTION.reset(token)
 
 
@@ -146,12 +187,19 @@ async def review_model_slot(stage: str):
         if waited:
             _capacity_event(execution, stage=stage, resource="model-call", acquired=True, wait_ms=wait_ms)
         outcome = "completed"
+        call = {"stage": stage, "outcome": "running", "queueWaitMs": wait_ms, "usage": None}
+        usage = _ACTIVE_USAGE.get()
+        if usage is not None:
+            usage.calls.append(call)
+        call_token = _ACTIVE_CALL.set(call)
         try:
             yield
         except BaseException as error:
             outcome = type(error).__name__
             raise
         finally:
+            call.update(outcome=outcome, durationMs=(time.perf_counter() - started) * 1000)
+            _ACTIVE_CALL.reset(call_token)
             logger.info("Review model call finished: project=%s PR=%s stage=%s duration_ms=%.1f outcome=%s",
                         execution.project_id, execution.pull_request_id, stage,
                         (time.perf_counter() - started) * 1000, outcome)

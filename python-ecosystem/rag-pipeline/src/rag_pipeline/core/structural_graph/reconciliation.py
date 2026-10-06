@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from collections import deque
 from typing import Callable
 
 
-from .shared import _interrupt_sql_on_cancel, _normalize_path
+from .shared import _interrupt_sql_on_cancel, _normalize_path, _timed_graph_phase
 
 from .write_state import GraphWriteState
 
@@ -53,12 +54,14 @@ class GraphReconciler:
         an unchanged but stale per-file fact in the cloned generation.
         """
 
-        with _interrupt_sql_on_cancel(self.state.connection, cancellation_check):
-            return self._remove_paths(paths)
+        with _timed_graph_phase(self.state.connection, "delta_remove_paths"), _interrupt_sql_on_cancel(self.state.connection, cancellation_check):
+            return self._remove_paths(paths, cancellation_check=cancellation_check)
 
     def _remove_paths(
         self,
         paths: Sequence[str],
+        *,
+        cancellation_check: Callable[[], None] | None = None,
     ) -> tuple[tuple[str, ...], frozenset[str]]:
         """Apply path removal while the public method owns cancellation setup."""
 
@@ -79,22 +82,44 @@ class GraphReconciler:
         )
         # A provider may report a removed directory. Expand it to concrete
         # stored descendants before computing relation dependencies.
-        self.state.connection.execute(
-            "INSERT OR IGNORE INTO delta_paths(path) "
-            "SELECT DISTINCT units.path FROM units JOIN delta_paths requested "
-            "ON units.path = requested.path "
-            "OR units.path LIKE requested.path || '/%'"
-        )
-        while True:
-            cursor = self.state.connection.execute(
-                "INSERT OR IGNORE INTO delta_paths(path) "
-                "SELECT DISTINCT relations.path FROM relations "
-                "JOIN relation_paths ON relation_paths.relation_id = relations.relation_id "
-                "JOIN delta_paths changed ON changed.path = relation_paths.path "
-                "WHERE json_type(relations.attributes_json, '$.packetKind') IS NULL"
-            )
-            if cursor.rowcount <= 0:
-                break
+        with _timed_graph_phase(self.state.connection, "delta_expand_paths"):
+            for path in normalized:
+                if cancellation_check is not None:
+                    cancellation_check()
+                # '/' and '0' are adjacent under the index's BINARY collation.
+                # Literal prefix bounds use idx_units_path and do not interpret
+                # '%' or '_' in repository names as LIKE wildcards.
+                self.state.connection.execute(
+                    "INSERT OR IGNORE INTO delta_paths(path) "
+                    "SELECT DISTINCT path FROM units WHERE path >= ? AND path < ?",
+                    (path + "/", path + "0"),
+                )
+        with _timed_graph_phase(self.state.connection, "delta_dependency_closure"):
+            affected = {
+                str(row["path"])
+                for row in self.state.connection.execute("SELECT path FROM delta_paths")
+            }
+            frontier = deque(sorted(affected))
+            while frontier:
+                if cancellation_check is not None:
+                    cancellation_check()
+                path = frontier.popleft()
+                # Probe the existing path index once per newly affected path;
+                # scanning every relation on each closure iteration is quadratic.
+                rows = self.state.connection.execute(
+                    "SELECT DISTINCT relations.path FROM relation_paths "
+                    "JOIN relations ON relations.relation_id = relation_paths.relation_id "
+                    "WHERE relation_paths.path = ? AND "
+                    "json_type(relations.attributes_json, '$.packetKind') IS NULL",
+                    (path,),
+                )
+                discovered = {str(row["path"]) for row in rows} - affected
+                self.state.connection.executemany(
+                    "INSERT INTO delta_paths(path) VALUES (?)",
+                    ((value,) for value in sorted(discovered)),
+                )
+                affected.update(discovered)
+                frontier.extend(sorted(discovered))
 
         affected_paths = tuple(
             str(row["path"])
@@ -102,44 +127,45 @@ class GraphReconciler:
                 "SELECT path FROM delta_paths ORDER BY path"
             )
         )
-        old_document_paths = frozenset(
-            str(row["path"])
-            for row in self.state.connection.execute(
-                "SELECT DISTINCT units.path FROM units JOIN delta_paths "
-                "ON delta_paths.path = units.path "
-                "WHERE units.record_type = 'source_unit' OR ("
-                "units.record_type = 'plugin_context' AND "
-                "json_extract(units.metadata_json, '$.content_type') = "
-                "'architecture-source')"
+        with _timed_graph_phase(self.state.connection, "delta_delete"):
+            old_document_paths = frozenset(
+                str(row["path"])
+                for row in self.state.connection.execute(
+                    "SELECT DISTINCT units.path FROM units JOIN delta_paths "
+                    "ON delta_paths.path = units.path "
+                    "WHERE units.record_type = 'source_unit' OR ("
+                    "units.record_type = 'plugin_context' AND "
+                    "json_extract(units.metadata_json, '$.content_type') = "
+                    "'architecture-source')"
+                )
             )
-        )
-        self.state.connection.execute(
-            "INSERT OR IGNORE INTO delta_units(unit_id, unit_rowid) "
-            "SELECT units.unit_id, units.rowid FROM units JOIN delta_paths "
-            "ON delta_paths.path = units.path"
-        )
-        self._remember_names_for_units("delta_units")
-        self.state.touched_relation_ids.update(
-            str(row["relation_id"])
-            for row in self.state.connection.execute(
-                "SELECT relation_id FROM relations WHERE "
-                "source_unit_id IN (SELECT unit_id FROM delta_units) OR "
-                "target_unit_id IN (SELECT unit_id FROM delta_units)"
-            )
-        )
-        self.state.connection.execute(
-            "DELETE FROM relations WHERE path IN (SELECT path FROM delta_paths)"
-        )
-        if self.state.fts_available:
             self.state.connection.execute(
-                "DELETE FROM units_fts WHERE rowid IN "
-                "(SELECT unit_rowid FROM delta_units)"
+                "INSERT OR IGNORE INTO delta_units(unit_id, unit_rowid) "
+                "SELECT units.unit_id, units.rowid FROM units JOIN delta_paths "
+                "ON delta_paths.path = units.path"
             )
-        self.state.connection.execute(
-            "DELETE FROM units WHERE unit_id IN (SELECT unit_id FROM delta_units)"
-        )
-        for path in affected_paths:
-            self.state.file_unit_ids.pop(path, None)
+            self._remember_names_for_units("delta_units")
+            self.state.touched_relation_ids.update(
+                str(row["relation_id"])
+                for row in self.state.connection.execute(
+                    "SELECT relation_id FROM relations WHERE "
+                    "source_unit_id IN (SELECT unit_id FROM delta_units) OR "
+                    "target_unit_id IN (SELECT unit_id FROM delta_units)"
+                )
+            )
+            self.state.connection.execute(
+                "DELETE FROM relations WHERE path IN (SELECT path FROM delta_paths)"
+            )
+            if self.state.fts_available:
+                self.state.connection.execute(
+                    "DELETE FROM units_fts WHERE rowid IN "
+                    "(SELECT unit_rowid FROM delta_units)"
+                )
+            self.state.connection.execute(
+                "DELETE FROM units WHERE unit_id IN (SELECT unit_id FROM delta_units)"
+            )
+            for path in affected_paths:
+                self.state.file_unit_ids.pop(path, None)
         return affected_paths, old_document_paths
 
     def remove_repository_analysis_outputs(self) -> None:

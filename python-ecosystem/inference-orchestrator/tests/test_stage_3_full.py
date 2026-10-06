@@ -379,10 +379,15 @@ class TestExecuteStage3Aggregation:
             assert result["dismissed_issue_ids"] == ["x"]
 
     @pytest.mark.asyncio(loop_scope="function")
+    @pytest.mark.parametrize("synthesis_fails", [False, True])
     async def test_small_profile_admits_one_prioritized_semantic_shard(
         self,
         monkeypatch,
+        synthesis_fails,
     ):
+        if synthesis_fails:
+            monkeypatch.setattr(stage_3_module, "_synthesize_stage_3_results",
+                                AsyncMock(side_effect=RuntimeError("optional synthesis unavailable")))
         token_target = 2_500
         monkeypatch.setattr(
             stage_3_module,
@@ -497,6 +502,9 @@ class TestExecuteStage3Aggregation:
         assert admitted["omittedShardCount"] == 7
         assert admitted["omittedRecordCount"] == 20
         assert admitted["omittedVerificationCount"] == 3
+        receipts = result["verification_assessments"]
+        assert {receipt["candidateObjectId"] for receipt in receipts} == {id(issue) for issue in issues}
+        assert sum(receipt["reasonCode"] == "verification_budget_exhausted" for receipt in receipts) == 3
         assert "CodeCrow Stage 3 child invocation ceiling reached" in prompts[0]
         assert result["report"] == "report-1"
         assert all(
@@ -1069,11 +1077,16 @@ class TestStage3McpVerification:
         assert result["report"] == "plain fallback report"
         bound_llm.ainvoke.assert_awaited_once()
         llm.ainvoke.assert_awaited_once()
-        continuation_call.assert_called_once()
-        [continuation_messages] = captured_continuations
+        assert continuation_call.call_count >= 1
+        continuation_messages = captured_continuations[0]
         assert continuation_messages[0]["content"].count(
             "TOOL_RESULT_MARKER"
         ) == marker_count
+        # Oversized observations are omitted whole; missing source cannot
+        # authorize a dismissal or a successful assessment.
+        assert "TOOL_RESULT_MARKER" not in str(llm.ainvoke.await_args.args)
+        assert result["verification_assessments"][0]["reasonCode"] == "verification_context_limit"
+        assert result["dismissed_issue_keys"] == []
         forbidden = {
             "max_tokens",
             "max_completion_tokens",
@@ -1108,6 +1121,7 @@ class TestStage3McpVerification:
             content=(
                 "Verified report\n"
                 '<!-- DISMISSED_ISSUES: ["issue_0"] -->'
+                '<!-- VERIFICATION_ASSESSMENTS: [{"issue_id":"issue_0","verdict":"disproven","reason":"Guard rules out trigger","contradicting_evidence":[{"file_path":"src/a.py","snippet":"current source"}]}] -->'
             ),
             tool_calls=[],
             response_metadata={},

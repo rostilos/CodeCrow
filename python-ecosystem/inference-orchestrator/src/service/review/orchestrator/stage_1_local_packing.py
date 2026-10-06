@@ -233,6 +233,7 @@ class Stage1ReviewUnitState:
             hunk_id
             for hunk_id, unit_ids in self.units_by_hunk.items()
             if unit_ids and unit_ids.issubset(self.completed_unit_ids)
+            and hunk_id not in self.omitted_hunk_ids
         ))
 
 
@@ -360,7 +361,7 @@ def _reviewable_manifest_hunk_ids(diff_file: Optional[Any]) -> tuple[str, ...]:
         return ()
     return tuple(sorted({
         hunk.id
-        for hunk in (getattr(diff_file, "hunks", ()) or ())
+        for hunk in (getattr(diff_file, "review_hunks", ()) or ())
         if getattr(hunk, "disposition", None) is HunkDisposition.REVIEWABLE
         and isinstance(getattr(hunk, "id", None), str)
         and hunk.id
@@ -370,15 +371,18 @@ def _reviewable_manifest_hunk_ids(diff_file: Optional[Any]) -> tuple[str, ...]:
 def _compacted_stage_1_hunk_ids(diff_file: Optional[Any]) -> tuple[str, ...]:
     if not _is_compacted_stage_1_diff(diff_file):
         return ()
-    return _reviewable_manifest_hunk_ids(diff_file)
+    return tuple(getattr(diff_file, "omitted_hunk_ids", ()) or ())
 
 
 def _reviewable_manifest_context_chars(diff_file: Optional[Any]) -> int:
-    return sum(
-        len(str(getattr(hunk, "content", "") or ""))
-        for hunk in (getattr(diff_file, "hunks", ()) or ())
-        if getattr(hunk, "disposition", None) is HunkDisposition.REVIEWABLE
-    )
+    def body_chars(hunks: Any) -> int:
+        return sum(
+            len(line) + 1 for hunk in hunks
+            if hunk.disposition is HunkDisposition.REVIEWABLE
+            for line in hunk.content.splitlines()[1:]
+        )
+    return max(0, body_chars(getattr(diff_file, "hunks", ()) or ())
+               - body_chars(getattr(diff_file, "review_hunks", ()) or ()))
 
 
 def _apply_compacted_stage_1_omission(
@@ -390,7 +394,6 @@ def _apply_compacted_stage_1_omission(
     if not compacted_hunk_ids:
         return item
     bounded = dict(item)
-    bounded["_hunk_ids"] = ()
     bounded["_omitted_hunk_ids"] = tuple(sorted({
         *(bounded.get("_omitted_hunk_ids", ()) or ()),
         *compacted_hunk_ids,
@@ -400,8 +403,8 @@ def _apply_compacted_stage_1_omission(
         f"path={normalize_repository_path(path)}, "
         f"omitted_hunks={len(compacted_hunk_ids)}, "
         f"reason={getattr(diff_file, 'skip_reason', None) or 'diff limit'}. "
-        "Original hunk contents were not materialized; absence is not negative "
-        "evidence.]"
+        "Only bounded exact fragments were materialized; omitted source is not "
+        "negative evidence.]"
     )
     existing = str(bounded.get("_stage1_budget_diagnostic") or "").strip()
     if diagnostic not in existing:
@@ -714,9 +717,7 @@ def _expand_oversized_diff_batches(
                 diff_content,
                 diff_chunk_token_budget,
                 known_hunks=(
-                    ()
-                    if compacted_hunk_ids
-                    else tuple(diff_file.hunks) if diff_file else ()
+                    tuple(diff_file.review_hunks) if diff_file else ()
                 ),
                 path=file_path,
             )
@@ -844,11 +845,7 @@ def _exact_stage1_diff(
             (),
             path,
         )
-    known_hunks = (
-        ()
-        if _is_compacted_stage_1_diff(diff_file)
-        else tuple(getattr(diff_file, "hunks", ()) or ())
-    )
+    known_hunks = tuple(getattr(diff_file, "review_hunks", ()) or ())
     return (
         str(getattr(diff_file, "content", "") or ""),
         known_hunks,
@@ -882,7 +879,7 @@ def _all_stage1_hunk_ids(
     diff_file = _find_diff_file_for_path(prepared_context, path)
     compacted_hunk_ids = _compacted_stage_1_hunk_ids(diff_file)
     if compacted_hunk_ids:
-        return compacted_hunk_ids
+        return _reviewable_manifest_hunk_ids(diff_file)
     diff_text, known_hunks, path = _exact_stage1_diff(item, prepared_context)
     if not diff_text:
         return ()
@@ -904,7 +901,7 @@ def _ensure_stage1_review_unit(
     path = getattr(file_info, "path", "")
     diff_file = _find_diff_file_for_path(prepared_context, path)
     compacted_hunk_ids = _compacted_stage_1_hunk_ids(diff_file)
-    hunk_ids = () if compacted_hunk_ids else _all_stage1_hunk_ids(
+    hunk_ids = _all_stage1_hunk_ids(
         item,
         prepared_context,
     )

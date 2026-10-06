@@ -100,9 +100,12 @@ VCS REPOSITORY (repoSlug/projectKey): {repo_slug}
 """
 
 STAGE_3_MCP_VERIFICATION_SECTION = """
-## Issue Re-verification (Optional)
-Before producing the final report, you may verify HIGH/CRITICAL issues that seem uncertain
-by reading actual file content from the exact reviewed PR revision.
+## Candidate evidence assessment
+Before producing the final report, assess every assigned Verification ID.
+Use the available exact-revision source reads to try to disprove the highest-impact
+unresolved hypotheses. A previous review's assertion is not independent evidence.
+Acquisition is bounded and optional failures must retain findings, but every
+candidate needs an explicit supported, disproven or unknown assessment.
 
 Available tools:
 {stage_3_file_tool}
@@ -110,7 +113,8 @@ Available tools:
 
 RULES:
 1. You have a MAXIMUM of {max_calls} verification calls total.
-2. Only verify issues you are UNCERTAIN about — do not verify every issue.
+2. Seek the guard, caller contract or handling path that would disprove a claim.
+   If source or budget is unavailable, record unknown and the missing fact.
 3. Prioritize HIGH and CRITICAL severity, but you may verify a lower-severity
    finding when its correctness materially affects the final report.
 4. Use the Verification ID from the complete verification-record list, including
@@ -121,17 +125,21 @@ RULES:
    the same Verification ID before dismissing the consolidated root finding.
 7. If verification reveals a false positive, note its Verification ID for dismissal.
 8. Missing, failed, partial, or ambiguous evidence means KEEP the finding.
-9. After verification, produce the final executive summary.
+9. After acquisition, return the structured assessment and executive summary.
 
 REVIEWED REVISION: {review_revision}
 PR ID: {pr_id}
 
-## False Positive Dismissal
-After producing the executive summary markdown, if your verification revealed any false
-positives, append an HTML comment at the very end of your response with the IDs of issues
-that should be removed from the issue list:
-
-<!-- DISMISSED_ISSUES: ["issue_0", "issue_3"] -->
+## Final response
+Return one JSON object, without a Markdown fence. Put the executive summary
+Markdown in report and one assessment per assigned Verification ID in assessments:
+{{"report":"Executive summary Markdown", "assessments":[{{"issue_id":"issue_0","verdict":"unknown","reason":"Source evidence is insufficient","supporting_evidence":[],"contradicting_evidence":[],"unresolved_questions":["Which guard handles the concrete trigger?"]}}]}}
+Allowed verdicts: supported, disproven, unknown. Cite supporting_evidence for supported.
+Evidence citations have file_path and snippet copied exactly from an observed read.
+An issue cannot be dismissed without a disproven assessment citing exact contradictory
+source retrieved for that verification ID. Reading an anchor alone is not falsification.
+Missing files (including whole-file deletions), failed tools and missing evidence remain
+unknown. Semantic interpretation of an exact source quote remains your judgment.
 
 RULES for dismissal:
 - Only dismiss issues you VERIFIED as false positives via successful file-content
@@ -139,5 +147,6 @@ RULES for dismissal:
 - Do NOT dismiss issues based on guessing — you must have read the relevant file.
 - Do not dismiss a concrete architecture/maintainability defect merely because it
   has no immediate runtime crash; verify the claim as written.
-- If no issues should be dismissed, omit the DISMISSED_ISSUES comment entirely.
+- A disproven assessment proposes dismissal; the host checks the source evidence.
+- Do not call findings verified or assign HIGH confidence because discovery completed.
 """

@@ -88,6 +88,24 @@ def test_operation_models_preserve_explicit_cursor_budget_and_content_window():
     assert unit.max_characters == 2048
 
 
+@patch("rag_pipeline.api.routers.query.ProposedTreeReviewContextService")
+@patch("rag_pipeline.api.routers.query._manager")
+def test_relation_field_page_uses_existing_bound_graph_route(manager_factory, service_class):
+    from rag_pipeline.api.routers.query import review_graph
+    request = ReviewGraphQueryRequest(**_binding(), evidence_id="relation:exact",
+                                     field="attributes", offset=4096,
+                                     max_characters=2000, token_budget=1000)
+    service_class.return_value.query_review_graph.return_value = {"status": "ready"}
+    assert review_graph(request)["status"] == "ready"
+    forwarded = service_class.return_value.query_review_graph.call_args.kwargs
+    assert forwarded["evidence_id"] == "relation:exact"
+    assert forwarded["field"] == "attributes"
+    assert forwarded["offset"] == 4096
+    assert forwarded["token_budget"] == 1000
+    assert forwarded["workspace"] == "workspace"
+    assert forwarded["review_collection_target"] == "sealed-review"
+
+
 def test_traversal_rejects_oversized_relation_kind_labels():
     with pytest.raises(ValueError, match="at most 128 characters"):
         ReviewTraverseRequest(

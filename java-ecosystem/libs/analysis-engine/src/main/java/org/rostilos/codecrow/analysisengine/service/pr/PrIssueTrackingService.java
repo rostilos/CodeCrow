@@ -79,8 +79,12 @@ public class PrIssueTrackingService {
             return new TrackingSummary(0, 0, newAnalysis.getIssues().size(), 0);
         }
 
-        List<CodeAnalysisIssue> newIssues = newAnalysis.getIssues();
-        List<CodeAnalysisIssue> prevIssues = previousAnalysis.getIssues();
+        // BASE findings describe removal impact. HEAD content hashes cannot prove
+        // their survival/resolution or relocate their immutable source anchor.
+        List<CodeAnalysisIssue> newIssues = newAnalysis.getIssues().stream()
+                .filter(i -> i.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE).toList();
+        List<CodeAnalysisIssue> prevIssues = previousAnalysis.getIssues().stream()
+                .filter(i -> i.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE).toList();
 
         if (newIssues.isEmpty() && prevIssues.isEmpty()) {
             return new TrackingSummary(0, 0, 0, 0);

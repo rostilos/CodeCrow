@@ -78,6 +78,7 @@ public class ProjectService implements IProjectService {
     private int maxCustomRulesPerProject;
 
     private final ProjectRepository projectRepository;
+    private final jakarta.persistence.EntityManager entityManager;
     private final VcsConnectionRepository vcsConnectionRepository;
     private final TokenEncryptionService tokenEncryptionService;
     private final AiConnectionRepository aiConnectionRepository;
@@ -132,8 +133,10 @@ public class ProjectService implements IProjectService {
             CommentCommandRateLimitRepository commentCommandRateLimitRepository,
             AnalyzedCommitRepository analyzedCommitRepository,
             ProjectWebhookCleanupService webhookCleanupService,
-            RepositoryIndexBootstrapService repositoryIndexBootstrapService) {
+            RepositoryIndexBootstrapService repositoryIndexBootstrapService,
+            jakarta.persistence.EntityManager entityManager) {
         this.projectRepository = projectRepository;
+        this.entityManager = entityManager;
         this.vcsConnectionRepository = vcsConnectionRepository;
         this.tokenEncryptionService = tokenEncryptionService;
         this.aiConnectionRepository = aiConnectionRepository;
@@ -216,6 +219,8 @@ public class ProjectService implements IProjectService {
             }
 
             branch.ifPresent(defaultBranch -> {
+                entityManager.refresh(project, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+                if (project.getDefaultBranch() != null) return;
                 project.setDefaultBranch(defaultBranch);
                 ProjectConfig config = project.getConfiguration();
                 if (config != null && (config.mainBranch() == null || config.mainBranch().isBlank())) {
@@ -392,8 +397,7 @@ public class ProjectService implements IProjectService {
 
     @Transactional
     public Project updateProject(Long workspaceId, Long projectId, UpdateProjectRequest request) {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
-                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        Project project = configurationProjectForUpdate(workspaceId, projectId);
 
         if (request.getName() != null) {
             project.setName(request.getName());
@@ -727,8 +731,7 @@ public class ProjectService implements IProjectService {
             Long projectId,
             List<String> prTargetBranches,
             List<String> branchPushPatterns) {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
-                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        Project project = configurationProjectForUpdate(workspaceId, projectId);
 
         ProjectConfig currentConfig = project.getConfiguration();
         if (currentConfig == null) {
@@ -767,8 +770,7 @@ public class ProjectService implements IProjectService {
             String branch,
             java.util.List<String> includePatterns,
             java.util.List<String> excludePatterns) {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
-                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        Project project = configurationProjectForUpdate(workspaceId, projectId);
         return updateRagConfig(project, enabled, branch, includePatterns, excludePatterns);
     }
 
@@ -818,8 +820,7 @@ public class ProjectService implements IProjectService {
             Integer maxAnalysisTokenLimit,
             Boolean useMcpTools,
             Boolean taskContextAnalysisEnabled) {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
-                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        Project project = configurationProjectForUpdate(workspaceId, projectId);
 
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
@@ -907,8 +908,7 @@ public class ProjectService implements IProjectService {
             Long workspaceId,
             Long projectId,
             org.rostilos.codecrow.webserver.project.dto.request.UpdateCommentCommandsConfigRequest request) {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
-                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        Project project = configurationProjectForUpdate(workspaceId, projectId);
 
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
@@ -973,8 +973,7 @@ public class ProjectService implements IProjectService {
     @Transactional
     public Project updateAnalysisLimits(Long workspaceId, Long projectId,
             AnalysisLimitsConfig analysisLimits) {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
-                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        Project project = configurationProjectForUpdate(workspaceId, projectId);
         ProjectConfig config = project.getEffectiveConfig();
         config.setAnalysisLimits(analysisLimits);
         project.setConfiguration(config);
@@ -983,8 +982,7 @@ public class ProjectService implements IProjectService {
 
     @Transactional
     public Project updateAnalysisScope(Long workspaceId, Long projectId, AnalysisScopeConfig analysisScope) {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
-                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        Project project = configurationProjectForUpdate(workspaceId, projectId);
         ProjectConfig config = project.getEffectiveConfig();
         config.setAnalysisScope(analysisScope != null ? analysisScope : new AnalysisScopeConfig());
         project.setConfiguration(config);
@@ -993,8 +991,7 @@ public class ProjectService implements IProjectService {
 
     @Transactional
     public Project syncAnalysisScope(Long workspaceId, Long projectId, String direction) {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
-                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        Project project = configurationProjectForUpdate(workspaceId, projectId);
         ProjectConfig config = project.getEffectiveConfig();
 
         if ("FROM_RAG".equals(direction)) {
@@ -1017,6 +1014,15 @@ public class ProjectService implements IProjectService {
 
     // ==================== Project Rules ====================
 
+    /** Reload under the same row lock used by feedback projection. A query alone
+     * can return an entity cached earlier by authorization in this request. */
+    private Project configurationProjectForUpdate(Long workspaceId, Long projectId) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        entityManager.refresh(project, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        return project;
+    }
+
     /**
      * Get the project rules configuration.
      */
@@ -1035,8 +1041,7 @@ public class ProjectService implements IProjectService {
      */
     @Transactional
     public Project updateProjectRules(Long workspaceId, Long projectId, UpdateProjectRulesRequest request) {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
-                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        Project project = configurationProjectForUpdate(workspaceId, projectId);
 
         // Enforce maximum rule count
         int maxRules = maxCustomRulesPerProject;

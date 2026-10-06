@@ -52,7 +52,7 @@ NON-NEGOTIABLE REVIEW RULES:
   unused/missing/unreferenced symbol, search all visible current-file and diff
   evidence for that symbol and suppress the issue if the evidence contradicts it.
 - Anchor every new finding to exact current source inside a visible reviewable
-  diff hunk. Full-file and structural context may prove impact, but code outside
+  diff hunk (or exact removed BASE source for a whole-file deletion). Full-file and structural context may prove impact, but code outside
   the changed hunk is supporting context, not a separate PR finding.
 - Do not report missing imports, undefined variables, missing methods/properties,
   or unseen definitions unless the visible evidence proves they are absent.
@@ -209,7 +209,7 @@ Return ONLY valid JSON with this structure:
 OUTPUT CONSTRAINTS:
 - Return exactly one review object per input file and match file paths exactly.
 - Every NEW finding must include a non-empty current-source codeSnippet from a
-  reviewable changed hunk and a scope.
+  reviewable changed hunk and a scope; for a deleted file use removed BASE source.
 - An exact matched previous issue returned only with isResolved=true may preserve
   its supplied historical codeSnippet when the fixed line no longer exists; it is
   exempt from current-source snippet matching and may have an empty snippet when

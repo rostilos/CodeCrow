@@ -97,6 +97,11 @@ async def test_fastmcp_schema_exposes_focused_graph_continuation_arguments():
     )
     assert relation_kind_items["maxLength"] == 128
     assert "cursor" in tools["queryCodeGraph"].inputSchema["properties"]
+    for name in ("getMinimalReviewContext", "getImpactRadius", "queryCodeGraph", "getStructuralUnit"):
+        assert tools[name].inputSchema["properties"]["tokenBudget"]["default"] == 4000
+    assert tools["exploreReviewContext"].inputSchema["properties"]["tokenBudget"]["default"] == 8000
+    assert {"evidenceId", "field", "offset", "maxCharacters"}.issubset(
+        tools["queryCodeGraph"].inputSchema["properties"])
     assert tools["getMinimalReviewContext"].inputSchema["properties"][
         "includeSource"
     ]["default"] is True
@@ -104,6 +109,12 @@ async def test_fastmcp_schema_exposes_focused_graph_continuation_arguments():
         "offset",
         "maxCharacters",
     }.issubset(tools["getStructuralUnit"].inputSchema["properties"])
+    for name in ("exploreReviewContext", "getMinimalReviewContext", "getImpactRadius", "traverseCodeGraph", "queryCodeGraph"):
+        properties = tools[name].inputSchema["properties"]
+        assert properties["maxSourceWindows"]["minimum"] == 1
+        assert properties["maxSourceWindows"]["maximum"] == 20
+        assert properties["maxSourceCharacters"]["minimum"] == 1_000
+        assert properties["maxSourceCharacters"]["maximum"] == 60_000
 
 
 @pytest.mark.asyncio
@@ -185,6 +196,7 @@ async def test_review_context_tool_uses_host_identity_and_bound_focus_paths(
         "max_relations": 37,
         "max_source_windows": 6,
         "max_source_characters": 12000,
+        "token_budget": 8000,
     }]
     assert fake.closed is True
 
@@ -302,4 +314,27 @@ async def test_proposed_tree_tools_forward_host_binding_and_query_arguments(
     assert fake.calls[4]["unit_id"] == "unit:payment"
     assert fake.calls[4]["offset"] == 4096
     assert fake.calls[4]["max_characters"] == 2048
+    assert fake.calls[0]["token_budget"] == 4000
+    assert fake.calls[3]["token_budget"] == 4000
+    await rag_mcp_server.query_code_graph(
+        focusPaths=["src/example.py"], evidenceId="relation:exact",
+        field="target", offset=14000, maxCharacters=2048, tokenBudget=1000,
+    )
+    assert fake.calls[-1]["evidence_id"] == "relation:exact"
+    assert fake.calls[-1]["offset"] == 14000
+    assert fake.calls[-1]["token_budget"] == 1000
     assert fake.closed is True
+
+
+@pytest.mark.asyncio
+async def test_graph_detail_enum_normalizes_provider_alias_before_tool_dispatch(monkeypatch):
+    fake = _FakeRagClient()
+    monkeypatch.setattr(rag_mcp_server, "RagClient", lambda: fake)
+    tools = {tool.name: tool for tool in await rag_mcp_server.server.list_tools()}
+    for name in ("getMinimalReviewContext", "getImpactRadius", "traverseCodeGraph", "queryCodeGraph"):
+        assert tools[name].inputSchema["properties"]["detailLevel"]["enum"] == ["minimal", "standard"]
+    await rag_mcp_server.server.call_tool("getMinimalReviewContext", {
+        "question": "What calls this?", "focusPaths": ["src/a.py"], "detailLevel": "compact",
+    })
+    assert fake.calls[-1]["detail_level"] == "minimal"
+    assert fake.closed

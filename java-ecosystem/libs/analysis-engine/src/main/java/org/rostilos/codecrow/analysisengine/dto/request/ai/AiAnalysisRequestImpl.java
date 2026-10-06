@@ -549,6 +549,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
                     resolvedOlder.resolvedDescription(),
                     resolvedOlder.resolvedByCommit(),
                     resolvedOlder.resolvedInAnalysisId(),
+                    newer.anchorSide(),
                     newer.codeSnippet());
         }
 

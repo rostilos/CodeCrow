@@ -329,3 +329,24 @@ class TestRepositoryIndexInspectionModels:
 
         with pytest.raises(ValueError):
             RepositoryIndexNodeRequest(collection_target="generation-target", neighbor_limit=500)
+
+
+@pytest.mark.parametrize("model_name,extra", [
+    ("ReviewMinimalContextRequest", {"question": "What calls this?"}),
+    ("ReviewImpactRadiusRequest", {}),
+    ("ReviewTraverseRequest", {"start": "src/a.py"}),
+    ("ReviewGraphQueryRequest", {"pattern": "callers", "target": "src/a.py"}),
+])
+@pytest.mark.parametrize("supplied,expected", [("compact", "minimal"), (" MINIMAL ", "minimal"), ("detailed", "standard"), ("unknown", "minimal")])
+def test_graph_detail_aliases_are_optional_display_preferences(model_name, extra, supplied, expected, tmp_path, monkeypatch):
+    from rag_pipeline.api import models
+    monkeypatch.setenv("ALLOWED_REPO_ROOT", str(tmp_path))
+    request = getattr(models, model_name)(
+        workspace="ws", project="project", target_branch="main", base_revision="base",
+        source_revision="head", target_repo_path=str(tmp_path / "base"),
+        review_overlay_path=str(tmp_path / "overlay"), focus_paths=["src/a.py"],
+        review_collection_target="sealed-review", review_generation_manifest_sha256="a" * 64,
+        detail_level=supplied, **extra,
+    )
+    assert request.detail_level == expected
+    assert request.model_json_schema()["properties"]["detail_level"]["enum"] == ["minimal", "standard"]

@@ -169,6 +169,7 @@ def _message_payload(message: Any) -> dict[str, Any]:
     }
     for attribute in (
         "tool_calls",
+        "tool_call_id",
         "invalid_tool_calls",
         "usage_metadata",
         "response_metadata",
@@ -214,18 +215,22 @@ def _classify_stage(schema: Any, rendered: str, tools: tuple[dict[str, Any], ...
         "FileReviewBatchOutput": "stage_1",
         "CrossFileAnalysisResult": "stage_2",
         "DeduplicatedIssueList": "deduplication",
+        "SemanticDeduplicationDecision": "deduplication",
+        "VerificationResult": "verification",
         "ReconciliationOutput": "branch_reconciliation",
         "CodeReviewOutput": "branch_analysis",
     }
     schema_stage = by_schema.get(_schema_name(schema))
     if schema_stage:
         return schema_stage
-    if tools and "Verification Agent" in rendered:
+    if "Verification Agent" in rendered:
         return "verification"
     if "JSON repair expert" in rendered:
         return "json_repair"
     if "Produce final PR executive summary" in rendered:
         return "stage_3"
+    if "senior code reviewer analyzing one batch of PR files" in rendered:
+        return "stage_1"
     if "reconciliation" in rendered.casefold():
         return "branch_reconciliation"
     return "unclassified"
@@ -423,7 +428,7 @@ class _ProviderBoundaryCallback:
         self.ignore_chain = True
         self.ignore_agent = True
         self.ignore_retriever = True
-        self.ignore_retry = True
+        self.ignore_retry = False
         self.ignore_custom_event = True
 
     def on_llm_start(self, *_: Any, **__: Any) -> None:
@@ -434,6 +439,20 @@ class _ProviderBoundaryCallback:
 
     def on_llm_new_token(self, *_: Any, **__: Any) -> None:
         return None
+
+    def on_retry(self, retry_state: Any, **_: Any) -> None:
+        self.events.append({
+            "status": "retrying",
+            "failedAttemptNumber": getattr(retry_state, "attempt_number", None),
+            "waitSeconds": getattr(getattr(retry_state, "next_action", None), "sleep", None),
+        })
+
+    @property
+    def observed_attempts(self) -> int:
+        terminal = sum(event["status"] in {"completed", "failed"} for event in self.events)
+        retry_minimum = max((event["failedAttemptNumber"] + 1 for event in self.events
+                             if event["status"] == "retrying" and isinstance(event.get("failedAttemptNumber"), int)), default=0)
+        return max(1, terminal, retry_minimum)
 
     def on_llm_end(self, response: Any, **_: Any) -> None:
         safe_response = _json_safe(response)
@@ -719,6 +738,14 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
             "visibleEvidenceFactDigests": normalized_fact_digests,
             "terminalState": terminal_state,
             "rejection": normalized_rejection,
+            **{
+                field: _redact_secrets(_json_safe(record[field]))
+                for field in (
+                    "sourceKey", "hypothesis", "evidenceGaps",
+                    "verificationAssessments", "consolidatedCandidateIds",
+                )
+                if field in record
+            },
         })
     if normalized_records != sorted(
         normalized_records,
@@ -964,6 +991,8 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
             **normalized_candidate_counts,
             "rejectionCounts": dict(sorted(computed_rejections.items())),
             "records": normalized_records,
+            **({"verification": _redact_secrets(_json_safe(candidates["verification"]))}
+               if "verification" in candidates else {}),
         },
         "hunkReceipts": normalized_hunk_receipts,
         "retrieval": {
@@ -1274,6 +1303,7 @@ class ReviewQualityCaptureSession:
     """Crash-safe artifact shared by all bound views of one review model."""
 
     def __init__(self, request: ReviewRequestDto):
+        self._capture_error: Optional[dict[str, str]] = None
         raw_snapshot = request.model_dump(mode="json", by_alias=True)
         self._credential_values = sorted(
             _credential_values(raw_snapshot),
@@ -1420,7 +1450,7 @@ class ReviewQualityCaptureSession:
                 "conflicting terminal pipeline evidence events"
             )
             return
-        self._pipeline_evidence = evidence
+        self._pipeline_evidence = self._scrub_known_credentials(evidence)
 
     def wrap_event_callback(
         self,
@@ -1428,21 +1458,27 @@ class ReviewQualityCaptureSession:
     ) -> Callable[[dict[str, Any]], None]:
         """Capture host evidence while preserving the caller's event stream."""
         def wrapped(event: dict[str, Any]) -> None:
-            self.observe_pipeline_event(event)
+            try:
+                if self._capture_error is None:
+                    self.observe_pipeline_event(event)
+            except Exception as exception:
+                self._capture_failed("pipeline_event", exception)
             if callback is not None:
                 callback(event)
 
         return wrapped
 
+    def _capture_failed(self, phase: str, exception: Exception) -> None:
+        self._capture_error = {"phase": phase, "errorType": type(exception).__name__}
+        logger.warning("Optional review quality capture unavailable: phase=%s error=%s",
+                       phase, type(exception).__name__)
+
     def _write(self) -> None:
+        if self._capture_error is not None:
+            return
         temporary = self.path.with_suffix(f".{uuid.uuid4().hex}.tmp")
-        payload = json.dumps(
-            self._artifact,
-            ensure_ascii=False,
-            sort_keys=True,
-            indent=2,
-        )
         try:
+            payload = json.dumps(self._artifact, ensure_ascii=False, sort_keys=True, indent=2)
             with temporary.open("x", encoding="utf-8") as handle:
                 os.chmod(temporary, 0o600)
                 handle.write(payload)
@@ -1450,9 +1486,13 @@ class ReviewQualityCaptureSession:
                 os.fsync(handle.fileno())
             os.replace(temporary, self.path)
             os.chmod(self.path, 0o600)
+        except Exception as exception:
+            self._capture_failed("write", exception)
         finally:
-            if temporary.exists():
-                temporary.unlink()
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _prune(self) -> None:
         candidates = sorted(
@@ -1475,6 +1515,10 @@ class ReviewQualityCaptureSession:
 
     def receipt(self) -> dict[str, Any]:
         """Return a source-free receipt for the completed capture artifact."""
+
+        if self._capture_error is not None:
+            return {"kind": "review-quality-capture-receipt", "status": "unavailable",
+                    "diagnostic": dict(self._capture_error)}
 
         if (
             self._artifact.get("status") not in {"completed", "failed"}
@@ -1538,82 +1582,125 @@ class ReviewQualityCaptureSession:
         tools: tuple[dict[str, Any], ...],
         invoke_kwargs: dict[str, Any],
     ) -> Any:
-        rendered, serialized = _serialize_input(input_data)
-        rendered = self._scrub_known_credentials(rendered)
-        serialized = self._scrub_known_credentials(serialized)
-        schema_definition = _schema_definition(schema)
-        declarations: dict[str, Any] = {}
-        if schema_definition is not None:
-            declarations["responseSchema"] = schema_definition
-        if tools:
-            declarations["tools"] = list(tools)
-        declaration_chars = len(_canonical_bytes(declarations)) if declarations else 0
-        started = time.monotonic()
-        async with self._lock:
-            sequence = len(self._artifact["calls"]) + 1
-            record: dict[str, Any] = {
-                "sequence": sequence,
-                "stage": _classify_stage(schema, rendered, tools),
-                "status": "in_progress",
-                "startedAt": _utc_now(),
-                "completedAt": None,
-                "durationMs": None,
-                "callType": (
-                    "tool-enabled"
-                    if tools
-                    else "structured"
-                    if schema is not None
-                    else "raw"
-                ),
-                "responseSchema": _schema_name(schema),
-                "responseSchemaDefinition": schema_definition,
-                "includeRawResponse": include_raw,
-                "modelBindings": _redact_secrets(_json_safe(bindings)),
-                "tools": list(tools),
-                "input": serialized,
-                "renderedPrompt": rendered,
-                "promptDigest": _digest({
-                    "input": serialized,
-                    "schema": schema_definition,
+        if self._capture_error is not None:
+            return await delegate.ainvoke(input_data, **invoke_kwargs)
+        try:
+            rendered, serialized = _serialize_input(input_data)
+            rendered = self._scrub_known_credentials(rendered)
+            serialized = self._scrub_known_credentials(serialized)
+            schema_definition = _schema_definition(schema)
+            declarations: dict[str, Any] = {}
+            if schema_definition is not None:
+                declarations["responseSchema"] = schema_definition
+            if tools:
+                declarations["tools"] = list(tools)
+            declaration_chars = len(_canonical_bytes(declarations)) if declarations else 0
+            started = time.monotonic()
+            async with self._lock:
+                sequence = len(self._artifact["calls"]) + 1
+                record: dict[str, Any] = {
+                    "sequence": sequence,
+                    "stage": _classify_stage(schema, rendered, tools),
+                    "status": "in_progress",
+                    "startedAt": _utc_now(),
+                    "completedAt": None,
+                    "durationMs": None,
+                    "callType": (
+                        "tool-enabled"
+                        if tools
+                        else "structured"
+                        if schema is not None
+                        else "raw"
+                    ),
+                    "responseSchema": _schema_name(schema),
+                    "responseSchemaDefinition": schema_definition,
+                    "includeRawResponse": include_raw,
+                    "modelBindings": _redact_secrets(_json_safe(bindings)),
+                    "invocationParameters": _redact_secrets(_json_safe({
+                        key: value for key, value in invoke_kwargs.items() if key != "config"
+                    })),
                     "tools": list(tools),
-                    "bindings": _redact_secrets(_json_safe(bindings)),
-                }),
-                "renderedPromptCharacterCount": len(rendered),
-                "estimatedInputTokens": math.ceil(
-                    (len(rendered.encode("utf-8")) + declaration_chars) / 4
-                ),
-                "response": None,
-                "responseDigest": None,
-                "providerEvents": [],
-                "providerCallCount": None,
-                "providerCallCountSource": None,
-                "error": None,
-            }
-            self._artifact["calls"].append(record)
-            self._write()
+                    "input": serialized,
+                    "renderedPrompt": rendered,
+                    "promptDigest": _digest({
+                        "input": serialized,
+                        "schema": schema_definition,
+                        "tools": list(tools),
+                        "bindings": _redact_secrets(_json_safe(bindings)),
+                    }),
+                    "renderedPromptCharacterCount": len(rendered),
+                    "renderedPromptByteCount": len(rendered.encode("utf-8")),
+                    "serializedMessageByteCount": len(_canonical_bytes(serialized)),
+                    "serializedToolByteCount": len(_canonical_bytes(list(tools))),
+                    "serializedDeclarationByteCount": declaration_chars,
+                    "estimatedInputTokens": math.ceil(
+                        (len(rendered.encode("utf-8")) + declaration_chars) / 4
+                    ),
+                    "response": None,
+                    "responseDigest": None,
+                    "providerEvents": [],
+                    "providerCallCount": None,
+                    "providerCallCountSource": None,
+                    "error": None,
+                }
+                self._artifact["calls"].append(record)
+                self._write()
+        except Exception as exception:
+            self._capture_failed("request", exception)
+            return await delegate.ainvoke(input_data, **invoke_kwargs)
 
-        provider_callback = _ProviderBoundaryCallback()
-        provider_kwargs = _invoke_kwargs_with_callback(
-            invoke_kwargs,
-            provider_callback,
-        )
+        try:
+            provider_callback = _ProviderBoundaryCallback()
+            provider_kwargs = _invoke_kwargs_with_callback(
+                invoke_kwargs,
+                provider_callback,
+            )
+        except Exception as exception:
+            self._capture_failed("provider_callback", exception)
+            return await delegate.ainvoke(input_data, **invoke_kwargs)
         try:
             response = await delegate.ainvoke(input_data, **provider_kwargs)
         except BaseException as exception:
+            try:
+                async with self._lock:
+                    record["status"] = "failed"
+                    record["completedAt"] = _utc_now()
+                    record["durationMs"] = round((time.monotonic() - started) * 1000, 3)
+                    record["error"] = {
+                        "type": type(exception).__name__,
+                        "message": self._scrub_known_credentials(str(exception)),
+                    }
+                    record["providerEvents"] = self._scrub_known_credentials(
+                        _redact_secrets(_json_safe(provider_callback.events))
+                    )
+                    record["providerCallCount"] = provider_callback.observed_attempts
+                    record["providerCallCountSource"] = (
+                        "callback"
+                        if provider_callback.events
+                        else "model-boundary-fallback"
+                    )
+                    self._artifact["modelBoundaryInvocations"] += 1
+                    self._artifact["providerCalls"] += record["providerCallCount"]
+                    self._write()
+            except Exception as capture_exception:
+                self._capture_failed("provider_error", capture_exception)
+            raise
+
+        try:
+            serialized_response = self._scrub_known_credentials(
+                _redact_secrets(_json_safe(response))
+            )
             async with self._lock:
-                record["status"] = "failed"
+                record["status"] = "completed"
                 record["completedAt"] = _utc_now()
                 record["durationMs"] = round((time.monotonic() - started) * 1000, 3)
-                record["error"] = {
-                    "type": type(exception).__name__,
-                    "message": self._scrub_known_credentials(str(exception)),
-                }
+                record["response"] = serialized_response
+                record["serializedResponseByteCount"] = len(_canonical_bytes(serialized_response))
+                record["responseDigest"] = _digest(serialized_response)
                 record["providerEvents"] = self._scrub_known_credentials(
                     _redact_secrets(_json_safe(provider_callback.events))
                 )
-                record["providerCallCount"] = max(
-                    1, len(provider_callback.events)
-                )
+                record["providerCallCount"] = provider_callback.observed_attempts
                 record["providerCallCountSource"] = (
                     "callback"
                     if provider_callback.events
@@ -1622,32 +1709,23 @@ class ReviewQualityCaptureSession:
                 self._artifact["modelBoundaryInvocations"] += 1
                 self._artifact["providerCalls"] += record["providerCallCount"]
                 self._write()
-            raise
-
-        serialized_response = self._scrub_known_credentials(
-            _redact_secrets(_json_safe(response))
-        )
-        async with self._lock:
-            record["status"] = "completed"
-            record["completedAt"] = _utc_now()
-            record["durationMs"] = round((time.monotonic() - started) * 1000, 3)
-            record["response"] = serialized_response
-            record["responseDigest"] = _digest(serialized_response)
-            record["providerEvents"] = self._scrub_known_credentials(
-                _redact_secrets(_json_safe(provider_callback.events))
-            )
-            record["providerCallCount"] = max(1, len(provider_callback.events))
-            record["providerCallCountSource"] = (
-                "callback"
-                if provider_callback.events
-                else "model-boundary-fallback"
-            )
-            self._artifact["modelBoundaryInvocations"] += 1
-            self._artifact["providerCalls"] += record["providerCallCount"]
-            self._write()
+        except Exception as exception:
+            self._capture_failed("response", exception)
         return response
 
     async def complete(
+        self,
+        response: Optional[dict[str, Any]],
+        error: Optional[BaseException] = None,
+        *,
+        failed: bool = False,
+    ) -> None:
+        try:
+            await self._complete(response, error, failed=failed)
+        except Exception as exception:
+            self._capture_failed("complete", exception)
+
+    async def _complete(
         self,
         response: Optional[dict[str, Any]],
         error: Optional[BaseException] = None,
@@ -1659,6 +1737,15 @@ class ReviewQualityCaptureSession:
                 _redact_secrets(_json_safe(response))
             )
             self._artifact["completedAt"] = _utc_now()
+            self._artifact["captureGaps"] = [
+                {"sequence": call["sequence"], "reason": "invocation_not_finalized"}
+                for call in self._artifact["calls"] if call["status"] == "in_progress"
+            ]
+            self._artifact["providerAttemptAccounting"] = (
+                "Observed provider callback attempts, including retry notifications; "
+                "one host invocation is the fallback minimum. SDK-internal retries "
+                "without callbacks remain unknown."
+            )
             self._artifact["status"] = (
                 "failed"
                 if error is not None or failed
@@ -1760,14 +1847,18 @@ class ReviewQualityCaptureLLM(BaseChatModel):
         )
 
     def _clone(self, delegate: Any, **updates: Any) -> "ReviewQualityCaptureLLM":
-        return ReviewQualityCaptureLLM(
-            delegate,
-            self._session,
-            schema=updates.get("schema", self._schema),
-            include_raw=updates.get("include_raw", self._include_raw),
-            bindings=updates.get("bindings", self._bindings),
-            tools=updates.get("tools", self._tools),
-        )
+        try:
+            return ReviewQualityCaptureLLM(
+                delegate,
+                self._session,
+                schema=updates.get("schema", self._schema),
+                include_raw=updates.get("include_raw", self._include_raw),
+                bindings=updates.get("bindings", self._bindings),
+                tools=updates.get("tools", self._tools),
+            )
+        except Exception as exception:
+            self._session._capture_failed("model_wrapper", exception)
+            return delegate
 
     def model_copy(
         self,
@@ -1834,11 +1925,12 @@ class ReviewQualityCaptureLLM(BaseChatModel):
         bindings["tool_binding"] = {
             "options": dict(kwargs),
         }
-        return self._clone(
-            delegate,
-            bindings=bindings,
-            tools=tuple(_tool_descriptor(tool) for tool in materialized),
-        )
+        try:
+            descriptors = tuple(_tool_descriptor(tool) for tool in materialized)
+        except Exception as exception:
+            self._session._capture_failed("tool_descriptor", exception)
+            return delegate
+        return self._clone(delegate, bindings=bindings, tools=descriptors)
 
     async def ainvoke(
         self,
@@ -1867,9 +1959,13 @@ class ReviewQualityCaptureLLM(BaseChatModel):
 def create_quality_capture_session(
     request: ReviewRequestDto,
 ) -> Optional[ReviewQualityCaptureSession]:
-    if not quality_capture_enabled_for(request):
-        return None
-    return ReviewQualityCaptureSession(request)
+    try:
+        if quality_capture_enabled_for(request):
+            return ReviewQualityCaptureSession(request)
+    except Exception as exception:
+        logger.warning("Optional review quality capture not started: error=%s",
+                       type(exception).__name__)
+    return None
 
 
 def wrap_quality_capture_llm(
@@ -1878,4 +1974,8 @@ def wrap_quality_capture_llm(
 ) -> Any:
     if session is None:
         return llm
-    return ReviewQualityCaptureLLM(llm, session)
+    try:
+        return ReviewQualityCaptureLLM(llm, session)
+    except Exception as exception:
+        session._capture_failed("model_wrapper", exception)
+        return llm

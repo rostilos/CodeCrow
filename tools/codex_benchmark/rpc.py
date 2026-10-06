@@ -32,6 +32,7 @@ class AppServer:
         self.pending: dict[int, asyncio.Future] = {}
         self.events: dict[str, asyncio.Queue] = {}
         self.usage: dict[str, dict] = {}
+        self.usage_callback = None
         self.counter = 0
         self.process = None
         self.reader = None
@@ -106,6 +107,8 @@ class AppServer:
                 thread = params.get("threadId") or (params.get("thread") or {}).get("id")
                 if message.get("method") == "thread/tokenUsage/updated":
                     self.usage[thread] = params.get("tokenUsage") or {}
+                    if self.usage_callback is not None:
+                        self.usage_callback(thread, params.get("turnId"), self.usage[thread])
                 if thread:
                     await self.events.setdefault(thread, asyncio.Queue()).put(message)
                 elif "id" in message:

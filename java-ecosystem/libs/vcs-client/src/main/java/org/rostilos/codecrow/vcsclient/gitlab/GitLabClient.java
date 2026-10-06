@@ -826,9 +826,25 @@ public class GitLabClient implements VcsClient {
             String filePath,
             int newLine
     ) throws IOException {
+        postMergeRequestLineComment(workspaceId, repoIdOrSlug, mergeRequestIid, body, baseSha, headSha, startSha, filePath, newLine,
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.HEAD);
+    }
+
+    public void postMergeRequestLineComment(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid,
+            String body,
+            String baseSha,
+            String headSha,
+            String startSha,
+            String filePath,
+            int newLine,
+            org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide anchorSide
+    ) throws IOException {
         mergeRequestApi.postLineComment(
                 workspaceId, repoIdOrSlug, mergeRequestIid,
-                body, baseSha, headSha, startSha, filePath, newLine);
+                body, baseSha, headSha, startSha, filePath, newLine, anchorSide);
     }
 
     public List<Map<String, Object>> listMergeRequestNotes(

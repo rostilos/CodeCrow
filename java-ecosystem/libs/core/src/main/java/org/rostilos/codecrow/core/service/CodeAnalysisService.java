@@ -279,7 +279,8 @@ public class CodeAnalysisService {
                         }
                         CodeAnalysisIssue issue = createIssueFromData(
                                 issueData, String.valueOf(i), vcsAuthorId, vcsAuthorUsername,
-                                commitHash, prNumber, analysisId, fileContents);
+                                commitHash, prNumber, analysisId, fileContents,
+                                savedAnalysis.getProject() == null ? null : savedAnalysis.getProject().getId());
                         if (issue != null) {
                             savedAnalysis.addIssue(issue);
                         }
@@ -304,7 +305,8 @@ public class CodeAnalysisService {
 
                         CodeAnalysisIssue issue = createIssueFromData(
                                 issueData, entry.getKey(), vcsAuthorId, vcsAuthorUsername,
-                                commitHash, prNumber, analysisId, fileContents);
+                                commitHash, prNumber, analysisId, fileContents,
+                                savedAnalysis.getProject() == null ? null : savedAnalysis.getProject().getId());
                         if (issue != null) {
                             savedAnalysis.addIssue(issue);
                         }
@@ -510,6 +512,7 @@ public class CodeAnalysisService {
             issueClone.setSeverity(srcIssue.getSeverity());
             issueClone.setFilePath(srcIssue.getFilePath());
             issueClone.setLineNumber(srcIssue.getLineNumber());
+            issueClone.setAnchorSide(srcIssue.getAnchorSide());
             issueClone.setReason(srcIssue.getReason());
             issueClone.setTitle(srcIssue.getTitle());
             issueClone.setSuggestedFixDescription(srcIssue.getSuggestedFixDescription());
@@ -572,7 +575,8 @@ public class CodeAnalysisService {
             String commitHash,
             Long prNumber,
             Long analysisId,
-            Map<String, String> fileContents
+            Map<String, String> fileContents,
+            Long projectId
     ) {
         try {
             // Sanitize all string values in the AI response map to strip null bytes
@@ -603,7 +607,8 @@ public class CodeAnalysisService {
                         originalId = ((Number) originalIdObj).longValue();
                     }
                     if (originalId != null) {
-                        originalIssue = issueRepository.findById(originalId).orElse(null);
+                        originalIssue = projectId == null ? null : issueRepository
+                                .findByIdAndAnalysis_Project_Id(originalId, projectId).orElse(null);
                         if (originalIssue != null) {
                             log.debug("Found original issue {} for reconciliation", originalId);
                         }
@@ -613,6 +618,8 @@ public class CodeAnalysisService {
                 }
             }
 
+            issue.setAnchorSide(originalIssue != null ? originalIssue.getAnchorSide()
+                    : IssueAnchorSide.fromString((String) issueData.get("anchorSide")));
             String severityStr = (String) issueData.get("severity");
             if (severityStr == null) {
                 log.warn("No severity found for issue {}", issueKey);
@@ -848,7 +855,7 @@ public class CodeAnalysisService {
             // Use the codeSnippet to find the actual line in the real file content.
             // Scope boundaries are NOT resolved here — instead, scope-aware context
             // hashing in computeTrackingHashes() captures the surrounding code window.
-            String availableFileContent = fileContents != null && filePath != null
+            String availableFileContent = issue.getAnchorSide() != IssueAnchorSide.BASE && fileContents != null && filePath != null
                     ? fileContents.get(filePath)
                     : null;
             boolean hasAvailableFileContent = availableFileContent != null && !availableFileContent.isEmpty();
@@ -904,7 +911,8 @@ public class CodeAnalysisService {
                 }
             }
 
-            computeTrackingHashes(issue, fileContents, codeSnippet);
+            computeTrackingHashes(issue, issue.getAnchorSide() == IssueAnchorSide.BASE
+                    ? Collections.emptyMap() : fileContents, codeSnippet);
 
             log.debug("Created issue: {} severity, category: {}, file: {}, line: {}, resolved: {}",
                     issue.getSeverity(), issue.getIssueCategory(), issue.getFilePath(), issue.getLineNumber(), isResolved);
@@ -922,7 +930,7 @@ public class CodeAnalysisService {
      */
     private CodeAnalysisIssue createIssueFromData(Map<String, Object> issueData, String issueKey, String vcsAuthorId, String vcsAuthorUsername) {
         return createIssueFromData(issueData, issueKey, vcsAuthorId, vcsAuthorUsername,
-                null, null, null, Collections.emptyMap());
+                null, null, null, Collections.emptyMap(), null);
     }
 
     /**
@@ -1121,7 +1129,8 @@ public class CodeAnalysisService {
             if (supersededIds.contains(issue.getId())) {
                 continue; // skip issues that were tracked forward to a newer analysis
             }
-            String fp = issue.getIssueFingerprint();
+            String fp = issue.getIssueFingerprint() == null ? null
+                    : issue.getAnchorSide().name() + ":" + issue.getIssueFingerprint();
             if (fp != null && !fp.isEmpty()) {
                 CodeAnalysisIssue existing = byFingerprint.get(fp);
                 if (existing == null || issue.getAnalysis().getId() > existing.getAnalysis().getId()) {
@@ -1137,7 +1146,8 @@ public class CodeAnalysisService {
         // This catches the same issue classified as STYLE vs CODE_QUALITY across PRs
         Map<String, CodeAnalysisIssue> byContentFp = new LinkedHashMap<>();
         for (CodeAnalysisIssue issue : byFingerprint.values()) {
-            String cfp = issue.getContentFingerprint();
+            String cfp = issue.getContentFingerprint() == null ? null
+                    : issue.getAnchorSide().name() + ":" + issue.getContentFingerprint();
             if (cfp != null && !cfp.isEmpty()) {
                 CodeAnalysisIssue existing = byContentFp.get(cfp);
                 if (existing == null || issue.getAnalysis().getId() > existing.getAnalysis().getId()) {

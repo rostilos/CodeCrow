@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import sqlite3
+import time
 from collections.abc import Mapping
 from contextlib import contextmanager
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from ...utils.path_identity import normalize_repository_path
@@ -30,6 +32,32 @@ _ENDPOINT_RELATION_KINDS = frozenset({
     "RAILS_ROUTE",
     "SPRING_ROUTE",
 })
+
+
+@contextmanager
+def _timed_graph_phase(connection: sqlite3.Connection, phase: str, *, target: str = ""):
+    """Correlate build work using its private database; stat never scans pages."""
+    database = str(connection.execute("PRAGMA database_list").fetchone()[2])
+    started = time.monotonic()
+    outcome = "completed"
+    try:
+        yield
+    except BaseException:
+        outcome = "failed"
+        raise
+    finally:
+        sizes = []
+        for suffix in ("", "-wal"):
+            try:
+                sizes.append(Path(database + suffix).stat().st_size if database else 0)
+            except OSError:
+                sizes.append(0)
+        logging.getLogger(__name__).info(
+            "Structural graph phase: target=%s generation=%s phase=%s "
+            "outcome=%s elapsed_ms=%d database_bytes=%d wal_bytes=%d",
+            target, Path(database).parent.name if database else "memory", phase,
+            outcome, round((time.monotonic() - started) * 1000), *sizes,
+        )
 
 
 @contextmanager

@@ -1,5 +1,7 @@
 package org.rostilos.codecrow.analysisengine.processor.analysis;
 
+import org.rostilos.codecrow.analysisapi.usage.ReviewUsagePolicy;
+
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
@@ -67,6 +69,8 @@ import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalys
  */
 @Service
 public class PullRequestAnalysisProcessor {
+    @Autowired(required = false)
+    private ReviewUsagePolicy reviewUsagePolicy;
     private static final Logger log = LoggerFactory.getLogger(PullRequestAnalysisProcessor.class);
     private static final int SCM_EVIDENCE_COMMIT_LIMIT = 1000;
 
@@ -178,6 +182,8 @@ public class PullRequestAnalysisProcessor {
         }
 
         AnalysisLockService.LockLease lockLease = null;
+        ReviewUsagePolicy.Reservation usageReservation =
+                ReviewUsagePolicy.Reservation.NONE;
         try {
             lockLease = analysisLockService.maintainLockLease(
                     lockKey,
@@ -255,6 +261,23 @@ public class PullRequestAnalysisProcessor {
             }
 
             Map<String, Object> aiResponse;
+            if (!promptDryRun && reviewUsagePolicy != null) {
+                try {
+                    usageReservation = reviewUsagePolicy.begin(
+                            new ReviewUsagePolicy.Review(
+                                    project.getWorkspace().getId(), project.getId(), request.getPullRequestId(),
+                                    request.getCommitHash(), diffFingerprint, lockKey));
+                } catch (ReviewUsagePolicy.LimitExceededException denied) {
+                    emitEvent(consumer, Map.of("type", "error", "state", "review_limit_exceeded",
+                            "message", denied.getMessage()));
+                    throw denied;
+                } catch (RuntimeException unavailable) {
+                    log.warn("Review usage admission unavailable; continuing review: project={}, detail={}",
+                            project.getId(), unavailable.getMessage());
+                    emitEvent(consumer, Map.of("type", "warning", "state", "review_usage_unavailable",
+                            "message", "Usage accounting is temporarily unavailable; review continues"));
+                }
+            }
             Map<String, String> proposedFileContents = extractFileContents(aiRequest);
             Optional<LocalRepositorySnapshotService.PreparedSnapshot> localSnapshot = Optional.empty();
             if (!promptDryRun
@@ -343,6 +366,14 @@ public class PullRequestAnalysisProcessor {
                     taskContextValue(aiRequest, "task_key", "taskKey", "key"),
                     taskContextValue(aiRequest, "task_summary", "taskSummary", "summary"));
 
+            try {
+                usageReservation.completed(newAnalysis.getId());
+            } catch (RuntimeException unavailable) {
+                log.warn("Review usage recording deferred: project={}, analysis={}, detail={}",
+                        project.getId(), newAnalysis.getId(), unavailable.getMessage());
+                emitEvent(consumer, Map.of("type", "warning", "state", "review_usage_deferred",
+                        "message", "Review completed; usage accounting will reconcile from the saved analysis"));
+            }
             persistTaskImplementationEvidence(newAnalysis, aiResponse.get("taskEvidence"));
 
             int issuesFound = newAnalysis.getTotalIssues();
@@ -426,6 +457,12 @@ public class PullRequestAnalysisProcessor {
 
             return Map.of("status", "error", "message", e.getMessage());
         } finally {
+            try {
+                usageReservation.close();
+            } catch (RuntimeException unavailable) {
+                log.warn("Review usage reservation cleanup deferred: project={}, detail={}",
+                        project.getId(), unavailable.getMessage());
+            }
             if (lockLease != null) {
                 try {
                     lockLease.close();

@@ -2,6 +2,7 @@
 Stage 3: Aggregation & final report — executive summary, optional MCP verification.
 """
 from service.review.execution_scheduler import review_model_slot
+from service.review.inference_usage import record_model_response
 import json
 import logging
 import os
@@ -32,6 +33,7 @@ from service.review.orchestrator.stage_3_mcp_verification import (
     validated_mcp_dismissals as _validated_mcp_dismissals,
     verification_issue_map as _stage_3_verification_issue_map,
     verification_record as _stage_3_verification_record,
+    unknown_verification_assessments,
 )
 from service.review.orchestrator.stage_3_semantic_packing import (
     _FREE_TEXT_BOUNDARY_RE,
@@ -305,16 +307,29 @@ async def execute_stage_3_aggregation(
                 shard.prompt,
                 fallback_llm=fallback_llm,
             )
+            result["verification_assessments"] = unknown_verification_assessments(
+                shard_issues, "verification_source_unavailable")
         results.append(result)
 
-    merged = await _synthesize_stage_3_results(
-        llm,
-        context=context,
-        input_results=results,
-        input_shards=shards,
-        token_budget=token_target,
-        fallback_llm=fallback_llm,
-    )
+    try:
+        merged = await _synthesize_stage_3_results(
+            llm,
+            context=context,
+            input_results=results,
+            input_shards=shards,
+            token_budget=token_target,
+            fallback_llm=fallback_llm,
+        )
+    except Exception as exc:
+        logger.warning("Stage 3 synthesis unavailable; preserving complete child reports: %s", exc)
+        merged = _merge_stage_3_results(results)
+    receipts = merged.setdefault("verification_assessments", [])
+    recorded = {receipt.get("candidateObjectId") for receipt in receipts}
+    admitted_ids = {key for shard in shards for key in shard.verification_ids}
+    for key, issue in verification_issues.items():
+        if id(issue) not in recorded:
+            receipts.extend(unknown_verification_assessments({key: issue},
+                "verification_budget_exhausted" if key not in admitted_ids else "assessment_missing"))
     merged["stage_3_prompt_provenance"] = {
         "inputShards": [
             _stage_3_shard_provenance(
@@ -402,6 +417,7 @@ async def _invoke_stage_3_report(
             prompt,
             **reasoning_request_kwargs(llm, reasoning_effort),
         )
+        record_model_response(response)
     if (
         _response_finished_by_length(response)
         and allow_retry
@@ -419,6 +435,7 @@ async def _invoke_stage_3_report(
                     ReasoningEffort.NONE,
                 ),
             )
+            record_model_response(response)
     return {"report": extract_llm_response_text(response), "dismissed_issue_ids": []}
 
 

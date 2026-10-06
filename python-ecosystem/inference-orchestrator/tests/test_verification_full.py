@@ -1,7 +1,9 @@
 """Tests for verification_agent: search_file_content tool, run_verification_agent."""
 import asyncio
+import json
+from types import SimpleNamespace
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from service.review.orchestrator import verification_agent
 from service.review.orchestrator.verification_agent import (
     search_file_content,
@@ -14,6 +16,7 @@ from service.review.orchestrator.verification_agent import (
     _FILE_CONTENTS_CACHE,
 )
 from model.output_schemas import CodeReviewIssue
+from service.review.candidate_ledger import CandidateEvidenceLedger
 from utils.diff_processor import (
     DiffChangeType,
     DiffFile,
@@ -37,7 +40,7 @@ class _FakeToolLLM:
         self.tools = tools
         return self
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, **kwargs):
         self.messages.append(list(messages))
         if not self.responses:
             raise AssertionError("No fake response queued")
@@ -177,14 +180,148 @@ async def test_oversized_complete_verification_prompt_is_not_sent_or_sliced():
     llm = _FakeToolLLM([])
     prompt = "verify the complete evidence: " + ("\U0001f9ea" * 20_000)
 
-    with pytest.raises(ValueError, match="without slicing tool evidence"):
-        await verification_agent._run_verification_tool_loop(
-            llm,
-            prompt,
-            input_token_target=1_000,
-        )
+    result = await verification_agent._run_verification_tool_loop(
+        llm, prompt, input_token_target=1_000,
+    )
 
     assert llm.messages == []
+    assert result.incomplete_reason == "input_budget_exhausted"
+    assert result.attempted is False
+
+
+@pytest.mark.asyncio
+async def test_four_tool_responses_are_followed_by_unbound_finalization(monkeypatch):
+    monkeypatch.setattr(verification_agent, "VERIFICATION_MAX_TOOL_ROUNDS", 4)
+    class BindingAwareLLM(_FakeToolLLM):
+        def bind_tools(self, tools):
+            async def bound(messages, **kwargs):
+                self.bound_calls += 1
+                return await _FakeToolLLM.ainvoke(self, messages, **kwargs)
+            return SimpleNamespace(ainvoke=bound)
+        async def ainvoke(self, messages, **kwargs):
+            self.unbound_calls += 1
+            return await super().ainvoke(messages, **kwargs)
+
+    calls = [_FakeResponse(tool_calls=[{"name": "search_file_content", "args": {"file_path": "a.py", "search_string": "guard"}, "id": f"call-{i}"}]) for i in range(4)]
+    llm = BindingAwareLLM([*calls, _FakeResponse(content='{"assessments":[{"issue_id":"issue_0","verdict":"unknown","reason":"Caller input remains unknown"}]}')])
+    llm.bound_calls = llm.unbound_calls = 0
+    token = verification_agent._ACTIVE_FILE_CONTENTS.set({"a.py": "if guard:\n    return value"})
+    try:
+        result = await verification_agent._run_verification_tool_loop(llm, "Verify issue_0")
+    finally:
+        verification_agent._ACTIVE_FILE_CONTENTS.reset(token)
+    assert llm.bound_calls == 4 and llm.unbound_calls == 1
+    assert result.incomplete_reason == ""
+    terminal_messages = llm.messages[-1]
+    assert len([message for message in terminal_messages if isinstance(message, dict) and message.get("role") == "tool"]) == 4
+    assert "if guard:\n    return value" in terminal_messages[-2]["content"]
+    assert "tools are disabled" in terminal_messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_acquisition_timeout_keeps_completed_observation_for_finalization():
+    async def source(args):
+        if args["target"] == "slow":
+            await asyncio.Event().wait()
+        return '{"content":"exact guard"}'
+    tool = SimpleNamespace(name="getStructuralUnit", ainvoke=source)
+    llm = _FakeToolLLM([
+        _FakeResponse(tool_calls=[{"name": tool.name, "id": "fast", "args": {"target": "fast"}}, {"name": tool.name, "id": "slow", "args": {"target": "slow"}}]),
+        _FakeResponse(content='{"assessments":[{"issue_id":"issue_0","verdict":"unknown","reason":"Only one source was acquired"}]}'),
+    ])
+    observations = {}
+    result = await verification_agent._run_verification_tool_loop(llm, "Verify", optional_tools=(tool,), observations=observations,
+        deadline=asyncio.get_running_loop().time() + .2)
+    assert result.assessments[0].reason == "Only one source was acquired"
+    assert len(observations) == 1
+    tool_messages = [message for message in llm.messages[-1] if isinstance(message, dict) and message.get("role") == "tool"]
+    assert [message["tool_call_id"] for message in tool_messages] == ["fast", "slow"]
+    assert "exact guard" in tool_messages[0]["content"]
+    assert "acquisition_deadline_exhausted" in tool_messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_large_observation_preserves_earlier_evidence_without_slicing():
+    tool = SimpleNamespace(name="getStructuralUnit", ainvoke=AsyncMock(side_effect=['{"content":"first exact source"}', 'huge source ' * 10_000]))
+    llm = _FakeToolLLM([
+        _FakeResponse(tool_calls=[{"name": tool.name, "id": "first", "args": {"target": "a"}}, {"name": tool.name, "id": "large", "args": {"target": "b"}}]),
+        _FakeResponse(content='{"assessments":[{"issue_id":"issue_0","verdict":"unknown"}]}'),
+    ])
+    observations = {}
+    result = await verification_agent._run_verification_tool_loop(llm, "Verify", optional_tools=(tool,), observations=observations, input_token_target=2_000)
+    assert result.assessments[0].verdict == "unknown"
+    final_text = str(llm.messages[-1])
+    assert "first exact source" in final_text
+    assert "Observation omitted" in final_text
+    assert "huge source" not in final_text
+    assert [entry["status"] for entry in observations.values()] == ["acquired", "unavailable"]
+
+
+@pytest.mark.asyncio
+async def test_empty_assessment_response_uses_terminal_turn_and_preserves_valid_sibling():
+    llm = _FakeToolLLM([
+        _FakeResponse(content='{"report":"A summary is not an assessment"}'),
+        _FakeResponse(content='{"assessments":[{"issue_id":"issue_0","verdict":"unknown","reason":"Caller unavailable"},{"issue_id":"issue_1","verdict":"invented"}]}'),
+    ])
+    result = await verification_agent._run_verification_tool_loop(llm, "Verify issue_0 and issue_1")
+    assert len(llm.messages) == 2
+    assert "tools are disabled" in llm.messages[-1][-1]["content"]
+    assert [assessment.issue_id for assessment in result.assessments] == ["issue_0"]
+    assert result.incomplete_reason == "invalid_assessment_response"
+
+
+@pytest.mark.asyncio
+async def test_partial_assessments_survive_failed_finalization(monkeypatch):
+    monkeypatch.setattr(verification_agent, "VERIFICATION_MAX_TOOL_ROUNDS", 1)
+    llm = _FakeToolLLM([
+        _FakeResponse(content='{"assessments":[{"issue_id":"issue_0","verdict":"unknown","reason":"First candidate checked"}]}',
+            tool_calls=[{"name": "search_file_content", "id": "call", "args": {"file_path": "a.py", "search_string": "guard"}}]),
+        RuntimeError("provider unavailable"),
+    ])
+    result = await verification_agent._run_verification_tool_loop(llm, "Verify")
+    assert result.incomplete_reason == "finalization_unavailable"
+    assert result.assessments[0].reason == "First candidate checked"
+
+
+@pytest.mark.asyncio
+async def test_exact_source_reader_is_host_bound_and_returns_citable_source():
+    tool = SimpleNamespace(name="getReviewFileContent", ainvoke=AsyncMock(return_value=json.dumps({"fileContent": 'if value == "safe":\n    return value'})))
+    llm = _FakeToolLLM([
+        _FakeResponse(tool_calls=[{"name": tool.name, "id": "read", "args": {"workspace": "other", "repoSlug": "other", "branch": "stale", "filePath": "a.py", "startLine": 10, "endLine": 9999}}]),
+        _FakeResponse(content='{"assessments":[]}'),
+    ])
+    observations = {}
+    await verification_agent._run_verification_tool_loop(llm, "Verify", optional_tools=(tool,), observations=observations,
+        source_bindings={"workspace": "tenant", "repoSlug": "reviewed-repo"})
+    tool.ainvoke.assert_awaited_once_with({"workspace": "tenant", "repoSlug": "reviewed-repo", "filePath": "a.py", "startLine": 10, "endLine": 169})
+    evidence_id = next(iter(observations))
+    observed_messages = [message for message in llm.messages[-1] if isinstance(message, dict) and message.get("role") == "tool"]
+    assert 'if value == "safe":\n    return value' in observed_messages[0]["content"]
+    assert '"observation"' in observed_messages[0]["content"]
+    assessment = verification_agent.VerificationAssessment(issue_id="issue_0", verdict="disproven", contradicting_evidence=[{"evidence_id": evidence_id, "snippet": 'if value == "safe":\n    return value'}])
+    assert verification_agent._validated_assessment(assessment, {}, observations)["verdict"] == "disproven"
+
+
+@pytest.mark.asyncio
+async def test_skipped_and_omitted_candidates_have_explicit_verification_status(monkeypatch):
+    issues = [CodeReviewIssue(file="a.py", line=1, severity="HIGH", category="BUG_RISK", title=f"Defect {i}",
+        reason="Current call can lose persisted data.", suggestedFixDescription="Preserve the value.", codeSnippet="call()") for i in range(2)]
+    ledger = CandidateEvidenceLedger()
+    for index, issue in enumerate(issues):
+        ledger.register(issue, stage="stage_1", source_key=str(index), review_unit_ids=["unit"], prompt_hunk_ids=["hunk"], generation_prompt=str(index))
+    request = SimpleNamespace(enrichmentData=None, rawDiff=None, deltaDiff=None, previousCodeAnalysisIssues=[])
+    assert await run_verification_agent(object(), issues, request, candidate_ledger=ledger) == issues
+    skipped = [record["verificationAssessments"][-1] for record in ledger.summary()["records"]]
+    assert all(assessment["reasonCode"] == "source_unavailable" and not assessment["attempted"] and not assessment["completed"] for assessment in skipped)
+    request.enrichmentData = SimpleNamespace(fileContents=[SimpleNamespace(path="a.py", content="call()", skipped=False)])
+    monkeypatch.setattr(verification_agent, "_build_verification_batches", lambda records: [([record], "Verify " + record[0]) for record in records])
+    llm = _FakeToolLLM([_FakeResponse(content='{"assessments":[{"issue_id":"issue_0","verdict":"unknown","reason":"Caller contract is unavailable"}]}')])
+    assert await run_verification_agent(llm, issues, request, candidate_ledger=ledger,
+        inference_profile=SimpleNamespace(invocation_cap=lambda _: 1)) == issues
+    latest = {record["sourceKey"]: record["verificationAssessments"][-1] for record in ledger.summary()["records"]}
+    assert latest["0"]["completed"] is True and latest["0"]["reasonCode"] == "model_unknown"
+    assert latest["1"]["reasonCode"] == "batch_budget_exhausted"
+    assert latest["1"]["attempted"] is False and latest["1"]["completed"] is False
 
 
 # ── run_verification_agent ────────────────────────────────────
@@ -237,7 +374,7 @@ class TestRunVerificationAgent:
                 "args": {"file_path": "a.py", "search_string": "Foo"},
                 "id": "call-1",
             }]),
-            _FakeResponse(content='{"issue_ids_to_drop": ["issue_0"]}'),
+            _FakeResponse(content='{"assessments": [{"issue_id": "issue_0", "verdict": "disproven", "reason": "The class is defined", "contradicting_evidence": [{"file_path": "a.py", "snippet": "class Foo:"}]}]}'),
         ])
 
         result = await run_verification_agent(llm, issues, request)
@@ -265,7 +402,7 @@ class TestRunVerificationAgent:
                 "args": {"file_path": "a.py", "search_string": "Foo"},
                 "id": "call-1",
             }]),
-            _FakeResponse(content='{"issue_ids_to_drop": ["issue_0"]}'),
+            _FakeResponse(content='{"assessments": [{"issue_id": "issue_0", "verdict": "disproven", "reason": "The class is defined", "contradicting_evidence": [{"file_path": "a.py", "snippet": "class Foo:"}]}]}'),
         ])
 
         result = await run_verification_agent(llm, issues, request)
@@ -286,7 +423,7 @@ class TestRunVerificationAgent:
         first = self._make_issue("12524", "BUG_RISK", "missing Foo")
         second = self._make_issue("12524", "BUG_RISK", "different current defect")
         llm = _FakeToolLLM([
-            _FakeResponse(content='{"issue_ids_to_drop": ["issue_0"]}'),
+            _FakeResponse(content='{"assessments": [{"issue_id": "issue_0", "verdict": "disproven", "reason": "The class is defined", "contradicting_evidence": [{"file_path": "a.py", "snippet": "class Foo:"}]}]}'),
         ])
 
         result = await run_verification_agent(llm, [first, second], request)
@@ -310,7 +447,7 @@ class TestRunVerificationAgent:
         request.previousCodeAnalysisIssues = [{"id": "12524", "status": "open"}]
         issue = self._make_issue("12524", "BUG_RISK", "missing Foo")
         llm = _FakeToolLLM([
-            _FakeResponse(content='{"issue_ids_to_drop": ["issue_0"]}'),
+            _FakeResponse(content='{"assessments": [{"issue_id": "issue_0", "verdict": "disproven", "reason": "The class is defined", "contradicting_evidence": [{"file_path": "a.py", "snippet": "class Foo:"}]}]}'),
         ])
 
         result = await run_verification_agent(llm, [issue], request)

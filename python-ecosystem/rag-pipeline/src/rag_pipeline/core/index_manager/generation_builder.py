@@ -14,6 +14,7 @@ from ..exact_index import (
 )
 from ..loader import DocumentLoader, RepositoryFileSkip
 from ..source_tree import require_repository_source_tree_unchanged
+from ..structural_graph.shared import _timed_graph_phase
 from ..splitter import ASTCodeSplitter
 from ..structural_store import (
     StructuralGenerationStore,
@@ -101,8 +102,15 @@ class GenerationBuilder:
             pending, connection, base_receipt = (
                 build.paths, build.connection, build.base_receipt,
             )
+            logger.info(
+                "Structural graph build: workspace=%s project=%s branch=%s revision=%s "
+                "base_revision=%s target=%s generation=%s mode=delta",
+                workspace, project, branch, commit, base_revision,
+                collection_target, pending.directory.name,
+            )
             writer = StructuralGraphWriter(connection, track_mutations=True)
-            writer.refresh_counts()
+            with _timed_graph_phase(connection, "refresh_counts", target=collection_target):
+                writer.refresh_counts()
             skipped_paths: set[str] = set()
             analysis_handle = None
 
@@ -129,13 +137,14 @@ class GenerationBuilder:
                 "Scanning repository-delta files under the base index policy",
                 10,
             )
-            repository_files = list(self.loader.iter_repository_files(
-                repo_path,
-                include_patterns,
-                exclude_patterns,
-                expected_file_sha256=source_tree.file_sha256_by_path,
-                on_skip=record_skip,
-            ))
+            with _timed_graph_phase(connection, "scan", target=collection_target):
+                repository_files = list(self.loader.iter_repository_files(
+                    repo_path,
+                    include_patterns,
+                    exclude_patterns,
+                    expected_file_sha256=source_tree.file_sha256_by_path,
+                    on_skip=record_skip,
+                ))
             self._raise_if_cancelled(cancellation_event)
             if (
                 self.config.max_files_per_index > 0
@@ -153,14 +162,15 @@ class GenerationBuilder:
             if self.plugin_catalog is not None and self.plugin_selector is not None:
                 from codecrow_plugins import build_repository_facts
 
-                repository_facts = build_repository_facts(
-                    repo_path,
-                    commit,
-                    repository_files,
-                    self.plugin_catalog.registry,
-                    project_type=project_type,
-                    source_root=source_root,
-                )
+                with _timed_graph_phase(connection, "repository_facts", target=collection_target):
+                    repository_facts = build_repository_facts(
+                        repo_path,
+                        commit,
+                        repository_files,
+                        self.plugin_catalog.registry,
+                        project_type=project_type,
+                        source_root=source_root,
+                    )
                 capabilities = self.plugin_selector.select(repository_facts)
                 implementation_fingerprint = (
                     self.plugin_catalog.implementation_fingerprint(
@@ -268,14 +278,15 @@ class GenerationBuilder:
                         "sealed base generation lacks resumable architecture state "
                         "for: " + ", ".join(sorted(unrestorable))
                     )
-                build.analysis_handle = analysis_handle = self.plugin_runtime.start_repository_analysis(
-                    capabilities,
-                    commit,
-                    snapshots=snapshots,
-                    source_root=(
-                        repository_facts.source_root if repository_facts else None
-                    ),
-                )
+                with _timed_graph_phase(connection, "plugin_setup", target=collection_target):
+                    build.analysis_handle = analysis_handle = self.plugin_runtime.start_repository_analysis(
+                        capabilities,
+                        commit,
+                        snapshots=snapshots,
+                        source_root=(
+                            repository_facts.source_root if repository_facts else None
+                        ),
+                    )
 
             requested_paths = tuple(sorted({
                 *changed_paths,
@@ -344,16 +355,17 @@ class GenerationBuilder:
                     indexedRelations=writer.relation_count,
                 )
 
-            document_count += self.files.index_files(
-                repo_path=repo_path, workspace=workspace, project=project,
-                branch=branch, commit=commit, source_tree=source_tree,
-                eligible_files=affected_eligible_files, writer=writer,
-                dispositions=dispositions, capabilities=capabilities,
-                analysis_handle=analysis_handle, skipped_paths=skipped_paths,
-                record_skip=record_skip,
-                check_cancelled=lambda: self._raise_if_cancelled(cancellation_event),
-                on_batch=report_batch, replace_missing_files=True,
-            )
+            with _timed_graph_phase(connection, "ingest", target=collection_target):
+                document_count += self.files.index_files(
+                    repo_path=repo_path, workspace=workspace, project=project,
+                    branch=branch, commit=commit, source_tree=source_tree,
+                    eligible_files=affected_eligible_files, writer=writer,
+                    dispositions=dispositions, capabilities=capabilities,
+                    analysis_handle=analysis_handle, skipped_paths=skipped_paths,
+                    record_skip=record_skip,
+                    check_cancelled=lambda: self._raise_if_cancelled(cancellation_event),
+                    on_batch=report_batch, replace_missing_files=True,
+                )
 
             if analysis_handle is not None:
                 self._raise_if_cancelled(cancellation_event)
@@ -370,17 +382,19 @@ class GenerationBuilder:
                     "architecture_finalization_timeout_seconds",
                     600.0,
                 )
-                self.enrichment.finish(
-                    writer, analysis_handle, deadline=deadline,
-                    discard_stale_outputs=True,
-                )
+                with _timed_graph_phase(connection, "plugin_finalize", target=collection_target):
+                    self.enrichment.finish(
+                        writer, analysis_handle, deadline=deadline,
+                        discard_stale_outputs=True,
+                    )
                 self._raise_if_cancelled(cancellation_event)
 
-            repository_facts_json = write_repository_state(
-                writer, commit=commit, repository_facts=repository_facts,
-                repository_files=repository_files, project_type=project_type,
-                source_root=source_root, source_file_sha256=source_tree.file_sha256_by_path,
-            )
+            with _timed_graph_phase(connection, "repository_state", target=collection_target):
+                repository_facts_json = write_repository_state(
+                    writer, commit=commit, repository_facts=repository_facts,
+                    repository_files=repository_files, project_type=project_type,
+                    source_root=source_root, source_file_sha256=source_tree.file_sha256_by_path,
+                )
             self._raise_if_cancelled(cancellation_event)
             self._progress(
                 progress_callback,
@@ -390,9 +404,11 @@ class GenerationBuilder:
                 indexedUnits=writer.unit_count,
                 indexedRelations=writer.relation_count,
             )
-            writer.resolve_touched_relations()
+            with _timed_graph_phase(connection, "resolve_relations", target=collection_target):
+                writer.resolve_touched_relations()
             self._raise_if_cancelled(cancellation_event)
-            writer.refresh_counts()
+            with _timed_graph_phase(connection, "refresh_counts", target=collection_target):
+                writer.refresh_counts()
             if (
                 self.config.max_chunks_per_index > 0
                 and writer.unit_count > self.config.max_chunks_per_index
@@ -416,28 +432,29 @@ class GenerationBuilder:
             skipped_file_count = int(
                 base_receipt.get("skipped_file_count", 0) or 0
             ) + len(skipped_paths)
-            receipt = build_receipt(
-                connection,
-                workspace=workspace,
-                project=project,
-                branch=branch,
-                revision=commit,
-                source_tree_sha256=source_tree.tree_sha256,
-                collection_target=collection_target,
-                repository_facts_json=repository_facts_json,
-                plugin_ids=plugin_ids,
-                plugin_fingerprint=plugin_fingerprint,
-                plugin_descriptor_fingerprint=descriptor_fingerprint,
-                plugin_implementation_fingerprint=implementation_fingerprint,
-                index_representation_fingerprint=(
-                    self.index_representation_fingerprint
-                ),
-                include_patterns=include_patterns,
-                exclude_patterns=exclude_patterns,
-                document_count=document_count,
-                skipped_file_count=skipped_file_count,
-                snapshot_metadata=snapshot_metadata,
-            )
+            with _timed_graph_phase(connection, "receipt", target=collection_target):
+                receipt = build_receipt(
+                    connection,
+                    workspace=workspace,
+                    project=project,
+                    branch=branch,
+                    revision=commit,
+                    source_tree_sha256=source_tree.tree_sha256,
+                    collection_target=collection_target,
+                    repository_facts_json=repository_facts_json,
+                    plugin_ids=plugin_ids,
+                    plugin_fingerprint=plugin_fingerprint,
+                    plugin_descriptor_fingerprint=descriptor_fingerprint,
+                    plugin_implementation_fingerprint=implementation_fingerprint,
+                    index_representation_fingerprint=(
+                        self.index_representation_fingerprint
+                    ),
+                    include_patterns=include_patterns,
+                    exclude_patterns=exclude_patterns,
+                    document_count=document_count,
+                    skipped_file_count=skipped_file_count,
+                    snapshot_metadata=snapshot_metadata,
+                )
             receipt = self.publisher.publish(
                 writer, pending, receipt, workspace=workspace, project=project,
                 branch=branch, commit=commit, collection_target=collection_target,
@@ -484,6 +501,11 @@ class GenerationBuilder:
     ) -> IndexStats:
         with pending_generation(self.store, collection_target) as build:
             pending, connection = build.paths, build.connection
+            logger.info(
+                "Structural graph build: workspace=%s project=%s branch=%s revision=%s "
+                "target=%s generation=%s mode=full",
+                workspace, project, branch, commit, collection_target, pending.directory.name,
+            )
             writer = StructuralGraphWriter(
                 connection,
                 defer_file_relation_ownership=True,
@@ -506,13 +528,14 @@ class GenerationBuilder:
                 "Scanning repository files for structural units",
                 5,
             )
-            repository_files = list(self.loader.iter_repository_files(
-                repo_path,
-                include_patterns,
-                exclude_patterns,
-                expected_file_sha256=source_tree.file_sha256_by_path,
-                on_skip=record_skip,
-            ))
+            with _timed_graph_phase(connection, "scan", target=collection_target):
+                repository_files = list(self.loader.iter_repository_files(
+                    repo_path,
+                    include_patterns,
+                    exclude_patterns,
+                    expected_file_sha256=source_tree.file_sha256_by_path,
+                    on_skip=record_skip,
+                ))
             self._raise_if_cancelled(cancellation_event)
             if (
                 self.config.max_files_per_index > 0
@@ -528,18 +551,19 @@ class GenerationBuilder:
                 from codecrow_plugins import build_repository_facts
 
                 self._raise_if_cancelled(cancellation_event)
-                repository_facts = build_repository_facts(
-                    repo_path,
-                    commit,
-                    (
-                        repository_fact_paths
-                        if repository_fact_paths is not None
-                        else repository_files
-                    ),
-                    self.plugin_catalog.registry,
-                    project_type=project_type,
-                    source_root=source_root,
-                )
+                with _timed_graph_phase(connection, "repository_facts", target=collection_target):
+                    repository_facts = build_repository_facts(
+                        repo_path,
+                        commit,
+                        (
+                            repository_fact_paths
+                            if repository_fact_paths is not None
+                            else repository_files
+                        ),
+                        self.plugin_catalog.registry,
+                        project_type=project_type,
+                        source_root=source_root,
+                    )
                 capabilities = self.plugin_selector.select(repository_facts)
                 implementation_fingerprint = (
                     self.plugin_catalog.implementation_fingerprint(
@@ -560,13 +584,14 @@ class GenerationBuilder:
                 lambda: self._raise_if_cancelled(cancellation_event),
             )
             if self.plugin_runtime is not None and capabilities is not None:
-                build.analysis_handle = analysis_handle = self.plugin_runtime.start_repository_analysis(
-                    capabilities,
-                    commit,
-                    source_root=(
-                        repository_facts.source_root if repository_facts else None
-                    ),
-                )
+                with _timed_graph_phase(connection, "plugin_setup", target=collection_target):
+                    build.analysis_handle = analysis_handle = self.plugin_runtime.start_repository_analysis(
+                        capabilities,
+                        commit,
+                        source_root=(
+                            repository_facts.source_root if repository_facts else None
+                        ),
+                    )
                 self._raise_if_cancelled(cancellation_event)
 
             def report_batch(batch_number: int, total_batches: int) -> None:
@@ -582,16 +607,17 @@ class GenerationBuilder:
                     skippedFiles=len(skipped_paths),
                 )
 
-            document_count += self.files.index_files(
-                repo_path=repo_path, workspace=workspace, project=project,
-                branch=branch, commit=commit, source_tree=source_tree,
-                eligible_files=eligible_files, writer=writer,
-                dispositions=dispositions, capabilities=capabilities,
-                analysis_handle=analysis_handle, skipped_paths=skipped_paths,
-                record_skip=record_skip,
-                check_cancelled=lambda: self._raise_if_cancelled(cancellation_event),
-                on_batch=report_batch, replace_missing_files=False,
-            )
+            with _timed_graph_phase(connection, "ingest", target=collection_target):
+                document_count += self.files.index_files(
+                    repo_path=repo_path, workspace=workspace, project=project,
+                    branch=branch, commit=commit, source_tree=source_tree,
+                    eligible_files=eligible_files, writer=writer,
+                    dispositions=dispositions, capabilities=capabilities,
+                    analysis_handle=analysis_handle, skipped_paths=skipped_paths,
+                    record_skip=record_skip,
+                    check_cancelled=lambda: self._raise_if_cancelled(cancellation_event),
+                    on_batch=report_batch, replace_missing_files=False,
+                )
 
             self._progress(
                 progress_callback, "building_lookup_indexes",
@@ -616,18 +642,20 @@ class GenerationBuilder:
                     "architecture_finalization_timeout_seconds",
                     600.0,
                 )
-                self.enrichment.finish(
-                    writer, analysis_handle, deadline=deadline,
-                    discard_stale_outputs=False,
-                )
+                with _timed_graph_phase(connection, "plugin_finalize", target=collection_target):
+                    self.enrichment.finish(
+                        writer, analysis_handle, deadline=deadline,
+                        discard_stale_outputs=False,
+                    )
                 self._raise_if_cancelled(cancellation_event)
 
             self._raise_if_cancelled(cancellation_event)
-            repository_facts_json = write_repository_state(
-                writer, commit=commit, repository_facts=repository_facts,
-                repository_files=repository_files, project_type=project_type,
-                source_root=source_root, source_file_sha256=source_tree.file_sha256_by_path,
-            )
+            with _timed_graph_phase(connection, "repository_state", target=collection_target):
+                repository_facts_json = write_repository_state(
+                    writer, commit=commit, repository_facts=repository_facts,
+                    repository_files=repository_files, project_type=project_type,
+                    source_root=source_root, source_file_sha256=source_tree.file_sha256_by_path,
+                )
             self._raise_if_cancelled(cancellation_event)
             self._progress(
                 progress_callback,
@@ -637,7 +665,8 @@ class GenerationBuilder:
                 indexedUnits=writer.unit_count,
                 indexedRelations=writer.relation_count,
             )
-            writer.resolve_relations()
+            with _timed_graph_phase(connection, "resolve_relations", target=collection_target):
+                writer.resolve_relations()
             self._raise_if_cancelled(cancellation_event)
 
             if (
@@ -671,36 +700,37 @@ class GenerationBuilder:
                 indexedUnits=writer.unit_count,
                 indexedRelations=writer.relation_count,
             )
-            receipt = build_receipt(
-                connection,
-                workspace=workspace,
-                project=project,
-                branch=branch,
-                revision=commit,
-                source_tree_sha256=source_tree.tree_sha256,
-                collection_target=collection_target,
-                repository_facts_json=repository_facts_json,
-                plugin_ids=plugin_ids,
-                plugin_fingerprint=(
-                    capabilities.fingerprint
-                    if capabilities is not None
-                    else _ZERO_FINGERPRINT
-                ),
-                plugin_descriptor_fingerprint=(
-                    capabilities.descriptor_fingerprint
-                    if capabilities is not None
-                    else _ZERO_FINGERPRINT
-                ),
-                plugin_implementation_fingerprint=implementation_fingerprint,
-                index_representation_fingerprint=(
-                    self.index_representation_fingerprint
-                ),
-                include_patterns=include_patterns,
-                exclude_patterns=exclude_patterns,
-                document_count=document_count,
-                skipped_file_count=len(skipped_paths),
-                snapshot_metadata=snapshot_metadata,
-            )
+            with _timed_graph_phase(connection, "receipt", target=collection_target):
+                receipt = build_receipt(
+                    connection,
+                    workspace=workspace,
+                    project=project,
+                    branch=branch,
+                    revision=commit,
+                    source_tree_sha256=source_tree.tree_sha256,
+                    collection_target=collection_target,
+                    repository_facts_json=repository_facts_json,
+                    plugin_ids=plugin_ids,
+                    plugin_fingerprint=(
+                        capabilities.fingerprint
+                        if capabilities is not None
+                        else _ZERO_FINGERPRINT
+                    ),
+                    plugin_descriptor_fingerprint=(
+                        capabilities.descriptor_fingerprint
+                        if capabilities is not None
+                        else _ZERO_FINGERPRINT
+                    ),
+                    plugin_implementation_fingerprint=implementation_fingerprint,
+                    index_representation_fingerprint=(
+                        self.index_representation_fingerprint
+                    ),
+                    include_patterns=include_patterns,
+                    exclude_patterns=exclude_patterns,
+                    document_count=document_count,
+                    skipped_file_count=len(skipped_paths),
+                    snapshot_metadata=snapshot_metadata,
+                )
             receipt = self.publisher.publish(
                 writer, pending, receipt, workspace=workspace, project=project,
                 branch=branch, commit=commit, collection_target=collection_target,

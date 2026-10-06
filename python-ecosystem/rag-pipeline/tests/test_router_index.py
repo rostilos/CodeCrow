@@ -165,7 +165,9 @@ def test_direct_index_routes_exact_base_binding_through_repository_delta():
 @pytest.mark.asyncio
 async def test_stream_disconnect_cancels_worker_and_cleans_owned_repository(
     tmp_path,
+    monkeypatch,
 ):
+    monkeypatch.setenv("ALLOWED_REPO_ROOT", str(tmp_path))
     source_repository = tmp_path / "codecrow-rag-branch-generation-disconnect"
     source_repository.mkdir()
     (source_repository / "example.py").write_text(
@@ -202,7 +204,6 @@ async def test_stream_disconnect_cancels_worker_and_cleans_owned_repository(
     )
 
     with (
-        patch.dict("os.environ", {"ALLOWED_REPO_ROOT": str(tmp_path)}),
         patch(
             "rag_pipeline.api.routers.index._get_singletons",
             return_value=(MagicMock(), manager),
@@ -241,7 +242,9 @@ async def test_stream_disconnect_cancels_worker_and_cleans_owned_repository(
 @pytest.mark.asyncio
 async def test_stream_polls_asgi_disconnect_and_cancels_without_generator_close(
     tmp_path,
+    monkeypatch,
 ):
+    monkeypatch.setenv("ALLOWED_REPO_ROOT", str(tmp_path))
     source_repository = tmp_path / "codecrow-rag-branch-generation-peer-gone"
     source_repository.mkdir()
     (source_repository / "example.py").write_text(
@@ -274,7 +277,6 @@ async def test_stream_polls_asgi_disconnect_and_cancels_without_generator_close(
     )
 
     with (
-        patch.dict("os.environ", {"ALLOWED_REPO_ROOT": str(tmp_path)}),
         patch(
             "rag_pipeline.api.routers.index._get_singletons",
             return_value=(MagicMock(), manager),

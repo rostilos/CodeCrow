@@ -29,6 +29,27 @@ def install_subscription_guard(factory, bridge_url: str, bridge_token: str, mode
         # Chat Completions; app-server remains the actual subscription transport.
         if hasattr(model, "use_responses_api"):
             model.use_responses_api = False
+        # Direct with_structured_output() bindings expose their intent here;
+        # ordinary forced tool calls have no structured-output metadata.
+        model_type = type(model)
+        bind_tools = getattr(model_type, "bind_tools", None)
+        if callable(bind_tools):
+            def subscription_bind_tools(self, tools, **options):
+                structured = options.get("ls_structured_output_format") or options.get("structured_output_format")
+                choice = options.get("tool_choice")
+                name = choice.get("function", {}).get("name") if isinstance(choice, dict) else choice
+                if structured and isinstance(name, str) and name not in {"auto", "none", "any", "required"}:
+                    options["extra_body"] = {
+                        **options.get("extra_body", {}),
+                        "codecrow_terminal_tools": [name],
+                    }
+                return bind_tools(self, tools, **options)
+            # Use a class method so provider model_copy() retains updated token
+            # settings instead of calling a closure bound to the original model.
+            subscription_type = type(f"Subscription{model_type.__name__}", (model_type,), {
+                "bind_tools": subscription_bind_tools, "__module__": __name__,
+            })
+            object.__setattr__(model, "__class__", subscription_type)
         return model
 
     factory.create_llm = staticmethod(create_llm)

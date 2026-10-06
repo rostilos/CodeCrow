@@ -2,6 +2,7 @@
 Branch analysis and reconciliation execution.
 """
 from service.review.execution_scheduler import review_model_slot
+from service.review.inference_usage import record_model_response
 import logging
 from typing import Any, Callable, Dict, Optional
 
@@ -133,6 +134,7 @@ async def execute_branch_reconciliation_direct(
                 prompt,
                 **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
             )
+            record_model_response(response)
         content = extract_llm_response_text(response)
 
         if not content.strip():

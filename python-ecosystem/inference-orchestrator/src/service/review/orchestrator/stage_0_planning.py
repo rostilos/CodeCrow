@@ -2,6 +2,7 @@
 Stage 0: Planning & Prioritization — analyze PR metadata and build a review plan.
 """
 from service.review.execution_scheduler import review_model_slot
+from service.review.inference_usage import record_model_response
 import json
 import logging
 import os
@@ -260,6 +261,7 @@ async def execute_stage_0_planning(
                 prompt,
                 **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
             )
+            record_model_response(response)
         content = extract_llm_response_text(response)
         if not content.strip():
             logger.warning(
@@ -453,10 +455,6 @@ def _mechanical_skip_reason(diff_file: Any = None) -> Optional[str]:
             "Git submodule pointer contains commit identifiers, not source "
             "content from the referenced repository."
         )
-    change_type = getattr(diff_file, "change_type", None)
-    change_value = getattr(change_type, "value", "").lower()
-    if change_value == "deleted" or reason_lower == "deleted file":
-        return "Deleted file has no new code to review."
     return None
 
 

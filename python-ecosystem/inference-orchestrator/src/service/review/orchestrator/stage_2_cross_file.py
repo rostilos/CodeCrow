@@ -1,5 +1,6 @@
 """Stage 2: Cross-file and architectural analysis."""
 from service.review.execution_scheduler import review_model_slot
+from service.review.inference_usage import record_model_response
 import json
 import hashlib
 import logging
@@ -401,6 +402,7 @@ async def _invoke_stage_2_llm(
                     else ReasoningEffort.LOW,
                 ),
             )
+            record_model_response(response)
         content = extract_llm_response_text(response)
         if not content.strip():
             logger.warning(

@@ -1541,8 +1541,8 @@ public class VcsIntegrationService {
                     return new VcsRepositoryListDTO(List.of(), 1, 1, 0, 0, false, false);
                 }
                 
-                boolean isOnboarded = bindingRepository.existsByProviderAndExternalRepoId(
-                        connection.getProviderType(), repo.id());
+                boolean isOnboarded = bindingRepository.existsByWorkspace_IdAndVcsConnection_IdAndExternalRepoId(
+                        workspaceId, connectionId, repo.id());
                 
                 List<VcsRepositoryListDTO.VcsRepositoryDTO> items = List.of(
                         VcsRepositoryListDTO.VcsRepositoryDTO.fromModel(repo, isOnboarded)
@@ -1610,8 +1610,8 @@ public class VcsIntegrationService {
             throw new IntegrationException("Repository not found: " + effectiveRepoId);
         }
         
-        boolean isOnboarded = bindingRepository.existsByProviderAndExternalRepoId(
-                connection.getProviderType(), repo.id());
+        boolean isOnboarded = bindingRepository.existsByWorkspace_IdAndVcsConnection_IdAndExternalRepoId(
+                workspaceId, connectionId, repo.id());
         
         return VcsRepositoryListDTO.VcsRepositoryDTO.fromModel(repo, isOnboarded);
     }
@@ -1704,7 +1704,7 @@ public class VcsIntegrationService {
         }
         
         // Check if already onboarded using the stable UUID
-        if (bindingRepository.existsByProviderAndExternalRepoId(provider, repo.id())) {
+        if (bindingRepository.existsByWorkspace_IdAndVcsConnection_IdAndExternalRepoId(workspaceId, connection.getId(), repo.id())) {
             throw new IntegrationException("Repository is already onboarded");
         }
         

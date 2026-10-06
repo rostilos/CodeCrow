@@ -33,6 +33,7 @@ from service.review.orchestrator.verification_agent import (
     _resolve_historical_candidate,
     apply_candidate_provenance_gate,
     canonicalize_prompt_visible_line_anchor,
+    normalize_candidate_anchor_sides,
     previous_open_issue_ids,
     reviewable_hunk_ids_for_issue,
     run_deterministic_evidence_gate,
@@ -69,6 +70,7 @@ from service.review.plugin_context import (
     apply_plugin_validation_gate,
 )
 from service.review.candidate_ledger import CandidateEvidenceLedger
+from service.review.orchestrator.inference_policy import adapt_review_inference_profile
 from service.review.snapshot_identity import validate_review_snapshot_identity
 from service.review.pr_evidence import (
     PrEvidenceLedger,
@@ -637,6 +639,7 @@ class MultiStageReviewOrchestrator:
                 for review_file in group.files
             }
             hunk_coverage.mark_planned(planned_paths)
+            inference_profile = adapt_review_inference_profile(inference_profile, plan=review_plan)
             stage_0_message = (
                 "Stage 0 Complete: fast bounded review plan created"
                 if inference_profile.fast_check_enabled
@@ -695,6 +698,7 @@ class MultiStageReviewOrchestrator:
             # Historical resolutions carry lifecycle identity and must survive
             # even when their original reason resembles a current candidate.
             protected_open_issue_ids = previous_open_issue_ids(request)
+            normalize_candidate_anchor_sides(file_issues, request, processed_diff)
             before_cross_batch_dedup = list(file_issues)
             file_issues = _deduplicate_cross_batch_issues_preserving_lifecycle(
                 file_issues,
@@ -737,6 +741,7 @@ class MultiStageReviewOrchestrator:
                     processed_diff,
                     candidate_ledger,
                     inference_profile=inference_profile,
+                    agent_service=self.agent_service if use_mcp else None,
                 )
                 _emit_progress(self.event_callback, 75, f"Verification Complete: {len(file_issues)} total issues after verification")
             else:
@@ -747,6 +752,7 @@ class MultiStageReviewOrchestrator:
                     "Verification skipped by REVIEW_VERIFICATION_ENABLED",
                 )
 
+            inference_profile = adapt_review_inference_profile(inference_profile, issues=file_issues)
             # === STAGE 2: Cross-File Analysis ===
             run_stage_2, stage_2_reason = should_run_stage_2(
                 inference_profile,
@@ -964,6 +970,7 @@ class MultiStageReviewOrchestrator:
                         "maxAllowedTokens",
                         None,
                     ),
+                    on_consolidated=candidate_ledger.consolidate,
                 )
             else:
                 fast_dedup = should_use_fast_dedup(
@@ -988,7 +995,8 @@ class MultiStageReviewOrchestrator:
                     ),
                 )
                 deduplicated_active_issues = deduplicate_final_issues(
-                    active_issues
+                    active_issues,
+                    on_consolidated=candidate_ledger.consolidate,
                 )
             before_final_dedup = list(active_issues)
             candidate_ledger.reject_removed(
@@ -1067,6 +1075,11 @@ class MultiStageReviewOrchestrator:
                 pr_evidence_ledger.task_implementation_evidence_payload(task_key)
             )
             dismissed_ids = set(stage_3_result.get("dismissed_issue_ids", []))
+            candidates_by_object = {id(issue): issue for issue in file_issues}
+            for assessment in stage_3_result.get("verification_assessments", []):
+                candidate = candidates_by_object.get(assessment.get("candidateObjectId"))
+                if candidate is not None:
+                    candidate_ledger.assess(candidate, {key: value for key, value in assessment.items() if key != "candidateObjectId"})
             dismissed_object_ids = {
                 int(value)
                 for value in stage_3_result.get(
@@ -1108,6 +1121,17 @@ class MultiStageReviewOrchestrator:
             hunk_coverage.assert_complete()
             candidate_ledger.publish(file_issues)
             candidate_ledger.assert_terminal()
+            verification = candidate_ledger.verification_summary()
+            if verification["candidates"]:
+                state = "verification_degraded" if verification["incomplete"] else "verification_completed"
+                if self.event_callback:
+                    self.event_callback({"type": "status", "state": state,
+                        "message": (f"Evidence assessment: {verification['completed']}/{verification['candidates']} completed; "
+                                    f"{verification['supported']} supported, {verification['unknown']} unknown"),
+                        "verificationSummary": verification})
+                if verification["unknown"]:
+                    final_report += (f"\n\nIndependent evidence verification remains unresolved for "
+                                     f"{verification['unknown']} of {verification['candidates']} findings.")
             _emit_review_evidence_completed(
                 self.event_callback,
                 hunk_coverage,
@@ -1260,7 +1284,7 @@ def _convert_cross_file_issues(cross_file_issues) -> List[CodeReviewIssue]:
         other_files = [f for f in cfi.affected_files if f != primary_file]
 
         # Build a comprehensive reason from the cross-file issue fields
-        reason_parts = [cfi.title]
+        reason_parts = []
         if cfi.description:
             reason_parts.append(cfi.description)
         if cfi.evidence:
@@ -1288,8 +1312,11 @@ def _convert_cross_file_issues(cross_file_issues) -> List[CodeReviewIssue]:
             suggestedFixDiff=None,
             isResolved=False,
             codeSnippet=issue_snippet,
+            hypothesis=getattr(cfi, "hypothesis", "") or cfi.description,
+            evidenceGaps=list(getattr(cfi, "evidenceGaps", ()) or ()),
             evidenceRefs=list(cfi.evidenceRefs or []),
             claimKind=cfi.claimKind or "",
+            relatedLocations=other_files,
         ))
     return converted
 

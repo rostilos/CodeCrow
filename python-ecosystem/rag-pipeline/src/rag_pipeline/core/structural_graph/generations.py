@@ -27,6 +27,7 @@ from .shared import (
     _SHA256_RE,
     _PENDING_OWNERSHIP_FILE,
     _canonical_json,
+    _timed_graph_phase,
 )
 
 from .schema import _SCHEMA_SQL, _FTS_SCHEMA_SQL, _BASE_SCHEMA_SQL, _FTS_CONTENT_SQL
@@ -167,7 +168,8 @@ class StructuralGenerationStore:
                 revision=revision,
                 manifest_sha256=manifest_sha256,
             ) as (source, receipt):
-                source.backup(backup_destination)
+                with _timed_graph_phase(backup_destination, "clone", target=target):
+                    source.backup(backup_destination)
                 base_receipt = dict(receipt)
             backup_destination.close()
             backup_destination = None

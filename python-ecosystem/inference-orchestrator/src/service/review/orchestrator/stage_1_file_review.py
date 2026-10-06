@@ -1,5 +1,7 @@
 """Stage 1: Parallel file reviews with exact repository context."""
-from service.review.execution_scheduler import review_model_slot
+from service.review.execution_scheduler import review_model_slot, optional_work_budget, optional_timeout_seconds
+from service.review.inference_usage import record_model_response, record_compute_decision
+from service.review.orchestrator.specialist_discovery import ReviewSpecialist, select_specialist_batches
 import asyncio
 from collections import Counter
 from collections.abc import Mapping
@@ -97,6 +99,8 @@ from service.review.orchestrator.stage_1_rag_retrieval import (
 )
 from service.review.orchestrator.stage_1_tool_inventory import (
     STAGE1_AGENT_TOOL_NAMES,
+    STAGE1_OPTIONAL_RUNTIME_TOOL_NAMES,
+    STAGE1_RUNTIME_VERIFICATION_TOOL_NAME,
     STAGE1_BRANCH_FILE_TOOL_NAME,
     STAGE1_MINIMAL_REVIEW_CONTEXT_TOOL_NAME,
     STAGE1_QUERY_GRAPH_TOOL_NAME,
@@ -428,11 +432,11 @@ def _available_stage1_agent_tools(
         return frozenset()
     available = getattr(agent_service, "available_tool_names", None)
     if available is None:
-        return STAGE1_AGENT_TOOL_NAMES
+        return STAGE1_AGENT_TOOL_NAMES - STAGE1_OPTIONAL_RUNTIME_TOOL_NAMES
     try:
         return STAGE1_AGENT_TOOL_NAMES.intersection(available)
     except TypeError:
-        return STAGE1_AGENT_TOOL_NAMES
+        return STAGE1_AGENT_TOOL_NAMES - STAGE1_OPTIONAL_RUNTIME_TOOL_NAMES
 
 
 def _stage1_schema_declaration_bytes() -> int:
@@ -1119,7 +1123,14 @@ def _prepare_stage1_prompt_material(
             else DiffChangeType.MODIFIED
         )
         source_override = item.get("_current_source_override")
-        if isinstance(source_override, str):
+        if change_type is DiffChangeType.DELETED:
+            current_code = (
+                "[File deleted: no head-side source exists. The removed diff is "
+                "BASE evidence. Review breakage caused by removal; anchor to an "
+                "exact removed line using its old line number. Existing defects "
+                "inside removed code are not current defects.]"
+            )
+        elif isinstance(source_override, str):
             current_code = source_override
         else:
             complete_added_source_in_diff = (
@@ -2727,6 +2738,45 @@ async def execute_stage_1_file_reviews(
     for batch_idx in range(1, len(batches) + 1):
         all_issues.extend(batch_results.get(batch_idx, []))
 
+    try:
+        specialist_cap = inference_profile.invocation_cap("specialist_passes")
+        specialists = select_specialist_batches(batches, prepared_context, specialist_cap)
+    except Exception as error:
+        logger.warning("Optional specialist selection unavailable; retaining core review: %s", error)
+        specialist_cap, specialists = 0, []
+    record_compute_decision("specialist_selection", admitted=[specialist.name for specialist, _ in specialists],
+                            coreBatches=len(batches), cap=specialist_cap)
+    configured_timeout = optional_timeout_seconds("REVIEW_SPECIALIST_TIMEOUT_SECONDS", 60)
+    specialist_deadline = asyncio.get_running_loop().time() + optional_work_budget(configured_timeout)
+    for specialist, batch in specialists:
+        remaining = max(0.0, specialist_deadline - asyncio.get_running_loop().time())
+        specialist_ledger = CandidateEvidenceLedger() if candidate_ledger is not None else None
+        try:
+            if remaining <= 0:
+                outcome = "skipped_budget_exhausted"
+            else:
+                async with asyncio.timeout(remaining):
+                    supplemental = await review_file_batch(
+                        llm, request, batch, rag_client, prepared_context,
+                        is_incremental=is_incremental, fallback_llm=fallback_llm,
+                        rag_state=rag_state, candidate_ledger=specialist_ledger,
+                        agent_service=agent_service, event_callback=event_callback,
+                        specialist=specialist,
+                    )
+                all_issues.extend(supplemental)
+                outcome = "completed"
+        except TimeoutError:
+            outcome = "timeout"
+            logger.warning("Optional %s specialist timed out; retaining core review", specialist.name)
+        except Exception as error:
+            logger.warning("Optional %s specialist unavailable; retaining core review: %s", specialist.name, error)
+            outcome = "unavailable"
+        if candidate_ledger is not None and specialist_ledger is not None:
+            candidate_ledger.absorb_optional(specialist_ledger, failure=None if outcome == "completed" else outcome)
+        record_compute_decision("specialist_result", specialist=specialist.name, outcome=outcome, budgetSeconds=remaining)
+        if event_callback:
+            event_callback({"type": "status", "state": "specialist_review", "specialist": specialist.name, "outcome": outcome})
+
     elapsed = time.time() - started_at
     logger.info(
         f"Stage 1 Complete: {len(all_issues)} issues found across "
@@ -2804,6 +2854,7 @@ async def review_file_batch(
     agent_service: Optional["AgentExecutionService"] = None,
     event_callback: Optional[Callable[[Dict], None]] = None,
     agent_telemetry: Optional[Stage1AgentTelemetryRecorder] = None,
+    specialist: Optional[ReviewSpecialist] = None,
 ) -> List[CodeReviewIssue]:
     if prepared_context is not None and not isinstance(prepared_context, Stage1PreparedContext):
         # Backwards compatibility for older direct callers/tests that pass
@@ -2817,6 +2868,14 @@ async def review_file_batch(
         prepared_context,
         is_incremental,
     )
+    specialist_directive = ""
+    if specialist is not None:
+        specialist_directive = (
+            "\nSPECIALIST DISCOVERY: " + specialist.name + "\n" + specialist.instructions
+            + "\nThis is a supplemental category pass. Keep the same exact changed-hunk anchors, "
+              "report unique defects, state a concrete hypothesis and remaining evidence gaps."
+        )
+        material.boundary_context += specialist_directive
     batch_file_paths = material.batch_file_paths
     requested_agentic_mode = (
         agent_service is not None and bool(request.useMcpTools)
@@ -2868,6 +2927,7 @@ async def review_file_batch(
         )
     agent_tool_names = frozenset(
         repository_agent_tools
+        | STAGE1_OPTIONAL_RUNTIME_TOOL_NAMES.intersection(available_agent_tools)
         | (available_structural_tools if structural_agent_mode else frozenset())
     )
     token_budget = _stage1_batch_token_limit(request)
@@ -3020,7 +3080,7 @@ async def review_file_batch(
                     getattr(item.get("file"), "path", "")
                 ) in recovery_path_set
             ]
-            return (
+            recovery_material = (
                 material
                 if len(recovery_batch_items) == len(batch_items)
                 else _prepare_stage1_prompt_material(
@@ -3030,6 +3090,9 @@ async def review_file_batch(
                     is_incremental,
                 )
             )
+            if recovery_material is not material:
+                recovery_material.boundary_context += specialist_directive
+            return recovery_material
 
         async def prepare_direct_fallback_prompt(
             recovery_paths: Sequence[str],
@@ -3180,7 +3243,7 @@ async def review_file_batch(
                 direct_fallback_prompt=direct_invocation_prompt,
                 direct_fallback_prompt_factory=prepare_direct_fallback_prompt,
                 agent_allowed_tool_names=agent_tool_names,
-                agent_max_steps=STAGE1_AGENT_MAX_STEPS,
+                agent_max_steps=3 if specialist is not None else STAGE1_AGENT_MAX_STEPS,
                 agent_phase="primary",
                 agent_complete_current_source_paths=tuple(sorted(
                     material.complete_current_file_paths
@@ -3321,7 +3384,7 @@ async def review_file_batch(
                         origin.generation_prompt,
                         {},
                     ),
-                    source_phase=origin.source_phase,
+                    source_phase=(f"specialist:{specialist.name}:{origin.source_phase}" if specialist is not None else origin.source_phase),
                 )
                 merged_issues.extend(origin_issues)
             all_issues.extend(merged_issues)
@@ -3337,7 +3400,7 @@ async def review_file_batch(
                     invocation_trace["generation_prompt"],
                     {},
                 ),
-                source_phase="agent" if agentic_mode else None,
+                source_phase=(f"specialist:{specialist.name}" if specialist is not None else "agent" if agentic_mode else None),
             )
             all_issues.extend(issues)
 
@@ -3460,7 +3523,7 @@ async def _invoke_stage_1_batch_llm(
         from service.agent import AgentExecutionRequest
 
         resolved_agent_tools = (
-            STAGE1_AGENT_TOOL_NAMES
+            _available_stage1_agent_tools(agent_service)
             if agent_allowed_tool_names is None
             else agent_allowed_tool_names
         )
@@ -3527,6 +3590,14 @@ async def _invoke_stage_1_batch_llm(
                 "the prompt's diff/current content remains authoritative for "
                 "every PR-modified path. "
             )
+            runtime_instruction = (
+                "Use runVerificationCheck only for a concrete hypothesis and a named "
+                "host-configured check from the tool description. Checks run in a "
+                "bounded isolated proposed-tree environment. An unavailable check "
+                "is not evidence; a passing check disproves only behavior it exercises, "
+                "and does not invalidate unrelated findings. "
+                if STAGE1_RUNTIME_VERIFICATION_TOOL_NAME in resolved_agent_tools else ""
+            )
             tool_argument_bindings: Dict[str, Dict[str, Any]] = {
                 tool_name: {
                     "focusPaths": tuple(batch_file_paths),
@@ -3553,11 +3624,16 @@ async def _invoke_stage_1_batch_llm(
                 # separate post-formatting model call.
                 output_schema=FileReviewBatchOutput,
                 additional_instructions=(
+                    "State the concrete fact each retrieval must resolve. After an empty "
+                    "or unavailable result, change the target or use exact source instead "
+                    "of repeating the same question. Record remaining facts as evidenceGaps; "
+                    "bounded absence is not proof of absence. "
                     "Return the complete structured file-review response "
                     "required by the prompt, with one review object for every "
                     "requested file. "
                     + exploration_instruction
                     + source_authority_instruction
+                    + runtime_instruction
                 ),
                 metadata={
                     "stage": "stage_1",
@@ -3828,6 +3904,7 @@ async def _invoke_stage_1_batch_llm(
                     else ReasoningEffort.LOW,
                 ),
             )
+            record_model_response(response)
         content = extract_llm_response_text(response)
         if not content.strip():
             logger.warning(

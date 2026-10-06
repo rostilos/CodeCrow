@@ -57,6 +57,7 @@ class SemanticExtractor:
 
         # Collect file-level metadata from all matches
         imports = []
+        import_occurrences = {}
         namespace = None
         decorators_map: Dict[int, List[str]] = {}  # line -> decorators
 
@@ -70,7 +71,13 @@ class SemanticExtractor:
                     match.get('use')
                 )
                 if import_path:
-                    imports.append(import_path.text.strip().strip('"\''))
+                    target = import_path.text.strip().strip('"\'')
+                    imports.append(target)
+                    declaration = match.get(match.pattern_name) or import_path
+                    import_occurrences[(declaration.start_byte, declaration.end_byte, target)] = {
+                        "target": target, "line": declaration.start_line,
+                        "startByte": declaration.start_byte, "endByte": declaration.end_byte,
+                    }
                 continue
 
             # Handle namespace/package/module
@@ -202,6 +209,28 @@ class SemanticExtractor:
                     namespace=namespace,
                 ))
 
+        if import_occurrences and not chunks:
+            # Import-only source still needs one complete source unit, just as
+            # the ordinary fallback does; retain the captured ownership too.
+            chunks.append(ASTChunk(
+                content=text, content_type=ContentType.FALLBACK,
+                language=lang_name, path=path, start_line=1,
+                end_line=text.count('\n') + 1, imports=list(imports),
+            ))
+        for chunk in chunks:
+            chunk.import_occurrences = []
+        for (start, end, _), occurrence in sorted(import_occurrences.items()):
+            owners = [
+                (range_end - range_start, owner)
+                for range_start, range_end, owner in chunk_ranges
+                if range_start <= start and end <= range_end
+            ]
+            if owners:
+                min(owners, key=lambda item: item[0])[1].import_occurrences.append(occurrence)
+            elif chunks:
+                # Carry file evidence once through the existing list-of-nodes
+                # contract. The writer binds it to the structural file owner.
+                chunks[0].file_import_occurrences.append(occurrence)
         return chunks
 
 
@@ -531,5 +560,3 @@ class SemanticExtractor:
                 types.append(name)
 
         return types
-
-

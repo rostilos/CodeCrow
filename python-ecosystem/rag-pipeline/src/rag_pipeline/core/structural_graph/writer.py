@@ -13,7 +13,7 @@ from .units import UnitWriter
 from .relations import RelationWriter
 from .reconciliation import GraphReconciler
 from .resolution import RelationResolver
-from .shared import _canonical_json, _interrupt_sql_on_cancel
+from .shared import _canonical_json, _interrupt_sql_on_cancel, _timed_graph_phase
 from .schema import _SECONDARY_INDEX_SQL, _FTS_TABLE_SQL
 
 logger = logging.getLogger(__name__)
@@ -216,14 +216,16 @@ class StructuralGraphWriter:
         *,
         cancellation_check: Callable[[], None] | None = None,
     ) -> tuple[tuple[str, ...], frozenset[str]]:
-        with _interrupt_sql_on_cancel(self.connection, cancellation_check):
-            return self._remove_paths(paths)
+        with _timed_graph_phase(self.connection, "delta_remove_paths"), _interrupt_sql_on_cancel(self.connection, cancellation_check):
+            return self._remove_paths(paths, cancellation_check=cancellation_check)
 
     def _remove_paths(
         self,
         paths: Sequence[str],
+        *,
+        cancellation_check: Callable[[], None] | None = None,
     ) -> tuple[tuple[str, ...], frozenset[str]]:
-        return self._reconciliation._remove_paths(paths)
+        return self._reconciliation._remove_paths(paths, cancellation_check=cancellation_check)
 
     def remove_repository_analysis_outputs(self) -> None:
         return self._reconciliation.remove_repository_analysis_outputs()
@@ -274,7 +276,7 @@ class StructuralGraphWriter:
         construction avoids rewriting lookup B-trees for every source fact.
         """
         self._relations.flush_deferred_file_relation_ownership()
-        with _interrupt_sql_on_cancel(self.connection, cancellation_check):
+        with _timed_graph_phase(self.connection, "lookup_indexes"), _interrupt_sql_on_cancel(self.connection, cancellation_check):
             for statement in _SECONDARY_INDEX_SQL:
                 self.connection.execute(statement)
             if not self._state.fts_available:
@@ -292,6 +294,8 @@ class StructuralGraphWriter:
             "INSERT INTO generation(singleton, receipt_json, sealed_at) VALUES (1, ?, ?)",
             (encoded, time.time()),
         )
-        self.connection.commit()
-        self.connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        self.connection.commit()
+        with _timed_graph_phase(self.connection, "seal_commit"):
+            self.connection.commit()
+        with _timed_graph_phase(self.connection, "checkpoint"):
+            self.connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            self.connection.commit()

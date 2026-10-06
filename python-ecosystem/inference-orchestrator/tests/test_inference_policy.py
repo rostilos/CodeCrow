@@ -126,3 +126,11 @@ def test_high_severity_issue_forces_stage_2_without_category_allowlist():
 
     assert run is True
     assert "high-severity" in reason
+
+
+def test_whole_file_deletion_forces_cross_file_discovery_in_fast_check():
+    request = _request(changedFiles=[], deletedFiles=["src/api.py"])
+    plan = ReviewPlan(analysis_summary="plan", file_groups=[], cross_file_concerns=[])
+    run, reason = should_run_stage_2(_fast_profile(), request, plan, [])
+    assert run is True
+    assert "deletions" in reason

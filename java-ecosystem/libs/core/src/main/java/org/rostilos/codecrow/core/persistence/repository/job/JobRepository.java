@@ -294,7 +294,8 @@ public interface JobRepository extends JpaRepository<Job, Long> {
     List<Job> findStuckJobs(@Param("threshold") OffsetDateTime threshold);
 
     @Query("SELECT j FROM Job j WHERE " +
-            "j.triggerSource = org.rostilos.codecrow.core.model.job.JobTriggerSource.WEBHOOK " +
+            "j.triggerSource IN (org.rostilos.codecrow.core.model.job.JobTriggerSource.WEBHOOK, " +
+            "org.rostilos.codecrow.core.model.job.JobTriggerSource.PIPELINE) " +
             "AND j.jobType IN (org.rostilos.codecrow.core.model.job.JobType.PR_ANALYSIS, " +
             "org.rostilos.codecrow.core.model.job.JobType.BRANCH_ANALYSIS) " +
             "AND j.status IN (org.rostilos.codecrow.core.model.job.JobStatus.PENDING, " +
@@ -305,7 +306,8 @@ public interface JobRepository extends JpaRepository<Job, Long> {
             Pageable pageable);
 
     @Query("SELECT j FROM Job j WHERE " +
-            "j.triggerSource = org.rostilos.codecrow.core.model.job.JobTriggerSource.WEBHOOK " +
+            "j.triggerSource IN (org.rostilos.codecrow.core.model.job.JobTriggerSource.WEBHOOK, " +
+            "org.rostilos.codecrow.core.model.job.JobTriggerSource.PIPELINE) " +
             "AND j.jobType IN (org.rostilos.codecrow.core.model.job.JobType.PR_ANALYSIS, " +
             "org.rostilos.codecrow.core.model.job.JobType.BRANCH_ANALYSIS) " +
             "AND j.status = org.rostilos.codecrow.core.model.job.JobStatus.RUNNING " +
@@ -317,7 +319,8 @@ public interface JobRepository extends JpaRepository<Job, Long> {
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE Job j SET j.status = org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
             "j.updatedAt = :claimedAt WHERE j.id = :jobId " +
-            "AND j.triggerSource = org.rostilos.codecrow.core.model.job.JobTriggerSource.WEBHOOK " +
+            "AND j.triggerSource IN (org.rostilos.codecrow.core.model.job.JobTriggerSource.WEBHOOK, " +
+            "org.rostilos.codecrow.core.model.job.JobTriggerSource.PIPELINE) " +
             "AND j.jobType IN (org.rostilos.codecrow.core.model.job.JobType.PR_ANALYSIS, " +
             "org.rostilos.codecrow.core.model.job.JobType.BRANCH_ANALYSIS) " +
             "AND j.status IN (org.rostilos.codecrow.core.model.job.JobStatus.PENDING, " +
@@ -328,6 +331,15 @@ public interface JobRepository extends JpaRepository<Job, Long> {
             @Param("threshold") OffsetDateTime threshold,
             @Param("claimedAt") OffsetDateTime claimedAt);
 
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Job j SET j.status = org.rostilos.codecrow.core.model.job.JobStatus.RUNNING, " +
+            "j.startedAt = :startedAt, j.updatedAt = :startedAt WHERE j.id = :jobId " +
+            "AND j.triggerSource = org.rostilos.codecrow.core.model.job.JobTriggerSource.PIPELINE " +
+            "AND j.status IN (org.rostilos.codecrow.core.model.job.JobStatus.PENDING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.QUEUED)")
+    int claimPipelineJobForExecution(@Param("jobId") Long jobId,
+                                    @Param("startedAt") OffsetDateTime startedAt);
+
     @Modifying
     @Query("UPDATE Job j SET j.updatedAt = :activityAt WHERE j.id = :jobId")
     int touchJob(@Param("jobId") Long jobId, @Param("activityAt") OffsetDateTime activityAt);
@@ -335,7 +347,8 @@ public interface JobRepository extends JpaRepository<Job, Long> {
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE Job j SET j.status = org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
             "j.updatedAt = :claimedAt WHERE j.id = :jobId " +
-            "AND j.triggerSource = org.rostilos.codecrow.core.model.job.JobTriggerSource.WEBHOOK " +
+            "AND j.triggerSource IN (org.rostilos.codecrow.core.model.job.JobTriggerSource.WEBHOOK, " +
+            "org.rostilos.codecrow.core.model.job.JobTriggerSource.PIPELINE) " +
             "AND j.jobType IN (org.rostilos.codecrow.core.model.job.JobType.PR_ANALYSIS, " +
             "org.rostilos.codecrow.core.model.job.JobType.BRANCH_ANALYSIS) " +
             "AND j.status = org.rostilos.codecrow.core.model.job.JobStatus.RUNNING " +

@@ -83,3 +83,15 @@ def review_query_payload(
     return payload
 
 
+
+
+def normalize_detail_level(value: object) -> str:
+    """A display preference must not make optional graph retrieval unavailable."""
+    level = str(value or "").strip().casefold()
+    normalized = "standard" if level in {"standard", "full", "detailed"} else "minimal"
+    if value != normalized:
+        import logging
+        logging.getLogger(__name__).info(
+            "structural_detail_level_normalized: %r -> %s", value, normalized,
+        )
+    return normalized

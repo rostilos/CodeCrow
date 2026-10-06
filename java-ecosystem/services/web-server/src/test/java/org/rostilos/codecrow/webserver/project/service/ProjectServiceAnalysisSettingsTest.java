@@ -21,6 +21,8 @@ class ProjectServiceAnalysisSettingsTest {
     @Mock
     private ProjectRepository projectRepository;
 
+    @Mock private jakarta.persistence.EntityManager entityManager;
+
     @InjectMocks
     private ProjectService projectService;
 

@@ -106,6 +106,10 @@ class ChunkEmitter:
 
         if chunk.imports:
             metadata['imports'] = chunk.imports
+        if chunk.import_occurrences is not None:
+            metadata['import_occurrences'] = chunk.import_occurrences
+        if chunk.file_import_occurrences:
+            metadata['file_import_occurrences'] = chunk.file_import_occurrences
 
         if chunk.namespace:
             metadata['namespace'] = chunk.namespace
@@ -218,5 +222,4 @@ class ChunkEmitter:
         #   density = 0/200 = 0.0 (bad)
         density = signal_count / line_span
         return round(min(density, 1.0), 4)
-
 

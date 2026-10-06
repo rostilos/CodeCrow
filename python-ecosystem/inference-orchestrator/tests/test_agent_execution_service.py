@@ -1,6 +1,7 @@
 """Focused tests for the shared MCP agent execution lifecycle."""
 
 import asyncio
+import json
 from dataclasses import dataclass, field, replace
 from inspect import signature
 from types import SimpleNamespace
@@ -26,6 +27,37 @@ from service.agent import (
 )
 class _Output(BaseModel):
     value: str
+
+
+@pytest.mark.asyncio
+async def test_disabled_evidence_tool_stays_advertised_and_skips_backend(monkeypatch):
+    from service.agent import evidence_acquisition
+    monkeypatch.setattr(evidence_acquisition, "ToolMessage", lambda **kwargs: SimpleNamespace(**kwargs))
+    middleware = evidence_acquisition.EvidenceAcquisitionMiddleware()
+    backend = AsyncMock(return_value=SimpleNamespace(content='{"status":"unavailable"}'))
+    for index in range(3):
+        result = await middleware.awrap_tool_call(SimpleNamespace(tool_call={
+            "id": str(index), "name": "queryCodeGraph", "args": {"target": str(index)},
+        }), backend)
+    assert backend.await_count == 2
+    assert json.loads(result.content)["reason"] == "repeated_unproductive_queries"
+    request = SimpleNamespace(tools=[SimpleNamespace(name="queryCodeGraph"), SimpleNamespace(name="getReviewFileContent")])
+    handler = AsyncMock(return_value="response")
+    assert await middleware.awrap_model_call(request, handler) == "response"
+    handler.assert_awaited_once_with(request)
+
+
+@pytest.mark.parametrize("benchmark", [False, True])
+def test_terminal_tool_metadata_is_benchmark_only(monkeypatch, benchmark):
+    if benchmark:
+        monkeypatch.setenv("CODECROW_CODEX_BENCHMARK", "1")
+    else:
+        monkeypatch.delenv("CODECROW_CODEX_BENCHMARK", raising=False)
+    middleware = FinalResponseReserveMiddleware(exploration_model_calls=4, structured_output=True)
+    request = _FakeModelRequest(state={"run_model_call_count": 0}, tools=[], tool_choice=None, system_message=None, messages=[],
+                                response_format=ToolStrategy(schema=_Output), model_settings={})
+    prepared = middleware._prepare_request(request)
+    assert prepared.model_settings.get("extra_body", {}).get("codecrow_terminal_tools") == (["_Output"] if benchmark else None)
 
 
 class _BatchOutput(BaseModel):
@@ -1092,7 +1124,7 @@ async def test_similar_user_text_is_not_treated_as_model_call_limit():
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_initial_required_tool_is_the_only_first_turn_choice_then_expires():
+async def test_initial_required_tool_choice_expires_without_changing_inventory():
     middleware = InitialRequiredToolMiddleware(tool_name="getStructuralRelations")
     graph_tool = SimpleNamespace(name="getStructuralRelations")
     file_tool = SimpleNamespace(name="getReviewFileContent")
@@ -1136,7 +1168,7 @@ async def test_initial_required_tool_is_the_only_first_turn_choice_then_expires(
             return_request,
         )
 
-    assert first.tools == [graph_tool]
+    assert first.tools == [graph_tool, file_tool]
     assert first.tool_choice == "getStructuralRelations"
     assert later is later_request
     assert later.tools == [graph_tool, file_tool]
@@ -1197,7 +1229,7 @@ async def test_initial_required_tool_retries_wrong_single_call_before_execution(
             runtime=None,
         )
 
-    assert prepared_requests[0].tools == [graph_tool]
+    assert prepared_requests[0].tools == [graph_tool, file_tool]
     assert prepared_requests[0].tool_choice == "exploreReviewContext"
     assert decision == {
         "messages": [_FakeRemoveMessage(id=response.result[0].id)],
@@ -1226,7 +1258,7 @@ async def test_initial_required_tool_discards_parallel_response_with_wrong_name(
     )
 
     async def mixed_parallel_response(prepared_request):
-        assert prepared_request.tools == [graph_tool]
+        assert prepared_request.tools == [graph_tool, file_tool]
         assert prepared_request.tool_choice == "exploreReviewContext"
         return _FakeModelResponse(result=[_FakeAIMessage(
             "",
@@ -1341,7 +1373,7 @@ async def test_initial_required_tool_keeps_explicit_openrouter_provider_preferen
             apply_reserve,
         )
 
-    assert prepared.tools == [graph_tool]
+    assert prepared.tools == [graph_tool, file_tool]
     assert prepared.tool_choice == "exploreReviewContext"
     assert prepared.response_format is response_format
     assert prepared.model_settings == {
@@ -2219,7 +2251,9 @@ def test_create_agent_adds_terminal_synthesis_after_exploration_ceiling():
     assert create_kwargs["middleware"][2]._exploration_model_calls == 12
     assert create_kwargs["middleware"][2].max_model_calls == 14
     assert create_kwargs["middleware"][2]._structured_output is True
-    assert create_kwargs["middleware"][3] is limit_middleware
+    from service.agent.evidence_acquisition import EvidenceAcquisitionMiddleware
+    assert isinstance(create_kwargs["middleware"][3], EvidenceAcquisitionMiddleware)
+    assert create_kwargs["middleware"][4] is limit_middleware
     tool_strategy_factory.assert_called_once_with(schema=_Output)
     graph.with_config.assert_called_once_with({"recursion_limit": 24})
 

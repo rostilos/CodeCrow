@@ -61,6 +61,25 @@ def _request():
     )
 
 
+def test_consolidated_provenance_and_verification_coverage_remain_separate():
+    ledger = CandidateEvidenceLedger()
+    keeper, duplicate, unassessed = _issue(), _issue(), _issue()
+    for i, issue in enumerate((keeper, duplicate, unassessed)):
+        ledger.register(issue, stage="stage_1", source_key=str(i), review_unit_ids=["unit"],
+                        prompt_hunk_ids=["hunk"], generation_prompt="prompt")
+    ledger.assess(keeper, {"verdict": "supported", "attempted": True, "completed": True})
+    ledger.consolidate(keeper, [keeper, duplicate])
+    ledger.reject(duplicate, gate="deduplication", code="final_duplicate")
+    ledger.publish([keeper, unassessed])
+    assert ledger.record_for(duplicate).candidate_id in ledger.record_for(keeper).consolidated_candidate_ids
+    assert ledger.verification_summary()["supported"] == 0
+    assert ledger.verification_summary()["incomplete"] == 2
+    ledger.assess(keeper, {"stage": "stage_3_verification", "verdict": "supported", "attempted": True, "completed": True})
+    summary = ledger.verification_summary()
+    assert (summary["candidates"], summary["attempted"], summary["completed"], summary["supported"], summary["unknown"]) == (2, 1, 1, 1, 1)
+    ledger.assert_terminal()
+
+
 def test_candidate_provenance_binds_anchor_to_owning_review_unit():
     processed = DiffProcessor().process(RAW_DIFF)
     hunk_id = processed.files[0].hunks[0].id

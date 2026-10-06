@@ -42,48 +42,50 @@ def summarize_oversized_diff(diff_content: str, path: str, max_changed_lines: in
     headers, and representative raw changed lines. It does not try to recognize
     language-specific signatures or infer what code constructs matter.
     """
-    added_lines = 0
-    removed_lines = 0
-    hunk_headers = []
-    changed_lines = []
-
-    for line in diff_content.split('\n'):
-        if line.startswith('+') and not line.startswith('+++'):
-            added_lines += 1
-            if len(changed_lines) < max_changed_lines:
-                changed_lines.append(line)
-        elif line.startswith('-') and not line.startswith('---'):
-            removed_lines += 1
-            if len(changed_lines) < max_changed_lines:
-                changed_lines.append(line)
-        # Capture hunk headers — they often contain the enclosing function name
-        elif line.startswith('@@'):
-            hunk_headers.append(line.strip())
-
-    # Deduplicate while preserving order
-    hunk_headers = list(dict.fromkeys(hunk_headers))[:20]
-    changed_lines = list(dict.fromkeys(changed_lines))[:max_changed_lines]
-
-    parts = [
-        f"diff --git a/{path} b/{path}",
-        f"--- a/{path}",
-        f"+++ b/{path}",
-        f"[CodeCrow Summary: diff too large for full inclusion — summary below]",
-        f"",
-        f"Change statistics: +{added_lines} lines added, -{removed_lines} lines removed",
+    lines = diff_content.splitlines()
+    added = sum(line.startswith("+") and not line.startswith("+++") for line in lines)
+    removed = sum(line.startswith("-") and not line.startswith("---") for line in lines)
+    header_end = next((i for i, line in enumerate(lines) if line.startswith("@@")), len(lines))
+    parts = lines[:header_end] + [
+        "[CodeCrow Summary: bounded exact diff fragments; omitted source is not reviewed]",
+        f"Change statistics: +{added} lines added, -{removed} lines removed",
     ]
-
-    if hunk_headers:
-        parts.append(f"\nAffected code regions ({len(hunk_headers)} hunks):")
-        for hh in hunk_headers:
-            parts.append(f"  {hh}")
-
-    if changed_lines:
-        parts.append(f"\nRepresentative changed lines ({len(changed_lines)} shown):")
-        parts.extend(changed_lines)
-    else:
-        parts.append("\n(No changed lines found in diff summary)")
-
+    remaining = max_changed_lines
+    pattern = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$")
+    index = header_end
+    while index < len(lines) and remaining > 0:
+        original_header = lines[index]
+        match = pattern.match(original_header)
+        index += 1
+        if match is None:
+            continue
+        body = []
+        old_count = new_count = changed = 0
+        # Keep contiguous, exact source, including context. Recompute coordinates
+        # for the retained fragment instead of attaching a full-hunk header to a
+        # selection of unrelated representative lines.
+        while index < len(lines) and not lines[index].startswith("@@"):
+            line = lines[index]
+            if remaining <= 0 or len(body) >= max_changed_lines * 4:
+                break
+            index += 1
+            if not line.startswith(("+", "-", " ", "\\")):
+                continue
+            body.append(line)
+            old_count += int(line.startswith(("-", " ")))
+            new_count += int(line.startswith(("+", " ")))
+            if line.startswith(("+", "-")):
+                remaining -= 1
+                changed += 1
+        if changed:
+            complete_hunk = index == len(lines) or lines[index].startswith("@@")
+            parts.append(
+                original_header if complete_hunk
+                else f"@@ -{match[1]},{old_count} +{match[2]},{new_count} @@{match[3]}"
+            )
+            parts.extend(body)
+        while index < len(lines) and not lines[index].startswith("@@"):
+            index += 1
     return "\n".join(parts)
 
 
@@ -130,11 +132,22 @@ class DiffFile:
     content: str = ""  # Diff content (unified diff format)
     full_content: Optional[str] = None  # Full file content (populated separately if needed)
     hunks: List[DiffHunk] = field(default_factory=list)
+    visible_hunks: Optional[List[DiffHunk]] = None
     is_binary: bool = False
     is_gitlink: bool = False
     is_skipped: bool = False
     skip_reason: Optional[str] = None
     plugin_disposition: Optional[str] = None
+
+    @property
+    def review_hunks(self) -> List[DiffHunk]:
+        """Only exact hunks materialized in the bounded review input."""
+        return self.hunks if self.visible_hunks is None else self.visible_hunks
+
+    @property
+    def omitted_hunk_ids(self) -> tuple[str, ...]:
+        visible = {hunk.id for hunk in self.review_hunks}
+        return tuple(hunk.id for hunk in self.hunks if hunk.id not in visible)
 
     @property
     def total_changes(self) -> int:
@@ -175,7 +188,11 @@ class ProcessedDiff:
         return "\n".join(parts)
 
     def hunk_manifest(self) -> List[DiffHunk]:
-        return [hunk for file in self.files for hunk in file.hunks]
+        return list({
+            hunk.id: hunk
+            for file in self.files
+            for hunk in [*file.hunks, *file.review_hunks]
+        }.values())
 
 
 class DiffProcessor:
@@ -231,6 +248,10 @@ class DiffProcessor:
 
         # Apply limits
         processed_files, truncated, truncation_reason = self._apply_limits(files)
+
+        for file in processed_files:
+            if "[CodeCrow Summary:" in file.content:
+                file.visible_hunks = self._extract_hunks(file)
 
         # Calculate stats
         total_additions = sum(f.additions for f in processed_files if not f.is_skipped)
@@ -396,8 +417,6 @@ class DiffProcessor:
             disposition = HunkDisposition.REVIEWABLE
             if file.is_binary:
                 disposition = HunkDisposition.BINARY
-            elif file.change_type == DiffChangeType.DELETED:
-                disposition = HunkDisposition.DELETED
             elif file.is_gitlink:
                 disposition = HunkDisposition.GITLINK
             elif match is None:
@@ -446,10 +465,8 @@ class DiffProcessor:
             file.skip_reason = "Git submodule pointer"
             return True
         
-        # Skip deleted files (no code to review)
-        if file.change_type == DiffChangeType.DELETED:
-            file.skip_reason = "Deleted file"
-            return True
+        # Whole-file removals are source changes: callers and registrations can
+        # break even though this path has no head-side bytes.
 
         # A file section without text hunks can still be a valid Git
         # metadata-only change (mode change or rename without edited source).

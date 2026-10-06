@@ -1,5 +1,6 @@
 """Shared construction and execution lifecycle for prompt-scoped MCP agents."""
 from service.review.execution_scheduler import review_model_slot
+from service.review.inference_usage import record_model_response
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -155,16 +156,20 @@ class AgentModelSession:
             *,
             bound_model: Any,
             invocation_kwargs: Mapping[str, Any],
+            usage_stage: str = "agent_execution_service",
     ):
         self._bound_model = bound_model
         self._invocation_kwargs = dict(invocation_kwargs)
+        self._usage_stage = usage_stage
 
     async def ainvoke(self, messages: Sequence[Any]) -> Any:
-        async with review_model_slot("agent_execution_service"):
-            return await self._bound_model.ainvoke(
+        async with review_model_slot(self._usage_stage):
+            response = await self._bound_model.ainvoke(
                 messages,
                 **self._invocation_kwargs,
             )
+            record_model_response(response)
+            return response
 
 
 class AgentExecutionService(Generic[AgentOutputT]):
@@ -195,6 +200,7 @@ class AgentExecutionService(Generic[AgentOutputT]):
             tool_definitions: Sequence[Any],
             reasoning_effort: ReasoningEffort,
             max_output_tokens: int | None = None,
+            usage_stage: str = "agent_execution_service",
     ) -> AgentModelSession:
         """Bind a model once for a caller-owned, flow-specific tool loop.
 
@@ -203,6 +209,7 @@ class AgentExecutionService(Generic[AgentOutputT]):
         tools; the shared service owns only common model-session construction.
         """
         return AgentModelSession(
+            usage_stage=usage_stage,
             bound_model=self._llm.bind_tools(list(tool_definitions)),
             invocation_kwargs=_model_request_settings(
                 self._llm,
@@ -343,6 +350,10 @@ class AgentExecutionService(Generic[AgentOutputT]):
             # at the owning request boundary gets another chance to close it.
             pass
 
+    def available_tools_for(self, names: set[str]) -> tuple[Any, ...]:
+        """Return initialized tools only; session identity remains host-owned."""
+        return tuple(tool for tool in self._available_tools if getattr(tool, "name", None) in names)
+
     async def stream(
             self,
             request: AgentExecutionRequest[AgentOutputT],
@@ -352,11 +363,7 @@ class AgentExecutionService(Generic[AgentOutputT]):
 
         metadata: Mapping[str, Any] = dict(request.metadata)
         allowed_tool_names = set(request.allowed_tool_names)
-        selected_tools = tuple(
-            tool
-            for tool in self._available_tools
-            if getattr(tool, "name", None) in allowed_tool_names
-        )
+        selected_tools = self.available_tools_for(allowed_tool_names)
         selected_tool_names = {
             getattr(tool, "name", None) for tool in selected_tools
         }
@@ -407,6 +414,7 @@ class AgentExecutionService(Generic[AgentOutputT]):
             disallowed_tools=disallowed_tools,
             preloaded_tools=selected_tools,
             initial_required_tool_name=initial_required_tool_name,
+            usage_stage=str(metadata.get("stage") or "mcp_agent"),
             model_request_settings=_model_request_settings(
                 self._llm,
                 reasoning_effort=request.reasoning_effort,

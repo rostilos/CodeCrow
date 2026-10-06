@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+from threading import Event
 
-from fastapi import APIRouter, HTTPException
+import anyio
+from fastapi import APIRouter, HTTPException, Request
 
 from ...core.coordination import MutationLeaseUnavailable
 from ...core.exact_index import ExactIndexPreconditionError
@@ -214,6 +217,7 @@ def review_context(request: ReviewContextRequest):
             max_relations=request.max_relations,
             max_source_windows=request.max_source_windows,
             max_source_characters=request.max_source_characters,
+            token_budget=request.token_budget,
         )
     except MutationLeaseUnavailable as exception:
         logger.warning(
@@ -241,23 +245,52 @@ def review_context(request: ReviewContextRequest):
 
 
 @router.post("/query/review-generation", name="prepare_review_generation")
-async def prepare_review_generation_endpoint(request: ProposedTreePrepareRequest):
+async def prepare_review_generation_endpoint(request: ProposedTreePrepareRequest, http_request: Request = None):
     workers = get_build_workers()
-    if workers is None:
-        return await run_heavy_operation(prepare_review_generation, request)
-    from ...core.review_generation import ReviewGenerationService
-    service = ReviewGenerationService(_manager())
+    cancellation = Event()
+
+    async def prepare():
+        if workers is None:
+            return await run_heavy_operation(
+                prepare_review_generation, request, cancellation_event=cancellation,
+            )
+        from ...core.review_generation import ReviewGenerationService
+        service = ReviewGenerationService(_manager())
+        try:
+            key = await run_heavy_operation(service.preparation_key, **_preparation_arguments(request))
+        except (ExactIndexPreconditionError, ProposedTreeUnavailableError, RepositorySourceTreeError) as exception:
+            raise HTTPException(status_code=409, detail=str(exception))
+        except ValueError as exception:
+            raise HTTPException(status_code=400, detail=str(exception))
+        except Exception as exception:
+            raise HTTPException(status_code=500, detail=str(exception))
+        return await workers.run_coalesced(key, "prepare_review", {
+            "request": request.model_dump(mode="json"),
+        })
+
+    pending = asyncio.create_task(prepare())
     try:
-        key = await run_heavy_operation(service.preparation_key, **_preparation_arguments(request))
-    except (ExactIndexPreconditionError, ProposedTreeUnavailableError, RepositorySourceTreeError) as exception:
-        raise HTTPException(status_code=409, detail=str(exception))
-    except ValueError as exception:
-        raise HTTPException(status_code=400, detail=str(exception))
-    except Exception as exception:
-        raise HTTPException(status_code=500, detail=str(exception))
-    return await workers.run_coalesced(key, "prepare_review", {
-        "request": request.model_dump(mode="json"),
-    })
+        if http_request is None:
+            return await pending
+        while not pending.done():
+            done, _ = await asyncio.wait({pending}, timeout=0.1)
+            if done:
+                break
+            if await http_request.is_disconnected():
+                logger.info(
+                    "Review preparation caller disconnected: workspace=%s project=%s revision=%s",
+                    request.workspace, request.project, request.source_revision,
+                )
+                raise HTTPException(status_code=499, detail="Review preparation caller disconnected")
+        return pending.result()
+    finally:
+        if not pending.done():
+            cancellation.set()
+            pending.cancel()
+        # Coalesced work cancels only after its last waiter leaves. Its join
+        # also keeps the originating source snapshot alive through cleanup.
+        with anyio.CancelScope(shield=True):
+            await asyncio.gather(pending, return_exceptions=True)
 
 
 def _preparation_arguments(request):
@@ -344,6 +377,7 @@ def review_minimal_context(request: ReviewMinimalContextRequest):
         include_source=request.include_source,
         max_source_windows=request.max_source_windows,
         max_source_characters=request.max_source_characters,
+        token_budget=request.token_budget,
     )
 
 
@@ -361,6 +395,7 @@ def review_impact_radius(request: ReviewImpactRadiusRequest):
         include_source=request.include_source,
         max_source_windows=request.max_source_windows,
         max_source_characters=request.max_source_characters,
+        token_budget=request.token_budget,
     )
 
 
@@ -394,12 +429,17 @@ def review_graph(request: ReviewGraphQueryRequest):
         "query_review_graph",
         pattern=request.pattern,
         target=request.target,
+        evidence_id=request.evidence_id,
+        field=request.field,
+        offset=request.offset,
+        max_characters=request.max_characters,
         max_results=request.max_results,
         cursor=request.cursor,
         detail_level=request.detail_level,
         include_source=request.include_source,
         max_source_windows=request.max_source_windows,
         max_source_characters=request.max_source_characters,
+        token_budget=request.token_budget,
     )
 
 
@@ -413,6 +453,7 @@ def review_unit(request: ReviewUnitRequest):
         unit_id=request.unit_id,
         offset=request.offset,
         max_characters=request.max_characters,
+        token_budget=request.token_budget,
     )
     if result is None:
         raise HTTPException(

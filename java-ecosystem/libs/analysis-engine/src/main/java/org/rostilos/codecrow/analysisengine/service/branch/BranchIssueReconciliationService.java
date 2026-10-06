@@ -141,7 +141,8 @@ public class BranchIssueReconciliationService {
             return;
 
         List<BranchIssue> issues = branchIssueRepository
-                .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath);
+                .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath).stream()
+                .filter(i -> i.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE).toList();
         if (issues.isEmpty())
             return;
 
@@ -161,7 +162,8 @@ public class BranchIssueReconciliationService {
             return;
 
         List<BranchIssue> issues = branchIssueRepository
-                .findUnresolvedByBranchIdAndFilePath(branch.getId(), oldPath);
+                .findUnresolvedByBranchIdAndFilePath(branch.getId(), oldPath).stream()
+                .filter(i -> i.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE).toList();
         if (issues.isEmpty())
             return;
 
@@ -224,6 +226,7 @@ public class BranchIssueReconciliationService {
             List<BranchIssue> issues = branchIssueRepository
                     .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath)
                     .stream()
+                    .filter(bi -> bi.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
                     .filter(bi -> bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank())
                     .toList();
             if (issues.isEmpty())
@@ -345,7 +348,17 @@ public class BranchIssueReconciliationService {
 
         for (Map.Entry<String, List<BranchIssue>> entry : issuesByFile.entrySet()) {
             String filePath = entry.getKey();
-            List<BranchIssue> fileIssues = entry.getValue();
+            List<BranchIssue> fileIssues = new ArrayList<>(entry.getValue());
+            // A removed source line is evidence for a BASE finding, not proof
+            // that the removal's regression was fixed.
+            fileIssues.removeIf(issue -> {
+                if (issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE) {
+                    // Keep BASE issue open during the deterministic sweep.
+                    return true;
+                }
+                return false;
+            });
+            if (fileIssues.isEmpty()) continue;
 
             // 4. Get file content — archive first, VCS fallback
             LineHashSequence currentHashes;
@@ -683,7 +696,8 @@ public class BranchIssueReconciliationService {
         List<BranchIssue> needsTracking = new ArrayList<>();
         for (BranchIssue issue : candidates) {
             String fp = issue.getFilePath();
-            if (fp != null && !filesExistingInBranch.contains(fp)) {
+            if (issue.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE
+                    && fp != null && !filesExistingInBranch.contains(fp)) {
                 autoResolved.add(issue);
             } else {
                 needsTracking.add(issue);
@@ -742,7 +756,17 @@ public class BranchIssueReconciliationService {
 
         for (Map.Entry<String, List<BranchIssue>> entry : issuesByFile.entrySet()) {
             String filePath = entry.getKey();
-            List<BranchIssue> fileIssues = entry.getValue();
+            List<BranchIssue> fileIssues = new ArrayList<>(entry.getValue());
+            // A removed source line is evidence for a BASE finding, not proof
+            // that the removal's regression was fixed.
+            fileIssues.removeIf(issue -> {
+                if (issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE) {
+                    needsAi.add(issue);
+                    return true;
+                }
+                return false;
+            });
+            if (fileIssues.isEmpty()) continue;
 
             LineHashSequence currentHashes;
             try {

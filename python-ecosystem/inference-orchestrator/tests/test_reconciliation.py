@@ -297,7 +297,7 @@ class TestDeduplicateFinalIssues:
         result = deduplicate_final_issues(issues)
         assert len(result) == 2
 
-    def test_same_source_snippet_survives_line_drift_and_deduplicates(self):
+    def test_same_source_snippet_with_wording_drift_is_deferred_to_semantic_comparison(self):
         issues = [
             _make_issue(
                 file="a.py",
@@ -315,7 +315,23 @@ class TestDeduplicateFinalIssues:
             ),
         ]
 
-        assert len(deduplicate_final_issues(issues)) == 1
+        assert len(deduplicate_final_issues(issues)) == 2
+        assert issues_are_semantic_dedup_candidates(*issues)
+
+    def test_same_anchor_similar_text_does_not_erase_a_distinct_trigger(self):
+        issues = [
+            _make_issue(file="a.py", line=10, title="Wrong guard", reason="The operation runs when user.is_admin is true.", codeSnippet="process(user)"),
+            _make_issue(file="a.py", line=10, title="Wrong guard", reason="The operation runs when user.is_admin is false.", codeSnippet="process(user)"),
+        ]
+        assert deduplicate_final_issues(issues) == issues
+
+    @pytest.mark.parametrize("reasons", [
+        ["The operation runs when role == admin.", "The operation runs when role != admin."],
+        ["The parser accepts the literal Admin.", "The parser accepts the literal admin."],
+    ])
+    def test_exact_identity_preserves_operators_and_literal_case(self, reasons):
+        issues = [_make_issue(file="a.py", line=10, title="Wrong guard", reason=reason, codeSnippet="process(user)") for reason in reasons]
+        assert deduplicate_final_issues(issues) == issues
 
     def test_exact_history_recreation_keeps_identity_and_refreshes_anchor(self):
         historical = _make_issue(
@@ -452,13 +468,13 @@ class TestDeduplicateCrossBatchIssues:
         result = deduplicate_cross_batch_issues(issues)
         assert len(result) == 2
 
-    def test_similar_deduped(self):
+    def test_similar_wording_is_deferred_to_semantic_review(self):
         issues = [
             _make_issue(reason="Missing null check in user lookup"),
             _make_issue(reason="Missing null check in user lookup method"),
         ]
         result = deduplicate_cross_batch_issues(issues)
-        assert len(result) == 1
+        assert len(result) == 2
 
     def test_similar_wording_in_different_files_is_not_deduplicated(self):
         issues = [

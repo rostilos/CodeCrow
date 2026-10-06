@@ -354,6 +354,16 @@ class ProposedTreeQueryBinding(ProposedTreeGenerationBinding):
             _validate_repository_relative_path(path) for path in value
         ))
 
+    @field_validator("detail_level", mode="before", check_fields=False)
+    @classmethod
+    def normalize_detail_level(cls, value: Any) -> str:
+        """Normalize presentation aliases without losing optional graph context."""
+        level = str(value or "").strip().casefold()
+        normalized = "standard" if level in {"standard", "full", "detailed"} else "minimal"
+        if value != normalized:
+            logger.info("structural_detail_level_normalized: %r -> %s", value, normalized)
+        return normalized
+
 
 class ReviewContextRequest(ProposedTreeQueryBinding):
     """Build/query one exact proposed-tree graph for an active PR review.
@@ -361,6 +371,8 @@ class ReviewContextRequest(ProposedTreeQueryBinding):
     Repository and overlay paths are injected by the review host. The model-facing
     MCP tool only supplies the review question and optional symbol focus.
     """
+
+    token_budget: int | None = Field(default=None, ge=512, le=16000)
 
     question: str = Field(min_length=1, max_length=4000)
     focus_symbols: List[str] = Field(default_factory=list, max_length=50)
@@ -380,6 +392,8 @@ class ReviewContextRequest(ProposedTreeQueryBinding):
 
 class ReviewMinimalContextRequest(ProposedTreeQueryBinding):
     """Ultra-compact starting topology for one proposed-tree review task."""
+
+    token_budget: int | None = Field(default=None, ge=512, le=16000)
 
     question: str = Field(min_length=1, max_length=4000)
     focus_symbols: List[str] = Field(default_factory=list, max_length=50)
@@ -401,6 +415,8 @@ class ReviewMinimalContextRequest(ProposedTreeQueryBinding):
 
 class ReviewImpactRadiusRequest(ProposedTreeQueryBinding):
     """Weighted best-score impact traversal from changed or precise targets."""
+
+    token_budget: int | None = Field(default=None, ge=512, le=16000)
 
     targets: List[str] = Field(default_factory=list, max_length=100)
     max_depth: int = Field(default=2, ge=0, le=6)
@@ -453,8 +469,14 @@ class ReviewTraverseRequest(ProposedTreeQueryBinding):
 class ReviewGraphQueryRequest(ProposedTreeQueryBinding):
     """One exact proposed-tree query with optional bounded source windows."""
 
-    pattern: str = Field(min_length=1, max_length=100)
-    target: str = Field(min_length=1, max_length=1000)
+    token_budget: int | None = Field(default=None, ge=512, le=16000)
+
+    pattern: str = Field(default="relations_of", min_length=1, max_length=100)
+    target: str = Field(default="", max_length=1000)
+    evidence_id: str | None = Field(default=None, max_length=200)
+    field: Literal["source", "target", "attributes"] = "target"
+    offset: int = Field(default=0, ge=0)
+    max_characters: int = Field(default=12000, ge=1, le=60000)
     max_results: int = Field(default=25, ge=1, le=100)
     cursor: int = Field(default=0, ge=0)
     detail_level: Literal["minimal", "standard"] = "standard"
@@ -465,6 +487,8 @@ class ReviewGraphQueryRequest(ProposedTreeQueryBinding):
 
 class ReviewUnitRequest(ProposedTreeQueryBinding):
     """Read one exact AST/plugin unit from the proposed-tree graph."""
+
+    token_budget: int | None = Field(default=None, ge=512, le=16000)
 
     unit_id: str = Field(min_length=1, max_length=200)
     offset: int = Field(default=0, ge=0)
@@ -487,6 +511,7 @@ class ReviewContextResponse(BaseModel):
     coverage: Dict[str, Any]
     provenance: Dict[str, Any]
     omittedFollowups: List[Dict[str, Any]]
+    continuations: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 # ── Parse models ──

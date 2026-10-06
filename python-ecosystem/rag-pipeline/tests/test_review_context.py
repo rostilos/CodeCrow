@@ -678,6 +678,7 @@ def test_review_context_selects_direct_relations_fairly_across_changed_roots():
 
 @pytest.mark.parametrize("base_available", [True, False])
 def test_review_context_indexes_and_caches_exact_proposed_topology(tmp_path, monkeypatch, base_available):
+    monkeypatch.setenv("ALLOWED_REPO_ROOT", str(tmp_path))
     pytest.importorskip("tree_sitter")
     pytest.importorskip("tree_sitter_python")
     target = tmp_path / "target"

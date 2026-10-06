@@ -29,8 +29,12 @@ class ControllerExecutorRoutingTest {
         var jobs = mock(PipelineJobService.class);
         var principal = mock(ProjectDTO.class);
         when(principal.id()).thenReturn(7L);
-        when(jobs.createDualConsumer(isNull(), any())).thenAnswer(call -> call.getArgument(1));
-        when(processor.processPipelineActionWithConsumer(any(), any(), isNull()))
+        var job = mock(org.rostilos.codecrow.core.model.job.Job.class);
+        when(jobs.createPipelinePrJob(any())).thenReturn(job);
+        when(jobs.createPipelineBranchJob(any())).thenReturn(job);
+        when(jobs.claimForExecution(job)).thenReturn(true);
+        when(jobs.createDualConsumer(eq(job), any())).thenAnswer(call -> call.getArgument(1));
+        when(processor.processPipelineActionWithConsumer(any(), any(), eq(job)))
                 .thenReturn(Map.of("status", "complete"));
         AtomicInteger submissions = new AtomicInteger();
         Executor executor = task -> { submissions.incrementAndGet(); task.run(); };
@@ -52,8 +56,8 @@ class ControllerExecutorRoutingTest {
         var branchResponse = controller.handleBranchWebhook(principal, branch);
 
         assertThat(submissions).hasValue(2);
-        verify(processor).processPipelineActionWithConsumer(eq(pr), any(), isNull());
-        verify(processor).processPipelineActionWithConsumer(eq(branch), any(), isNull());
+        verify(processor).processPipelineActionWithConsumer(eq(pr), any(), eq(job));
+        verify(processor).processPipelineActionWithConsumer(eq(branch), any(), eq(job));
         for (var response : java.util.List.of(prResponse, branchResponse)) {
             ByteArrayOutputStream output = new ByteArrayOutputStream();
             ((StreamingResponseBody) response.getBody()).writeTo(output);

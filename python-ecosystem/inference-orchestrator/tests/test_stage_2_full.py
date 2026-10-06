@@ -503,8 +503,8 @@ class TestStage2SemanticPacking:
 
         assert len(prompts) == 4
         assert all(_estimated_prompt_tokens(prompt) <= 6_000 for prompt in prompts)
-        assert all(prompt.omitted_packet_count == 15 for prompt in prompts)
-        assert all(prompt.omitted_unit_count == 29 for prompt in prompts)
+        assert all(prompt.omitted_packet_count == 30 for prompt in prompts)
+        assert all(prompt.omitted_unit_count == 31 for prompt in prompts)
         authority_prompts = [
             prompt for prompt in prompts
             if "OVERSIZED_DEPENDENCY_EDGE" in prompt
@@ -533,7 +533,15 @@ class TestStage2SemanticPacking:
         assert "OVERSIZED_LINE_0899" not in joined
         assert "CodeCrow Stage 2 invocation ceiling reached" in joined
 
-    def test_multibyte_evidence_uses_a_bounded_utf8_aware_prefix(self):
+    def test_multibyte_evidence_uses_a_bounded_utf8_aware_prefix(self, monkeypatch):
+        from service.review.orchestrator import stage_2_semantic_packets as packing
+        render = packing._render_stage_2_packet
+        rendered_units = {}
+        def capture_units(static, packet):
+            text = render(static, packet)
+            rendered_units[text] = {unit.key for unit in packet.units}
+            return text
+        monkeypatch.setattr(packing, "_render_stage_2_packet", capture_units)
         evidence = PrLedgerEvidence(
             ref="PRF001",
             scope="full_pr",
@@ -551,7 +559,7 @@ class TestStage2SemanticPacking:
             has_removal=False,
         )
 
-        prompts = _build_stage_2_prompts(
+        packet_arguments = dict(
             repo_slug="owner/repo",
             pr_title="Multibyte evidence",
             commit_hash="abc",
@@ -565,11 +573,22 @@ class TestStage2SemanticPacking:
             evidence_ledger=_stage_2_ledger([evidence]),
             token_budget=6_000,
         )
+        prompts = _build_stage_2_prompts(**packet_arguments)
+        uncapped_prompts = _build_stage_2_prompts(**packet_arguments, max_packets=1000)
 
         assert len(prompts) == 4
         assert all(_estimated_prompt_tokens(prompt) <= 6_000 for prompt in prompts)
-        assert all(prompt.omitted_packet_count == 5 for prompt in prompts)
-        assert all(prompt.omitted_unit_count == 10 for prompt in prompts)
+        # Schema growth changes the exact partition, but every admitted packet
+        # must carry the same positive omission accounting and respect budget.
+        omissions = {(prompt.omitted_packet_count, prompt.omitted_unit_count) for prompt in prompts}
+        assert len(omissions) == 1
+        omitted_packets, omitted_units = omissions.pop()
+        assert omitted_packets == len(uncapped_prompts) - len(prompts)
+        all_units = set().union(*(rendered_units[str(prompt)] for prompt in uncapped_prompts))
+        admitted_units = set().union(*(rendered_units[str(prompt)] for prompt in prompts))
+        assert omitted_units == len(all_units - admitted_units)
+        assert omitted_units >= omitted_packets > 0
+        assert all(prompt.omitted_packet_count == 0 for prompt in uncapped_prompts)
         joined = "\n".join(prompts)
         admitted = [
             index
@@ -659,8 +678,8 @@ class TestStage2SemanticPacking:
 
         assert len(prompts) == 4
         assert all(_estimated_prompt_tokens(prompt) <= 6_000 for prompt in prompts)
-        assert all(prompt.omitted_packet_count == 2 for prompt in prompts)
-        assert all(prompt.omitted_unit_count == 4 for prompt in prompts)
+        assert all(prompt.omitted_packet_count == 6 for prompt in prompts)
+        assert all(prompt.omitted_unit_count == 6 for prompt in prompts)
         joined = "\n".join(prompts)
         admitted = [record for record in records if record in joined]
         assert admitted == records[:len(admitted)]

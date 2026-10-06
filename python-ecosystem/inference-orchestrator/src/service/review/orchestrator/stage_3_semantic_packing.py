@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from model.multi_stage import ReviewPlan
 from model.output_schemas import CodeReviewIssue
 from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
+from service.review.orchestrator.verification_agent import _decoded_verification_source_view
 from service.review.orchestrator.stage_3_mcp_verification import (
     location_file_path as _location_file_path,
     safe_issue_field as _safe_issue_field,
@@ -180,6 +181,12 @@ def _stage_3_mcp_continuation_messages(
             default=str,
         ),
     ))
+    for record in verification_records:
+        for result in record.get("toolResults", []):
+            source_view = _decoded_verification_source_view(result.get("result", ""))
+            if source_view:
+                continuation += ("\n\nTool call " + str(result.get("toolCallId", ""))
+                                 + ", arguments: " + json.dumps(result.get("arguments", {})) + source_view)
     return [{"role": "user", "content": continuation}]
 
 

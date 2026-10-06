@@ -147,4 +147,23 @@ class BranchIssueReconciliationServiceTest {
         f.setAccessible(true);
         f.set(target, id);
     }
+
+    @Test void missingHeadFileDoesNotResolveRemovalImpactAndDiffDoesNotRemapBase() throws Exception {
+        Branch branch=new Branch(); setId(branch,1L); branch.setBranchName("main");
+        BranchIssue issue=new BranchIssue(); issue.setBranch(branch); issue.setFilePath("src/Deleted.java");
+        issue.setLineNumber(7); issue.setCurrentLineNumber(7);
+        issue.setAnchorSide(org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE);
+        when(branchIssueRepository.findUnresolvedByBranchIdAndFilePath(1L,"src/Deleted.java"))
+                .thenReturn(List.of(issue));
+        BranchProcessRequest request=new BranchProcessRequest(); request.targetBranchName="main"; request.commitHash="head";
+        when(branchRepository.findByIdWithIssues(1L)).thenReturn(java.util.Optional.of(branch));
+        when(branchRepository.save(any(Branch.class))).thenAnswer(call->call.getArgument(0));
+        // No optional provider/AI connection: degraded reconciliation retains issue.
+        service.reanalyzeCandidateIssues(Set.of("src/Deleted.java"),Set.of(),branch,new Project(),
+                request,event->{},Map.of(),"",false);
+        assertThat(issue.isResolved()).isFalse();
+        service.reconcileIssueLineNumbers("diff --git a/src/Deleted.java b/src/Deleted.java\n--- a/src/Deleted.java\n+++ b/src/Deleted.java\n@@ -1 +1,2 @@\n+new\n context", Set.of("src/Deleted.java"),branch);
+        assertThat(issue.getCurrentLineNumber()).isEqualTo(7);
+        verifyNoInteractions(reconciliationEngine);
+    }
 }

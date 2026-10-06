@@ -1,6 +1,6 @@
 from service.runtime_capacity import review_concurrency, review_call_concurrency
 from service.review.execution_scheduler import (
-    FairReviewScheduler, review_execution, review_context_slot,
+    FairReviewScheduler, review_execution, review_context_slot, optional_timeout_seconds,
 )
 import os
 import asyncio
@@ -23,6 +23,8 @@ from utils.mcp_tool_serialization import (
 )
 from service.rag.rag_client import RagClient
 from service.review.issue_processor import post_process_analysis_result
+from service.review.runtime_verification import build_verification_context
+from service.review.inference_usage import current_inference_usage
 from service.review.plugin_context import apply_plugin_file_policy
 from service.review.quality_capture import (
     ReviewQualityCaptureSession,
@@ -52,6 +54,7 @@ class ReviewService:
 
     # Hard timeout ceiling per review (seconds). Configurable via .env
     REVIEW_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "1500"))
+    REVIEW_GRAPH_PREPARATION_TIMEOUT_SECONDS = optional_timeout_seconds("REVIEW_GRAPH_PREPARATION_TIMEOUT_SECONDS", 120)
     MCP_SESSION_INITIALIZATION_TIMEOUT_SECONDS = float(os.environ.get(
         "MCP_SESSION_INITIALIZATION_TIMEOUT_SECONDS",
         "30",
@@ -119,6 +122,8 @@ class ReviewService:
                 if quality_capture is not None:
                     await quality_capture.complete(None, exception)
                 raise
+            if isinstance(response, dict):
+                response["inferenceUsage"] = current_inference_usage()
             if quality_capture is not None:
                 await quality_capture.complete(
                     response,
@@ -394,7 +399,9 @@ class ReviewService:
         
         client = None
         try:
-            async with asyncio.timeout(self.REVIEW_TIMEOUT_SECONDS):
+            async with asyncio.timeout(self.REVIEW_TIMEOUT_SECONDS) as review_deadline:
+                from service.review.execution_scheduler import set_review_deadline
+                set_review_deadline(review_deadline.when())
                 context = "with pre-fetched diff" if has_raw_diff else "fetching diff via MCP"
                 self._emit_event(event_callback, {
                     "type": "status",
@@ -408,11 +415,14 @@ class ReviewService:
                     request,
                     agent_rag_client,
                     event_callback,
+                    review_deadline=review_deadline.when(),
                 )
                 rag_mcp_context = self._build_rag_mcp_context(
                     request,
                     agent_rag_client,
                 )
+
+                verification_context = build_verification_context(request)
 
                 # Provider construction is intentionally after every local-only
                 # request/binding precondition. No model invocation happens
@@ -431,6 +441,7 @@ class ReviewService:
                             jar_path,
                             self._build_jvm_props(request),
                             rag_mcp_context=rag_mcp_context,
+                            verification_context=verification_context,
                         )
                         client = self._create_mcp_client(config)
                         # Keep the agent runtime lazy for MCP-disabled reviews and
@@ -443,9 +454,8 @@ class ReviewService:
                         optional_errors = await agent_service.initialize(
                             required_server_names=("codecrow-vcs-mcp",),
                             optional_server_names=(
-                                ("codecrow-rag-mcp",)
-                                if rag_mcp_context is not None
-                                else ()
+                                (("codecrow-rag-mcp",) if rag_mcp_context is not None else ())
+                                + (("codecrow-verification-mcp",) if verification_context is not None else ())
                             ),
                             session_timeout_seconds=(
                                 self.MCP_SESSION_INITIALIZATION_TIMEOUT_SECONDS
@@ -468,6 +478,17 @@ class ReviewService:
                                     "Structural graph tools are unavailable; "
                                     "local repository tools remain available"
                                 ),
+                            })
+                        verification_start_error = optional_errors.get("codecrow-verification-mcp")
+                        if verification_start_error is not None:
+                            logger.warning(
+                                "Optional runtime verification tools failed to start: %s",
+                                verification_start_error,
+                            )
+                            self._emit_event(event_callback, {
+                                "type": "status",
+                                "state": "runtime_verification_degraded",
+                                "message": "Runtime checks are unavailable; core review continues",
                             })
                         if request.mcpLocalOnly:
                             preflight = await self._preflight_local_only_mcp(
@@ -897,6 +918,8 @@ class ReviewService:
             request: ReviewRequestDto,
             rag_client: Optional[RagClient],
             event_callback: Optional[Callable[[Dict], None]],
+            *,
+            review_deadline: Optional[float] = None,
     ) -> None:
         """Prepare one sealed proposed-tree graph before MCP and Stage 1 fan-out."""
 
@@ -950,9 +973,29 @@ class ReviewService:
                 "Preparing one exact proposed-tree graph before Stage 1"
             ),
         })
+        # Include queue wait in the optional budget. Always retain at least 80%
+        # of the remaining deadline for model work and cleanup, even when an
+        # operator configures a preparation timeout longer than the review.
+        remaining = (
+            max(0.0, review_deadline - asyncio.get_running_loop().time())
+            if review_deadline is not None else float(self.REVIEW_TIMEOUT_SECONDS)
+        )
+        preparation_budget = max(0.0, min(
+            self.REVIEW_GRAPH_PREPARATION_TIMEOUT_SECONDS,
+            remaining * 0.2,
+        ))
         try:
-            async with review_context_slot("graph_preparation", preparation=True):
-                response = await rag_client.prepare_review_generation(**binding)
+            async with asyncio.timeout(preparation_budget):
+                async with review_context_slot("graph_preparation", preparation=True):
+                    response = await rag_client.prepare_review_generation(**binding)
+        except TimeoutError:
+            response = {
+                "status": "unavailable",
+                "error": (
+                    "optional_graph_preparation_timeout: "
+                    f"budget={preparation_budget:.3f}s; continuing core review"
+                ),
+            }
         except Exception as error:
             response = {
                 "status": "error",

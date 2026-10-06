@@ -295,6 +295,12 @@ def apply_plugin_file_policy(
             else hunk
             for hunk in diff_file.hunks
         ]
+        if diff_file.visible_hunks is not None:
+            diff_file.visible_hunks = [
+                replace(hunk, disposition=hunk_disposition)
+                if hunk.disposition is HunkDisposition.REVIEWABLE else hunk
+                for hunk in diff_file.visible_hunks
+            ]
         newly_skipped += 1
 
     if newly_skipped:

@@ -700,3 +700,45 @@ async def test_cancellation_during_mcp_startup_closes_owned_client(service):
             await task
 
     client.close_all_sessions.assert_awaited_once()
+
+
+@pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("waiting_for_slot", [False, True])
+async def test_optional_graph_preparation_timeout_preserves_core_budget(
+    service, tmp_path, monkeypatch, waiting_for_slot,
+):
+    from contextlib import asynccontextmanager
+    request = _local_only_request(tmp_path)
+    cancelled = asyncio.Event()
+
+    async def stalled(**kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    @asynccontextmanager
+    async def slot(*args, **kwargs):
+        if waiting_for_slot:
+            await stalled()
+        yield
+
+    monkeypatch.setattr("service.review.review_service.review_context_slot", slot)
+    monkeypatch.setattr(service, "REVIEW_GRAPH_PREPARATION_TIMEOUT_SECONDS", 1000)
+    client = SimpleNamespace(prepare_review_generation=AsyncMock(side_effect=stalled))
+    events = []
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    async with asyncio.timeout(1.0) as outer:
+        await service._prepare_rag_review_generation(
+            request, client, events.append, review_deadline=started + 0.25,
+        )
+        # A model coroutine still runs normally after optional cancellation.
+        assert await AsyncMock(return_value="core completed")() == "core completed"
+    assert not outer.expired()
+    assert loop.time() - started < 0.25
+    assert cancelled.is_set()
+    assert request.ragReviewGenerationStatus == "unavailable"
+    assert "optional_graph_preparation_timeout" in request.ragReviewGenerationError
+    assert events[-1]["state"] == "rag_review_generation_degraded"
+    assert client.prepare_review_generation.await_count == (0 if waiting_for_slot else 1)

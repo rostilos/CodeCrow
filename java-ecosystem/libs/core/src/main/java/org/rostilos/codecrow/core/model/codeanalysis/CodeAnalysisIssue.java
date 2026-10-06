@@ -26,6 +26,17 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
     @Column(name = "file_path", nullable = false, length = 500)
     private String filePath;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "anchor_side", nullable = false, length = 8)
+    private IssueAnchorSide anchorSide = IssueAnchorSide.HEAD;
+
+    public IssueAnchorSide getAnchorSide() {
+        return anchorSide == null ? IssueAnchorSide.HEAD : anchorSide;
+    }
+    public void setAnchorSide(IssueAnchorSide value) {
+        this.anchorSide = value == null ? IssueAnchorSide.HEAD : value;
+    }
+
     @Column(name = "line_number")
     private Integer lineNumber;
 

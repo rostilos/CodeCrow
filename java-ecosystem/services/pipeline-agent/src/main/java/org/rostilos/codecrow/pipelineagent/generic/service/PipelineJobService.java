@@ -15,6 +15,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
 import java.util.Optional;
 
 /**
@@ -29,10 +31,12 @@ public class PipelineJobService implements AnalysisJobService {
 
     private final JobService jobService;
     private final ProjectRepository projectRepository;
+    private final ObjectMapper objectMapper;
 
-    public PipelineJobService(JobService jobService, ProjectRepository projectRepository) {
+    public PipelineJobService(JobService jobService, ProjectRepository projectRepository, ObjectMapper objectMapper) {
         this.jobService = jobService;
         this.projectRepository = projectRepository;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -55,7 +59,7 @@ public class PipelineJobService implements AnalysisJobService {
                 request.pullRequestId,
                 request.sourceBranchName,
                 request.targetBranchName,
-                null, // commitHash - not available in request
+                request.getCommitHash(),
                 JobTriggerSource.PIPELINE,
                 null  // triggeredBy - pipeline has no user context
         );
@@ -80,10 +84,25 @@ public class PipelineJobService implements AnalysisJobService {
         return jobService.createBranchAnalysisJob(
                 project,
                 request.getTargetBranchName(),
-                null, // commitHash - not available in request
+                request.getCommitHash(),
                 JobTriggerSource.PIPELINE,
-                null  // triggeredBy - pipeline has no user context
+                null, // triggeredBy - pipeline has no user context
+                request.getSourcePrNumber()
         );
+    }
+
+    /** Called only after project authentication, before executor submission. */
+    public void persistDispatch(Job job, AnalysisProcessRequest request) {
+        try {
+            jobService.queueWebhookJob(job, objectMapper.writeValueAsString(request));
+        } catch (Exception failure) {
+            failJob(job, "Could not persist pipeline dispatch: " + failure.getMessage());
+            throw new IllegalStateException("Pipeline work was not accepted", failure);
+        }
+    }
+
+    public boolean claimForExecution(Job job) {
+        return jobService.claimPipelineJobForExecution(job.getId());
     }
 
     @Override

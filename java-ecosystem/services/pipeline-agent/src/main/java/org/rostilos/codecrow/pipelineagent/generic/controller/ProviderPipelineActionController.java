@@ -69,6 +69,9 @@ public class ProviderPipelineActionController {
             @AuthenticationPrincipal ProjectDTO authenticationPrincipal,
             @Valid @RequestBody PrProcessRequest payload
     ) {
+        validateRequest(authenticationPrincipal, payload);
+        // A caller cannot carry a lock owned by an internal webhook worker.
+        payload.preAcquiredLockKey = null;
         Job job = pipelineJobService.createPipelinePrJob(payload);
         
         return processWebhookWithJob(
@@ -97,7 +100,7 @@ public class ProviderPipelineActionController {
                                 "type", "error",
                                 "message", "Processing failed: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
                         ));
-                        return Map.of("status", "error", "message", e.getMessage());
+                        return Map.of("status", "error", "message", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
                     }
                 }
         );
@@ -108,6 +111,7 @@ public class ProviderPipelineActionController {
             @AuthenticationPrincipal ProjectDTO authenticationPrincipal,
             @Valid @RequestBody BranchProcessRequest payload
     ) {
+        validateRequest(authenticationPrincipal, payload);
         Job job = pipelineJobService.createPipelineBranchJob(payload);
 
         return processWebhookWithJob(
@@ -138,7 +142,7 @@ public class ProviderPipelineActionController {
                                         ? e.getMessage()
                                         : e.getClass().getSimpleName())
                         ));
-                        return Map.of("status", "error", "message", e.getMessage());
+                        return Map.of("status", "error", "message", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
                     }
                 }
         );
@@ -156,25 +160,24 @@ public class ProviderPipelineActionController {
             JobAwareWebhookProcessor webhookProcessorFunc
     ) {
         try {
-            validateProjectIdPresent(payload);
-            validateAuthentication(authenticationPrincipal, payload);
-            validateProcessPayload(payload);
-
-            if (job != null) {
-                pipelineJobService.getJobService().startJob(job);
+            if (job == null) {
+                throw new IllegalArgumentException("Project not found");
             }
-
-            if (!streamingResponseEnabled) {
-                return ResponseEntity.ok()
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(createAcceptedResponse(job));
-            }
+            pipelineJobService.persistDispatch(job, payload);
 
             LinkedBlockingQueue<String> queue = new LinkedBlockingQueue<>();
-            PipelineActionProcessor.EventConsumer consumer = createEventConsumer(queue);
+            PipelineActionProcessor.EventConsumer consumer = streamingResponseEnabled
+                    ? createEventConsumer(queue) : event -> {};
 
+            if (streamingResponseEnabled) {
+                consumer.accept(Map.of("type", "status", "state", "queued",
+                        "message", "Analysis request accepted"));
+            }
             CompletableFuture<Map<String, Object>> processingFuture = CompletableFuture.supplyAsync(() -> {
                 try {
+                    if (!pipelineJobService.claimForExecution(job)) {
+                        return Map.of("status", "already_claimed");
+                    }
                     return webhookProcessorFunc.process(consumer, job);
                 } catch (org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException e) {
                     log.warn("Analysis locked: {}", e.getMessage());
@@ -184,25 +187,6 @@ public class ProviderPipelineActionController {
                     return Map.of("status", "error", "message", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
                 }
             }, actionExecutor);
-
-            try {
-                Map<String, Object> quickResult = processingFuture.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);
-                enqueueCompletedResult(queue, quickResult, job);
-                return ResponseEntity.ok()
-                        .contentType(MediaType.parseMediaType("application/x-ndjson"))
-                        .body(createStreamingResponse(queue));
-            } catch (java.util.concurrent.TimeoutException e) {
-                // Normal case - processing is taking time, continue with streaming
-            }
-
-            try {
-                String initialMsg = objectMapper.writeValueAsString(
-                        Map.of("type", "status", "state", "started", "message", "Analysis request received")
-                );
-                queue.put(initialMsg);
-            } catch (Exception e) {
-                log.warn("Failed to enqueue initial status", e);
-            }
 
             processingFuture.whenComplete((result, throwable) -> {
                 try {
@@ -225,10 +209,20 @@ public class ProviderPipelineActionController {
                 }
             });
 
+            if (!streamingResponseEnabled) {
+                return ResponseEntity.accepted().contentType(MediaType.APPLICATION_JSON)
+                        .body(createAcceptedResponse(job));
+            }
+
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType("application/x-ndjson"))
                     .body(createStreamingResponse(queue));
 
+        } catch (java.util.concurrent.RejectedExecutionException saturated) {
+            pipelineJobService.logToJob(job, org.rostilos.codecrow.core.model.job.JobLogLevel.INFO,
+                    "queued", "Review is durably queued and waiting for pipeline worker capacity");
+            return ResponseEntity.accepted().contentType(MediaType.APPLICATION_JSON)
+                    .body(createAcceptedResponse(job));
         } catch (UnauthorizedException e) {
             log.warn("Unauthorized webhook request: {}", e.getMessage());
             pipelineJobService.failJob(job, "Unauthorized: " + e.getMessage());
@@ -246,6 +240,11 @@ public class ProviderPipelineActionController {
 
     private void enqueueCompletedResult(LinkedBlockingQueue<String> queue, Map<String, Object> result, Job job) {
         Object status = result.get("status");
+        if ("already_claimed".equals(status)) {
+            enqueueFinalResult(queue, result);
+            enqueueEOF(queue);
+            return;
+        }
         if ("error".equals(status)) {
             log.warn("Webhook processing completed with error: {}", result.get("message"));
             enqueueFinalResult(queue, result);
@@ -269,6 +268,18 @@ public class ProviderPipelineActionController {
         enqueueEOF(queue);
     }
 
+    private void validateRequest(ProjectDTO principal, AnalysisProcessRequest payload) {
+        try {
+            validateProjectIdPresent(payload);
+            validateAuthentication(principal, payload);
+            validateProcessPayload(payload);
+        } catch (UnauthorizedException denied) {
+            throw createErrorResponse(HttpServletResponse.SC_UNAUTHORIZED, "token_project_mismatch", null);
+        } catch (IllegalArgumentException invalid) {
+            throw createErrorResponse(HttpServletResponse.SC_BAD_REQUEST, "invalid_request", invalid.getMessage());
+        }
+    }
+
     private void validateProjectIdPresent(AnalysisProcessRequest payload) {
         if (payload == null || payload.getProjectId() == null) {
             throw new IllegalArgumentException("Project ID is required");
@@ -276,9 +287,9 @@ public class ProviderPipelineActionController {
     }
 
     private void validateAuthentication(ProjectDTO authenticationPrincipal, AnalysisProcessRequest payload) {
-        if (!payload.getProjectId().equals(authenticationPrincipal.id())) {
+        if (authenticationPrincipal == null || !payload.getProjectId().equals(authenticationPrincipal.id())) {
             log.warn("Request body projectId {} does not match JWT projectId {}",
-                    payload.getProjectId(), authenticationPrincipal.id());
+                    payload.getProjectId(), authenticationPrincipal == null ? null : authenticationPrincipal.id());
             throw new UnauthorizedException("Project ID mismatch");
         }
     }

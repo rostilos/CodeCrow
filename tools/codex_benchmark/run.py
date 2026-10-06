@@ -16,9 +16,9 @@ def main():
     parser.add_argument('--run-dir', type=Path, required=True)
     parser.add_argument('--limit', type=int, required=True)
     parser.add_argument('--dataset-file', type=Path)
-    parser.add_argument('--jobs', type=int, default=5)
-    parser.add_argument('--index-jobs', type=int, default=5)
-    parser.add_argument('--score-batch-size', type=int, default=4)
+    parser.add_argument('--jobs', type=int, default=16)
+    parser.add_argument('--index-jobs', type=int, default=16)
+    parser.add_argument('--score-batch-size', type=int, default=32)
     parser.add_argument('--tool-name', required=True)
     parser.add_argument('--resume', action='store_true')
     parser.add_argument('--score-only', action='store_true')
@@ -62,7 +62,6 @@ def main():
         '--rag-workspace-root', '/tmp', '--agentic-workspace-mode', 'docker',
         '--agentic-container', env['CODECROW_AGENTIC_CONTAINER'],
         '--agentic-workspace-root', '/tmp/codecrow-agentic-codex-subscription',
-        '--index-capacity-lock', str(run/'work/index-capacity.lock'),
         '--ai-provider', 'openai_compatible', '--ai-model', MODEL,
         '--ai-base-url', env['CODECROW_AI_BASE_URL'], '--ai-custom-parameters', '{}']
     score = common + ['score', '--benchmark-dir', str(run/'scorer'),

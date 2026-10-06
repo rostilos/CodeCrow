@@ -8,9 +8,10 @@ hidden reasoning cannot consume the provider's entire completion window.
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
+from service.review.inference_usage import record_compute_decision
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from model.multi_stage import ReviewPlan
@@ -51,6 +52,7 @@ MEDIUM_REVIEW_MAX_DIFF_BYTES = _env_int("REVIEW_MEDIUM_MAX_DIFF_BYTES", 450_000)
 FAST_CHECK_DEDUP_MAX_ISSUES = _env_int("REVIEW_FAST_CHECK_DEDUP_MAX_ISSUES", 5)
 
 DEFAULT_STAGE_INVOCATION_CAPS = {
+    "specialist_passes": {"small": 1, "medium": 2, "large": 2},
     "stage_1_total": {"small": 4, "medium": 12, "large": 24},
     "stage_1_per_unit": {"small": 1, "medium": 2, "large": 3},
     "stage_2_packets": {"small": 1, "medium": 2, "large": 4},
@@ -67,6 +69,7 @@ class ReviewInferenceProfile:
     fast_check_enabled: bool
     fast_check_reason: str
     invocation_caps: dict[str, int] = field(default_factory=dict)
+    allocation_reasons: tuple[str, ...] = ()
 
     def describe(self) -> str:
         return (
@@ -114,6 +117,38 @@ def build_review_inference_profile(
     return profile
 
 
+def adapt_review_inference_profile(
+    profile: ReviewInferenceProfile,
+    *,
+    plan: Optional[ReviewPlan] = None,
+    issues: tuple[CodeReviewIssue, ...] | list[CodeReviewIssue] = (),
+) -> ReviewInferenceProfile:
+    """Spend bounded supplemental work on observed risk or unresolved evidence."""
+    reasons = set(profile.allocation_reasons)
+    if plan is not None:
+        if plan.cross_file_concerns:
+            reasons.add("cross_file_hypotheses")
+        if any(file.risk_level.upper() in {"HIGH", "CRITICAL"} for group in plan.file_groups for file in group.files):
+            reasons.add("high_risk_plan")
+    if any(issue.severity.upper() in {"HIGH", "CRITICAL"} for issue in issues):
+        reasons.add("high_severity_candidates")
+    if any(getattr(issue, "evidenceGaps", None) for issue in issues):
+        reasons.add("unresolved_evidence_gaps")
+    caps = dict(profile.invocation_caps)
+    if reasons - set(profile.allocation_reasons):
+        # Core Stage 1 admission is unchanged. Add at most one packet per
+        # adaptation phase, bounded by existing large-review ceilings.
+        for stage in ("stage_2_packets", "stage_3_children", "specialist_passes"):
+            if any(name in os.environ for name in _stage_cap_env_names(stage, profile.size_class)):
+                continue  # Explicit operator caps remain ceilings.
+            limit = max(DEFAULT_STAGE_INVOCATION_CAPS[stage].values())
+            caps[stage] = max(profile.invocation_cap(stage), min(limit, profile.invocation_cap(stage) + 1))
+    adapted = replace(profile, invocation_caps=caps, allocation_reasons=tuple(sorted(reasons)))
+    record_compute_decision("adaptive_allocation", sizeClass=profile.size_class,
+                            reasons=list(adapted.allocation_reasons), caps={stage: adapted.invocation_cap(stage) for stage in DEFAULT_STAGE_INVOCATION_CAPS})
+    return adapted
+
+
 def should_run_stage_2(
     profile: ReviewInferenceProfile,
     request: ReviewRequestDto,
@@ -125,6 +160,12 @@ def should_run_stage_2(
 
     if not profile.fast_check_enabled:
         return True, "full review profile"
+
+    if any(getattr(issue, "evidenceGaps", None) for issue in issues):
+        return True, "unresolved evidence gaps require focused cross-file investigation"
+
+    if getattr(request, "deletedFiles", None):
+        return True, "file deletions require a cross-file impact check"
 
     if getattr(request, "taskContext", None):
         return True, "task context requires PR-wide coverage check"
@@ -238,26 +279,25 @@ def _classify_fast_check(file_count: int, changed_lines: int, diff_bytes: int) -
 
 def _stage_invocation_cap(stage: str, size_class: str) -> int:
     default = DEFAULT_STAGE_INVOCATION_CAPS[stage][size_class]
-    env_stage = stage.upper()
-    env_stage_no_underscore = env_stage.replace("_", "")
-    env_size = size_class.upper()
-    for name in (
-        f"REVIEW_{env_stage}_MAX_INVOCATIONS",
-        f"REVIEW_{env_stage_no_underscore}_MAX_INVOCATIONS",
-        f"REVIEW_{env_stage}_{env_size}_MAX_INVOCATIONS",
-        f"REVIEW_{env_stage_no_underscore}_{env_size}_MAX_INVOCATIONS",
-    ):
+    for name in _stage_cap_env_names(stage, size_class):
         value = os.environ.get(name)
         if value is None or not value.strip():
             continue
         cap = _env_int(name, default)
         if cap > 0:
             return cap
-        logger.warning(
-            "Ignoring non-positive %s=%s; using finite default %s",
-            name,
-            value,
-            default,
-        )
+        logger.warning("Ignoring non-positive %s=%s; using finite default %s", name, value, default)
         return default
     return default
+
+
+def _stage_cap_env_names(stage: str, size_class: str) -> tuple[str, ...]:
+    env_stage = stage.upper()
+    env_stage_no_underscore = env_stage.replace("_", "")
+    env_size = size_class.upper()
+    return (
+        f"REVIEW_{env_stage}_MAX_INVOCATIONS",
+        f"REVIEW_{env_stage_no_underscore}_MAX_INVOCATIONS",
+        f"REVIEW_{env_stage}_{env_size}_MAX_INVOCATIONS",
+        f"REVIEW_{env_stage_no_underscore}_{env_size}_MAX_INVOCATIONS",
+    )

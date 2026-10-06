@@ -440,3 +440,40 @@ class TestProperties:
         s = e.summary()
         assert "stage_1" in s
         assert "0/3" in s
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("file_path", ["apps/web/pages/api/webhook/app-credential.ts", "apps/web/pages/api/webhook/app-credential.ts:12-93"])
+async def test_real_related_range_reads_clean_path_and_both_endpoints(file_path):
+    request = _make_request()
+    issue = CodeReviewIssue(file="packages/app-store/_utils/oauth/refreshOAuthTokens.ts", line=15,
+        severity="HIGH", category="BUG_RISK", reason="Sync response contract mismatch", suggestedFixDescription="Normalize it",
+        relatedLocations=["apps/web/pages/api/webhook/app-credential.ts:12-93",
+                          "packages/app-store/_utils/oauth/refreshOAuthTokens.ts:3-20"])
+    client = MagicMock()
+    client.session.call_tool = AsyncMock(return_value=SimpleNamespace(content=[SimpleNamespace(text="source")]))
+    executor = McpToolExecutor(client, request, "stage_3", "review-sha", {"issue_0": issue})
+    await executor.execute_tool("getBranchFileContent", {"filePath": file_path, "verificationId": "issue_0",
+        "workspace": "other", "repoSlug": "other", "branch": "stale"})
+    _, args = client.session.call_tool.call_args.args
+    assert args["filePath"] == "apps/web/pages/api/webhook/app-credential.ts"
+    assert args["startLine"] <= 12 <= 93 <= args["endLine"]
+    assert args["endLine"] - args["startLine"] <= 160
+    assert (args["workspace"], args["repoSlug"], args["branch"]) == ("ws", "repo", "review-sha")
+
+
+@pytest.mark.asyncio
+async def test_large_source_range_stays_bounded_and_endpoint_can_be_requested():
+    request = _make_request()
+    issue = CodeReviewIssue(file="a.py", line=12, severity="HIGH", category="BUG_RISK",
+        reason="Concrete claim", suggestedFixDescription="Fix it", relatedLocations=["a.py:12-500"])
+    client = MagicMock()
+    client.session.call_tool = AsyncMock(return_value=SimpleNamespace(content=[SimpleNamespace(text="source")]))
+    executor = McpToolExecutor(client, request, "stage_3", "review-sha", {"issue_0": issue})
+    await executor.execute_tool("getBranchFileContent", {"filePath": "a.py", "verificationId": "issue_0"})
+    first = client.session.call_tool.call_args.args[1]
+    assert first["startLine"] == 12 and first["endLine"] == 172
+    await executor.execute_tool("getBranchFileContent", {"filePath": "a.py:500", "verificationId": "issue_0"})
+    last = client.session.call_tool.call_args.args[1]
+    assert last["filePath"] == "a.py" and last["startLine"] <= 500 <= last["endLine"]
+    assert last["endLine"] - last["startLine"] <= 160

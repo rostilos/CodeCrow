@@ -1,8 +1,10 @@
 """MCP agent variant with bounded exploration and structured completion."""
 from service.review.execution_scheduler import review_model_slot
+from service.review.inference_usage import record_model_response, record_compute_decision
 
 import json
 import logging
+import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import UnionType
 from typing import Annotated, Any, NotRequired, Union, get_args, get_origin
@@ -33,6 +35,7 @@ from mcp_use import MCPAgent
 from mcp_use.agents.middleware import tool_error_handler
 from pydantic import BaseModel
 
+from service.agent.evidence_acquisition import EvidenceAcquisitionMiddleware
 from service.agent.models import reject_mcp_use_model_call_limit_output
 from utils.llm_delegate import llm_class_names, unwrap_llm_delegate
 from utils.llm_response import extract_llm_response_text
@@ -194,7 +197,7 @@ def _single_structured_output_tool_name(
 
 
 class InitialRequiredToolMiddleware(AgentMiddleware):
-    """Require one exact tool before exposing the remaining tool inventory."""
+    """Require the first tool while keeping the advertised inventory stable."""
 
     def __init__(self, *, tool_name: str):
         super().__init__()
@@ -227,12 +230,11 @@ class InitialRequiredToolMiddleware(AgentMiddleware):
             self._tool_name,
         )
         return request.override(
-            tools=selected_tools,
             tool_choice=self._tool_name,
         )
 
     def _mark_narrowed_response(self, response: Any) -> Any:
-        """Mark the AI response whose request had one exact tool inventory."""
+        """Mark the response whose first tool choice was required."""
 
         def mark_message(message: AIMessage) -> AIMessage:
             response_metadata = dict(message.response_metadata)
@@ -286,7 +288,7 @@ class InitialRequiredToolMiddleware(AgentMiddleware):
 
     @hook_config(can_jump_to=["model"])
     def after_model(self, state: Mapping[str, Any], runtime: Any) -> Any:
-        """Retry a narrowed turn before its out-of-inventory call can run."""
+        """Retry a noncompliant turn before any other tool can run."""
         messages = state.get("messages") or ()
         latest_message = messages[-1] if messages else None
         response_metadata = getattr(
@@ -312,7 +314,7 @@ class InitialRequiredToolMiddleware(AgentMiddleware):
             return None
 
         logger.warning(
-            "MCP provider ignored required tool inventory; retrying before "
+            "MCP provider ignored required first tool; retrying before "
             "tool execution: required=%s returned=%s",
             self._tool_name,
             list(tool_names),
@@ -326,9 +328,10 @@ class InitialRequiredToolMiddleware(AgentMiddleware):
 class ModelRequestSettingsMiddleware(AgentMiddleware):
     """Apply one request's provider settings to every recursive model turn."""
 
-    def __init__(self, *, settings: Mapping[str, Any]):
+    def __init__(self, *, settings: Mapping[str, Any], usage_stage: str = "mcp_agent"):
         super().__init__()
         self._settings = dict(settings)
+        self._usage_stage = usage_stage
 
     def _prepare_request(self, request: ModelRequest) -> ModelRequest:
         model_settings = dict(request.model_settings)
@@ -361,8 +364,10 @@ class ModelRequestSettingsMiddleware(AgentMiddleware):
             request: ModelRequest,
             handler: Callable[[ModelRequest], Awaitable[Any]],
     ) -> Any:
-        async with review_model_slot("mcp_agent"):
-            return await handler(self._prepare_request(request))
+        async with review_model_slot(self._usage_stage):
+            response = await handler(self._prepare_request(request))
+            record_model_response(response)
+            return response
 
 
 class FinalResponseReserveMiddleware(AgentMiddleware):
@@ -401,6 +406,13 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
             request.model,
             request.model_settings,
         )
+        if os.environ.get("CODECROW_CODEX_BENCHMARK") == "1" and isinstance(response_format, ToolStrategy):
+            schema_tool_name = _single_structured_output_tool_name(response_format)
+            if schema_tool_name:
+                model_settings = {**model_settings, "extra_body": {
+                    **model_settings.get("extra_body", {}),
+                    "codecrow_terminal_tools": [schema_tool_name],
+                }}
         if (
             isinstance(response_format, ToolStrategy)
             and _supports_parallel_tool_control(request.model)
@@ -427,6 +439,10 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
         if synthesis_start is None:
             synthesis_start = self._exploration_model_calls
         synthesis_attempt = completed_calls - synthesis_start + 1
+        record_compute_decision("agent_finalization", explorationCalls=completed_calls,
+                                explorationLimit=self._exploration_model_calls,
+                                finalizationAttempt=synthesis_attempt,
+                                reason="exploration_budget_exhausted" if completed_calls >= self._exploration_model_calls else "early_finalization")
         is_last_synthesis_call = (
             self._structured_output and synthesis_attempt >= 2
         )
@@ -842,12 +858,14 @@ class RecursiveMCPAgent(MCPAgent):
             preloaded_tools: Sequence[BaseTool] | None = None,
             initial_required_tool_name: str | None = None,
             model_request_settings: Mapping[str, Any] | None = None,
+            usage_stage: str = "mcp_agent",
             **kwargs: Any,
     ):
         self._custom_recursion_limit = recursion_limit
         self._output_schema = output_schema
         self._initial_required_tool_name = initial_required_tool_name
         self._model_request_settings = dict(model_request_settings or {})
+        self._usage_stage = usage_stage
         self._preloaded_tools = (
             None
             if preloaded_tools is None
@@ -892,6 +910,7 @@ class RecursiveMCPAgent(MCPAgent):
         # the graph even when the caller has no additional model settings.
         middleware.append(ModelRequestSettingsMiddleware(
             settings=model_request_settings,
+            usage_stage=getattr(self, "_usage_stage", "mcp_agent"),
         ))
         structured_output = self._output_schema is not None
         final_response_middleware = FinalResponseReserveMiddleware(
@@ -902,11 +921,12 @@ class RecursiveMCPAgent(MCPAgent):
         if self._initial_required_tool_name:
             # FinalResponseReserveMiddleware stays outside this middleware. If a
             # caller configures too few calls to explore, its tool removal wins;
-            # normal exploration gets one exact first call and later turns are
-            # reconstructed with the complete automatic-choice tool inventory.
+            # normal exploration forces the first tool without changing the
+            # inventory used by later automatic-choice turns.
             middleware.append(InitialRequiredToolMiddleware(
                 tool_name=self._initial_required_tool_name,
             ))
+        middleware.append(EvidenceAcquisitionMiddleware())
         middleware.append(ModelCallLimitMiddleware(
             run_limit=final_response_middleware.max_model_calls,
             exit_behavior="error",
@@ -946,12 +966,14 @@ class RecursiveMCPAgent(MCPAgent):
         # call for schema conversion. Reject it before it can become fabricated
         # structured output.
         reject_mcp_use_model_call_limit_output(raw_result)
-        async with review_model_slot("mcp_agent_attempt_structured_output"):
-            return await super()._attempt_structured_output(
+        async with review_model_slot(getattr(self, "_usage_stage", "mcp_agent") + "_structured_recovery"):
+            response = await super()._attempt_structured_output(
                 raw_result,
                 *args,
                 **kwargs,
             )
+            record_model_response(response)
+            return response
 
     @staticmethod
     def _validated_stream_output(

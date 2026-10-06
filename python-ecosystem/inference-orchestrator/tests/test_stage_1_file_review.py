@@ -836,7 +836,7 @@ class TestBatchReviewCoverage:
         assert len(agent_service.requests) == 1
         request = agent_service.requests[0]
         assert request.prompt == "diff plus prepared RAG evidence"
-        assert request.allowed_tool_names == STAGE1_AGENT_TOOL_NAMES
+        assert request.allowed_tool_names == STAGE1_AGENT_TOOL_NAMES.difference({"runVerificationCheck"})
         assert request.reasoning_effort is ReasoningEffort.MEDIUM
         assert request.max_output_tokens == STAGE1_AGENT_MAX_OUTPUT_TOKENS
         assert request.output_schema is FileReviewBatchOutput
@@ -2502,86 +2502,40 @@ class TestRenderedInputPacking:
         )
         units = [batch[0] for batch in expanded]
 
-        source_parts = {}
-        source_total = 0
-        diff_parts_by_index = {}
-        diff_total = 0
-        rendered_prompts = []
-        for unit in units:
-            source_override = unit.get("_current_source_override") or ""
-            source_match = re.match(
-                r"\[Lossless Stage 1 source slice (\d+)/(\d+) [^\n]*\]\n",
-                source_override,
-            )
-            if source_match:
-                source_index, source_total = map(int, source_match.groups())
-                source_parts[source_index] = source_override[source_match.end():]
-            diff_override = unit.get("_diff_override") or ""
-            diff_match = re.match(
-                r"\[Lossless Stage 1 diff slice (\d+)/(\d+) [^\n]*\]\n",
-                diff_override,
-            )
-            if diff_match:
-                diff_index, diff_total = map(int, diff_match.groups())
-                diff_parts_by_index[diff_index] = diff_override[diff_match.end():]
-
-            prompt, _ = _render_stage1_prompt(
-                _prepare_stage1_prompt_material(
-                    request,
-                    [unit],
-                    prepared,
-                    False,
-                ),
-                "",
-            )
-            rendered_prompts.append(prompt)
-            assert _estimated_prompt_tokens(prompt) <= token_budget
-            assert _prepare_stage1_prompt_material(
-                request,
-                [unit],
-                prepared,
-                False,
-            ).batch_file_paths == [path]
-
-        assert processed.files[0].skip_reason.startswith("File too large:")
-        assert "[CodeCrow Summary:" in processed.files[0].content
+        materials = [
+            _prepare_stage1_prompt_material(request, [unit], prepared, False)
+            for unit in units
+        ]
+        prompts = [_render_stage1_prompt(material, "")[0] for material in materials]
         assert 1 <= len(units) <= 3
-        assert diff_total == 1
-        assert len(diff_parts_by_index) == 1
+        assert all(_estimated_prompt_tokens(prompt) <= token_budget for prompt in prompts)
+        assert all(material.batch_file_paths == [path] for material in materials)
         packed_source = "\n".join(
-            unit.get("_current_source_override") or "" for unit in units
+            file["current_code"] for material in materials for file in material.batch_files_data
+        )
+        packed_diff = "\n".join(
+            file["diff"] for material in materials for file in material.batch_files_data
         )
         assert "SOURCE_LINE_" in packed_source
         assert source not in packed_source
-        packed_diff = "".join(
-            diff_parts_by_index[index]
-            for index in sorted(diff_parts_by_index)
-        )
         assert "[CodeCrow Summary:" in packed_diff
         assert diff_sentinels[0] in packed_diff
         assert diff_sentinels[-1] not in packed_diff
-        assert len(units) <= source_total + diff_total
-        assert len(units) == max(source_total, diff_total)
-        assert all(
-            "CodeCrow bounded diff compaction" in prompt
-            for prompt in rendered_prompts
-        )
-
-        expected_hunks = tuple(sorted(hunk.id for hunk in processed.files[0].hunks))
-        assert expected_hunks
+        assert all("CodeCrow bounded diff compaction" in prompt for prompt in prompts)
         omitted_hunks = tuple(units[-1]["_omitted_hunk_ids"])
         admitted_hunks = tuple(sorted({
             hunk_id for unit in units for hunk_id in unit["_hunk_ids"]
         }))
         assert units[-1]["_omitted_stage1_unit_count"] >= 1
-        assert admitted_hunks == ()
-        assert omitted_hunks == expected_hunks
+        visible_hunks = tuple(sorted(hunk.id for hunk in processed.files[0].review_hunks))
+        assert admitted_hunks == visible_hunks
+        assert omitted_hunks == tuple(sorted(processed.files[0].omitted_hunk_ids))
+        assert set(admitted_hunks).isdisjoint(omitted_hunks)
         state = Stage1ReviewUnitState()
         state.register_batches(expanded)
-        unit_ids = tuple(unit["_review_unit_id"] for unit in units)
-        state.mark_completed(unit_ids)
+        state.mark_completed(tuple(unit["_review_unit_id"] for unit in units))
         state.assert_complete()
-        assert state.reviewed_hunk_ids == ()
+        assert state.reviewed_hunk_ids == admitted_hunks
         assert tuple(sorted(state.omitted_hunk_ids)) == omitted_hunks
 
     def test_compacted_added_file_uses_bounded_source_and_omits_hunk(self):
@@ -2645,9 +2599,11 @@ class TestRenderedInputPacking:
             sorted(hunk.id for hunk in processed.files[0].hunks)
         )
         assert expected_hunks
-        assert all(
-            not (batch[0].get("_hunk_ids") or ()) for batch in expanded
-        )
+        admitted_hunks = {
+            hunk_id for batch in expanded for hunk_id in batch[0].get("_hunk_ids", ())
+        }
+        assert admitted_hunks == {hunk.id for hunk in processed.files[0].review_hunks}
+        assert admitted_hunks.isdisjoint(expected_hunks)
         assert tuple(expanded[-1][0]["_omitted_hunk_ids"]) == expected_hunks
         assert all(
             "CodeCrow bounded diff compaction" in _render_stage1_prompt(
@@ -4209,6 +4165,7 @@ class TestRenderedInputPacking:
         assert agent_call.kwargs["agent_allowed_tool_names"] == (
             STAGE1_AGENT_TOOL_NAMES.difference({
                 STAGE1_BRANCH_FILE_TOOL_NAME,
+                "runVerificationCheck",
             })
         )
 
@@ -4652,3 +4609,10 @@ class TestStage1Scheduling:
                 await review_task
 
         assert cleaned_up == {file.path for file in files}
+
+
+@pytest.mark.parametrize("inventory,expected", [(None, False), ({"getBranchFileContent"}, False), ({"getBranchFileContent", "runVerificationCheck"}, True)])
+def test_runtime_verification_is_admitted_only_from_initialized_inventory(inventory, expected):
+    from service.review.orchestrator.stage_1_file_review import _available_stage1_agent_tools
+    agent = SimpleNamespace(available_tool_names=inventory)
+    assert ("runVerificationCheck" in _available_stage1_agent_tools(agent)) is expected

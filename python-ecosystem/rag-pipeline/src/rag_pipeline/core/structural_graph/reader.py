@@ -254,6 +254,13 @@ class StructuralGraphReader:
             "sourceEvidence": source_evidence,
         }
 
+    def get_relation(self, evidence_id: str) -> dict[str, Any] | None:
+        """Read one exact fact only from this already-bound generation."""
+        row = self.connection.execute(
+            "SELECT * FROM relations WHERE relation_id = ?", (evidence_id,),
+        ).fetchone()
+        return relations_to_manifests(self.connection, [row])[0] if row is not None else None
+
     def relations_among(
         self,
         unit_ids: Sequence[str],
@@ -506,6 +513,21 @@ class StructuralGraphReader:
 
         if direction in {"outgoing", "both"}:
             add_endpoint_candidates("source")
+            if pattern in {"imports_of", "relations_of"} and candidate_units:
+                # File imports are context available to the declaration, not
+                # evidence that every declaration uses the imported symbol.
+                # Return the canonical file-owned edge with its real location.
+                import_paths = tuple(sorted({row["path"] for row in candidate_units}))
+                placeholders = ",".join("?" for _ in import_paths)
+                candidate_queries.append((
+                    "SELECT relations.relation_id FROM units AS file_owner "
+                    "CROSS JOIN relations ON relations.source_unit_id = file_owner.unit_id "
+                    "WHERE file_owner.path IN (" + placeholders + ") "
+                    "AND file_owner.record_type = 'structural_file' "
+                    "AND relations.kind = 'IMPORTS' AND relations.origin = 'tree-sitter' "
+                    "AND json_extract(relations.attributes_json, '$.importScope') = 'file'",
+                    import_paths,
+                ))
         if direction in {"incoming", "both"}:
             add_endpoint_candidates("target")
         path_target = _optional_path(target)

@@ -1281,6 +1281,12 @@ def evaluate_capture_manifest(
                 "terminalHunks": terminal,
                 "changedLines": changed_lines,
                 "modelCalls": capture["providerCalls"],
+                "completionStatus": "complete",
+                "provenance": {
+                    "sourceIdentityDigest": current_source_digest,
+                    "modelSettingsDigest": current_settings_digest,
+                    "groundTruthDigest": _digest(ground_truth),
+                },
                 "inputTokens": input_tokens,
                 "outputTokens": output_tokens,
                 "cost": _non_negative_number(

@@ -14,7 +14,7 @@ Generate a private random local bridge token; it is not an API key. Launch:
 ```bash
 CODECROW_CODEX_BENCHMARK_MODEL=gpt-6-sol python -m tools.codex_benchmark.bridge \
   --artifacts "$RUN/model" --workspace "$RUN/model-workspace" \
-  --token-file "$RUN/config/bridge.token" --host 172.17.0.1 --capacity 4
+  --token-file "$RUN/config/bridge.token" --host 172.17.0.1 --capacity 64
 ```
 
 Use the actual Docker host address, bound only to a local Docker interface. The
@@ -34,9 +34,13 @@ Use a separate random service secret in both, fresh Redis at
 - `CODECROW_SUBSCRIPTION_BRIDGE_TOKEN` to the local bridge token
 - `ALLOW_PRIVATE_ENDPOINTS=true`
 - `RAG_API_URL=http://rag-pipeline:8001`
+- `MAX_CONCURRENT_REVIEWS=16`
+- `MAX_CONCURRENT_REVIEW_CALLS=64`
+- `REVIEW_STAGE1_MAX_PARALLEL=8`
 
 Set RAG `STRUCTURAL_INDEX_ROOT=/var/lib/codecrow/structural-index` and
-`UVICORN_WORKERS=1`. Start the dedicated services:
+`UVICORN_WORKERS=1`, and `RAG_FULL_INDEX_CONCURRENCY=16`. The one API process
+owns sixteen spawned build slots. Start the dedicated services:
 
 ```bash
 CODECROW_BENCHMARK_RUN="$RUN" docker compose \
@@ -64,6 +68,23 @@ supported. Built-in shell, browsing, apps and delegation are disabled. Errors
 have no remote API fallback. Disconnection cancels the owned request; abandoned
 tool waits are reclaimed after ten minutes.
 
+The benchmark-only `codecrow_terminal_tools` request field lists output-schema
+function names. The benchmark entrypoint tags direct structured bindings; agent
+middleware tags its ToolStrategy output schema only in benchmark mode. A named
+output call releases its native conversation. Without this field, even a forced
+function call remains pending for its real tool result. Initial required tools
+keep the full inventory; first-tool enforcement does not require rebuilding a
+native conversation. Disabled evidence tools remain advertised and return an
+unresolved diagnostic without another backend read.
+
+The ledger records actual tool choice, serialized request/message/tool/result
+sizes, distinct reconstruction reasons, native usage updates (`total` and `last`),
+and terminal snapshots with thread identity. Response usage subtracts only totals
+already reported; delayed updates can cover earlier tool deliveries. Missing
+usage stays unknown. For run totals, use the latest cumulative total per thread;
+never add cumulative snapshots or `last` usage to those totals. Updates arriving
+after a terminal snapshot remain recorded separately.
+
 Temperature, top-p and output-token caps have no equivalent in this app-server
 protocol. They are recorded as unmapped parameters, never silently claimed as
 applied. Codex instruction/context overhead and subscription limits also make
@@ -76,7 +97,8 @@ For the prepared restored 10-PR corpus, copy the matching harness and scoring
 checkout under `RUN/harness` and `RUN/scorer`, link `RUN/codecrow-public` to the
 application for contract validation, freeze two golden entries per repository,
 and save the GitHub credential in private `RUN/config/github.token`. The prepared
-runner uses five review/index workers and four model calls at a time:
+runner defaults to sixteen review/index workers and thirty-two scoring calls
+per batch. Bridge capacity defaults to sixty-four and is exposed at `/health`:
 
 ```bash
 CODECROW_CODEX_BENCHMARK_MODEL=gpt-6-sol python -m tools.codex_benchmark.run \
@@ -101,8 +123,8 @@ inference service and runner, then run:
 ```bash
 CODECROW_CODEX_BENCHMARK_MODEL=gpt-5.6-luna python -m tools.codex_benchmark.run \
   --run-dir "$RUN" --dataset-file "$RUN/qodo100.jsonl" --limit 100 \
-  --tool-name CodeCrow-Qodo100-CodexLuna56 --jobs 10 --index-jobs 10 \
-  --score-batch-size 8
+  --tool-name CodeCrow-Qodo100-CodexLuna56 --jobs 16 --index-jobs 16 \
+  --score-batch-size 32
 ```
 
 The same dataset path is passed to review and scoring. The restored harness uses

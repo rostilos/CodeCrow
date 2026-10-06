@@ -49,6 +49,29 @@ def _request(**updates):
     return ReviewRequestDto(**values)
 
 
+@pytest.mark.asyncio
+async def test_capture_records_retry_minimum_sizes_and_unfinalized_calls(capture_environment):
+    from types import SimpleNamespace
+    class RetryingDelegate(_FakeDelegate):
+        async def ainvoke(self, input_data, **kwargs):
+            for callback in kwargs.get("config", {}).get("callbacks", []):
+                callback.on_retry(SimpleNamespace(attempt_number=1, next_action=SimpleNamespace(sleep=0.1)))
+                callback.on_retry(SimpleNamespace(attempt_number=2, next_action=SimpleNamespace(sleep=0.2)))
+            return await super().ainvoke(input_data, **kwargs)
+    session = create_quality_capture_session(_request())
+    wrapped = ReviewQualityCaptureLLM(RetryingDelegate(), session)
+    await wrapped.ainvoke("Review source α")
+    session._artifact["calls"].append({"sequence": 2, "status": "in_progress"})
+    await session.complete({"result": {"issues": []}})
+    artifact = json.loads(session.path.read_text())
+    call = artifact["calls"][0]
+    assert call["providerCallCount"] == 3
+    assert [event["status"] for event in call["providerEvents"]] == ["retrying", "retrying", "completed"]
+    assert call["renderedPromptByteCount"] == len("Review source α".encode())
+    assert call["serializedMessageByteCount"] > 0 and call["serializedResponseByteCount"] > 0
+    assert artifact["captureGaps"] == [{"sequence": 2, "reason": "invocation_not_finalized"}]
+
+
 def _revision_binding():
     return {
         "pullRequestId": 12,
@@ -119,17 +142,80 @@ def capture_environment(monkeypatch, tmp_path):
     return tmp_path
 
 
-def test_capture_requires_explicit_project_allowlist(monkeypatch):
+def test_capture_requires_explicit_project_allowlist_without_blocking_review(monkeypatch, caplog):
     monkeypatch.setenv("REVIEW_QUALITY_CAPTURE_ENABLED", "true")
     monkeypatch.delenv("REVIEW_QUALITY_CAPTURE_PROJECT_IDS", raising=False)
 
-    with pytest.raises(ValueError, match="non-empty"):
-        create_quality_capture_session(_request())
+    assert create_quality_capture_session(_request()) is None
+    assert "Optional review quality capture not started" in caplog.text
 
 
 def test_non_allowlisted_project_is_not_captured(capture_environment):
     assert create_quality_capture_session(_request(projectId=43)) is None
     assert list(capture_environment.iterdir()) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_write", [1, 2])
+async def test_capture_failure_before_or_after_provider_does_not_retry_or_drop_result(
+    capture_environment, monkeypatch, failed_write,
+):
+    session = create_quality_capture_session(_request())
+    delegate = _FakeDelegate()
+    wrapped = ReviewQualityCaptureLLM(delegate, session)
+    write = session._write
+    writes = 0
+
+    def fail_once():
+        nonlocal writes
+        writes += 1
+        if writes == failed_write:
+            raise OSError("capture disk unavailable")
+        write()
+
+    monkeypatch.setattr(session, "_write", fail_once)
+    result = await wrapped.ainvoke("Review the exact source")
+    assert result["answer"] == "captured"
+    assert len(delegate.calls) == 1
+    await session.complete({"result": {"issues": []}})
+    assert session.receipt()["status"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_capture_keeps_tool_call_identity_and_effective_invocation_parameters(capture_environment):
+    from types import SimpleNamespace
+
+    session = create_quality_capture_session(_request())
+    wrapped = ReviewQualityCaptureLLM(_FakeDelegate(), session)
+    await wrapped.ainvoke(
+        [{"role": "system", "content": "Verification Agent"},
+         SimpleNamespace(type="tool", content="observed code", tool_call_id="native-call-42")],
+        reasoning_effort="high",
+    )
+    artifact = json.loads(session.path.read_text())
+    call = artifact["calls"][0]
+    assert call["input"][1]["tool_call_id"] == "native-call-42"
+    assert call["invocationParameters"]["reasoning_effort"] == "high"
+    assert call["stage"] == "verification"
+    assert quality_capture._classify_stage(type("SemanticDeduplicationDecision", (), {}), "", ()) == "deduplication"
+    assert quality_capture._classify_stage(None, "senior code reviewer analyzing one batch of PR files; lifecycle reconciliation", ()) == "stage_1"
+
+
+@pytest.mark.asyncio
+async def test_capture_event_and_finalization_failures_preserve_review(capture_environment, monkeypatch):
+    session = create_quality_capture_session(_request())
+    forwarded = []
+
+    def unavailable(*args):
+        raise OSError("capture unavailable")
+
+    monkeypatch.setattr(session, "observe_pipeline_event", unavailable)
+    event = {"state": "completed"}
+    session.wrap_event_callback(forwarded.append)(event)
+    assert forwarded == [event]
+    monkeypatch.setattr(session, "_prune", unavailable)
+    await session.complete({"result": {"issues": []}})
+    assert session.receipt()["status"] == "unavailable"
 
 
 def test_provider_model_identity_uses_metadata_not_tool_arguments():
@@ -623,11 +709,12 @@ async def test_review_service_routes_pipeline_events_through_capture_session(
         event_callback=forwarded.append,
     )
 
-    assert response == {"result": {"issues": []}}
+    assert response["result"] == {"issues": []}
+    assert response["inferenceUsage"]["attempts"] == 0
     assert observed[0] == {"state": "review_evidence_completed"}
     assert observed[1]["state"] == "review_quality_capture_completed"
     assert observed[1]["qualityCapture"]["receiptDigest"] == "a" * 64
-    assert forwarded == [
+    assert [event for event in forwarded if event.get("state") != "inference_usage"] == [
         {"state": "review_evidence_completed"},
         {
             "type": "status",
@@ -675,7 +762,7 @@ def test_capture_records_resolved_runtime_plugin_identity(
     assert len(artifact["modeIdentity"]) == 64
 
 
-def test_capture_rejects_plugin_order_that_runtime_would_expand(
+def test_capture_skips_plugin_order_that_runtime_would_expand(
     capture_environment,
 ):
     catalog = quality_capture._runtime_plugin_catalog()
@@ -691,8 +778,7 @@ def test_capture_rejects_plugin_order_that_runtime_would_expand(
         },
     )
 
-    with pytest.raises(ValueError, match="dependency-stable"):
-        create_quality_capture_session(request)
+    assert create_quality_capture_session(request) is None
 
 
 def test_capture_records_request_plugin_descriptor_mismatch_as_provenance(
@@ -760,3 +846,68 @@ def test_provider_capability_checks_see_through_capture_wrapper(
 )
 def test_review_response_failure_classification(response, expected):
     assert review_response_indicates_failure(response) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["provider_callback", "tool_descriptor", "model_wrapper"])
+async def test_optional_capture_setup_failure_preserves_one_provider_call(capture_environment, monkeypatch, boundary):
+    session = create_quality_capture_session(_request())
+    delegate = _FakeDelegate()
+    wrapped = ReviewQualityCaptureLLM(delegate, session)
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("capture serialization unavailable")
+
+    if boundary == "provider_callback":
+        monkeypatch.setattr(quality_capture, "_invoke_kwargs_with_callback", unavailable)
+    elif boundary == "tool_descriptor":
+        monkeypatch.setattr(quality_capture, "_tool_descriptor", unavailable)
+        wrapped = wrapped.bind_tools([object()])
+    else:
+        monkeypatch.setattr(quality_capture, "ReviewQualityCaptureLLM", unavailable)
+        wrapped = quality_capture.wrap_quality_capture_llm(delegate, session)
+    result = await wrapped.ainvoke("prompt")
+    assert result["answer"] == "captured"
+    assert len(delegate.calls) == 1
+    assert session.receipt()["diagnostic"]["phase"] == boundary
+
+
+@pytest.mark.asyncio
+async def test_capture_retains_optional_candidate_verification_and_provenance(capture_environment):
+    session = create_quality_capture_session(_request())
+    candidate = {
+        "candidateId": "sha256:" + "1" * 64,
+        "stage": "stage_1", "generationPromptDigest": "sha256:" + "2" * 64,
+        "reviewUnitIds": [], "promptHunkIds": [], "anchorHunkIds": [],
+        "evidenceRefs": [], "visibleEvidenceIds": [], "visibleEvidenceFactDigests": {},
+        "terminalState": "published", "rejection": None,
+        "sourceKey": "src/example.py:10", "hypothesis": "Caller drops a value",
+        "evidenceGaps": ["Caller evidence unavailable"],
+        "verificationAssessments": [{"verdict": "unknown", "reasonCode": "timeout",
+            "reason": "provider-secret remains protected", "apiKey": "hidden"}],
+        "consolidatedCandidateIds": ["sha256:" + "3" * 64],
+    }
+    event = {
+        "state": "review_evidence_completed",
+        "hunkCoverage": {state: 0 for state in ("ingested", "planned", "reviewed", "validated", "completed", "excluded")},
+        "reviewUnits": {"registered": 0, "completed": 0},
+        "candidates": {"generated": 1, "published": 1, "rejected": 0,
+            "rejectionCounts": {}, "records": [candidate],
+            "verification": {"unknown": 1, "attempted": 1, "completed": 0}},
+        "hunkReceipts": [], "retrieval": {"deterministicStates": [], "exactEvidenceIds": 0},
+        "revisionBinding": _revision_binding(),
+    }
+    forwarded = []
+    session.wrap_event_callback(forwarded.append)(event)
+    await session.complete({"result": {"issues": []}})
+    artifact = json.loads(session.path.read_text())
+    assert artifact["pipelineEvidenceStatus"] == "complete"
+    captured = artifact["pipelineEvidence"]["candidates"]
+    assert captured["verification"] == event["candidates"]["verification"]
+    record = captured["records"][0]
+    for field in ("sourceKey", "hypothesis", "evidenceGaps", "consolidatedCandidateIds"):
+        assert record[field] == candidate[field]
+    assert record["verificationAssessments"] == [{"verdict": "unknown", "reasonCode": "timeout",
+        "reason": "[REDACTED] remains protected", "apiKey": "[REDACTED]"}]
+    assert forwarded == [event]
+    assert event["candidates"]["records"][0]["verificationAssessments"][0]["apiKey"] == "hidden"

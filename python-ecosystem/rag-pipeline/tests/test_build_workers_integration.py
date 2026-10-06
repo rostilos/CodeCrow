@@ -75,7 +75,8 @@ async def entered_processes(wave, tasks):
 
 
 @pytest.mark.asyncio
-async def test_ten_processes_build_full_and_delta_graphs_while_parent_queries_continue(tmp_path):
+async def test_ten_processes_build_full_and_delta_graphs_while_parent_queries_continue(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLOWED_REPO_ROOT", str(tmp_path))
     config = RAGConfig(structural_index_root=str(tmp_path / "indexes"), full_index_concurrency=10)
     parent = isolated_manager(config)
     query_repo = tmp_path / "query-source"
@@ -163,9 +164,10 @@ async def test_ten_processes_build_full_and_delta_graphs_while_parent_queries_co
 
 
 @pytest.mark.asyncio
-async def test_review_preparation_worker_preserves_seed_policy_and_exact_proposed_source(tmp_path):
+async def test_review_preparation_worker_preserves_seed_policy_and_exact_proposed_source(tmp_path, monkeypatch):
     import json
 
+    monkeypatch.setenv("ALLOWED_REPO_ROOT", str(tmp_path))
     config = RAGConfig(structural_index_root=str(tmp_path / "indexes"), full_index_concurrency=1)
     parent = isolated_manager(config)
     repository = tmp_path / "repository"

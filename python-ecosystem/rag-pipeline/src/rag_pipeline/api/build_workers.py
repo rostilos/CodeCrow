@@ -153,8 +153,9 @@ class BuildWorkerPool:
         admitted_at = time.monotonic()
         request = payload.get("request", {})
         logger.info(
-            "Repository build admitted: operation=%s workspace=%s project=%s queue_wait_ms=%d",
+            "Repository build admitted: operation=%s workspace=%s project=%s revision=%s base_revision=%s queue_wait_ms=%d",
             operation, request.get("workspace"), request.get("project"),
+            request.get("commit") or request.get("source_revision"), request.get("base_revision"),
             round((admitted_at - queued_at) * 1000),
         )
         return admitted_at
@@ -163,8 +164,9 @@ class BuildWorkerPool:
     def _log_completion(operation, payload, admitted_at, outcome):
         request = payload.get("request", {})
         logger.info(
-            "Repository build finished: operation=%s workspace=%s project=%s outcome=%s execution_ms=%d",
-            operation, request.get("workspace"), request.get("project"), outcome,
+            "Repository build finished: operation=%s workspace=%s project=%s revision=%s base_revision=%s outcome=%s execution_ms=%d",
+            operation, request.get("workspace"), request.get("project"),
+            request.get("commit") or request.get("source_revision"), request.get("base_revision"), outcome,
             round((time.monotonic() - admitted_at) * 1000),
         )
 

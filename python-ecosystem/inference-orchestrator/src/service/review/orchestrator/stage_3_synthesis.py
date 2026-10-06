@@ -81,6 +81,7 @@ def _merge_stage_3_results(
         merged_report += "\n\n---\n\n" + "\n\n".join(supplements)
     return {
         "report": merged_report,
+        "verification_assessments": [assessment for result in results for assessment in result.get("verification_assessments", [])],
         "dismissed_issue_ids": _stable_result_union(
             results, "dismissed_issue_ids"
         ),
@@ -340,6 +341,7 @@ async def synthesize_stage_3_results(
     final_report = str(synthesis_result.get("report") or "")
     return {
         "report": final_report,
+        "verification_assessments": dismissal_merge.get("verification_assessments", []),
         "dismissed_issue_ids": dismissal_merge.get(
             "dismissed_issue_ids", []
         ),

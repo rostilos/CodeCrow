@@ -378,6 +378,7 @@ def test_repository_delta_finalizer_failure_drops_stale_base_plugin_output(
 @pytest.mark.parametrize("missing_seed_hashes", [False, True])
 def test_review_reuses_different_revision_seed_with_complete_content_delta(tmp_path, monkeypatch, missing_seed_hashes):
     """A warm graph is an optimization seed, never a substitute target snapshot."""
+    monkeypatch.setenv("ALLOWED_REPO_ROOT", str(tmp_path))
     from unittest.mock import Mock
     from rag_pipeline.api.models import ProposedTreePrepareRequest
     from rag_pipeline.api.routers import query as query_router

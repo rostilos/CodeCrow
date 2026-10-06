@@ -53,9 +53,9 @@ class ReviewEntryConcurrencyTest {
     }
 
     @Test
-    void saturatedReviewIndexAndStreamPoolsQueueTheNextAcceptedRequest() throws Exception {
+    void saturatedMaintenanceAndStreamPoolsKeepTheirExistingQueuePolicy() throws Exception {
         try (var context = context(Map.of())) {
-            for (String bean : java.util.List.of("pipelineActionExecutor", "ragExecutor", "webMvcAsyncExecutor")) {
+            for (String bean : java.util.List.of("ragExecutor", "webMvcAsyncExecutor")) {
                 ThreadPoolTaskExecutor executor = context.getBean(bean, ThreadPoolTaskExecutor.class);
                 int concurrency = executor.getCorePoolSize();
                 CountDownLatch started = new CountDownLatch(concurrency);
@@ -74,6 +74,23 @@ class ReviewEntryConcurrencyTest {
                 }
                 waiting.get(3, TimeUnit.SECONDS);
             }
+        }
+    }
+
+    @Test
+    void saturatedPipelineActionsLeaveTheirBacklogInPersistentStorage() throws Exception {
+        ThreadPoolTaskExecutor executor = new AsyncConfig().pipelineActionExecutor(1);
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            executor.execute(() -> block(started, release));
+            assertThat(started.await(3, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> executor.execute(() -> {}))
+                    .isInstanceOf(org.springframework.core.task.TaskRejectedException.class);
+            assertThat(executor.getThreadPoolExecutor().getQueue()).isEmpty();
+        } finally {
+            release.countDown();
+            executor.shutdown();
         }
     }
 

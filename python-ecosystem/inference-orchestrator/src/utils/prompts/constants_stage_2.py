@@ -139,10 +139,10 @@ Return ONLY valid JSON:
 }}
 
 Constraints:
-- Do NOT re-report individual file issues; focus on proven interactions across changed files
-- Every cross_file_issue must be an unresolved, actionable defect in the resulting
-  post-change code. Positive change descriptions and already-applied fixes belong
-  in no issue list.
+- Do not reissue a Stage 1 defect as CROSS. A helper failure and caller impact
+  fixed together are one defect despite different wording/anchors. Added evidence
+  is not a new defect; do not bundle existing defects. Cite supplied IDs; emit
+  only distinct harmful interactions.
 - Copy supporting retrieved `Evidence ID` values into `evidenceRefs`; never invent
   an ID. Leave it empty when changed-file evidence alone proves the interaction.
 - `coverageEvidenceRefs` is separate from repository-context `evidenceRefs`. Copy only exact
@@ -157,7 +157,7 @@ Constraints:
 - Only flag normal cross-file/architectural concerns if at least 2 files are
   involved. Task-coverage gaps are the exception: they are PR-wide checks and
   may be anchored to one changed file after considering the complete PR.
-- CRITICAL ANCHORING: For each cross_file_issue, you MUST set "primary_file" to the single most relevant changed file where the issue should be annotated in a reviewable PR diff hunk. You MUST set "line" to a specific line number in that hunk. You MUST set "codeSnippet" to the EXACT verbatim current-source line from that hunk, using a Stage 1 finding anchor when applicable. Full-file or retrieved code outside the hunk may support impact but cannot be the annotation anchor. Issues without an in-hunk codeSnippet are withheld.
+- CRITICAL ANCHORING: For each cross_file_issue, you MUST set "primary_file" to the single most relevant changed file where the issue should be annotated in a reviewable PR diff hunk. You MUST set "line" to a specific line number in that hunk. You MUST set "codeSnippet" to the EXACT verbatim current-source line from that hunk, using a Stage 1 finding anchor when applicable. For a whole-file deletion, use an exact removed BASE-side line and its old line number to anchor a regression caused by removal. Full-file or retrieved code outside the hunk may support impact but cannot be the annotation anchor. Issues without an in-hunk codeSnippet are withheld.
 - If there are no cross_file_issues and no unresolved task-coverage gap, set pr_recommendation to "PASS"
 - If any LOW, MEDIUM, or HIGH cross_file_issue exists, set pr_recommendation to at least "PASS_WITH_WARNINGS"
 - If any CRITICAL cross_file_issue exists, set pr_recommendation to "FAIL"

@@ -137,11 +137,21 @@ public class JobService {
         persisted.setCurrentStep("Waiting for pipeline worker");
         persisted = jobRepository.save(persisted);
         addLog(persisted, JobLogLevel.INFO, "queued",
-                "Webhook work persisted and queued for pipeline processing");
+                "Analysis work persisted and queued for pipeline processing");
         addLog(persisted, JobLogLevel.DEBUG, WEBHOOK_DISPATCH_STEP,
-                "Durable webhook dispatch payload",
+                "Durable analysis dispatch payload",
                 Map.of("payload", webhookPayload));
         return persisted;
+    }
+
+    @Transactional
+    public boolean claimPipelineJobForExecution(Long jobId) {
+        if (jobRepository.claimPipelineJobForExecution(jobId, OffsetDateTime.now()) != 1) {
+            return false;
+        }
+        jobRepository.findById(jobId).ifPresent(job ->
+                addLog(job, JobLogLevel.INFO, "start", "Pipeline worker claimed persisted work"));
+        return true;
     }
 
     public Optional<String> findWebhookDispatchPayload(Long jobId) {

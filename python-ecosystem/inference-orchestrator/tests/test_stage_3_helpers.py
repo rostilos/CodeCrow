@@ -175,7 +175,7 @@ class TestValidatedMcpDismissals:
         ])
 
         assert _validated_mcp_dismissals(
-            ["issue_0"], issue_map, executor, "abc123"
+            ["issue_0"], issue_map, executor, "abc123", {"issue_0": {"verdict": "disproven"}}
         ) == []
 
         executor.call_log.append({
@@ -191,7 +191,7 @@ class TestValidatedMcpDismissals:
             "evidence_end_line": 100,
         })
         assert _validated_mcp_dismissals(
-            ["issue_0"], issue_map, executor, "abc123"
+            ["issue_0"], issue_map, executor, "abc123", {"issue_0": {"verdict": "disproven"}}
         ) == ["issue_0"]
 
     def test_wrong_revision_failed_or_unknown_dismissal_fails_open(self):
@@ -223,7 +223,7 @@ class TestValidatedMcpDismissals:
         ])
 
         assert _validated_mcp_dismissals(
-            ["issue_0", "issue_99"], issue_map, executor, "abc123"
+            ["issue_0", "issue_99"], issue_map, executor, "abc123", {"issue_0": {"verdict": "disproven"}}
         ) == []
 
     def test_window_must_cover_the_bound_issue_line(self):
@@ -246,11 +246,11 @@ class TestValidatedMcpDismissals:
         }])
 
         assert _validated_mcp_dismissals(
-            ["issue_0"], issue_map, executor, "abc123"
+            ["issue_0"], issue_map, executor, "abc123", {"issue_0": {"verdict": "disproven"}}
         ) == []
 
         executor.call_log[0]["evidence_start_line"] = 420
         executor.call_log[0]["evidence_end_line"] = 580
         assert _validated_mcp_dismissals(
-            ["issue_0"], issue_map, executor, "abc123"
+            ["issue_0"], issue_map, executor, "abc123", {"issue_0": {"verdict": "disproven"}}
         ) == ["issue_0"]

@@ -415,6 +415,8 @@ def test_evaluates_integrity_checked_paired_full_pipeline_captures(tmp_path):
         "precision": 0.5,
         "recall": 0.5,
         "coverage": 1.0,
+        "f1": 0.5,
+        "f2": 0.5,
         "changed_lines": 1,
         "model_calls": 1,
         "input_tokens": 10,
@@ -423,6 +425,11 @@ def test_evaluates_integrity_checked_paired_full_pipeline_captures(tmp_path):
         "cost_per_changed_kloc": 10.0,
         "median_cost_per_changed_kloc": 10.0,
         "p95_cost_per_changed_kloc": 10.0,
+        "completion_counts": {"complete": 1, "partial": 0, "failed": 0, "missing": 0, "unknown": 0},
+        "usage_known_cases": {"model_calls": 1, "input_tokens": 1, "output_tokens": 1, "cost": 1, "wall_time_seconds": 0},
+        "wall_time_seconds": None,
+        "median_wall_time_seconds": None,
+        "p95_wall_time_seconds": None,
     }
     assert metrics["php-magento"]["true_positives"] == 2
     assert metrics["php-magento"]["false_positives"] == 0

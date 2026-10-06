@@ -114,7 +114,7 @@ async def test_source_wait_does_not_occupy_provider_capacity():
             assert not waiting.done()
     release.set()
     await asyncio.wait_for(asyncio.gather(slow, waiting), 1)
-    assert events[-1]["state"] == "capacity_acquired"
+    assert [event for event in events if event["state"] != "inference_usage"][-1]["state"] == "capacity_acquired"
 
 
 @pytest.mark.asyncio
@@ -127,7 +127,8 @@ async def test_uncontended_calls_emit_no_capacity_events_and_exception_releases_
                 raise RuntimeError("provider unavailable")
         async with review_model_slot("verification_validate"):
             pass
-    assert events == []
+    assert all(event["state"] == "inference_usage" for event in events)
+    assert events[-1]["inferenceUsage"]["attempts"] == 2
     assert scheduler._active == 0
     async with review_model_slot("standalone"):
         assert scheduler._active == 0

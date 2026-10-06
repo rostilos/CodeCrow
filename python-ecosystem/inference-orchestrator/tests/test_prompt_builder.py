@@ -439,7 +439,7 @@ class TestBuildStage2:
         assert "Different valid implementation techniques are not" in result
         assert "hypotheses, not findings" in result
         assert "speculate that similar code" in result
-        assert "already-applied fixes belong" in result
+        assert "current diff already fixes or correctly addresses" in result
         assert "Different styles or" in result
         assert "DATA_INTEGRITY" not in result
         assert "BUSINESS_LOGIC" not in result
@@ -493,7 +493,10 @@ class TestBuildStage3:
 
         assert "REVIEWED REVISION: commit-abc" in result
         assert "Verification ID" in result
-        assert 'DISMISSED_ISSUES: ["issue_0", "issue_3"]' in result
+        assert '"issue_id":"issue_0"' in result
+        assert '"verdict":"unknown"' in result
+        assert "one assessment per assigned Verification ID" in result
+        assert "disproven assessment citing exact contradictory" in result
 
     def test_local_only_mcp_verification_never_advertises_provider_tools(self):
         result = PromptBuilder.build_stage_3_aggregation_prompt(

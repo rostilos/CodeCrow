@@ -11,6 +11,8 @@ import java.util.List;
 
 @Repository
 public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisIssue, Long> {
+    java.util.Optional<CodeAnalysisIssue> findByIdAndAnalysis_Project_Id(Long issueId, Long projectId);
+
 
     List<CodeAnalysisIssue> findByAnalysisIdOrderBySeverityDescLineNumberAsc(Long analysisId);
 

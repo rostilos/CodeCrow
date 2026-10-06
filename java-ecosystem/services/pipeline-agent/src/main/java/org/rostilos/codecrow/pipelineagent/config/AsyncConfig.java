@@ -84,7 +84,7 @@ public class AsyncConfig {
     @Bean(name = "pipelineActionExecutor")
     public ThreadPoolTaskExecutor pipelineActionExecutor(
             @Value("${pipeline.review.concurrency:16}") int concurrency) {
-        return blockingExecutor(concurrency, "pipeline-action-", 120);
+        return blockingExecutor(concurrency, "pipeline-action-", 120, 0);
     }
 
     /**
@@ -113,21 +113,25 @@ public class AsyncConfig {
 
     private static ThreadPoolTaskExecutor blockingExecutor(
             int concurrency, String prefix, int shutdownSeconds) {
+        return blockingExecutor(concurrency, prefix, shutdownSeconds, Integer.MAX_VALUE);
+    }
+
+    private static ThreadPoolTaskExecutor blockingExecutor(
+            int concurrency, String prefix, int shutdownSeconds, int queueCapacity) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(concurrency);
         executor.setMaxPoolSize(concurrency);
-        // Preserve accepted request work when the I/O workers are occupied. These
-        // request/stream submissions have no webhook-style durable redelivery
-        // at the executor boundary; saturation must not reject the next request.
-        // Running work is bounded by the fixed pool, waiting work stays queued.
-        executor.setQueueCapacity(Integer.MAX_VALUE);
+        // Review actions use zero in-memory backlog: persisted jobs are replayed
+        // by recovery when workers are saturated. Maintenance and stream writers
+        // retain their existing independent queues.
+        executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix(prefix);
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(shutdownSeconds);
         executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
         executor.initialize();
-        log.info("Executor initialized: name={} concurrency={} waiting queue enabled",
-                prefix, concurrency);
+        log.info("Executor initialized: name={} concurrency={} queueCapacity={}",
+                prefix, concurrency, queueCapacity);
         return executor;
     }
 

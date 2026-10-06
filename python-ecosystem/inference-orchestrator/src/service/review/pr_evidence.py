@@ -411,7 +411,7 @@ def _build_scope_context(
     all_reviewable_hunks = sum(
         1
         for diff_file in processed_diff.files
-        for hunk in diff_file.hunks
+        for hunk in diff_file.review_hunks
         if hunk.disposition is HunkDisposition.REVIEWABLE
     )
     rendered_scope_evidence = [
@@ -470,7 +470,7 @@ def _evidence_candidates(
     for diff_file in processed_diff.files:
         if diff_file.is_skipped:
             continue
-        for hunk in diff_file.hunks:
+        for hunk in diff_file.review_hunks:
             if hunk.disposition is not HunkDisposition.REVIEWABLE:
                 continue
             score = _task_relevance_score(diff_file.path, hunk.content, task_terms)
@@ -510,8 +510,11 @@ def _render_evidence_candidates(
             scope=scope,
             path=path,
             hunk_id=hunk.id,
-            line_start=hunk.new_start,
-            line_end=max(hunk.new_start, hunk.new_start + hunk.new_count - 1),
+            line_start=hunk.new_start if hunk.new_count else hunk.old_start,
+            line_end=(
+                max(hunk.new_start, hunk.new_start + hunk.new_count - 1)
+                if hunk.new_count else max(hunk.old_start, hunk.old_start + hunk.old_count - 1)
+            ),
             excerpt=excerpt,
             has_removal=any(
                 line.startswith("-") and not line.startswith("---")

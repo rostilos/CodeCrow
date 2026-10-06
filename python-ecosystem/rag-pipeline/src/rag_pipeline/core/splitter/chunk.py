@@ -63,6 +63,10 @@ class ASTChunk:
 
     # Dependencies
     imports: List[str] = field(default_factory=list)
+    # None denotes extraction without located import captures. An empty list
+    # denotes a complete query inventory with no imports owned by this unit.
+    import_occurrences: Optional[List[dict]] = None
+    file_import_occurrences: List[dict] = field(default_factory=list)
 
     # --- RICH AST FIELDS (extracted from tree-sitter) ---
 

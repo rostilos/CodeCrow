@@ -1,7 +1,7 @@
 # Staging is independent of deploy.yml, production packages and production secrets.
 # Setup and all STAGE_* keys: /docs/developer/configuration#staging-deployment
 name: Deploy to Stage
-run-name: Stage ${{ inputs.branch || 'stage' }} (${{ inputs.services || 'all' }})
+run-name: Stage ${{ inputs.branch || 'stage' }} + frontend ${{ inputs.frontend_branch || 'stage' }} (${{ inputs.services || 'all' }})
 
 on:
   push:
@@ -13,9 +13,9 @@ on:
         type: string
         default: stage
       frontend_branch:
-        description: Optional frontend branch (empty uses the backend's pinned submodule)
+        description: Frontend branch to build (defaults to stage)
         type: string
-        default: ""
+        default: stage
       services:
         description: all, java, python, frontend, or comma-separated service names
         type: string
@@ -60,7 +60,7 @@ jobs:
       - name: Resolve exact revisions and release tag
         id: release
         env:
-          FRONTEND_BRANCH: ${{ inputs.frontend_branch }}
+          FRONTEND_BRANCH: ${{ inputs.frontend_branch || 'stage' }}
           SKIP_BUILD: ${{ inputs.skip_build || false }}
           EXISTING_IMAGE_TAG: ${{ inputs.image_tag }}
           DEPLOY_SERVICES: ${{ inputs.services || 'all' }}
@@ -68,12 +68,11 @@ jobs:
           source deployment/ci/service-selection.sh
           codecrow_resolve_services "$DEPLOY_SERVICES"
           if [[ "$SKIP_BUILD" != true ]]; then
-            if [[ -n "$FRONTEND_BRANCH" ]]; then
-              git check-ref-format "refs/heads/$FRONTEND_BRANCH"
-              git -C frontend fetch --no-tags origin "refs/heads/$FRONTEND_BRANCH"
-              git -C frontend checkout --detach FETCH_HEAD
-            fi
+            git check-ref-format "refs/heads/$FRONTEND_BRANCH"
+            git -C frontend fetch --no-tags origin "refs/heads/$FRONTEND_BRANCH"
+            git -C frontend checkout --detach FETCH_HEAD
             echo "frontend_sha=$(git -C frontend rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            echo "Frontend source: $FRONTEND_BRANCH @ $(git -C frontend rev-parse HEAD)"
           fi
           SOURCE_SHA=$(git rev-parse HEAD)
           echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"

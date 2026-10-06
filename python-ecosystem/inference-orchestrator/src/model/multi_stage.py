@@ -91,6 +91,8 @@ class CrossFileIssue(BaseModel):
     codeSnippet: Optional[str] = Field(default=None, description="Verbatim code line from primary_file that anchors this issue")
     affected_files: List[str]
     description: str = Field(description="Concrete defect that remains in the post-change code; never a successful fix, praise, or optional standardization")
+    hypothesis: str = Field(default="", description="Concrete trigger, violated behavior and impact that exact source or relationships could disprove")
+    evidenceGaps: List[str] = Field(default_factory=list, description="Focused unresolved facts; missing optional evidence is unknown")
     evidence: str = Field(description="Visible post-change evidence proving the current harmful interaction")
     evidenceRefs: List[str] = Field(
         default_factory=list,
@@ -129,13 +131,13 @@ class CrossFileIssue(BaseModel):
     business_impact: str = Field(description="Concrete behavior or operation that is currently broken")
     suggestion: str = Field(description="Code change still required; never work already present in the diff")
 
-    @field_validator("primary_file", "claimKind", mode="before")
+    @field_validator("primary_file", "claimKind", "hypothesis", mode="before")
     @classmethod
     def normalize_null_empty_strings(cls, value):
         """Apply the existing empty-string defaults to explicit JSON nulls."""
         return "" if value is None else value
 
-    @field_validator("evidenceRefs", "coverageEvidenceRefs", mode="before")
+    @field_validator("evidenceRefs", "coverageEvidenceRefs", "evidenceGaps", mode="before")
     @classmethod
     def normalize_null_empty_lists(cls, value):
         """Apply the existing empty-list defaults to explicit JSON nulls."""

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Any
 
 
-from .bindings import review_query_payload
+from .bindings import review_query_payload, normalize_detail_level
 from .transport import RagTransport
 
 class ReviewQueries:
@@ -36,7 +36,7 @@ class ReviewQueries:
         )
 
 
-    async def explore_review_context(self, *, question: str, focus_symbols: Optional[List[str]] = None, max_relations: int = 32, max_source_windows: int = 6, max_source_characters: int = 12000, **binding: Any) -> Dict[str, Any]:
+    async def explore_review_context(self, *, question: str, focus_symbols: Optional[List[str]] = None, max_relations: int = 32, max_source_windows: int = 6, max_source_characters: int = 12000, token_budget: int | None = None, **binding: Any) -> Dict[str, Any]:
         """Query one sealed proposed-tree review generation.
 
         Repository paths and revision identity come from the request host, not
@@ -47,6 +47,7 @@ class ReviewQueries:
         """
         payload = review_query_payload(**binding)
         payload.update({
+            **({"token_budget": token_budget} if token_budget is not None else {}),
             "question": question,
             "focus_symbols": focus_symbols or [],
             "max_relations": max_relations,
@@ -75,14 +76,15 @@ class ReviewQueries:
         )
 
 
-    async def minimal_review_context(self, *, question: str, focus_symbols: Optional[List[str]] = None, max_relations: int = 25, detail_level: str = 'minimal', include_source: bool = True, max_source_windows: int = 4, max_source_characters: int = 8000, **binding: Any) -> Dict[str, Any]:
+    async def minimal_review_context(self, *, question: str, focus_symbols: Optional[List[str]] = None, max_relations: int = 25, detail_level: str = 'minimal', include_source: bool = True, max_source_windows: int = 4, max_source_characters: int = 8000, token_budget: int | None = None, **binding: Any) -> Dict[str, Any]:
         """Return a compact exact proposed-tree orientation for this review."""
         payload = review_query_payload(**binding)
         payload.update({
+            **({"token_budget": token_budget} if token_budget is not None else {}),
             "question": question,
             "focus_symbols": focus_symbols or [],
             "max_relations": max_relations,
-            "detail_level": detail_level,
+            "detail_level": normalize_detail_level(detail_level),
             "include_source": include_source,
             "max_source_windows": max_source_windows,
             "max_source_characters": max_source_characters,
@@ -114,14 +116,15 @@ class ReviewQueries:
         )
 
 
-    async def review_impact_radius(self, *, targets: Optional[List[str]] = None, max_depth: int = 2, max_results: int = 100, detail_level: str = 'standard', include_source: bool = True, max_source_windows: int = 6, max_source_characters: int = 12000, **binding: Any) -> Dict[str, Any]:
+    async def review_impact_radius(self, *, targets: Optional[List[str]] = None, max_depth: int = 2, max_results: int = 100, detail_level: str = 'standard', include_source: bool = True, max_source_windows: int = 6, max_source_characters: int = 12000, token_budget: int | None = None, **binding: Any) -> Dict[str, Any]:
         """Return the bounded impact radius in the exact proposed tree."""
         payload = review_query_payload(**binding)
         payload.update({
+            **({"token_budget": token_budget} if token_budget is not None else {}),
             "targets": targets or [],
             "max_depth": max_depth,
             "max_results": max_results,
-            "detail_level": detail_level,
+            "detail_level": normalize_detail_level(detail_level),
             "include_source": include_source,
             "max_source_windows": max_source_windows,
             "max_source_characters": max_source_characters,
@@ -173,7 +176,7 @@ class ReviewQueries:
             "max_depth": max_depth,
             "max_results": max_results,
             "token_budget": token_budget,
-            "detail_level": detail_level,
+            "detail_level": normalize_detail_level(detail_level),
             "include_source": include_source,
             "max_source_windows": max_source_windows,
             "max_source_characters": max_source_characters,
@@ -212,15 +215,20 @@ class ReviewQueries:
         )
 
 
-    async def query_review_graph(self, *, pattern: str, target: str, max_results: int = 25, cursor: int = 0, detail_level: str = 'standard', include_source: bool = True, max_source_windows: int = 6, max_source_characters: int = 12000, **binding: Any) -> Dict[str, Any]:
+    async def query_review_graph(self, *, pattern: str = "relations_of", target: str = "", max_results: int = 25, cursor: int = 0, detail_level: str = 'standard', include_source: bool = True, max_source_windows: int = 6, max_source_characters: int = 12000, token_budget: int | None = None, evidence_id: str | None = None, field: str = "target", offset: int = 0, max_characters: int = 12000, **binding: Any) -> Dict[str, Any]:
         """Run one named query against the exact proposed review graph."""
         payload = review_query_payload(**binding)
         payload.update({
+            **({"token_budget": token_budget} if token_budget is not None else {}),
+            "evidence_id": evidence_id,
+            "field": field,
+            "offset": offset,
+            "max_characters": max_characters,
             "pattern": pattern,
             "target": target,
             "max_results": max_results,
             "cursor": cursor,
-            "detail_level": detail_level,
+            "detail_level": normalize_detail_level(detail_level),
             "include_source": include_source,
             "max_source_windows": max_source_windows,
             "max_source_characters": max_source_characters,
@@ -250,10 +258,11 @@ class ReviewQueries:
         )
 
 
-    async def get_review_structural_unit(self, *, unit_id: str, offset: int = 0, max_characters: int = 12000, **binding: Any) -> Dict[str, Any]:
+    async def get_review_structural_unit(self, *, unit_id: str, offset: int = 0, max_characters: int = 12000, token_budget: int | None = None, **binding: Any) -> Dict[str, Any]:
         """Read one exact source-backed unit from the proposed review tree."""
         payload = review_query_payload(**binding)
         payload.update({
+            **({"token_budget": token_budget} if token_budget is not None else {}),
             "unit_id": unit_id,
             "offset": offset,
             "max_characters": max_characters,

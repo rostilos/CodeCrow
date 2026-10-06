@@ -49,8 +49,14 @@ public class CommentOnPullRequestAction {
         }
     }
 
-    public void postReviewComment(String owner, String repo, int pullRequestNumber, 
+    public void postReviewComment(String owner, String repo, int pullRequestNumber,
                                    String body, String commitId, String path, int line) throws IOException {
+        postReviewComment(owner, repo, pullRequestNumber, body, commitId, path, line,
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.HEAD);
+    }
+
+    public void postReviewComment(String owner, String repo, int pullRequestNumber,
+                                   String body, String commitId, String path, int line, org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide anchorSide) throws IOException {
         String apiUrl = String.format("%s/repos/%s/%s/pulls/%d/comments",
                 GitHubConfig.API_BASE, owner, repo, pullRequestNumber);
 
@@ -59,7 +65,7 @@ public class CommentOnPullRequestAction {
         payload.put("commit_id", commitId);
         payload.put("path", path);
         payload.put("line", line);
-        payload.put("side", "RIGHT");
+        payload.put("side", anchorSide == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "LEFT" : "RIGHT");
 
         Request req = new Request.Builder()
                 .url(apiUrl)

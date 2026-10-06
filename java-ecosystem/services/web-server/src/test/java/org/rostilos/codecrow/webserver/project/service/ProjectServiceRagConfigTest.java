@@ -25,6 +25,8 @@ class ProjectServiceRagConfigTest {
     @Mock
     private ProjectRepository projectRepository;
 
+    @Mock private jakarta.persistence.EntityManager entityManager;
+
     @Mock
     private RepositoryIndexBootstrapService repositoryIndexBootstrapService;
 

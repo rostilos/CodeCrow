@@ -2,6 +2,7 @@
 JSON parsing, repair, and cleaning utilities for LLM responses.
 """
 from service.review.execution_scheduler import review_model_slot
+from service.review.inference_usage import record_model_response
 import json
 import logging
 import os
@@ -299,6 +300,7 @@ async def repair_json_with_llm(
             prompt,
             **reasoning_request_kwargs(llm, ReasoningEffort.NONE),
         )
+        record_model_response(response)
     return extract_llm_response_text(response)
 
 

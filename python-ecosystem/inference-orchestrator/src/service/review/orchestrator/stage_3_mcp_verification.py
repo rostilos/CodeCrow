@@ -5,9 +5,11 @@ operations through :class:`Stage3McpRuntime`.  Keeping those operations behind
 this narrow adapter lets the verification loop remain independent from Stage
 3 prompt packing and final-report composition.
 """
-from service.review.execution_scheduler import review_model_slot
+from service.review.execution_scheduler import review_model_slot, optional_work_budget, optional_timeout_seconds
+from service.review.inference_usage import record_model_response, record_compute_decision
 
 import json
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -19,6 +21,8 @@ from model.output_schemas import CodeReviewIssue
 from service.agent import AgentExecutionService
 from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
 from utils.llm_response import extract_llm_response_text
+from utils.path_identity import repository_source_location
+from service.review.orchestrator.verification_agent import VerificationAssessment, _validated_assessment, _decoded_verification_source_view
 
 
 logger = logging.getLogger(__name__)
@@ -30,9 +34,13 @@ STAGE3_AGENT_MAX_OUTPUT_TOKENS = 16_384
 _TERMINAL_FINALIZATION_INSTRUCTION = (
     "Repository verification is complete and tools are now disabled. Produce "
     "the final executive-summary report from the original review material and "
-    "the complete tool results above. Do not request another tool call. Apply "
-    "the prompt's DISMISSED_ISSUES format only for false positives established "
-    "by those successful repository reads."
+    "the complete tool results above. Do not request another tool call. "
+    "Return one JSON object with report (the executive summary) and assessments "
+    "(one assessment for every assigned Verification ID). Each assessment has "
+    "issue_id, verdict (supported/disproven/unknown), reason, supporting_evidence, "
+    "contradicting_evidence and unresolved_questions. Cite exact observed source "
+    "with file_path and snippet; use unknown when evidence is insufficient. "
+    "Do not infer verification success from completed discovery or agreement."
 )
 
 
@@ -186,21 +194,11 @@ def extract_dismissed_issues(content: str) -> tuple[str, List[str]]:
 
 
 def location_file_path(location: str) -> str:
-    normalized = str(location or "").strip().replace("\\", "/").lstrip("/")
-    if not normalized:
-        return ""
-    path, separator, possible_line = normalized.rpartition(":")
-    if separator and possible_line.isdigit():
-        return path
-    return normalized
+    return repository_source_location(location)[0]
 
 
 def _location_line(location: str) -> int:
-    normalized = str(location or "").strip().replace("\\", "/")
-    _, separator, possible_line = normalized.rpartition(":")
-    if separator and possible_line.isdigit():
-        return int(possible_line)
-    return 0
+    return repository_source_location(location)[1]
 
 
 def required_verification_locations(
@@ -214,11 +212,12 @@ def required_verification_locations(
     except (TypeError, ValueError):
         primary_line = 0
     locations = {(primary_path, max(0, primary_line))}
-    locations.update(
-        (location_file_path(location), _location_line(location))
-        for location in normalized_related_locations(issue)
-    )
-    return {(path, line) for path, line in locations if path}
+    for location in normalized_related_locations(issue):
+        path, start, end = repository_source_location(location)
+        locations.update({(path, start), (path, end)})
+    anchored_paths = {path for path, line in locations if line > 0}
+    return {(path, line) for path, line in locations
+            if path and (line > 0 or path not in anchored_paths)}
 
 
 def mcp_read_covers_location(
@@ -265,10 +264,14 @@ def validated_mcp_dismissals(
     issue_by_verification_id: Dict[str, CodeReviewIssue],
     executor: McpToolExecutor,
     review_revision: str,
+    assessments: Dict[str, dict] | None = None,
 ) -> List[str]:
     """Accept dismissals only when every affected anchor has bound evidence."""
     validated: List[str] = []
     for verification_id in requested_ids:
+        if (assessments or {}).get(verification_id, {}).get("verdict") != "disproven":
+            logger.info("[Stage 3] Keeping %s: no source-backed falsification assessment", verification_id)
+            continue
         issue = issue_by_verification_id.get(verification_id)
         if issue is None:
             logger.warning(
@@ -306,6 +309,100 @@ def validated_mcp_dismissals(
     return validated
 
 
+def extract_verification_assessments(content: str, executor: McpToolExecutor,
+                                    issues: Dict[str, CodeReviewIssue]) -> tuple[str, Dict[str, dict]]:
+    pattern = r'<!--\s*VERIFICATION_ASSESSMENTS:\s*(\[.*?\])\s*-->'
+    match = re.search(pattern, content, re.DOTALL)
+    assessments = {}
+    items = []
+    missing_reason = "assessment_missing"
+    try:
+        payload = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip()))
+        if isinstance(payload, dict):
+            items = payload.get("assessments", [])
+            content = str(payload.get("report") or "")
+    except (ValueError, TypeError):
+        # Keep usable prose from a malformed response; older model responses
+        # may place the same assessment records in an HTML comment.
+        if match:
+            try:
+                items = json.loads(match.group(1))
+            except (ValueError, TypeError):
+                missing_reason = "assessment_malformed"
+            content = re.sub(pattern, "", content, flags=re.DOTALL).strip()
+    if not isinstance(items, list):
+        items = []
+        missing_reason = "assessment_malformed"
+    for item in items:
+        try:
+            assessment = VerificationAssessment.model_validate(item)
+            if assessment.issue_id not in issues:
+                continue
+            evidence = {path: text for (key, path), text in executor.verification_source.items()
+                        if key == assessment.issue_id}
+            checked = _validated_assessment(assessment, evidence)
+            checked.update(stage="stage_3_verification", attempted=True, completed=True,
+                           reasonCode="assessed" if checked["verdict"] == assessment.verdict else "citation_unavailable")
+            assessments[assessment.issue_id] = checked
+        except (ValueError, TypeError, AttributeError):
+            logger.warning("[Stage 3] Optional verification assessment unavailable; retaining unverified issues")
+            missing_reason = "assessment_malformed"
+    for key in issues:
+        assessments.setdefault(key, {"verdict": "unknown", "reason": "no valid final verification assessment",
+            "reasonCode": missing_reason, "stage": "stage_3_verification", "attempted": True, "completed": False})
+        record_compute_decision("final_verification", verificationId=key, **assessments[key])
+    return content, assessments
+
+
+def unknown_verification_assessments(issues: Dict[str, CodeReviewIssue], reason: str,
+                                    *, attempted: bool = False) -> List[dict]:
+    return [{"candidateObjectId": id(issue), "stage": "stage_3_verification",
+             "verdict": "unknown", "reason": reason, "reasonCode": reason,
+             "attempted": attempted, "completed": False} for issue in issues.values()]
+
+
+def _retained_assessment_receipts(issues, state, reason):
+    completed = state.get("assessments", {})
+    return [{**receipt, **completed.get(key, {})}
+            for key, receipt in zip(issues, unknown_verification_assessments(
+                issues, reason, attempted=state.get("attempted", False)))]
+
+
+async def _verification_report_fallback(llm, prompt, runtime, state, issues, reason, fallback_llm=None,
+                                        reasoning_effort=ReasoningEffort.LOW):
+    """Preserve complete acquired observations when optional verification stops."""
+    records = state.get("records", [])
+    admitted = []
+    try:
+        for record in records:
+            for result in record["toolResults"]:
+                candidate = [*admitted, {"iteration": record["iteration"], "assistantContent": "", "toolResults": [result]}]
+                messages = runtime.continuation_messages(prompt, candidate)
+                if runtime.estimate_messages_tokens(messages, use_mcp_tools=False) <= state["token_target"]:
+                    admitted = candidate
+                else:
+                    record_compute_decision("final_verification_evidence", outcome="context_limit", tool=result["name"])
+        if admitted:
+            prompt = "\n\n".join(str(message.get("content", "")) for message in runtime.continuation_messages(prompt, admitted))
+    except Exception as exc:
+        logger.warning("Optional verification evidence could not be rendered: %s", exc)
+        record_compute_decision("final_verification_evidence", outcome=type(exc).__name__)
+    if issues:
+        prompt += ("\nOptional verification ended: " + reason + ". Produce the executive summary only. "
+                   "Findings remain unverified; do not claim verified confidence or dismiss any candidate.")
+    try:
+        result = await runtime.invoke_report(llm, prompt, fallback_llm=fallback_llm,
+                                             allow_retry=False, reasoning_effort=reasoning_effort)
+    except Exception as exc:
+        logger.warning("Optional verification report fallback failed: %s", exc)
+        record_compute_decision("final_verification_report", outcome=type(exc).__name__)
+        result = {"report": state.get("report") or "Optional verification was unavailable; review findings have been retained."}
+    # A fallback report cannot authorize removing findings, regardless of prose.
+    result.update(dismissed_issue_ids=[], dismissed_issue_keys=[], dismissed_issue_object_ids=[])
+    result["verification_assessments"] = _retained_assessment_receipts(issues, state, reason)
+    return result
+
+
 async def execute_stage_3_mcp_verification(
     llm,
     request: ReviewRequestDto,
@@ -315,6 +412,32 @@ async def execute_stage_3_mcp_verification(
     issue_by_verification_id: Dict[str, CodeReviewIssue],
     runtime: Stage3McpRuntime,
     fallback_llm=None,
+) -> Dict[str, Any]:
+    """Bound optional verification, leaving time to report retained candidates."""
+    seconds = optional_timeout_seconds("REVIEW_FINAL_VERIFICATION_TIMEOUT_SECONDS", 60)
+    budget = optional_work_budget(seconds)
+    state = {"records": [], "token_target": runtime.input_token_target(request), "attempted": False,
+             "acquisition_deadline": asyncio.get_running_loop().time() + max(0, budget - min(20, budget / 2))}
+    try:
+        async with asyncio.timeout(budget):
+            return await _execute_stage_3_mcp_verification(llm, request, prompt, mcp_client, review_revision,
+                issue_by_verification_id, runtime, fallback_llm, state)
+    except TimeoutError:
+        record_compute_decision("final_verification", outcome="timeout", verdict="unknown")
+        logger.warning("Optional final verification timed out; retaining candidates for report synthesis")
+        return await _verification_report_fallback(llm, prompt, runtime, state,
+            issue_by_verification_id, "verification_timeout", fallback_llm)
+    except Exception as exc:
+        logger.warning("Optional final verification failed; retaining candidates: %s", exc)
+        record_compute_decision("final_verification", outcome=type(exc).__name__, verdict="unknown")
+        return await _verification_report_fallback(llm, prompt, runtime, state,
+            issue_by_verification_id, "verification_unavailable", fallback_llm)
+
+
+async def _execute_stage_3_mcp_verification(
+    llm, request: ReviewRequestDto, prompt: str, mcp_client, review_revision: str,
+    issue_by_verification_id: Dict[str, CodeReviewIssue], runtime: Stage3McpRuntime, fallback_llm=None,
+    state=None,
 ) -> Dict[str, Any]:
     """Run the bounded optional tool loop and return a report plus dismissals."""
     executor = McpToolExecutor(
@@ -336,7 +459,9 @@ async def execute_stage_3_mcp_verification(
     token_target = runtime.input_token_target(request)
 
     messages = [{"role": "user", "content": prompt}]
-    verification_records: List[Dict[str, Any]] = []
+    state = state if state is not None else {"records": [], "token_target": token_target, "attempted": False,
+                                          "acquisition_deadline": float("inf")}
+    verification_records: List[Dict[str, Any]] = state["records"]
 
     for iteration in range(max_iterations):
         try:
@@ -381,12 +506,8 @@ async def execute_stage_3_mcp_verification(
                         continuation_tokens,
                         token_target,
                     )
-                    return await runtime.invoke_report(
-                        llm,
-                        prompt,
-                        fallback_llm=fallback_llm,
-                        allow_retry=(iteration == 0),
-                    )
+                    return await _verification_report_fallback(llm, prompt, runtime, state,
+                        issue_by_verification_id, "verification_context_limit", fallback_llm)
                 logger.info(
                     "[MCP Stage 3] Reframed %d complete verification "
                     "iteration records into a fresh continuation (%d -> %d "
@@ -404,17 +525,22 @@ async def execute_stage_3_mcp_verification(
                         tool_definitions=tool_defs,
                         reasoning_effort=ReasoningEffort.LOW,
                         max_output_tokens=STAGE3_AGENT_MAX_OUTPUT_TOKENS,
+                        usage_stage="stage_3_verification",
                     )
-                response = await model_session.ainvoke(messages)
+                state["attempted"] = True
+                async with asyncio.timeout(max(0, state["acquisition_deadline"] - asyncio.get_running_loop().time())):
+                    response = await model_session.ainvoke(messages)
             else:
                 # Binding an empty tool list still serializes a provider tool
                 # parameter in some adapters. A direct call guarantees that
                 # this terminal response has no callable repository tools.
+                state["attempted"] = True
                 async with review_model_slot("stage_3_mcp_verification"):
                     response = await llm.ainvoke(
                         messages,
                         **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
                     )
+                    record_model_response(response)
             messages.append(response)
 
             tool_calls = getattr(response, "tool_calls", None)
@@ -434,36 +560,50 @@ async def execute_stage_3_mcp_verification(
                         "MCP Stage 3 report exhausted its output; retrying once "
                         "as a reasoning-free direct output request"
                     )
-                    return await runtime.invoke_report(
+                    return await _verification_report_fallback(
                         fallback_llm,
                         prompt,
+                        runtime,
+                        state,
+                        issue_by_verification_id,
+                        "verification_output_limit",
                         fallback_llm=None,
-                        allow_retry=False,
                         reasoning_effort=ReasoningEffort.NONE,
                     )
                 if runtime.response_finished_by_length(response):
-                    return {
-                        "report": extract_llm_response_text(response),
-                        "dismissed_issue_ids": [],
-                        "dismissed_issue_keys": [],
-                        "dismissed_issue_object_ids": [],
-                    }
+                    return await _verification_report_fallback(llm, prompt, runtime, state,
+                        issue_by_verification_id, "verification_output_limit", fallback_llm)
                 content = extract_llm_response_text(response)
+                report, dismissed = extract_dismissed_issues(content)
+                report, assessments = extract_verification_assessments(report, executor, issue_by_verification_id)
+                state["report"] = report
+                completed = state.setdefault("assessments", {})
+                completed.update({key: value for key, value in assessments.items() if value["completed"]})
+                assessments.update(completed)
+                if iteration == 0 and any(not assessment["completed"] for assessment in assessments.values()):
+                    # Summary-only prose is not candidate verification. Reserve
+                    # the second call for explicit, tools-disabled assessments.
+                    continue
                 logger.info(
                     "[MCP Stage 3] Completed in %d iterations, %d "
                     "verification calls",
                     iteration + 1,
                     executor.call_count,
                 )
-                report, dismissed = extract_dismissed_issues(content)
+                dismissed = sorted(set(dismissed) | {key for key, value in assessments.items() if value["verdict"] == "disproven"})
                 validated = validated_mcp_dismissals(
                     dismissed,
                     issue_by_verification_id,
                     executor,
                     review_revision,
+                    assessments,
                 )
                 return {
                     "report": report,
+                    "verification_assessments": [
+                        {"candidateObjectId": id(issue_by_verification_id[key]), **assessment}
+                        for key, assessment in assessments.items()
+                    ],
                     "dismissed_issue_ids": [
                         str(safe_issue_field(issue_by_verification_id[key], "id") or "")
                         for key in validated
@@ -480,11 +620,10 @@ async def execute_stage_3_mcp_verification(
                 "assistantContent": extract_llm_response_text(response),
                 "toolResults": [],
             }
+            verification_records.append(iteration_record)
             for tool_call in tool_calls:
-                tool_result = await executor.execute_tool(
-                    tool_call["name"],
-                    tool_call["args"],
-                )
+                async with asyncio.timeout(max(0, state["acquisition_deadline"] - asyncio.get_running_loop().time())):
+                    tool_result = await executor.execute_tool(tool_call["name"], tool_call["args"])
                 tool_result_record = {
                     "toolCallId": tool_call["id"],
                     "name": tool_call["name"],
@@ -494,17 +633,21 @@ async def execute_stage_3_mcp_verification(
                 iteration_record["toolResults"].append(tool_result_record)
                 messages.append({
                     "role": "tool",
-                    "content": tool_result_record["result"],
+                    "content": tool_result_record["result"] + _decoded_verification_source_view(tool_result_record["result"]),
                     "tool_call_id": tool_call["id"],
                 })
-            verification_records.append(iteration_record)
-
         except Exception as exception:
             logger.info(
                 "[MCP Stage 3] Iteration %d failed: %s",
                 iteration + 1,
                 exception,
             )
+            if iteration == 0:
+                # Reframe completed observations: a partially executed tool
+                # batch cannot be sent back as an incomplete native tool reply.
+                messages = runtime.continuation_messages(prompt, verification_records)
+                record_compute_decision("final_verification", outcome=type(exception).__name__, verdict="unknown")
+                continue
             break
 
     logger.warning(
@@ -513,15 +656,5 @@ async def execute_stage_3_mcp_verification(
         "dismissal was produced",
         max_iterations,
     )
-    return {
-        # A tool-call turn is not a report and may itself contain an
-        # untrusted dismissal marker. Never surface it as final output when
-        # the dedicated terminal call failed or violated the no-tools turn.
-        "report": (
-            "Optional MCP verification finalization was unavailable; "
-            "no issue was dismissed."
-        ),
-        "dismissed_issue_ids": [],
-        "dismissed_issue_keys": [],
-        "dismissed_issue_object_ids": [],
-    }
+    return await _verification_report_fallback(llm, prompt, runtime, state,
+        issue_by_verification_id, "verification_finalization_unavailable", fallback_llm)

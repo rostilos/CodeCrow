@@ -43,7 +43,8 @@ class MCPConfigBuilder:
                      include_platform_mcp: bool = False,
                      platform_mcp_jar_path: Optional[str] = None,
                      platform_jvm_props: Optional[Dict[str, str]] = None,
-                     rag_mcp_context: Optional[Dict[str, str]] = None) -> dict:
+                     rag_mcp_context: Optional[Dict[str, str]] = None,
+                     verification_context: Optional[Dict[str, str]] = None) -> dict:
         """
         Build MCP configuration with optional Platform MCP server.
         
@@ -55,6 +56,8 @@ class MCPConfigBuilder:
             platform_jvm_props: JVM properties for Platform MCP server
             rag_mcp_context: Exact repository-generation binding for the optional
                 structural graph MCP server.
+            verification_context: Host-bound tenant, revisions and staged source
+                for optional isolated executable verification.
         """
         jvm_args, vcs_env = MCPConfigBuilder.build_java_launch_options(jvm_props)
         local_mcp_only = str(
@@ -125,6 +128,21 @@ class MCPConfigBuilder:
                 "command": sys.executable,
                 "args": ["-m", "service.rag.rag_mcp_server"],
                 "env": rag_env,
+                "type": "stdio",
+            }
+
+        if verification_context is not None:
+            verification_env = {
+                f"CODECROW_VERIFICATION_{key.upper()}": str(value or "")
+                for key, value in verification_context.items()
+            }
+            for name in ("CODECROW_VERIFICATION_CHECKS", "CODECROW_VERIFICATION_RUNTIME"):
+                if name in os.environ:
+                    verification_env[name] = os.environ[name]
+            mcp_servers["codecrow-verification-mcp"] = {
+                "command": sys.executable,
+                "args": ["-m", "service.review.runtime_verification_mcp"],
+                "env": verification_env,
                 "type": "stdio",
             }
 

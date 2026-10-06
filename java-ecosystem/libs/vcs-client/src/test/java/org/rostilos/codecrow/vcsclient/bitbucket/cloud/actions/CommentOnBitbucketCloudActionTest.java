@@ -331,4 +331,16 @@ class CommentOnBitbucketCloudActionTest {
         request.body().writeTo(buffer);
         return mapper.readTree(buffer.readUtf8());
     }
+
+    @Test void deletedSourceCommentUsesOnlyFromLine() throws Exception {
+        ArgumentCaptor<Request> request=ArgumentCaptor.forClass(Request.class);
+        when(httpClient.newCall(request.capture())).thenReturn(call);
+        when(call.execute()).thenAnswer(inv->jsonResponse(request.getValue(),201,"{\"id\":\"88\"}"));
+        action.postInlineComment("deleted.java",10,"Finding",
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE);
+        okio.Buffer buffer=new okio.Buffer(); request.getValue().body().writeTo(buffer);
+        JsonNode inline=mapper.readTree(buffer.readUtf8()).path("inline");
+        assertThat(inline.path("from").asInt()).isEqualTo(10); assertThat(inline.has("to")).isFalse();
+    }
+
 }

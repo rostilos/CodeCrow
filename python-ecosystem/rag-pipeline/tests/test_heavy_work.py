@@ -22,7 +22,8 @@ async def test_queued_review_preparation_leaves_ten_query_threads_available(capa
     lock = Lock()
     counts = {"heavy": 0, "queries": 0}
 
-    def blocked_heavy(request):
+    def blocked_heavy(request, *, cancellation_event):
+        assert isinstance(cancellation_event, Event)
         with lock:
             counts["heavy"] += 1
             if counts["heavy"] == capacity:

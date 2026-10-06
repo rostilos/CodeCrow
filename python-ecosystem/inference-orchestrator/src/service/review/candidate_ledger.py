@@ -81,10 +81,14 @@ class CandidateRecord:
     generation_prompt_digest: str
     evidence_refs: tuple[str, ...]
     visible_evidence_by_id: dict[str, tuple[dict[str, Any], ...]]
+    hypothesis: str = ""
+    evidence_gaps: tuple[str, ...] = ()
+    assessments: list[dict[str, Any]] = field(default_factory=list)
     anchor_hunk_ids: tuple[str, ...] = ()
     terminal_state: Optional[str] = None
     rejection: Optional[CandidateRejection] = None
     object_ids: set[int] = field(default_factory=set, repr=False)
+    consolidated_candidate_ids: set[str] = field(default_factory=set)
 
 
 class CandidateEvidenceLedger:
@@ -176,6 +180,9 @@ class CandidateEvidenceLedger:
             generation_prompt_digest=resolved_prompt_digest,
             evidence_refs=evidence_refs,
             visible_evidence_by_id=visible_evidence,
+            hypothesis=str(getattr(issue, "hypothesis", "") or issue.reason)[:1600],
+            evidence_gaps=_normalized_values(getattr(issue, "evidenceGaps", ()) or ()),
+            assessments=[{"verdict": "unknown", "reason": "Candidate has not been independently verified"}],
             object_ids={object_id},
         )
         self._records[candidate_id] = record
@@ -230,6 +237,63 @@ class CandidateEvidenceLedger:
                 "candidate evidence refs can only be narrowed after generation"
             )
         record.evidence_refs = retained
+
+    def assess(self, issue: CodeReviewIssue, assessment: Mapping[str, Any]) -> None:
+        """Record verification outcome without interpreting unavailable evidence as false."""
+        record = self.record_for(issue)
+        if record is not None:
+            record.assessments.append(dict(assessment))
+
+    def consolidate(self, retained: CodeReviewIssue, sources: Iterable[CodeReviewIssue]) -> None:
+        """Keep original generation receipts when several findings become one."""
+        record = self.record_for(retained)
+        if record is None:
+            return
+        for source in sources:
+            source_record = self.record_for(source)
+            if source_record is not None and source_record is not record:
+                record.consolidated_candidate_ids.add(source_record.candidate_id)
+                record.consolidated_candidate_ids.update(source_record.consolidated_candidate_ids)
+        record.consolidated_candidate_ids.discard(record.candidate_id)
+        if record.consolidated_candidate_ids:
+            record.assessments.append({"stage": "deduplication", "verdict": "unknown",
+                "reason": "Consolidated evidence needs assessment as a whole",
+                "reasonCode": "consolidated_evidence", "attempted": False, "completed": False})
+
+    def verification_summary(self) -> dict[str, Any]:
+        """Report published-candidate evidence coverage, separately from transport."""
+        records = [record for record in self._records.values() if record.terminal_state == "published"]
+        counts = {"candidates": len(records), "attempted": 0, "completed": 0,
+                  "supported": 0, "disproven": 0, "unknown": 0, "incomplete": 0}
+        reasons: dict[str, int] = {}
+        for record in records:
+            assessments = record.assessments
+            for index, assessment in enumerate(assessments):
+                if assessment.get("reasonCode") == "consolidated_evidence":
+                    assessments = record.assessments[index:]
+            counts["attempted"] += any(a.get("attempted") is True for a in assessments)
+            completed = [a for a in assessments if a.get("completed") is True]
+            counts["completed"] += bool(completed)
+            counts["incomplete"] += not bool(completed)
+            supported = [a for a in completed if a.get("verdict") in {"supported", "disproven"}]
+            last = (supported or completed or assessments)[-1] if assessments else {}
+            verdict = last.get("verdict", "unknown")
+            counts[verdict if verdict in {"supported", "disproven"} else "unknown"] += 1
+            if verdict == "unknown":
+                reason = str(last.get("reasonCode") or "not_assessed")
+                reasons[reason] = reasons.get(reason, 0) + 1
+        return {**counts, "reasonCounts": dict(sorted(reasons.items()))}
+
+    def absorb_optional(self, other: "CandidateEvidenceLedger", *, failure: Optional[str] = None) -> None:
+        """Merge isolated supplemental discovery, closing partial failed output."""
+        for candidate_id, record in other._records.items():
+            if failure and record.terminal_state is None:
+                record.terminal_state = "rejected"
+                record.rejection = CandidateRejection("specialist_discovery", failure)
+            self._records.setdefault(candidate_id, record)
+            if record.terminal_state != "rejected":
+                for object_id in record.object_ids:
+                    self._candidate_by_object_id[object_id] = candidate_id
 
     def reject(self, issue: CodeReviewIssue, *, gate: str, code: str) -> bool:
         record = self.record_for(issue)
@@ -357,10 +421,16 @@ class CandidateEvidenceLedger:
                 record.terminal_state == "rejected" for record in records
             ),
             "rejectionCounts": dict(sorted(rejection_counts.items())),
+            "verification": self.verification_summary(),
             "records": [
                 {
                     "candidateId": record.candidate_id,
                     "stage": record.stage,
+                    "sourceKey": record.source_key,
+                    "hypothesis": record.hypothesis,
+                    "evidenceGaps": list(record.evidence_gaps),
+                    "verificationAssessments": list(record.assessments),
+                    "consolidatedCandidateIds": sorted(record.consolidated_candidate_ids),
                     "reviewUnitIds": list(record.review_unit_ids),
                     "promptHunkIds": list(record.prompt_hunk_ids),
                     "generationPromptDigest": (

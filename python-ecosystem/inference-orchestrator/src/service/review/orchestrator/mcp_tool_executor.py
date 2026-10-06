@@ -11,6 +11,7 @@ import json
 import logging
 import re
 from typing import Any, Dict, List, Optional, Set
+from utils.path_identity import normalize_repository_path, repository_source_location
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ class McpToolExecutor:
         self.max_calls: int = config["max_calls"]
         self.call_count: int = 0
         self.call_log: List[Dict[str, Any]] = []
+        self.verification_source: Dict[tuple[str, str], List[str]] = {}
         self.review_revision = str(review_revision or "").strip()
         self.verification_issues = dict(verification_issues or {})
         self._use_local_review_source = (
@@ -140,21 +142,23 @@ class McpToolExecutor:
             verification_id = str(
                 arguments.get("verificationId") or ""
             ).strip()
-            source_line = self._verification_line_for_path(
+            file_path, requested_start, requested_end = repository_source_location(arguments.get("filePath"))
+            arguments["filePath"] = file_path
+            source_start, source_end = self._verification_range_for_path(
                 verification_id,
-                str(arguments.get("filePath") or ""),
+                file_path,
             )
-            if source_line > 0:
+            if requested_start > 0:
+                source_start, source_end = requested_start, requested_end
+            if source_start > 0:
                 # Request an anchor-centred source window. This avoids replacing
                 # large files with a generic size placeholder or sending an
                 # unrelated full file merely to verify one concrete finding.
-                arguments["startLine"] = max(
-                    1,
-                    source_line - _REVIEW_SOURCE_CONTEXT_LINES,
-                )
-                arguments["endLine"] = (
-                    source_line + _REVIEW_SOURCE_CONTEXT_LINES
-                )
+                max_span = 2 * _REVIEW_SOURCE_CONTEXT_LINES
+                source_end = min(source_end, source_start + max_span)
+                context = max(0, (max_span - (source_end - source_start)) // 2)
+                arguments["startLine"] = max(1, source_start - context)
+                arguments["endLine"] = source_end + context
 
         logger.info(
             f"[MCP {self.stage}] Calling {effective_tool_name} "
@@ -217,6 +221,13 @@ class McpToolExecutor:
                     else "reviewed_revision"
                 )
             self.call_log.append(log_entry)
+            if self.stage == "stage_3" and evidence.get("evidence_valid") is True and not tool_reported_error:
+                source = text
+                if evidence.get("evidence_structured"):
+                    source = json.loads(text).get("fileContent", "")
+                key = (str(arguments.get("verificationId") or ""), str(arguments.get("filePath") or ""))
+                # Separate windows cannot fabricate a contiguous source quote.
+                self.verification_source.setdefault(key, []).append(source)
             return text
         except Exception as e:
             logger.error(f"[MCP {self.stage}] Tool call failed: {e}")
@@ -289,7 +300,10 @@ class McpToolExecutor:
                                 } if self.stage != "stage_3" else {}),
                                 "filePath": {
                                     "type": "string",
-                                    "description": "Path to the file in the repository"
+                                    "description": (
+                                        "Repository file path, optionally with :line or :start-end to select a bounded source window"
+                                        if self.stage == "stage_3" else "Path to the file in the repository"
+                                    )
                                 },
                                 **({
                                     "verificationId": {
@@ -340,7 +354,7 @@ class McpToolExecutor:
                             "properties": {
                                 "filePath": {
                                     "type": "string",
-                                    "description": "Path to the repository file",
+                                    "description": "Repository file path, optionally with :line or :start-end to select a bounded source window",
                                 },
                                 "verificationId": {
                                     "type": "string",
@@ -374,7 +388,7 @@ class McpToolExecutor:
 
     @staticmethod
     def _normalized_path(value: Any) -> str:
-        return str(value or "").strip().replace("\\", "/").lstrip("/")
+        return normalize_repository_path(value)
 
     @staticmethod
     def _has_local_review_source(request: Any) -> bool:
@@ -392,32 +406,35 @@ class McpToolExecutor:
 
     @staticmethod
     def _location_parts(value: Any) -> tuple[str, int]:
-        normalized = McpToolExecutor._normalized_path(value)
-        path, separator, possible_line = normalized.rpartition(":")
-        if separator and possible_line.isdigit():
-            return path, int(possible_line)
-        return normalized, 0
+        path, start, _ = repository_source_location(value)
+        return path, start
 
     def _verification_line_for_path(
         self,
         verification_id: str,
         file_path: str,
     ) -> int:
+        return self._verification_range_for_path(verification_id, file_path)[0]
+
+    def _verification_range_for_path(self, verification_id: str, file_path: str) -> tuple[int, int]:
         issue = self.verification_issues.get(verification_id)
         if issue is None:
-            return 0
+            return 0, 0
+        ranges = []
         requested_path = self._normalized_path(file_path)
         issue_path = self._normalized_path(getattr(issue, "file", ""))
         if requested_path == issue_path:
             try:
-                return max(0, int(getattr(issue, "line", 0) or 0))
+                line = max(0, int(getattr(issue, "line", 0) or 0))
+                if line:
+                    ranges.append((line, line))
             except (TypeError, ValueError):
-                return 0
+                pass
         for location in self._related_locations(issue):
-            path, line = self._location_parts(location)
-            if path == requested_path:
-                return line
-        return 0
+            path, start, end = repository_source_location(location)
+            if path == requested_path and start > 0:
+                ranges.append((start, end))
+        return (min(start for start, _ in ranges), max(end for _, end in ranges)) if ranges else (0, 0)
 
     @staticmethod
     def _related_locations(issue: Any) -> List[str]:

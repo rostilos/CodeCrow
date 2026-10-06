@@ -67,6 +67,23 @@ class RelationWriter:
             "primary_name",
         ) or Path(path).name
         line = max(1, int(metadata.get("start_line") or 1))
+        located_imports = metadata.get("import_occurrences")
+        if located_imports is not None:
+            for scope, occurrences, owner, owner_id in (
+                ("unit", located_imports, source, unit_id),
+                ("file", metadata.get("file_import_occurrences", ()), path,
+                 self.state.file_unit_ids.get(path)),
+            ):
+                for occurrence in occurrences:
+                    self.add_relation(
+                        kind="IMPORTS", source=owner, relation="imports",
+                        target=occurrence["target"], path=path,
+                        line=occurrence["line"], origin="tree-sitter",
+                        source_unit_id=owner_id, attributes={
+                            "importScope": scope, "startByte": occurrence["startByte"],
+                            "endByte": occurrence["endByte"],
+                        },
+                    )
         mappings = (
             ("IMPORTS", "imports"),
             ("EXTENDS", "extends"),
@@ -75,6 +92,8 @@ class RelationWriter:
             ("REFERENCES", "referenced_types"),
         )
         for kind, field in mappings:
+            if field == "imports" and located_imports is not None:
+                continue
             for target in sorted(set(_string_list(metadata.get(field)))):
                 self.add_relation(
                     kind=kind,

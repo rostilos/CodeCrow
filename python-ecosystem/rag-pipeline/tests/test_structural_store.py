@@ -2014,7 +2014,7 @@ def test_remove_paths_interrupts_in_flight_sql_on_cancellation(
         if cancellation_checks > 1:
             raise ExpectedCancellation("cancelled during graph mutation")
 
-    def run_long_query(_paths):
+    def run_long_query(_paths, *, cancellation_check=None):
         connection.execute(
             "WITH RECURSIVE counter(value) AS ("
             "SELECT 1 UNION ALL SELECT value + 1 FROM counter "
