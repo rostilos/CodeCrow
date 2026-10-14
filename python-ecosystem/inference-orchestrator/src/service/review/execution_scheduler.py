@@ -102,12 +102,12 @@ def set_review_deadline(deadline: float | None) -> None:
 
 
 def optional_work_budget(configured_seconds: float) -> float:
-    """Optional work gets at most a fifth of remaining time; core can finalize."""
+    """Respect the stage timeout and the caller's actual remaining deadline."""
     execution = _EXECUTION.get()
     if execution is None or execution.deadline is None:
         return configured_seconds
     remaining = max(0.0, execution.deadline - asyncio.get_running_loop().time())
-    return min(configured_seconds, remaining * 0.2)
+    return min(configured_seconds, remaining)
 
 
 def optional_timeout_seconds(name: str, default: float) -> float:

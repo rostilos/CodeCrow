@@ -16,17 +16,23 @@ Available issue categories (use EXACTLY one of these values):
 - ARCHITECTURE: Design issues, coupling problems, SOLID violations
 """
 
+CAUSAL_ANCHOR_INSTRUCTIONS = """
+CAUSAL ANCHORING:
+- Anchor file/primary_file, line and codeSnippet to the changed cause in a visible reviewable PR diff hunk, regardless of scope. Cite unchanged downstream consequences in reason/evidence and relatedLocations.
+- For partial deletions, copy an exact surviving current-source line at the removal boundary inside that hunk and explain the removed behavior's causal link. Never substitute an unrelated nearby line.
+"""
+
 CODE_SNIPPET_AND_SCOPE_INSTRUCTIONS = """
 LINE, CODE SNIPPET, AND SCOPE CONTRACT:
 - "line" is a best-effort line number in the new version; the system re-anchors using codeSnippet.
 - For every NEW finding, "codeSnippet" is mandatory. Copy one exact, verbatim source line from the visible current/new-side diff or file context, preserving whitespace and quotes. Never fabricate, annotate, shorten, or paraphrase it.
 - For a whole-file deletion only, use an exact removed BASE-side line and its old line number (anchorSide=BASE; otherwise HEAD). Report a current regression caused by removal, not a defect that disappeared with the file. Never describe removed bytes as head source.
-- Choose the most representative anchor line: the faulty line for LINE, the first line of the block for BLOCK, the function signature for FUNCTION, or the most relevant declaration/changed line for FILE.
+- Choose the source line in a visible reviewable diff hunk that causes the defect, regardless of scope.
 - Empty or non-matching codeSnippet values cause a NEW finding to be discarded.
 - Sole exception: an exact previous issue returned with isResolved=true is a historical lifecycle update, not a new finding. It may reuse the supplied previous codeSnippet even when that fixed line is absent from current source, and it may omit codeSnippet when no historical snippet was supplied.
 - "scope" is required and must be one of LINE, BLOCK, FUNCTION, FILE. Use LINE only when one line fully captures the problem; use BLOCK/FUNCTION/FILE for wider issues.
 - Do not compute endLine or line ranges.
-"""
+""" + CAUSAL_ANCHOR_INSTRUCTIONS
 
 ISSUE_DEDUPLICATION_INSTRUCTIONS = (
     "ATOMIC: 1 root/issue. Repeats: relatedLocations."

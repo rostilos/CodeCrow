@@ -180,7 +180,9 @@ class SemanticDuplicateGroup(BaseModel):
     duplicate_indices: List[int] = Field(
         default_factory=list,
         description=(
-            "Batch-local indices describing the same root cause as keeper_index."
+            "Batch-local indices sharing the keeper's root cause or fully contained "
+            "in it; never distinct atomic findings whose existing reports already "
+            "fully cover the keeper. Use covered_summaries for that case."
         ),
     )
     confidence: str = Field(
@@ -191,11 +193,18 @@ class SemanticDuplicateGroup(BaseModel):
     )
     rationale: str = Field(
         default="",
-        description="Short root-cause identity explanation, not chain-of-thought.",
+        description=(
+            "Explain shared cause or complete containment, and why separate retained "
+            "findings for distinct root causes do not already fully cover the keeper."
+        ),
     )
     merged_reason: str = Field(
         default="",
-        description="Concise combined evidence and impact for this one defect, preserving useful facts from every member without repeating the claim.",
+        description=(
+            "Combined evidence and impact preserving every assertion of the existing "
+            "keeper and useful evidence from every removed member; do not invent a "
+            "broader union."
+        ),
     )
 
 

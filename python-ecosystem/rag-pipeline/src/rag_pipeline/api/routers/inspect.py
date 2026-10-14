@@ -6,15 +6,16 @@ import hashlib
 import json
 import logging
 import sqlite3
-from collections import Counter
+from collections import Counter, OrderedDict
 from contextlib import contextmanager
 from pathlib import PurePosixPath
+from threading import Lock
 from typing import Any, Iterable
 
 from fastapi import APIRouter, HTTPException, Query
 
 from ...core.exact_index import ExactIndexPreconditionError
-from ...core.structural_store import relation_to_manifest
+from ...core.structural_graph.projections import relations_to_manifests
 from ..models import (
     RepositoryIndexFilters,
     RepositoryIndexGraphRequest,
@@ -28,6 +29,10 @@ router = APIRouter(tags=["inspect"])
 GRAPH_TEXT_LIMIT = 280
 DETAIL_TEXT_LIMIT = 8000
 MAX_OVERVIEW_SCAN = 20000
+
+# Small, process-local cache of rendering projections for sealed generations.
+_FILE_MAP_CACHE: OrderedDict[tuple, dict[str, Any]] = OrderedDict()
+_FILE_MAP_CACHE_LOCK = Lock()
 
 
 def _get_index_manager():
@@ -124,7 +129,7 @@ def _unit_node(
         "virtual": False,
         "recordType": row["record_type"],
         "metadata": {
-            **metadata,
+            **(metadata if detail else {}),
             "qualified_name": row["qualified_name"],
             "content_sha256": row["content_sha256"],
         },
@@ -314,6 +319,27 @@ def _relation_rows_for_units(
     return rows, total
 
 
+def _relation_filter_sql(filters: RepositoryIndexFilters) -> tuple[str, list[Any]]:
+    unit_where, parameters = _unit_where(filters, prefix="candidate.")
+    if unit_where == "1 = 1":
+        return (
+            "(source_unit_id IS NOT NULL OR target_unit_id IS NOT NULL OR "
+            "EXISTS (SELECT 1 FROM relation_paths rp JOIN units candidate "
+            "ON candidate.path = rp.path WHERE rp.relation_id = relations.relation_id))",
+            [],
+        )
+    return (
+        "relation_id IN ("
+        "SELECT r.relation_id FROM units candidate JOIN relations r "
+        f"ON r.source_unit_id = candidate.unit_id WHERE {unit_where} UNION "
+        "SELECT r.relation_id FROM units candidate JOIN relations r "
+        f"ON r.target_unit_id = candidate.unit_id WHERE {unit_where} UNION "
+        "SELECT rp.relation_id FROM units candidate JOIN relation_paths rp "
+        f"ON rp.path = candidate.path WHERE {unit_where})",
+        parameters * 3,
+    )
+
+
 def _relation_rows_for_filters(
     connection: sqlite3.Connection,
     filters: RepositoryIndexFilters,
@@ -322,27 +348,20 @@ def _relation_rows_for_filters(
     offset: int = 0,
 ) -> tuple[list[sqlite3.Row], int]:
     """Page each relation once across the complete filtered unit population."""
-    unit_where, unit_parameters = _unit_where(filters, prefix="candidate.")
-    clauses = (
-        "source_unit_id IN (SELECT candidate.unit_id FROM units AS candidate "
-        f"WHERE {unit_where})",
-        "target_unit_id IN (SELECT candidate.unit_id FROM units AS candidate "
-        f"WHERE {unit_where})",
-        "relation_id IN (SELECT relation_paths.relation_id FROM relation_paths "
-        "WHERE EXISTS (SELECT 1 FROM units AS candidate "
-        "WHERE candidate.path = relation_paths.path "
-        f"AND {unit_where}))",
-    )
-    parameters = (
-        *unit_parameters,
-        *unit_parameters,
-        *unit_parameters,
-    )
-    where = "(" + " OR ".join(clauses) + ")"
-    total = connection.execute(  # nosec B608 -- fixed clauses, placeholders only
-        "SELECT count(*) AS count FROM relations WHERE " + where,
-        parameters,
-    ).fetchone()["count"]
+    where, parameters = _relation_filter_sql(filters)
+    if not parameters and not (filters.languages or filters.path or filters.file_query or filters.text_query):
+        # Most relations have a resolved endpoint. Only inspect path membership
+        # for the unresolved remainder; counting the covering index is cheap.
+        total = connection.execute(
+            "SELECT (SELECT count(*) FROM relations) - count(*) AS count "
+            "FROM relations WHERE source_unit_id IS NULL AND target_unit_id IS NULL "
+            "AND NOT EXISTS (SELECT 1 FROM relation_paths rp JOIN units candidate "
+            "ON candidate.path = rp.path WHERE rp.relation_id = relations.relation_id)"
+        ).fetchone()["count"]
+    else:
+        total = connection.execute(  # nosec B608 -- fixed clauses, placeholders only
+            "SELECT count(*) AS count FROM relations WHERE " + where, parameters,
+        ).fetchone()["count"]
     rows = connection.execute(  # nosec B608 -- fixed clauses, placeholders only
         "SELECT * FROM relations WHERE " + where + " "
         "ORDER BY path, line, relation_id LIMIT ? OFFSET ?",
@@ -400,7 +419,9 @@ def _build_relation_graph(
             extra_node_count += 1
         return external["id"]
 
-    for row in relation_rows:
+    relation_rows = list(relation_rows)
+    manifests = relations_to_manifests(connection, relation_rows)
+    for row, manifest in zip(relation_rows, manifests):
         source_id = endpoint(
             row["source_unit_id"], row["source"], row["kind"]
         )
@@ -409,7 +430,6 @@ def _build_relation_graph(
         )
         if not source_id or not target_id:
             continue
-        manifest = relation_to_manifest(connection, row)
         edges.append({
             "id": row["relation_id"],
             "source": source_id,
@@ -499,7 +519,8 @@ def repository_index_overview(
                 "GROUP BY relation ORDER BY count DESC, relation"
             ).fetchall()
             rows = connection.execute(
-                "SELECT * FROM units ORDER BY path, start_line, unit_id LIMIT ?",
+                "SELECT language, path, record_type, name, metadata_json "
+                "FROM units ORDER BY path, start_line, unit_id LIMIT ?",
                 (sample_limit,),
             ).fetchall()
     except ExactIndexPreconditionError:
@@ -585,6 +606,101 @@ def repository_index_overview(
     }
 
 
+def _file_graph(connection: sqlite3.Connection, receipt: dict[str, Any], filters: RepositoryIndexFilters):
+    """A complete file projection without transferring every AST relation.
+
+    Unresolved endpoints are explicitly grouped by relation kind. Exact symbols,
+    evidence, and individual relations remain available in the AST/point views.
+    """
+    # Tenant/generation checks have already run on the caller's connection.
+    # Include physical generation + digest, never only a project or branch name.
+    manifest = receipt.get("generation_manifest_sha256")
+    cache_key = (
+        receipt.get("workspace"), receipt.get("project"), receipt.get("collection_target"),
+        manifest, connection.execute("PRAGMA database_list").fetchone()[2],
+        filters.model_dump_json(),
+    )
+    if manifest:
+        with _FILE_MAP_CACHE_LOCK:
+            cached = _FILE_MAP_CACHE.get(cache_key)
+            if cached is not None:
+                _FILE_MAP_CACHE.move_to_end(cache_key)
+                return cached
+    units = connection.execute(
+        "SELECT unit_id, path, language FROM units WHERE record_type != 'repository_state'"
+    ).fetchall()
+    unit_paths = {row["unit_id"]: row["path"] for row in units}
+    where, parameters = _unit_where(filters)
+    selected_paths = {row[0] for row in connection.execute(  # nosec B608
+        f"SELECT DISTINCT path FROM units WHERE {where}", parameters,
+    )}
+    files: dict[str, dict[str, Any]] = {}
+    for row in units:
+        path = row["path"]
+        if path not in files:
+            files[path] = {
+                "id": f"file-map:{len(files)}", "title": PurePosixPath(path).name,
+                "kind": "file", "recordType": "file_aggregate", "virtual": True,
+                "path": path, "language": row["language"], "branch": receipt["branch"],
+                "group": str(PurePosixPath(path).parent), "symbolNames": [],
+                "metadata": {"aggregate_record_count": 0, "internal_relations": 0},
+            }
+        files[path]["metadata"]["aggregate_record_count"] += 1
+    relation_where, relation_parameters = _relation_filter_sql(filters)
+    relations = connection.execute(  # nosec B608 -- fixed clauses, placeholders only
+        "SELECT source_unit_id, target_unit_id, kind, relation FROM relations WHERE "
+        + relation_where, relation_parameters,
+    )
+    nodes = {node["id"]: node for path, node in files.items() if path in selected_paths}
+    bundles: Counter = Counter()
+    total = internal = external = 0
+    for row in relations:
+        total += 1
+        endpoints = []
+        for key in ("source_unit_id", "target_unit_id"):
+            path = unit_paths.get(row[key])
+            if path is not None:
+                node = files[path]
+            else:
+                kind = row["kind"].casefold()
+                node = {
+                    "id": f"unresolved-group:{kind}", "title": f"Unresolved {kind} endpoints",
+                    "kind": "external_symbol", "recordType": "external_aggregate",
+                    "virtual": True, "branch": receipt["branch"], "path": None,
+                    "metadata": {"aggregate": True},
+                }
+            nodes[node["id"]] = node
+            endpoints.append(node["id"])
+        source, target = endpoints
+        if any(endpoint.startswith("unresolved-group:") for endpoint in endpoints):
+            external += 1
+        if source == target and source.startswith("file-map:"):
+            internal += 1
+            nodes[source]["metadata"]["internal_relations"] += 1
+        else:
+            bundles[(source, target, row["kind"].casefold(), row["relation"])] += 1
+    edges = [{
+        "id": f"file-bundle:{index}", "source": source, "target": target,
+        "kind": kind, "label": label, "weight": count,
+        "metadata": {"aggregate": True, "aggregateCount": count},
+    } for index, ((source, target, kind, label), count) in enumerate(bundles.items())]
+    result = {
+        "available": True, "projection": "files", "nodes": list(nodes.values()),
+        "edges": edges, "nextCursor": None, "scannedPoints": len(units),
+        "totalRelations": int(receipt.get("relation_count") or 0),
+        "eligibleRelations": total, "returnedRelations": total,
+        "internalRelations": internal, "externalRelations": external,
+        "relationsTruncated": False,
+    }
+    if manifest:
+        with _FILE_MAP_CACHE_LOCK:
+            _FILE_MAP_CACHE[cache_key] = result
+            _FILE_MAP_CACHE.move_to_end(cache_key)
+            while len(_FILE_MAP_CACHE) > 4:
+                _FILE_MAP_CACHE.popitem(last=False)
+    return result
+
+
 @router.post("/repository-index/{workspace}/{project}/graph")
 def repository_index_graph(
     workspace: str,
@@ -609,6 +725,8 @@ def repository_index_graph(
                     "scannedPoints": 0,
                     "limit": request.limit,
                 }
+            if request.projection == "files":
+                return _file_graph(connection, receipt, request.filters)
             offset, relation_offset, _legacy_cursor_page_size = _graph_cursor(
                 request.cursor
             )

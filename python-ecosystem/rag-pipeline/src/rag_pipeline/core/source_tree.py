@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import stat
@@ -16,6 +17,7 @@ from typing import BinaryIO, Mapping
 
 SOURCE_TREE_SCHEMA = "codecrow.repository-source-tree"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+logger = logging.getLogger(__name__)
 
 
 class RepositorySourceTreeError(RuntimeError):
@@ -341,20 +343,32 @@ def compute_repository_source_tree_sha256(repo_path: str | Path) -> str:
 def _git_output(root: Path, *arguments: str) -> str:
     environment = dict(os.environ)
     environment["GIT_OPTIONAL_LOCKS"] = "0"
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), *arguments],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=environment,
-        )
-    except (OSError, subprocess.SubprocessError) as exception:
-        raise RepositorySourceTreeError(
-            "cannot verify repository Git revision"
-        ) from exception
-    return result.stdout
+    for attempt in range(2):
+        try:
+            return subprocess.run(
+                ["git", "-C", str(root), *arguments],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=environment,
+            ).stdout
+        except subprocess.TimeoutExpired as exception:
+            if attempt == 0:
+                logger.warning(
+                    "Repository Git %s timed out after 30 seconds; retrying once",
+                    arguments[0],
+                )
+                continue
+            raise RepositorySourceTreeError(
+                "cannot verify repository Git revision: "
+                f"git {arguments[0]} timed out after 30 seconds (2 attempts)"
+            ) from exception
+        except (OSError, subprocess.SubprocessError) as exception:
+            raise RepositorySourceTreeError(
+                "cannot verify repository Git revision: "
+                f"git {arguments[0]} failed ({type(exception).__name__})"
+            ) from exception
 
 
 def _verify_git_checkout(root: Path, commit: str) -> bool:
@@ -373,7 +387,9 @@ def _verify_git_checkout(root: Path, commit: str) -> bool:
         root,
         "status",
         "--porcelain=v1",
-        "--untracked-files=all",
+        # Only the clean/dirty predicate is used. Reporting an untracked
+        # directory is sufficient; enumerating all its descendants is not.
+        "--untracked-files=normal",
     )
     if status:
         raise RepositorySourceTreeError(

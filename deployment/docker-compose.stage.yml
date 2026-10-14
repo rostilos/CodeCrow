@@ -245,11 +245,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 1G
+          cpus: "${INFERENCE_CPU_LIMIT:-4.0}"
+          memory: ${INFERENCE_MEMORY_LIMIT:-8G}
         reservations:
-          cpus: "0.5"
-          memory: 512M
+          cpus: "4"
+          memory: 6G
 
   rag-pipeline:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-stage-rag-pipeline:${RAG_PIPELINE_IMAGE_TAG:-stage}

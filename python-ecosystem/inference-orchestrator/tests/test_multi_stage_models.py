@@ -137,3 +137,29 @@ def test_null_normalization_keeps_non_nullable_wire_schema_types():
     assert code_issue_schema["claimKind"]["type"] == "string"
     assert cross_issue_schema["coverageRegression"]["type"] == "boolean"
     assert cross_issue_schema["coverageEvidenceRefs"]["type"] == "array"
+
+
+@pytest.mark.parametrize("encoded", [False, True])
+def test_batch_accepts_exact_json_encoded_reviews_without_another_model_call(encoded):
+    import json
+    reviews = [{"file": "a.py", "analysis_summary": "checked", "issues": []}]
+    result = FileReviewBatchOutput.model_validate({"reviews": json.dumps(reviews) if encoded else reviews})
+    assert [review.file for review in result.reviews] == ["a.py"]
+
+
+def test_saved_provider_response_preserves_pagination_finding_without_retry():
+    import json
+    from pathlib import Path
+    fixture = json.loads((Path(__file__).parent / "fixtures/stage1_encoded_reviews.json").read_text())
+    result = FileReviewBatchOutput.model_validate(fixture["tool_arguments"])
+    review = next(r for r in result.reviews if r.file.endswith("admin-group.js.es6"))
+    assert len(review.issues) == 1
+    assert "totalPages" in review.issues[0].title
+    assert "user_count = 50" in review.issues[0].reason
+
+
+@pytest.mark.parametrize("value", ['[{"file":"a.py"}]', '{}', '[{"file":', 'not json', 'null',
+                                    '[]}}', '[]} trailing text', '[]{}', '[] {"reviews":[]}'])
+def test_encoded_reviews_still_require_a_complete_valid_array(value):
+    with pytest.raises(ValidationError):
+        FileReviewBatchOutput.model_validate({"reviews": value})

@@ -47,16 +47,15 @@ async def main():
         return ToolMessage(content=json.dumps({"results": []}), tool_call_id=request.tool_call["id"])
     for index in range(2):
         await empty.awrap_tool_call(SimpleNamespace(tool_call={"name": "queryCodeGraph", "args": {"question": "caller " + str(index)}, "id": str(index)}), no_results)
-    async def model(request):
-        assert [tool["name"] for tool in request.tools] == ["queryCodeGraph", "getReviewFileContent"]
-        assert request.model_settings["tool_choice"]["function"]["name"] == "queryCodeGraph"
-        return "fallback source available"
-    request = SimpleNamespace(tools=[{"name":"queryCodeGraph"}, {"name":"getReviewFileContent"}], model_settings={"tool_choice": {"type":"function", "function":{"name":"queryCodeGraph"}}})
-    request.override = lambda **kwargs: SimpleNamespace(**kwargs)
-    assert await empty.awrap_model_call(request, model) == "fallback source available"
+    recovered = await empty.awrap_tool_call(SimpleNamespace(tool_call={
+        "name": "queryCodeGraph", "args": {"question": "resolved caller"}, "id": "recovered",
+    }), handler)
+    assert recovered.tool_call_id == "recovered"
+    assert observation_status(recovered) == "acquired"
+    assert len(executed) == 2
     fresh = EvidenceAcquisitionMiddleware()
     await fresh.awrap_tool_call(SimpleNamespace(tool_call={"id":"other-review", "name":"getReviewFileContent", "args":{"filePath":"a.py"}}), handler)
-    assert len(executed) == 2
+    assert len(executed) == 3
 
 asyncio.run(main())
 print("Real SDK cache/reducer/recovery and per-review isolation passed")

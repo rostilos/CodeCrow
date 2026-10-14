@@ -12,9 +12,9 @@ from .shared import (
     _canonical_json,
     _sha256_text,
     _normalize_path,
-    _string_list,
     _first_string,
     _unit_id,
+    _unit_names,
     _normalized_name,
     _short_name,
 )
@@ -70,25 +70,7 @@ class UnitWriter:
             end_line,
             content_sha256,
         )
-        names = {
-            name,
-            qualified_name,
-            _short_name(name),
-            _short_name(qualified_name),
-            *_string_list(metadata.get("symbol_names")),
-            *_string_list(metadata.get("architecture_identifiers")),
-        }
-        namespace = str(metadata.get("namespace") or "").strip(" \\")
-        parent_class = str(metadata.get("parent_class") or "").strip()
-        if namespace and parent_class and name:
-            qualified_owner = f"{namespace}\\{parent_class}"
-            names.update({
-                qualified_owner,
-                f"{qualified_owner}::{name}",
-                f"{qualified_owner}.{name}",
-            })
-        elif namespace and name:
-            names.add(f"{namespace}\\{name}")
+        names = _unit_names(name, qualified_name, metadata)
         encoded_metadata = _canonical_json(metadata)
         capture_repository_unit = self.state.capturing_repository_outputs and (
             record_type == "plugin_symbol"

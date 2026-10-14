@@ -18,7 +18,7 @@ from dataclasses import dataclass
 import re
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
-from utils.diff_processor import DiffFile, DiffHunk, HunkDisposition, ProcessedDiff
+from utils.diff_processor import DiffChangeType, DiffFile, DiffHunk, HunkDisposition, ProcessedDiff
 
 
 PERSISTED_TASK_EVIDENCE_CHAR_BUDGET = 2_400
@@ -391,6 +391,27 @@ def _build_scope_context(
         "FILE MANIFEST:",
     ]
     manifest_text = "\n".join([*manifest_header, *manifest_lines])
+    impact_paths = [
+        file for file in processed_diff.files
+        if file.change_type in {DiffChangeType.RENAMED, DiffChangeType.DELETED}
+        and not file.is_binary and not file.is_gitlink
+    ]
+    if impact_paths:
+        manifest_text += (
+            "\nPATH-CHANGE IMPACT OBLIGATIONS: check imports, callers, registrations "
+            "and path resolution affected by these moves/removals. Context-only rename "
+            "units contain unchanged source, not text edits. Report only defects caused "
+            "by the path change with exact source evidence; missing source is not evidence of a defect.\n"
+            + "\n".join(
+                f"- {file.old_path} → {file.path}" + (
+                    " (source unavailable; inspect relevant supplied callers)"
+                    if not file.review_hunks else ""
+                )
+                if file.change_type is DiffChangeType.RENAMED
+                else f"- DELETED {file.path} (removed source anchors are BASE-side)"
+                for file in impact_paths
+            )
+        )
     manifest_complete = not processed_diff.truncated
     manifest_text += (
         "\nManifest status: COMPLETE"
@@ -539,8 +560,12 @@ def _manifest_line(diff_file: DiffFile) -> str:
         diff_file.plugin_disposition
         or ("skipped" if diff_file.is_skipped else "reviewable")
     )
+    display_path = (
+        f"{diff_file.old_path} → {diff_file.path}"
+        if diff_file.old_path else diff_file.path
+    )
     return (
-        f"- {change_type.upper()} {diff_file.path} "
+        f"- {change_type.upper()} {display_path} "
         f"(+{diff_file.additions}/-{diff_file.deletions}, {disposition})"
     )
 

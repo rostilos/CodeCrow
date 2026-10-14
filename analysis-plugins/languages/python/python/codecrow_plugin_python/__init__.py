@@ -7,7 +7,10 @@ from codecrow_plugins import (
     CandidateClaim, EvidenceRequest, FileArtifact, GraphFact, PluginDescriptor,
     ImportGraphSession, PluginDiagnostic, PluginOutcome, ReviewContribution,
     SyntaxContribution, ValidationDecision, ValidationResult,
+    TreeSitterDocument,
 )
+
+from .syntax import graph_facts, parse_source
 
 from .repository import (
     PYTHON_EXTENSIONS,
@@ -72,12 +75,14 @@ class PythonPlugin:
         if not artifact.path.casefold().endswith(_EXTENSIONS) or artifact.deleted:
             return PluginOutcome.abstained()
         try:
-            tree = ast.parse(artifact.content, filename=artifact.path, type_comments=True)
+            tree = parse_source(artifact)
         except SyntaxError as exception:
             return PluginOutcome.failed(PluginDiagnostic(
                 "python-parse-failed", f"SyntaxError at line {exception.lineno}: {exception.msg}", self.descriptor.id,
             ))
         module = artifact.path.removesuffix(".py").replace("/", ".")
+        if isinstance(tree, TreeSitterDocument):
+            return PluginOutcome.handled(graph_facts(tree, artifact.path, module))
         facts: set[GraphFact] = {GraphFact("python-module", artifact.path, "declares", module, artifact.path)}
         owners: list[tuple[int, int, str]] = []
         for node in ast.walk(tree):

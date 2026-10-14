@@ -484,7 +484,7 @@ def test_plugin_runtime_remains_the_syntax_selection_boundary():
     } for node in nodes)
 
 
-def test_resilient_splitter_quarantines_only_the_failing_file():
+def test_resilient_splitter_retains_failing_file_and_continues():
     splitter = ASTCodeSplitter()
 
     def split_one(documents, capabilities=None):
@@ -500,8 +500,10 @@ def test_resilient_splitter_quarantines_only_the_failing_file():
         Document("value = 2", {"path": "later.py"}),
     ])
 
-    assert [node.metadata["path"] for node in nodes] == ["ok.py", "later.py"]
-    assert skipped == ("broken.py",)
+    assert [node.metadata["path"] for node in nodes] == ["ok.py", "broken.py", "later.py"]
+    assert skipped == ()
+    assert nodes[1].text == "broken"
+    assert nodes[1].metadata["parse_fallback"] == "RuntimeError"
 
 
 def test_python_ast_chunks_keep_source_and_structural_metadata():
@@ -571,3 +573,32 @@ def test_query_capture_byte_points_match_prefix_scan_at_every_unicode_and_newlin
         capture = match.get("function")
         assert capture.start_point == capture.end_point == (expected_line, expected_column)
         assert capture.start_byte == capture.end_byte == offset
+
+
+@pytest.mark.parametrize("content", ['def method():\n    """"""\n    return 1\n', "def method():\n    ''''''\n    return 1\n"])
+def test_empty_python_docstrings_do_not_drop_source(content):
+    assert MetadataExtractor().extract_docstring(content, "python") == ""
+    nodes, skipped = ASTCodeSplitter().split_documents_resilient([
+        Document(content, {"path": "service.py", "language": "python"}),
+    ])
+    assert nodes and not skipped
+    assert any("return 1" in node.text for node in nodes)
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("enrichment crashed"), SyntaxError("unsupported syntax")])
+def test_optional_parser_failure_retains_complete_plain_source(failure):
+    source = 'type Pair[T] = tuple[T, T]\ndef pair[T](value: T) -> Pair[T]:\n    return value, value\n'
+    splitter = ASTCodeSplitter()
+    splitter.split_documents = MagicMock(side_effect=failure)
+    splitter.emitter._metadata_extractor.extract_names_from_content = MagicMock(
+        side_effect=AssertionError("recovery must not repeat failed metadata extraction"),
+    )
+    nodes, skipped = splitter.split_documents_resilient([
+        Document(source, {"path": "service.py", "language": "python"}),
+    ])
+    assert skipped == ()
+    assert len(nodes) == 1 and nodes[0].text == source
+    assert nodes[0].metadata["content_type"] == "fallback"
+    assert nodes[0].metadata["start_line"] == 1
+    assert nodes[0].metadata["end_byte"] == len(source.encode())
+    assert nodes[0].metadata["parse_fallback"] == type(failure).__name__

@@ -565,6 +565,7 @@ class RepositoryIndexGraphRequest(BaseModel):
     limit: int = Field(default=160, ge=20, le=5000)
     cursor: Optional[str] = Field(default=None, max_length=256)
     scan_limit: int = Field(default=2500, ge=100, le=100000)
+    projection: str = "symbols"
 
 
 class RepositoryIndexNodeRequest(BaseModel):

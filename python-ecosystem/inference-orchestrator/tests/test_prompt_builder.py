@@ -109,6 +109,35 @@ class TestBuildStage0:
 
 class TestBuildStage1:
 
+    def test_unknown_dependency_coverage_is_not_reported_as_no_dependencies(self):
+        result = PromptBuilder.build_stage_1_batch_prompt(
+            files=[{"path": "boot.js", "diff": "+scheduling.init()"}],
+            priority="HIGH",
+        )
+        assert "No dependency edge crosses" not in result
+        assert "relationship coverage may be incomplete" in result
+
+    def test_partial_dependency_records_do_not_claim_complete_coverage(self):
+        result = PromptBuilder.build_stage_1_batch_prompt(
+            files=[{"path": "boot.js", "diff": "+scheduling.init()"}],
+            priority="HIGH", batch_boundary_context="boot.js -> scheduling/index.js",
+        )
+        assert "boot.js -> scheduling/index.js" in result
+        assert "relationship coverage may be incomplete" in result
+
+    def test_available_directory_tool_recovers_missing_source_paths(self):
+        result = PromptBuilder.build_stage_1_batch_prompt(
+            files=[{"path": "boot.js", "diff": "+scheduling.init()"}],
+            priority="HIGH", use_mcp_tools=True,
+            structural_tools_available=False, review_file_tool_available=True,
+            directory_tool_available=True, target_branch="base-sha",
+            vcs_workspace="tenant", vcs_repo_slug="repo",
+        )
+        assert "getDirectoryByPath" in result
+        assert "projectKey=repo" in result
+        assert "missing or guessed path" in result
+        assert "absence of a dependency" in result
+
     def test_basic(self):
         files = [{"path": "src/main.py", "diff": "+print('hi')",
                   "type": "MODIFIED", "current_code": "print('hi')", "focus_areas": ["logic"]}]
@@ -496,7 +525,10 @@ class TestBuildStage3:
         assert '"issue_id":"issue_0"' in result
         assert '"verdict":"unknown"' in result
         assert "one assessment per assigned Verification ID" in result
-        assert "disproven assessment citing exact contradictory" in result
+        assert "must cite exact contradictory source from an admitted Request HEAD source block" in result
+        assert "or a tool read bound to that Verification ID" in result
+        assert "A related file without line numbers needs an observed window in" in result
+        assert "BASE and primary path-only anchors still require successful" in result
 
     def test_local_only_mcp_verification_never_advertises_provider_tools(self):
         result = PromptBuilder.build_stage_3_aggregation_prompt(

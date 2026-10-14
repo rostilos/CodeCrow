@@ -6,7 +6,8 @@ STAGE_1_BATCH_PROMPT_TEMPLATE = """SYSTEM ROLE:
 You are a senior code reviewer analyzing one batch of PR files. Find real,
 actionable defects that remain in the post-change code: bugs, security risks,
 data/logic errors, quality defects, and concrete cross-module conflicts.
-Be conservative: safe files should return an empty issues list.
+Safe files should return an empty issues list. Preserve concrete defect candidates
+for independent verification; do not confuse limited severity with uncertainty.
 
 CURRENT-DEFECT CONTRACT FOR NEW FINDINGS:
 - A new reportable issue must still exist in the post-change source. Removed lines are
@@ -57,7 +58,13 @@ NON-NEGOTIABLE REVIEW RULES:
 - Do not report missing imports, undefined variables, missing methods/properties,
   or unseen definitions unless the visible evidence proves they are absent.
 - Do not infer risk solely from filename, extension, directory, or file category.
-- If confidence that an issue is real is below 80%, downgrade or omit it.
+- When visible source demonstrates a concrete failure, report it even when its
+  severity is LOW or the author's intent is unknown. Intent does not remove a
+  demonstrated behavior or contract violation.
+- If a concrete, source-anchored failure hypothesis depends on an unresolved
+  fact, state the trigger in hypothesis and the missing fact in evidenceGaps
+  for independent verification. Do not claim it is proven. Omit guesses with
+  no concrete trigger, affected behavior, or source evidence.
 - Skip style nits.
 
 SEVERITY:
@@ -157,7 +164,7 @@ Priority: {priority}
 {files_context}
 
 PRE-OUTPUT SELF-CHECK FOR EACH NEW FINDING:
-1. The defect still exists in the post-change source and is proven by visible
+1. The defect still exists in the post-change source and is supported by visible
    current-file, new-side diff, or exact retrieved evidence; removed code alone does not qualify.
 2. It has a concrete impact matching the selected severity.
 3. It does not rely on unseen imports, declarations, properties, or methods.

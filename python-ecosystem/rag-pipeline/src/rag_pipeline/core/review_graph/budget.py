@@ -101,7 +101,49 @@ def bound_graph_response(value: dict[str, Any] | None, token_budget: int | None)
     if references:
         response["continuations"] = references + list(response.get("continuations") or [])[:4]
 
+    # Every measurement includes the final counts and their omission fields.
+    # Otherwise adding those fields after fitting can trigger an unnecessary
+    # emergency fallback and discard source that still fits.
+    original_counts = {
+        key: coverage[key]
+        for key in (
+            'returnedNodes', 'returnedRelations', 'returnedResults',
+            'returnedRoots', 'sourceWindowCount',
+        )
+        if key in coverage
+    }
+    original_omissions = {
+        key: value for key, value in coverage.items()
+        if key.startswith('omitted')
+    }
+
+    def refresh_coverage() -> None:
+        # Refresh returned counts instead of claiming the original cardinalities.
+        for name, key in (("returnedNodes", "nodes"), ("returnedRelations", "edges"),
+                          ("returnedResults", "results"), ("returnedRoots", "roots"),
+                          ("sourceWindowCount", "sourceWindows")):
+            if name in coverage and key in response:
+                old = int(original_counts.get(name, coverage[name]))
+                coverage[name] = len(response[key])
+                if old > coverage[name]:
+                    omitted_key = "omitted" + name.removeprefix("returned")
+                    coverage[omitted_key] = int(original_omissions.get(omitted_key, 0)) + old - coverage[name]
+        evidence = response.get("evidence", {})
+        if "relationCount" in coverage and isinstance(evidence, dict):
+            coverage["relationCount"] = len(evidence.get("relations", []))
+        changed = response.get("changed", {})
+        if "changedUnitCount" in coverage and isinstance(changed, dict):
+            coverage["changedUnitCount"] = len(changed.get("units", []))
+        source = coverage.get("source")
+        if isinstance(source, dict):
+            source["returnedSourceCharacters"] = sum(len(x.get("content", "")) for x in response.get("sourceWindows", []))
+            if omitted.get("source_content"):
+                source.update(state="bounded", truncated=True)
+        if omitted.get("results") and "cursor" in response:
+            response["nextCursor"] = int(response["cursor"]) + len(response["results"])
+
     def measure() -> int:
+        refresh_coverage()
         coverage["budgetOmissions"] = dict(list(omitted.items())[:20])
         for _ in range(8):
             encoded = _encoded(response)
@@ -118,10 +160,34 @@ def bound_graph_response(value: dict[str, Any] | None, token_budget: int | None)
                 break
         return coverage["modelObservationBytes"]
 
+    def update_candidate_page() -> None:
+        if response.get("status") != "ambiguous" or "candidates" not in response:
+            return
+        # Candidate cursors index candidates, never the empty relation results.
+        # Stop before an undisplayable identity rather than skipping its fact.
+        items = response["candidates"]
+        for index, item in enumerate(items):
+            if not item.get("unitId"):
+                del items[index:]
+                break
+        count = len(items)
+        cursor = int(value.get("cursor") or 0)
+        total = int(value.get("candidateCount", len(value.get("candidates", []))))
+        more = cursor + count < total
+        response.update(candidateCount=total, candidateResultCount=count,
+                        candidatesTruncated=more, truncated=more, cursor=cursor,
+                        nextCursor=cursor + count if count and more else None)
+        if count:
+            response["hint"] = ("Retry with a candidate unitId; use nextCursor for more candidates."
+                                if more else "Retry with a candidate unitId.")
+        elif value.get("candidates"):
+            response["reason"] = "candidate_budget_exhausted"
+            response["hint"] = "Use an exact source path or qualified symbol to narrow the target."
+
     # Reduce optional navigation/cardinality before exact source. These lists
     # are already semantically selected; their omitted tails stay observable.
     arrays = [
-        (response, key) for key in ("omittedFollowups", "frontier", "connections",
+        (response, key) for key in ("candidates", "omittedFollowups", "frontier", "connections",
                                    "impactedFiles", "resolvedUnits", "roots", "results", "edges", "nodes")
     ]
     for key in ("evidence", "changed"):
@@ -133,10 +199,12 @@ def bound_graph_response(value: dict[str, Any] | None, token_budget: int | None)
         items = owner.get(key)
         if not isinstance(items, list):
             continue
-        minimum = 1 if key in {"results", "edges", "relations", "nodes", "roots"} else 0
+        minimum = 1 if key in {"candidates", "results", "edges", "relations", "nodes", "roots"} else 0
         while len(items) > minimum and measure() > ceiling:
             items.pop()
             mark(key)
+
+    update_candidate_page()
 
     if isinstance(response.get("impactScores"), dict) and "nodes" in response:
         visible = {node.get("unitId") for node in response["nodes"]}
@@ -189,29 +257,6 @@ def bound_graph_response(value: dict[str, Any] | None, token_budget: int | None)
         if id(window) in source_refs:
             source_refs[id(window)]["arguments"]["offset"] = len(window.get("content", ""))
 
-    # Refresh returned counts instead of claiming the original cardinalities.
-    for name, key in (("returnedNodes", "nodes"), ("returnedRelations", "edges"),
-                      ("returnedResults", "results"), ("returnedRoots", "roots"),
-                      ("sourceWindowCount", "sourceWindows")):
-        if name in coverage and key in response:
-            old = int(coverage[name])
-            coverage[name] = len(response[key])
-            if old > coverage[name]:
-                omitted_key = "omitted" + name.removeprefix("returned")
-                coverage[omitted_key] = int(coverage.get(omitted_key, 0)) + old - coverage[name]
-    evidence = response.get("evidence", {})
-    if "relationCount" in coverage and isinstance(evidence, dict):
-        coverage["relationCount"] = len(evidence.get("relations", []))
-    changed = response.get("changed", {})
-    if "changedUnitCount" in coverage and isinstance(changed, dict):
-        coverage["changedUnitCount"] = len(changed.get("units", []))
-    source = coverage.get("source")
-    if isinstance(source, dict):
-        source["returnedSourceCharacters"] = sum(len(x.get("content", "")) for x in response.get("sourceWindows", []))
-        if omitted.get("source_content"):
-            source.update(state="bounded", truncated=True)
-    if omitted.get("results") and "cursor" in response:
-        response["nextCursor"] = int(response["cursor"]) + len(response["results"])
     # If optional metadata alone dominates the envelope, retain the smallest
     # useful exact page/identity. Never advance a cursor past undisclosed facts.
     if measure() > ceiling:
@@ -247,6 +292,13 @@ def bound_graph_response(value: dict[str, Any] | None, token_budget: int | None)
                                       if len(original["results"]) > count or original.get("nextCursor") is not None
                                       else None)
             coverage["returnedResults"] = count
+        if original.get("status") == "ambiguous" and "candidates" in value:
+            response["candidates"] = []
+            for item in value["candidates"][:1]:
+                response["candidates"].append({key: item[key] for key in
+                    ("unitId", "path", "kind", "startLine", "endLine")
+                    if key in item and len(_encoded(item[key]).encode()) <= 300})
+            update_candidate_page()
         # An exact field/unit read must still return a progressing page even if
         # optional attributes were enormous. Source windows use unit paging.
         page_source = value.get("unit") if isinstance(value.get("unit"), dict) else value
@@ -288,5 +340,11 @@ def bound_graph_response(value: dict[str, Any] | None, token_budget: int | None)
             response["sourceWindows"] = []
         if measure() > ceiling:
             response.pop("continuations", None)
+        if measure() > ceiling and response.get("candidates"):
+            # The exact ID is sufficient for a retry when path labels do not fit.
+            response["candidates"] = [{"unitId": response["candidates"][0]["unitId"]}]
+        if measure() > ceiling and response.get("candidates"):
+            response["candidates"] = []
+            update_candidate_page()
         measure()
     return response

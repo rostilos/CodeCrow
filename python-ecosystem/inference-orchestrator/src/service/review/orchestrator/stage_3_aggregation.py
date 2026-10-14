@@ -2,7 +2,7 @@
 Stage 3: Aggregation & final report — executive summary, optional MCP verification.
 """
 from service.review.execution_scheduler import review_model_slot
-from service.review.inference_usage import record_model_response
+from service.review.inference_usage import record_model_response, record_compute_decision
 import json
 import logging
 import os
@@ -189,12 +189,33 @@ async def execute_stage_3_aggregation(
     fallback_llm=None,
     inference_profile: Optional[ReviewInferenceProfile] = None,
 ) -> Dict[str, Any]:
+    verification_issues = _stage_3_verification_issue_map(stage_1_issues)
+    if not verification_issues and not stage_2_results.cross_file_issues:
+        record_compute_decision("final_verification", outcome="no_candidates", candidates=0)
+        resolved_count = sum(issue.isResolved is True for issue in stage_1_issues)
+        report = (
+            f"# Pull Request Review: {request.prTitle or request.projectVcsRepoSlug}\n\n"
+            f"**Status**: {stage_2_results.pr_recommendation}\n\n"
+            f"**Risk Level**: {stage_2_results.pr_risk_level}\n\n"
+            f"**Confidence**: {stage_2_results.confidence}\n\n"
+            "No active findings remain from the completed review stages. "
+            "No candidate verification was required."
+        )
+        if resolved_count:
+            report += f"\n\nResolved findings: {resolved_count}."
+        return {
+            "report": report,
+            "verification_assessments": [],
+            "dismissed_issue_ids": [],
+            "dismissed_issue_keys": [],
+            "dismissed_issue_object_ids": [],
+            "stage_3_prompt_provenance": {"inputShards": [], "synthesisShards": []},
+        }
     inference_profile = inference_profile or build_review_inference_profile(
         request,
         processed_diff,
     )
     stage_1_json = _summarize_issues_for_stage_3(stage_1_issues)
-    verification_issues = _stage_3_verification_issue_map(stage_1_issues)
     stage_2_json = stage_2_results.model_dump_json(indent=2)
     plan_summary = _summarize_plan_for_stage_3(plan)
     try:
@@ -300,6 +321,7 @@ async def execute_stage_3_aggregation(
                 review_revision,
                 shard_issues,
                 fallback_llm=fallback_llm,
+                processed_diff=processed_diff,
             )
         else:
             result = await _invoke_stage_3_report(
@@ -553,6 +575,7 @@ async def _stage_3_with_mcp(
     review_revision: str,
     issue_by_verification_id: Dict[str, CodeReviewIssue],
     fallback_llm=None,
+    processed_diff: Optional[ProcessedDiff] = None,
 ) -> Dict[str, Any]:
     runtime = Stage3McpRuntime(
         input_token_target=_stage_3_input_token_target,
@@ -576,4 +599,5 @@ async def _stage_3_with_mcp(
         issue_by_verification_id,
         runtime,
         fallback_llm=fallback_llm,
+        processed_diff=processed_diff,
     )

@@ -184,6 +184,7 @@ class PromptBuilder:
         vcs_repo_slug: str = "",
         plugin_context: str = "",
         batch_boundary_context: str = "",
+        directory_tool_available: bool = False,
     ) -> str:
         """
         Build prompt for Stage 1: Batch File Review.
@@ -298,8 +299,10 @@ tools are available below; begin with the required minimal-context call.)"""
             deleted_files_context=deleted_files_context,
             task_context=task_context or "No task context available.",
             batch_boundary_context=(
-                batch_boundary_context
-                or "No dependency edge crosses this Stage 1 batch boundary."
+                (batch_boundary_context
+                 or "No cross-batch dependency edges were observed in available context.")
+                + "\nAvailable relationship coverage may be incomplete; an unlisted edge "
+                  "is not proof that no dependency exists."
             ),
             line_number_instructions=CODE_SNIPPET_AND_SCOPE_INSTRUCTIONS,
             issue_deduplication_instructions=ISSUE_DEDUPLICATION_INSTRUCTIONS,
@@ -357,6 +360,18 @@ tools are available below; begin with the required minimal-context call.)"""
                     separators=(",", ":"),
                 ),
             )
+            if directory_tool_available:
+                prompt += (
+                    "\nRepository path discovery: getDirectoryByPath(workspace="
+                    f"{vcs_workspace}, projectKey={vcs_repo_slug}, branch={target_branch}, dirPath=...) "
+                    "lists one directory (use an empty dirPath for the root). For a missing or guessed path, "
+                    "list its parent and follow a plausible child, including package index files, before "
+                    "concluding source is unavailable. In a request-bound local review, listings include "
+                    "proposed additions and omit deleted files. Read the discovered file with "
+                    + ("getReviewFileContent. " if review_file_tool_available else "getBranchFileContent. ")
+                    + "Listings can be truncated; neither a failed guessed read nor an incomplete listing proves "
+                    "absence of a dependency. Limit discovery to directories relevant to the changed code.\n"
+                )
 
         return prompt
 

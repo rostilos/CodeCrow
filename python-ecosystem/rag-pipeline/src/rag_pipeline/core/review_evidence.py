@@ -206,14 +206,18 @@ def _source_detail_for_manifest(reader, unit: Mapping[str, Any]) -> dict[str, An
         line = max(1, int(unit.get("startLine") or 1))
     except (TypeError, ValueError):
         line = 1
-    row = reader.connection.execute(
+    rows = reader.connection.execute(
         "SELECT unit_id FROM units WHERE path = ? "
         "AND record_type IN ('source_unit', 'plugin_context') "
         "ORDER BY CASE WHEN start_line <= ? AND end_line >= ? THEN 0 ELSE 1 END, "
-        "abs(start_line - ?), start_line, unit_id LIMIT 1",
+        "abs(start_line - ?), start_line, unit_id",
         (path, line, line, line),
-    ).fetchone()
-    return reader.get_unit(row["unit_id"]) if row is not None else None
+    )
+    for row in rows:
+        detail = reader.get_unit(row["unit_id"])
+        if detail and detail.get("sourceEvidence"):
+            return detail
+    return None
 
 
 
@@ -224,6 +228,8 @@ def _bounded_source_window(
     changed_paths: set[str],
     relation_evidence_ids: Sequence[str],
 ) -> dict[str, Any] | None:
+    if not detail.get("sourceEvidence"):
+        return None
     unit = detail.get("unit")
     if not isinstance(unit, Mapping):
         return None

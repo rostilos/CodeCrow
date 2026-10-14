@@ -723,7 +723,7 @@ public class McpStdioServer {
                   "required": ["workspace", "projectKey", "branch", "dirPath"]
                 }
                 """;
-        tools.add(new Tool("getDirectoryByPath", "Get branch directory by path.", getDirectoryByPathSchema));
+        tools.add(new Tool("getDirectoryByPath", "List one directory by path. Request-bound local reviews include proposed additions and omit deleted files. Local output is bounded and labels truncation; use an empty dirPath for the root.", getDirectoryByPathSchema));
 
         return tools;
     }

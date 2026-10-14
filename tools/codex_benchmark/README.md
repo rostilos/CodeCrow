@@ -61,29 +61,71 @@ local bridge token, `MARTIAN_MODEL=gpt-6-sol`, and `MARTIAN_PROVIDER=`. No scori
 stage should retain its API-provider defaults. Preserve completed artifacts when
 resuming; do not clear a live run's index volume.
 
-Native function calls retain their pending Codex turn until CodeCrow supplies
+The bridge exposes the default `functions` namespace directly through the
+supported `features.code_mode.enabled=false` and
+`features.code_mode.direct_only_tool_namespaces=["functions"]` configuration.
+This applies even to a `code_mode_only` model. It changes the model's native tool
+surface, despite unchanged HTTP function schemas; it does not establish behavior
+or cost parity with earlier code-mode runs. Native helper tools may still exist,
+so verify the actual call events rather than inferring direct execution from
+configuration alone.
+
+Ordinary native function calls retain their pending Codex turn until CodeCrow supplies
 the tool results. Changed history/tool inventory is recorded and reconstructed
 from supplied messages. JSON schemas and function-based structured responses are
 supported. Built-in shell, browsing, apps and delegation are disabled. Errors
-have no remote API fallback. Disconnection cancels the owned request; abandoned
-tool waits are reclaimed after ten minutes.
+have no remote API fallback. Disconnection cancels the owned request. The recursive
+agent and verification loops also release their native conversations on return,
+error or cancellation between model calls, including during repository reads.
+The entrypoint's optional provider scope attaches an opaque `codecrow_owner` in
+transport metadata, outside model instructions. Authenticated
+`POST /v1/conversations/release` closes that owner before cancelling its active
+requests and releasing pending or concurrently created conversations; other owners
+and shared clients are unaffected. Cleanup is bounded and fails open with a
+diagnostic. Abandoned tool waits still have the ten-minute reaper fallback.
 
 The benchmark-only `codecrow_terminal_tools` request field lists output-schema
 function names. The benchmark entrypoint tags direct structured bindings; agent
-middleware tags its ToolStrategy output schema only in benchmark mode. A named
-output call releases its native conversation. Without this field, even a forced
+middleware tags its ToolStrategy output schema only in benchmark mode. Every
+assembled tool batch, including ordinary and mixed calls, first checks the exact
+current thread/turn/call-to-response mappings. A batch containing only named
+output calls then releases its native conversation; ordinary and mixed batches
+remain pending for their real tool results. An already recorded match needs no wait.
+Otherwise, receipt collection can wait at most
+`min(1 second, max(0, SDK read allowance - elapsed request time - 20 seconds))`;
+the 20 seconds reserve the existing interrupt and unsubscribe cleanup allowances.
+Missing or invalid SDK read-timeout metadata gives no additional wait. A missing
+match, timeout or collector failure records a diagnostic and preserves the
+answer; it adds no model call or tool result. External cancellation still
+propagates and performs owned cleanup. Without this field, even a forced
 function call remains pending for its real tool result. Initial required tools
 keep the full inventory; first-tool enforcement does not require rebuilding a
 native conversation. Disabled evidence tools remain advertised and return an
 unresolved diagnostic without another backend read.
 
 The ledger records actual tool choice, serialized request/message/tool/result
-sizes, distinct reconstruction reasons, native usage updates (`total` and `last`),
-and terminal snapshots with thread identity. Response usage subtracts only totals
-already reported; delayed updates can cover earlier tool deliveries. Missing
-usage stays unknown. For run totals, use the latest cumulative total per thread;
-never add cumulative snapshots or `last` usage to those totals. Updates arriving
-after a terminal snapshot remain recorded separately.
+sizes, reconstruction reasons and exact `rawResponse/completed` receipts with
+response/thread/turn identity and nullable native usage. It also retains native
+usage updates (`total` and `last`), terminal snapshots, owner identity and the
+latest usage sequence, including late receipts. SDK response usage still uses
+cumulative deltas and can remain null even when an exact raw receipt exists.
+For accounting, deduplicate raw receipts by response ID only when identity and
+usage agree; reconcile their sum with cumulative snapshots. Never add snapshots,
+`last` usage or SDK deltas to the raw total. Null, conflicting or absent receipts
+remain unknown, and known totals remain lower bounds until generation coverage
+is established. An idle facade, interrupt acknowledgement, or pending code-mode
+child does not prove that no additional generation occurred. Include abandoned
+work and require evidence for the actual direct-call/terminal lifecycle; do not
+retroactively certify interrupted child calls from the presence of one receipt.
+
+Two isolated LOW `gpt-5.6-sol` protocol probes recorded a direct terminal call
+with 12,400 complete native tokens and a 12.586 ms exact-ID wait (SDK usage was
+null), and an ordinary tool continuation with two HTTP requests in one native
+thread/turn, natural completion and 12,270 complete native tokens. Their source
+and lifecycle proofs are under
+`reports/benchmark-quality-20261011/terminal-schema-accounting/` in the workspace.
+These examples validate those exercised paths, not review quality, latency or
+token savings, and do not repair historical missing accounting.
 
 Temperature, top-p and output-token caps have no equivalent in this app-server
 protocol. They are recorded as unmapped parameters, never silently claimed as

@@ -235,3 +235,20 @@ class TestDocumentLoaderLoadBatch:
         assert {doc.metadata["path"] for doc in docs} == {
             path.as_posix() for path in paths
         }
+
+
+def test_default_index_ceiling_preserves_unindexed_source_and_reports_boundary(tmp_path):
+    from rag_pipeline.core.source_tree import read_repository_file_bytes
+
+    ceiling = RAGConfig().max_file_size_bytes
+    assert ceiling == 512 * 1024
+    exact = b'#' + b'x' * (ceiling - 2) + b'\n'
+    over = exact + b'\n'
+    (tmp_path / 'exact.py').write_bytes(exact)
+    (tmp_path / 'over.py').write_bytes(over)
+    skips = []
+    assert list(DocumentLoader(RAGConfig()).iter_repository_files(tmp_path, on_skip=skips.append)) == [Path('exact.py')]
+    assert len(skips) == 1 and skips[0].code == REPOSITORY_FILE_SIZE_LIMIT_CODE
+    assert skips[0].path == 'over.py' and skips[0].size_bytes == ceiling + 1
+    # Optional indexing did not alter or truncate source available to exact reads.
+    assert read_repository_file_bytes(tmp_path, 'over.py') == over

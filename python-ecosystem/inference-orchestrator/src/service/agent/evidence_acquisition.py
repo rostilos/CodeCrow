@@ -1,4 +1,4 @@
-"""Request-local retrieval reuse and recovery from unproductive tool loops."""
+"""Request-local retrieval reuse and evidence diagnostics."""
 from __future__ import annotations
 
 import hashlib
@@ -64,17 +64,15 @@ def observation_status(result: Any) -> str:
 
 
 class EvidenceAcquisitionMiddleware(AgentMiddleware):
-    """Never re-execute identical reads; switch tools after repeated nonprogress.
+    """Reuse identical reads without blocking different evidence requests.
 
     Each prompt agent owns one instance, bound to one immutable review snapshot.
-    No results or disabled-tool state cross reviews or tenants.
+    No cached results cross reviews or tenants.
     """
 
     def __init__(self):
         super().__init__()
         self._cache: dict[str, Any] = {}
-        self._nonprogress: dict[str, int] = {}
-        self._disabled: set[str] = set()
 
     async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
         call = request.tool_call
@@ -83,13 +81,6 @@ class EvidenceAcquisitionMiddleware(AgentMiddleware):
             return await handler(request)
         fingerprint = hashlib.sha256(json.dumps([name, args], sort_keys=True, default=str).encode()).hexdigest()
         gap = str(args.get("question") or args.get("target") or args.get("start") or args.get("filePath") or "focused source lookup")[:400]
-        if name in self._disabled:
-            record_compute_decision("evidence_acquisition", tool=name, outcome="unresolved", requestFingerprint=fingerprint, gap=gap)
-            return ToolMessage(content=json.dumps({
-                "status": "unavailable", "reason": "repeated_unproductive_queries",
-                "unresolvedEvidenceGap": gap,
-                "nextAction": "Use another focused graph operation or exact source tool, or retain the uncertainty; missing evidence is not proof of absence.",
-            }), tool_call_id=call.get("id") or "evidence-recovery", name=name)
         cached = fingerprint in self._cache
         try:
             result = self._cache[fingerprint] if cached else await handler(request)
@@ -99,12 +90,6 @@ class EvidenceAcquisitionMiddleware(AgentMiddleware):
         status = observation_status(result)
         if not cached:
             self._cache[fingerprint] = result
-        if status in {"empty", "unavailable"}:
-            self._nonprogress[name] = self._nonprogress.get(name, 0) + 1
-            if self._nonprogress[name] >= 2:
-                self._disabled.add(name)
-        else:
-            self._nonprogress[name] = 0
         record_compute_decision("evidence_acquisition", tool=name,
                                 outcome="cache_hit" if cached else status,
                                 evidenceStatus=status, requestFingerprint=fingerprint,
@@ -119,8 +104,3 @@ class EvidenceAcquisitionMiddleware(AgentMiddleware):
                 if hasattr(result, "id"):
                     result.id = None
         return result
-
-    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
-        # Keep the native session's tool inventory stable. Disabled reads return
-        # the explicit unresolved diagnostic above without touching the backend.
-        return await handler(request)

@@ -1551,6 +1551,97 @@ class Service
     )
 
 
+def test_php_call_facts_preserve_declared_method_case_and_raw_retrieval_name():
+    plugin = PluginCatalog.discover(PLUGINS_ROOT).implementation("php")
+    started = plugin.start_repository_analysis("php-canonical-method-spelling")
+    started.value.ingest((
+        FileArtifact("src/BaseTarget.php", """<?php
+class BaseTarget {
+    public function InheritedRun(): bool { return true; }
+    private function HiddenMethod(): void {}
+}
+"""),
+        FileArtifact("src/Target.php", """<?php
+class Target extends BaseTarget {
+    public function DoWork(): void {}
+    public static function StaticWork(): void {}
+    public function __call($name, $arguments) {}
+}
+"""),
+        FileArtifact("src/Factory.php", """<?php
+class Factory { public function Build(): Target { return new Target(); } }
+"""),
+        FileArtifact("src/Service.php", """<?php
+class Service {
+    public function run(Target $target, Factory $factory): void {
+        $target->dowork();
+        $target->inheritedrun();
+        Target::STATICWORK();
+        $factory->BUILD()->dowork();
+        $this->localrun();
+        self::LOCALSTATIC();
+        $target->MiSsInG();
+        $target->hiddenmethod();
+        $factory->BUILD()->MiSsInG();
+    }
+    private function LocalRun(): void {}
+    private static function LocalStatic(): void {}
+}
+"""),
+    ))
+    analysis = started.value.finish(RepositoryAnalysis()).value
+    facts = [
+        fact
+        for packet in analysis.packets
+        for fact in packet.facts
+        if fact.path == "src/Service.php" and "call-relation" in fact.kind
+    ]
+    declared = [
+        fact for fact in facts
+        if dict(fact.attributes).get("targetMethodDeclared") == "true"
+    ]
+    assert {dict(fact.attributes)["targetMethod"] for fact in declared} == {
+        "DoWork", "InheritedRun", "StaticWork", "Build", "LocalRun", "LocalStatic",
+    }
+    for fact in facts:
+        assert len(fact.attributes) == len(dict(fact.attributes))
+    raw_by_canonical = {
+        dict(fact.attributes)["targetMethod"]: dict(fact.attributes)["retrievalIdentifier:targetMethod"]
+        for fact in declared
+    }
+    assert raw_by_canonical == {
+        "DoWork": "dowork", "InheritedRun": "inheritedrun", "StaticWork": "STATICWORK",
+        "Build": "BUILD", "LocalRun": "localrun", "LocalStatic": "LOCALSTATIC",
+    }
+    work = [fact for fact in declared if dict(fact.attributes)["targetMethod"] == "DoWork"]
+    assert len(work) == 2
+    assert {dict(fact.attributes)["receiverResolution"] for fact in work} == {
+        "declared-parameter", "exact-call-return",
+    }
+    inherited = next(
+        fact for fact in declared
+        if dict(fact.attributes)["targetMethod"] == "InheritedRun"
+    )
+    assert dict(inherited.attributes)["targetMethodDeclaredOn"] == "BaseTarget"
+    assert dict(inherited.attributes)["targetMethodDeclarationOrigin"] == "inherited-parent"
+    assert "src/BaseTarget.php" in inherited.related_paths
+    unknown = [
+        dict(fact.attributes) for fact in facts
+        if dict(fact.attributes).get("targetMethodDeclared") != "true"
+    ]
+    assert sorted(attributes["targetMethod"] for attributes in unknown) == [
+        "MiSsInG", "MiSsInG", "hiddenmethod",
+    ]
+    assert all(
+        attributes["retrievalIdentifier:targetMethod"] == attributes["targetMethod"]
+        for attributes in unknown
+    )
+    restored = plugin.restore_repository_analysis(
+        "php-canonical-method-restored", analysis.snapshots,
+    )
+    assert restored.value.finish(RepositoryAnalysis()).value.packets == analysis.packets
+
+
 def test_php_repository_abstains_after_unknown_or_conflicting_local_assignment():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     plugin = catalog.implementation("php")

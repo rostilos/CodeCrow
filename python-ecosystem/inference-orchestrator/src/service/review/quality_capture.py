@@ -8,6 +8,7 @@ issuing, retrying, or replacing any provider call.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -131,6 +132,24 @@ def _redact_secrets(value: Any, *, key: str = "") -> Any:
     if isinstance(value, str) and key.casefold().endswith(("baseurl", "base_url")):
         return _sanitize_url(value)
     return value
+
+
+def _redact_inline_auth(match: re.Match[str]) -> str:
+    scheme, token = match.group(1), match.group(2)
+    # Plain English such as "basic formatting" is prompt evidence, not auth.
+    # Explicit authorization headers remain secret even with malformed values.
+    header = re.search(
+        r"(?i)\b(?:proxy-)?authorization[\s\"'\\]*[:=][\s\"'\\]*$",
+        match.string[:match.start()],
+    )
+    is_credential = scheme.casefold() == "bearer" or header is not None
+    if not is_credential:
+        try:
+            encoded = token.rstrip(".")
+            is_credential = b":" in base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True)
+        except ValueError:
+            pass
+    return f"{scheme} [REDACTED]" if is_credential else match.group(0)
 
 
 def _sanitize_url(value: str) -> str:
@@ -515,9 +534,9 @@ def review_response_indicates_failure(response: Any) -> bool:
 def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
     """Validate and project the host-owned terminal review ledger.
 
-    The event deliberately contains no prompts or source. Keeping this compact
-    projection in the capture makes coverage independently verifiable without
-    relying on operator-entered hunk totals.
+    Preserve candidate source anchors and assessment citations alongside coverage,
+    without duplicating full generation prompts. Original producer payloads make
+    rejected-anchor failures diagnosable; secret redaction applies to them too.
     """
     if not isinstance(event, dict) or event.get("state") != "review_evidence_completed":
         return None
@@ -743,6 +762,7 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
                 for field in (
                     "sourceKey", "hypothesis", "evidenceGaps",
                     "verificationAssessments", "consolidatedCandidateIds",
+                    "originalIssue", "generationPromptHunkIds",
                 )
                 if field in record
             },
@@ -1389,8 +1409,8 @@ class ReviewQualityCaptureSession:
             for credential in self._credential_values:
                 scrubbed = scrubbed.replace(credential, "[REDACTED]")
             scrubbed = re.sub(
-                r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+",
-                r"\1 [REDACTED]",
+                r"(?i)\b(bearer|basic)\s+([A-Za-z0-9._~+/=-]+)",
+                _redact_inline_auth,
                 scrubbed,
             )
             return scrubbed
@@ -1478,7 +1498,7 @@ class ReviewQualityCaptureSession:
             return
         temporary = self.path.with_suffix(f".{uuid.uuid4().hex}.tmp")
         try:
-            payload = json.dumps(self._artifact, ensure_ascii=False, sort_keys=True, indent=2)
+            payload = json.dumps(self._artifact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             with temporary.open("x", encoding="utf-8") as handle:
                 os.chmod(temporary, 0o600)
                 handle.write(payload)

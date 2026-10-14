@@ -1,6 +1,7 @@
 """Extended tests for reconciliation: _format_issues_for_prompt, _build_batches, _dedup_batch_with_llm."""
 import json
 import asyncio
+import hashlib
 from pathlib import Path
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -502,6 +503,9 @@ class TestDeduplicateFinalIssuesLlm:
 _FROZEN_DUPLICATES = json.loads(
     (Path(__file__).parent / 'fixtures' / 'verifier_duplicate_findings.json').read_text()
 )
+_FROZEN_PRECEDENCE = json.loads(
+    (Path(__file__).parent / 'fixtures' / 'semantic_dedup_precedence.json').read_text()
+)['cases']
 
 
 def _decision_llm(decision):
@@ -510,15 +514,79 @@ def _decision_llm(decision):
     return llm
 
 
-def test_semantic_prompt_requires_exact_indices_and_shared_keeper_cause():
+def test_semantic_prompt_requires_exact_indices_and_coverage_precedence():
     issues = [_real_issue(title=f'Finding {i}') for i in range(3)]
     prompt = _dedup_prompt(_format_semantic_batch(issues, dict.fromkeys(range(3), 'candidate_0')))
     assert 'Valid index range: 0..2 (inclusive)' in prompt
     assert 'exact supplied ZERO-BASED index values' in prompt
-    assert 'INCLUDING the keeper' in prompt
+    assert 'Coverage takes precedence over containment' in prompt
+    assert 'NEVER use that summary as keeper for those distinct findings' in prompt
     assert 'title and suggested fix cover the whole group' in prompt
-    assert 'without dropping the keeper\'s own assertion' in prompt
-    assert 'covered_by_indices must name FINAL retained representatives' in prompt
+    assert 'without dropping any keeper assertion' in prompt
+    assert 'FINAL retained representatives as covered_by_indices' in prompt
+    assert 'keep A+B and A+C separate' in prompt
+
+
+@pytest.mark.asyncio(loop_scope='function')
+@pytest.mark.parametrize('case', _FROZEN_PRECEDENCE, ids=lambda case: case['case'])
+async def test_saved_precedence_decisions_preserve_assertions_and_lineage(case):
+    """Replay actual saved decisions; test host/contract preservation, not model quality."""
+    from service.review.candidate_ledger import CandidateEvidenceLedger
+    issues = [CodeReviewIssue.model_validate(data) for data in case['issues']]
+    before = [issue.model_dump() for issue in issues]
+    ledger = CandidateEvidenceLedger()
+    for index, issue in enumerate(issues):
+        ledger.register(issue, stage='saved_dedup_packet', source_key=str(index),
+                        review_unit_ids=['unit'], prompt_hunk_ids=[], generation_prompt='saved packet')
+    candidate_ids = [ledger.record_for(issue).candidate_id for issue in issues]
+    proposal = SemanticDeduplicationDecision.model_validate(case['proposal'])
+    refinement = SemanticDeduplicationDecision.model_validate(case['refinement'])
+    prompts = []
+
+    async def respond(prompt, **kwargs):
+        assert [issue.model_dump() for issue in issues] == before
+        assert hashlib.sha256(prompt.encode()).hexdigest() == case['prompt_sha256'][len(prompts)]
+        prompts.append(prompt)
+        return proposal if len(prompts) == 1 else refinement
+
+    schema = json.dumps(SemanticDeduplicationDecision.model_json_schema(), sort_keys=True, separators=(',', ':'))
+    assert hashlib.sha256(schema.encode()).hexdigest() == case['schema_sha256']
+    llm = _decision_llm(proposal)
+    llm.with_structured_output.return_value.ainvoke.side_effect = respond
+    result = await _dedup_batch_with_llm(
+        llm, issues, dict.fromkeys(range(len(issues)), 'candidate_0'),
+        on_consolidated=ledger.consolidate,
+    )
+
+    assert len(prompts) == 2
+    assert [id(issue) for issue in result] == [id(issues[i]) for i in case['retained_indices']]
+    affected = set()
+    for group in refinement.duplicate_groups:
+        keeper = issues[group.keeper_index]
+        members = [group.keeper_index, *group.duplicate_indices]
+        affected.update(members)
+        assert keeper.reason.split('\n\nAlso affects:')[0] == group.merged_reason
+        for field in ('file', 'line', 'codeSnippet', 'title', 'suggestedFixDescription'):
+            assert getattr(keeper, field) == before[group.keeper_index][field]
+        locations = {f'{keeper.file}:{keeper.line}', *keeper.relatedLocations}
+        assert all({f"{before[i]['file']}:{before[i]['line']}", *before[i]['relatedLocations']} <= locations for i in members)
+        assert ledger.record_for(keeper).consolidated_candidate_ids == {candidate_ids[i] for i in group.duplicate_indices}
+    for summary in refinement.covered_summaries:
+        affected.update([summary.summary_index, *summary.covered_by_indices])
+        source = before[summary.summary_index]
+        for index in summary.covered_by_indices:
+            keeper = issues[index]
+            for field in ('file', 'line', 'codeSnippet', 'title', 'reason', 'suggestedFixDescription'):
+                assert getattr(keeper, field) == before[index][field]
+            assert {f"{source['file']}:{source['line']}", *source['relatedLocations']} <= {f'{keeper.file}:{keeper.line}', *keeper.relatedLocations}
+            assert ledger.record_for(keeper).consolidated_candidate_ids == {candidate_ids[summary.summary_index]}
+    for index in set(range(len(issues))) - affected:
+        assert issues[index].model_dump() == before[index]
+    if case['case'] == 'discourse10':
+        assert 'port' in issues[2].reason and 'uppercase' in issues[2].reason
+        assert 'embed requests and topic retrieval' in issues[2].reason
+    elif case['case'] == 'keycloak33832_der':
+        assert result == issues[:2] and not refinement.duplicate_groups
 
 
 @pytest.mark.asyncio(loop_scope="function")

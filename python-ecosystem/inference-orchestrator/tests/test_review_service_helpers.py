@@ -704,7 +704,7 @@ async def test_cancellation_during_mcp_startup_closes_owned_client(service):
 
 @pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.parametrize("waiting_for_slot", [False, True])
-async def test_optional_graph_preparation_timeout_preserves_core_budget(
+async def test_explicit_graph_preparation_timeout_preserves_core_review(
     service, tmp_path, monkeypatch, waiting_for_slot,
 ):
     from contextlib import asynccontextmanager
@@ -724,7 +724,7 @@ async def test_optional_graph_preparation_timeout_preserves_core_budget(
         yield
 
     monkeypatch.setattr("service.review.review_service.review_context_slot", slot)
-    monkeypatch.setattr(service, "REVIEW_GRAPH_PREPARATION_TIMEOUT_SECONDS", 1000)
+    monkeypatch.setattr(service, "REVIEW_GRAPH_PREPARATION_TIMEOUT_SECONDS", 0.05)
     client = SimpleNamespace(prepare_review_generation=AsyncMock(side_effect=stalled))
     events = []
     loop = asyncio.get_running_loop()
@@ -742,3 +742,43 @@ async def test_optional_graph_preparation_timeout_preserves_core_budget(
     assert "optional_graph_preparation_timeout" in request.ragReviewGenerationError
     assert events[-1]["state"] == "rag_review_generation_degraded"
     assert client.prepare_review_generation.await_count == (0 if waiting_for_slot else 1)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_graph_preparation_uses_remaining_deadline_without_fractional_cutoff(service, tmp_path, monkeypatch):
+    request = _local_only_request(tmp_path)
+
+    async def prepare(**kwargs):
+        await asyncio.sleep(0.15)
+        return {"status": "ready", "collection_target": "sealed-review",
+                "generation_manifest_sha256": "b" * 64, "source_revision": "source-head"}
+
+    monkeypatch.setattr(service, "REVIEW_GRAPH_PREPARATION_TIMEOUT_SECONDS", 1.0)
+    client = SimpleNamespace(prepare_review_generation=AsyncMock(side_effect=prepare))
+    await service._prepare_rag_review_generation(
+        request, client, None, review_deadline=asyncio.get_running_loop().time() + 0.5,
+    )
+    assert request.ragReviewGenerationStatus == "ready"
+
+
+@pytest.mark.parametrize("graph_status,specialist_outcome,limited", [
+    ("ready", "completed", False), ("not_eligible", "completed", False),
+    ("unavailable", "completed", True), ("ready", "timeout", True),
+    ("ready", "skipped_budget_exhausted", True),
+])
+def test_final_report_exposes_missing_coverage_without_losing_issues(graph_status, specialist_outcome, limited):
+    issues = [{"title": "Existing finding"}]
+    response = {"result": {"issues": issues, "comment": "Review findings"}, "inferenceUsage": {"decisions": [
+        {"kind": "specialist_result", "outcome": specialist_outcome},
+    ]}}
+    ReviewService._include_coverage_notice(SimpleNamespace(ragReviewGenerationStatus=graph_status), response)
+    assert response["result"]["issues"] is issues
+    assert response["result"]["comment"].endswith("Review findings")
+    assert ("reduced coverage" in response["result"]["comment"]) is limited
+
+
+def test_coverage_notice_does_not_label_failed_review_as_completed():
+    from utils.error_sanitizer import create_error_response
+    response = {"result": create_error_response("Review timed out")}
+    ReviewService._include_coverage_notice(SimpleNamespace(ragReviewGenerationStatus="unavailable"), response)
+    assert response["result"]["comment"] == "Review timed out"

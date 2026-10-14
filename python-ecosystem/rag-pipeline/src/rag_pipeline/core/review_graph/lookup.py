@@ -8,18 +8,10 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, Sequence
 
-from .constants import (
-    _SOURCE_SUFFIXES,
-)
+from ..structural_graph.shared import _looks_like_path
 from .projection import (
     _unit_key,
 )
-
-
-def _looks_like_path(target: str) -> bool:
-    final = target.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-    suffix = "." + final.rsplit(".", 1)[-1].casefold() if "." in final else ""
-    return "/" in target or "\\" in target or suffix in _SOURCE_SUFFIXES
 
 
 def _query_page(

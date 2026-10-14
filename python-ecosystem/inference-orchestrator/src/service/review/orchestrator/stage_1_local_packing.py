@@ -51,6 +51,7 @@ class Stage1PreparedContext:
     file_content_by_path: Dict[str, Optional[str]] = field(default_factory=dict)
     enrichment_metadata_by_path: Dict[str, Optional[Any]] = field(default_factory=dict)
     task_context: str = "No task context available."
+    current_source_batch_char_budget: Optional[int] = None
 
 
 Stage1Batch = List[Dict[str, Any]]

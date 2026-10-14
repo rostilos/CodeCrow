@@ -78,13 +78,6 @@ _MAX_IMPACT_WORK_RELATIONS = 10000
 _MAX_RETURNED_FRONTIER = 25
 
 
-_SOURCE_SUFFIXES = {
-    ".c", ".cc", ".cpp", ".cs", ".css", ".go", ".h", ".hpp", ".html",
-    ".java", ".js", ".jsx", ".kt", ".kts", ".php", ".py", ".rb", ".rs",
-    ".scala", ".sql", ".swift", ".ts", ".tsx", ".vue", ".xml", ".yaml",
-    ".yml",
-}
-
 
 _RELATION_SEMANTIC_ALIASES = {
     "CALL": "CALLS",

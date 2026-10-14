@@ -108,7 +108,7 @@ class ASTCodeSplitter:
         documents: List[Document],
         capabilities: Any = None,
     ) -> tuple[List[TextNode], tuple[str, ...]]:
-        """Split documents independently and quarantine file-local failures."""
+        """Keep source usable when optional syntax or enrichment fails."""
         nodes: List[TextNode] = []
         skipped_paths: list[str] = []
         for document in documents:
@@ -120,12 +120,23 @@ class ASTCodeSplitter:
                 ))
             except MemoryError:
                 raise
-            except Exception:
-                skipped_paths.append(path)
-                logger.exception(
-                    "Skipping repository file that failed parsing/enrichment: %s",
-                    path,
+            except Exception as exception:
+                logger.warning(
+                    "Repository parsing/enrichment failed; retaining plain source: %s",
+                    path, exc_info=True,
                 )
+                try:
+                    fallback = self.emitter._split_fallback(
+                        document, extract_language_metadata=False,
+                    )
+                    for node in fallback:
+                        node.metadata["parse_fallback"] = type(exception).__name__
+                    nodes.extend(fallback)
+                except MemoryError:
+                    raise
+                except Exception:
+                    skipped_paths.append(path)
+                    logger.exception("Repository plain-source fallback failed: %s", path)
         return nodes, tuple(skipped_paths)
 
 

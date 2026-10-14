@@ -219,6 +219,48 @@ async def test_four_tool_responses_are_followed_by_unbound_finalization(monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("first_result", [
+    {"status": "unavailable", "reason": "Optional index unavailable"},
+    RuntimeError("Optional index unavailable"),
+])
+async def test_failed_queries_do_not_block_distinct_verifier_evidence(first_result):
+    source = {"sourceWindows": [{"filePath": "caller.py", "content": "return service.check(value)"}]}
+    tool = SimpleNamespace(name="queryCodeGraph", ainvoke=AsyncMock(side_effect=[
+        first_result, {"relations": []}, source,
+    ]))
+
+    def query(call_id, target):
+        return {"name": tool.name, "id": call_id, "args": {"queryType": "callers_of", "target": target}}
+
+    llm = _FakeToolLLM([
+        _FakeResponse(tool_calls=[query("unavailable", "first")]),
+        _FakeResponse(tool_calls=[query("empty", "second")]),
+        _FakeResponse(tool_calls=[query("source", "third"), query("cached-source", "third"), query("cached-unavailable", "first")]),
+        _FakeResponse(content='{"assessments":[{"issue_id":"issue_0","verdict":"unknown","reason":"Caller acquired; input remains unresolved"}]}'),
+    ])
+    observations = {}
+
+    result = await verification_agent._run_verification_tool_loop(
+        llm, "Verify issue_0", optional_tools=(tool,), observations=observations,
+    )
+
+    assert [call.args[0]["target"] for call in tool.ainvoke.await_args_list] == ["first", "second", "third"]
+    assert result.incomplete_reason == ""
+    assert result.assessments[0].verdict == "unknown"
+    assert len(llm.messages) == 4
+    tool_messages = [message for message in llm.messages[-1] if isinstance(message, dict) and message.get("role") == "tool"]
+    assert [message["tool_call_id"] for message in tool_messages] == ["unavailable", "empty", "source", "cached-source", "cached-unavailable"]
+    payloads = [json.loads(message["content"]) for message in tool_messages]
+    assert [payload["status"] for payload in payloads] == ["unavailable", "empty", "acquired", "acquired", "unavailable"]
+    assert payloads[2] == payloads[3]
+    assert payloads[0] == payloads[4]
+    assert json.loads(payloads[2]["observation"]) == source
+    assert len(observations) == 3
+    assert observations[payloads[2]["evidence_id"]]["status"] == "acquired"
+    assert json.loads(observations[payloads[2]["evidence_id"]]["text"]) == source
+
+
+@pytest.mark.asyncio
 async def test_acquisition_timeout_keeps_completed_observation_for_finalization():
     async def source(args):
         if args["target"] == "slow":
@@ -540,13 +582,24 @@ diff --git a/{path} b/{path}
         )
         request = MagicMock(enrichmentData=None, rawDiff=diff, deltaDiff=None)
 
+        request.enrichmentData = SimpleNamespace(fileContents=[SimpleNamespace(
+            path=path, content=verification_agent._current_source_from_diff(diff), skipped=False,
+        )])
+
+        llm = _FakeToolLLM([_FakeResponse(content=json.dumps({"assessments": [{
+            "issue_id": "issue_0", "verdict": "disproven",
+            "reason": "The exact source uses the imported class.",
+            "contradicting_evidence": [{"file_path": path, "snippet": "SwatchHelper::class"}],
+        }]}))])
+
         result = await run_verification_agent(
-            MagicMock(),
+            llm,
             [issue],
             request,
             processed,
         )
 
+        assert llm.messages
         assert result == []
 
     @pytest.mark.asyncio(loop_scope="function")
@@ -582,11 +635,22 @@ diff --git a/{path} b/{path}
             previousCodeAnalysisIssues=[{"id": "12524", "status": "open"}],
         )
 
-        result = await run_verification_agent(MagicMock(), [issue], request, processed)
+        request.enrichmentData = SimpleNamespace(fileContents=[SimpleNamespace(
+            path=path, content=verification_agent._current_source_from_diff(diff), skipped=False,
+        )])
 
+        llm = _FakeToolLLM([_FakeResponse(content=json.dumps({"assessments": [{
+            "issue_id": "issue_0", "verdict": "disproven",
+            "reason": "The exact source uses the imported class.",
+            "contradicting_evidence": [{"file_path": path, "snippet": "Helper::class"}],
+        }]}))])
+
+        result = await run_verification_agent(llm, [issue], request, processed)
+
+        assert llm.messages
         assert result == [issue]
         assert issue.isResolved is True
-        assert "source evidence contradicts" in issue.resolutionReason
+        assert "current-file verification" in issue.resolutionReason
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_keeps_genuinely_unused_import_from_same_diff(self):
@@ -728,8 +792,19 @@ diff --git a/{path} b/{path}
         )
         request = MagicMock(enrichmentData=None, rawDiff=diff, deltaDiff=None)
 
-        result = await run_verification_agent(MagicMock(), [issue], request, processed)
+        request.enrichmentData = SimpleNamespace(fileContents=[SimpleNamespace(
+            path=path, content=verification_agent._current_source_from_diff(diff), skipped=False,
+        )])
 
+        llm = _FakeToolLLM([_FakeResponse(content=json.dumps({"assessments": [{
+            "issue_id": "issue_0", "verdict": "disproven",
+            "reason": "The exact source uses the imported class.",
+            "contradicting_evidence": [{"file_path": path, "snippet": "Helper::class"}],
+        }]}))])
+
+        result = await run_verification_agent(llm, [issue], request, processed)
+
+        assert llm.messages
         assert result == []
 
     @pytest.mark.asyncio(loop_scope="function")
@@ -1577,3 +1652,20 @@ class TestDeterministicPublicationGate:
         assert "Suggested fix: Add a null guard before reading the country ID." in prompt
         assert "concrete defect that remains in the post-change code" in prompt
         assert "A partial fix is still a valid finding" in prompt
+@pytest.mark.parametrize("verdict", ["supported", "disproven"])
+@pytest.mark.parametrize("missing_citation", [
+    {"file_path": "missing.py", "snippet": "required_dependency"},
+    {"evidence_id": "unavailable-observation", "snippet": "required_dependency"},
+])
+def test_required_citations_cannot_drop_an_unobserved_premise(verdict, missing_citation):
+    from service.review.orchestrator import verification_agent
+    field = "supporting_evidence" if verdict == "supported" else "contradicting_evidence"
+    assessment = verification_agent.VerificationAssessment(issue_id="issue_0", verdict=verdict,
+        reason="Both source premises are required", **{field: [
+            {"file_path": "guard.py", "snippet": "if enabled: return"}, missing_citation,
+        ]})
+    checked = verification_agent._validated_assessment(assessment, {"guard.py": "if enabled: return"})
+    assert checked["verdict"] == "unknown"
+    assert checked["reasonCode"] == ("supporting_citation_unobserved" if verdict == "supported" else "contradicting_citation_unobserved")
+    retained = checked["supportingEvidence" if verdict == "supported" else "contradictingEvidence"]
+    assert len(retained) == 1

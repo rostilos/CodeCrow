@@ -46,7 +46,7 @@ STAGE1_RELATION_BRIEFING_MAX_CHARS = max(
 
 @dataclass
 class Stage1RagState:
-    """Review-scoped structural evidence state shared with later stages."""
+    """Review-scoped observed evidence shared with later stages."""
 
     exact_evidence_by_id: Dict[str, tuple[Dict[str, Any], ...]] = field(
         default_factory=dict
@@ -55,6 +55,10 @@ class Stage1RagState:
     relation_briefings_by_paths: Dict[
         tuple[str, ...], Dict[str, Any]
     ] = field(default_factory=dict, repr=False)
+    # None remembers conflicting observations so a later batch cannot revive them.
+    complete_file_contents: Dict[str, Optional[str]] = field(
+        default_factory=dict, repr=False
+    )
 
 
 async def fetch_stage1_relation_briefing(

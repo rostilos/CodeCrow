@@ -81,6 +81,8 @@ class CandidateRecord:
     generation_prompt_digest: str
     evidence_refs: tuple[str, ...]
     visible_evidence_by_id: dict[str, tuple[dict[str, Any], ...]]
+    original_issue: dict[str, Any]
+    generation_prompt_hunk_ids: tuple[str, ...]
     hypothesis: str = ""
     evidence_gaps: tuple[str, ...] = ()
     assessments: list[dict[str, Any]] = field(default_factory=list)
@@ -111,6 +113,8 @@ class CandidateEvidenceLedger:
         visible_evidence_by_id: Optional[
             Mapping[str, Iterable[Mapping[str, Any]]]
         ] = None,
+        original_issue: Optional[dict[str, Any]] = None,
+        generation_prompt_hunk_ids: Optional[Iterable[str]] = None,
     ) -> str:
         normalized_stage = str(stage).strip()
         normalized_source_key = str(source_key).strip()
@@ -180,6 +184,12 @@ class CandidateEvidenceLedger:
             generation_prompt_digest=resolved_prompt_digest,
             evidence_refs=evidence_refs,
             visible_evidence_by_id=visible_evidence,
+            original_issue=json.loads(json.dumps(
+                original_issue if original_issue is not None else _issue_payload(issue)
+            )),
+            generation_prompt_hunk_ids=_normalized_values(
+                generation_prompt_hunk_ids if generation_prompt_hunk_ids is not None else hunks
+            ),
             hypothesis=str(getattr(issue, "hypothesis", "") or issue.reason)[:1600],
             evidence_gaps=_normalized_values(getattr(issue, "evidenceGaps", ()) or ()),
             assessments=[{"verdict": "unknown", "reason": "Candidate has not been independently verified"}],
@@ -272,11 +282,9 @@ class CandidateEvidenceLedger:
                 if assessment.get("reasonCode") == "consolidated_evidence":
                     assessments = record.assessments[index:]
             counts["attempted"] += any(a.get("attempted") is True for a in assessments)
-            completed = [a for a in assessments if a.get("completed") is True]
-            counts["completed"] += bool(completed)
-            counts["incomplete"] += not bool(completed)
-            supported = [a for a in completed if a.get("verdict") in {"supported", "disproven"}]
-            last = (supported or completed or assessments)[-1] if assessments else {}
+            last = assessments[-1] if assessments else {}
+            counts["completed"] += last.get("completed") is True
+            counts["incomplete"] += last.get("completed") is not True
             verdict = last.get("verdict", "unknown")
             counts[verdict if verdict in {"supported", "disproven"} else "unknown"] += 1
             if verdict == "unknown":
@@ -427,6 +435,8 @@ class CandidateEvidenceLedger:
                     "candidateId": record.candidate_id,
                     "stage": record.stage,
                     "sourceKey": record.source_key,
+                    "originalIssue": record.original_issue,
+                    "generationPromptHunkIds": list(record.generation_prompt_hunk_ids),
                     "hypothesis": record.hypothesis,
                     "evidenceGaps": list(record.evidence_gaps),
                     "verificationAssessments": list(record.assessments),

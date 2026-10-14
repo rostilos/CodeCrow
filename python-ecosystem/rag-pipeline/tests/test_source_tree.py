@@ -15,6 +15,8 @@ from rag_pipeline.core.source_tree import (
     read_repository_file_bytes,
     require_repository_source_tree_unchanged,
     verify_repository_source_tree,
+    _git_output,
+    _verify_git_checkout,
 )
 
 
@@ -98,6 +100,83 @@ def test_git_tree_requires_exact_clean_head(tmp_path):
     dirty_digest = compute_repository_source_tree_sha256(tmp_path)
     with pytest.raises(RepositorySourceTreeError, match="not clean"):
         verify_repository_source_tree(tmp_path, commit, dirty_digest)
+
+
+def test_git_attestation_retries_one_transient_timeout(tmp_path, caplog):
+    with patch("rag_pipeline.core.source_tree.subprocess.run", side_effect=[
+        subprocess.TimeoutExpired("git status", 30),
+        SimpleNamespace(stdout=""),
+    ]) as run:
+        assert _git_output(tmp_path, "status", "--porcelain=v1", "--untracked-files=normal") == ""
+    assert run.call_count == 2
+    assert run.call_args_list[0] == run.call_args_list[1]
+    assert "git status" in caplog.text.lower()
+    assert "retrying once" in caplog.text
+
+
+def test_git_attestation_timeout_is_bounded_and_identifies_command(tmp_path):
+    with patch("rag_pipeline.core.source_tree.subprocess.run", side_effect=
+               subprocess.TimeoutExpired("git status", 30)) as run:
+        with pytest.raises(RepositorySourceTreeError, match=r"git status.*30.*2 attempts"):
+            _git_output(tmp_path, "status", "--porcelain=v1", "--untracked-files=normal")
+    assert run.call_count == 2
+
+
+@pytest.mark.parametrize("failure", [
+    subprocess.CalledProcessError(128, "git status", stderr="fixture Git failure"),
+    OSError("fixture unavailable executable"),
+])
+def test_git_attestation_non_timeout_failures_do_not_retry(tmp_path, failure):
+    with patch("rag_pipeline.core.source_tree.subprocess.run", side_effect=failure) as run:
+        with pytest.raises(RepositorySourceTreeError, match="cannot verify repository Git revision"):
+            _git_output(tmp_path, "status", "--porcelain=v1", "--untracked-files=normal")
+    assert run.call_count == 1
+
+
+@pytest.mark.parametrize("linked_worktree", [False, True], ids=["checkout", "worktree"])
+@pytest.mark.parametrize("change", ["clean", "tracked", "staged", "deleted", "nested_untracked"])
+def test_git_clean_predicate_keeps_all_dirty_controls(tmp_path, linked_worktree, change):
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "--quiet")
+    _git(origin, "config", "user.email", "benchmark@example.test")
+    _git(origin, "config", "user.name", "Benchmark")
+    (origin / "tracked.py").write_text("original = True\n")
+    _git(origin, "add", ".")
+    _git(origin, "commit", "--quiet", "-m", "snapshot")
+    commit = _git(origin, "rev-parse", "HEAD")
+    repo = origin
+    if linked_worktree:
+        repo = tmp_path / "linked"
+        _git(origin, "worktree", "add", "--detach", str(repo), commit)
+        assert (repo / ".git").is_file()
+    if change in {"tracked", "staged"}:
+        (repo / "tracked.py").write_text("changed = True\n")
+        if change == "staged":
+            _git(repo, "add", "tracked.py")
+    elif change == "deleted":
+        (repo / "tracked.py").unlink()
+    elif change == "nested_untracked":
+        nested = repo / "new" / "deep" / "file.py"
+        nested.parent.mkdir(parents=True)
+        nested.write_text("untracked = True\n")
+    with patch("rag_pipeline.core.source_tree.subprocess.run", wraps=subprocess.run) as run:
+        if change == "clean":
+            assert attest_repository_source_tree(repo, commit).git_commit_verified
+        else:
+            with pytest.raises(RepositorySourceTreeError, match="not clean"):
+                attest_repository_source_tree(repo, commit)
+    assert run.call_count == 2  # rev-parse and one status; dirty is never retried.
+    assert "--untracked-files=normal" in run.call_args.args[0]
+
+
+def test_git_wrong_head_does_not_retry(tmp_path):
+    (tmp_path / ".git").mkdir()
+    with patch("rag_pipeline.core.source_tree.subprocess.run", return_value=
+               SimpleNamespace(stdout="b" * 40)) as run:
+        with pytest.raises(RepositorySourceTreeError, match="does not match"):
+            _verify_git_checkout(tmp_path, "a" * 40)
+    assert run.call_count == 1
 
 
 def test_git_administrative_data_is_not_part_of_tree_digest(tmp_path):

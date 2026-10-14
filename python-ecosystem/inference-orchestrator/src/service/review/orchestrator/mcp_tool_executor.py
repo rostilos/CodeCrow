@@ -225,9 +225,20 @@ class McpToolExecutor:
                 source = text
                 if evidence.get("evidence_structured"):
                     source = json.loads(text).get("fileContent", "")
-                key = (str(arguments.get("verificationId") or ""), str(arguments.get("filePath") or ""))
-                # Separate windows cannot fabricate a contiguous source quote.
-                self.verification_source.setdefault(key, []).append(source)
+                path = str(arguments.get("filePath") or "")
+                bound_ids = {str(arguments.get("verificationId") or "")}
+                for candidate_id in self.verification_issues:
+                    start, end = self._verification_range_for_path(candidate_id, path)
+                    if start > 0 and (evidence.get("evidence_complete_file") is True or (
+                        evidence.get("evidence_start_line", 0) <= start
+                        and end <= evidence.get("evidence_end_line", 0)
+                    )):
+                        bound_ids.add(candidate_id)
+                log_entry["verification_ids"] = sorted(bound_ids)
+                for candidate_id in bound_ids:
+                    # Reuse only this exact observed window, never concatenate
+                    # disjoint reads into an invented contiguous source quote.
+                    self.verification_source.setdefault((candidate_id, path), []).append(source)
             return text
         except Exception as e:
             logger.error(f"[MCP {self.stage}] Tool call failed: {e}")

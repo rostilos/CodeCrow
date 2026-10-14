@@ -119,6 +119,7 @@ class DiffHunk:
     new_count: int
     content: str
     disposition: HunkDisposition = HunkDisposition.REVIEWABLE
+    evidence_kind: str = "changed_source"
 
 
 @dataclass
@@ -141,7 +142,7 @@ class DiffFile:
 
     @property
     def review_hunks(self) -> List[DiffHunk]:
-        """Only exact hunks materialized in the bounded review input."""
+        """Exact changed hunks and labelled source-backed path-impact units."""
         return self.hunks if self.visible_hunks is None else self.visible_hunks
 
     @property

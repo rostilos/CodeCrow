@@ -63,6 +63,8 @@ class DependencyGraphBuilder:
 
     def _initialize_nodes(self, file_groups: List[Any]) -> None:
         """Initialize nodes and preserve deterministic plugin evidence groups."""
+        self.nodes = {}
+        self.relationships = []
         for group in file_groups:
             paths = []
             for review_file in group.files:
@@ -106,10 +108,9 @@ class DependencyGraphBuilder:
         """
         Build dependency graph from pre-computed enrichment data sent by Java.
 
-        This is the preferred method when enrichment_data is available, as it:
-        - Eliminates redundant RAG calls (Java already parsed the files)
-        - Uses full file content for accurate relationship detection
-        - Provides relationships computed with proper AST parsing
+        This starts a fresh graph from explicit enrichment relationships and
+        plugin groups. Enrichment content or edges do not establish complete
+        relationship coverage; async callers supplement it with the bound graph.
 
         Args:
             file_groups: List of FileGroup objects with files to analyze
@@ -177,16 +178,17 @@ class DependencyGraphBuilder:
         project: str,
         branches: List[str],
         structural_binding: Optional[Dict[str, str]] = None,
+        enrichment_data: Any = None,
     ) -> Dict[str, FileNode]:
         """Build changed-file edges from one exact structural relation map."""
+        self.build_graph_from_enrichment(file_groups, enrichment_data)
         if not self.rag_client:
             logger.info(
                 "No structural client provided; batching without inferred edges"
             )
-            return self._build_basic_graph(file_groups)
+            return self.nodes
 
         all_file_paths = []
-        self._initialize_nodes(file_groups)
         for group in file_groups:
             for f in group.files:
                 all_file_paths.append(f.path)
@@ -441,18 +443,19 @@ class DependencyGraphBuilder:
         token_cost_by_path: Optional[Dict[str, int]] = None,
         structural_binding: Optional[Dict[str, str]] = None,
     ) -> List[List[Dict[str, Any]]]:
-        """Build batches from enrichment or an exact structural relation map."""
-        if enrichment_data and hasattr(enrichment_data, 'has_data') and enrichment_data.has_data():
-            logger.info("Using pre-computed enrichment data for dependency graph")
-            self.build_graph_from_enrichment(file_groups, enrichment_data)
-        else:
-            await self.build_graph_from_structural_relations(
-                file_groups,
-                workspace,
-                project,
-                branches,
-                structural_binding=structural_binding,
-            )
+        """Merge available enrichment with exact structural relationships.
+
+        File contents and partial relationship lists do not establish complete
+        relationship coverage. A failed optional lookup preserves known edges.
+        """
+        await self.build_graph_from_structural_relations(
+            file_groups,
+            workspace,
+            project,
+            branches,
+            structural_binding=structural_binding,
+            enrichment_data=enrichment_data,
+        )
 
         return self._build_batches_from_graph(
             file_groups=file_groups,

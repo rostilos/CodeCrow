@@ -1,3 +1,5 @@
+
+from llm.provider_lifecycle import provider_execution_scope
 import json
 import asyncio
 import hashlib
@@ -5,7 +7,7 @@ import logging
 import os
 import re
 from contextvars import ContextVar
-from typing import Literal, List, Dict, Any, Optional, Tuple
+from typing import Literal, List, Dict, Any, Mapping, Optional, Tuple
 try:
     from langchain_core.tools import tool
 except ModuleNotFoundError as exception:
@@ -31,7 +33,7 @@ from utils.diff_processor import (
     HunkDisposition,
     ProcessedDiff,
 )
-from utils.path_identity import repository_paths_match
+from utils.path_identity import normalize_repository_path, repository_paths_match
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -68,23 +70,6 @@ _ACTIVE_FILE_CONTENTS: ContextVar[Optional[Dict[str, str]]] = ContextVar(
     default=None,
 )
 
-_IDENTIFIER_RE = re.compile(r"(?<![A-Za-z0-9_$])[A-Za-z_$][A-Za-z0-9_$]*(?![A-Za-z0-9_$])")
-_UNUSED_CLAIM_RE = re.compile(
-    r"\b(?:unused|unreferenced)\b|\b(?:not|never)\s+(?:used|referenced)\b",
-    re.IGNORECASE,
-)
-_IMPORT_CLAIM_RE = re.compile(
-    r"\b(?:import|imports|dependency|dependencies|use statement|using directive)\b",
-    re.IGNORECASE,
-)
-_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/|<!--.*?-->", re.DOTALL)
-_TRIPLE_QUOTED_LITERAL_RE = re.compile(
-    r"'''(?:\\.|[^\\])*?'''|\"\"\"(?:\\.|[^\\])*?\"\"\"",
-    re.DOTALL,
-)
-_QUOTED_LITERAL_RE = re.compile(
-    r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|`(?:\\.|[^`\\])*`"
-)
 _APPLIED_FIX_RE = re.compile(
     r"\b(?:the\s+)?current\s+(?:diff|change|patch|code|implementation)\s+"
     r"(?:already\s+|correctly\s+|successfully\s+|fully\s+)+"
@@ -172,12 +157,6 @@ _POSITIVE_OUTCOME_RE = re.compile(
     re.IGNORECASE,
 )
 _EVIDENCE_LABEL_RE = re.compile(r"^\s*(?:evidence|also\s+affects)\s*:", re.IGNORECASE)
-_NON_SYMBOL_WORDS = {
-    "unused", "unreferenced", "not", "never", "used", "referenced",
-    "import", "imports", "dependency", "dependencies", "use", "using",
-    "statement", "directive", "class", "module", "symbol", "the", "an",
-    "a", "in", "is", "but", "file", "template",
-}
 
 
 @tool
@@ -269,10 +248,10 @@ def _validated_assessment(assessment: VerificationAssessment, evidence: Dict[str
     contradicting = observed(assessment.contradicting_evidence)
     verdict = assessment.verdict
     reason_code = "model_unknown" if verdict == "unknown" else "evidence_checked"
-    if verdict == "disproven" and not contradicting:
+    if verdict == "disproven" and (not contradicting or len(contradicting) != len(assessment.contradicting_evidence)):
         verdict = "unknown"
         reason_code = "contradicting_citation_unobserved"
-    if verdict == "supported" and not supporting:
+    if verdict == "supported" and (not supporting or len(supporting) != len(assessment.supporting_evidence)):
         verdict = "unknown"
         reason_code = "supporting_citation_unobserved"
     return {
@@ -338,11 +317,22 @@ def _verification_record_text(
     )
 
 
+PREDICATE_VERIFICATION_INSTRUCTION = """For a changed predicate, evaluate the candidate trigger against the exact code:
+state the relevant input relationship, predicate result, and branch outcome in
+your reason. For equality checks, distinguish the same value from a different
+value explicitly. Comments describe intent, not executable behavior; never use
+comments to reverse the meaning of ===, !==, or the branch that throws.
+A disproven assessment must explain how observed code rules out the candidate
+trigger. If that counterexample cannot be established, use unknown and preserve
+the finding. An exact citation alone does not prove its semantic interpretation."""
+
+
 def _verification_prompt(issues_text: str) -> str:
     return f"""You are a Verification Agent for a code review system.
 Actively try to disprove each concrete defect hypothesis using exact current
 source, not agreement with its author. State what trigger would make it fail and
 seek the existing guard, caller contract, handling path or check that contradicts it.
+{PREDICATE_VERIFICATION_INSTRUCTION}
 
 `search_file_content` searches complete request-local files and returns exact
 bounded source windows with line coordinates. If available, `getReviewFileContent`
@@ -562,72 +552,6 @@ def _build_file_evidence(
                     _add_path_evidence(evidence, diff_file.path, current_source)
 
     return evidence
-
-
-def _unused_import_candidates(issue: CodeReviewIssue) -> List[str]:
-    """
-    Extract issue-named identifiers for an unused-import-like claim.
-
-    This examines the review claim and its exact anchor, not source-language
-    syntax. It therefore works across PHP, Java, Python, JS/TS, C#, and similar
-    import forms without extension or framework checks.
-    """
-    title = _issue_field(issue, "title")
-    reason = _issue_field(issue, "reason")
-    snippet = _issue_field(issue, "codeSnippet")
-    claim = f"{title}\n{reason}"
-    if not snippet or not _UNUSED_CLAIM_RE.search(claim) or not _IMPORT_CLAIM_RE.search(claim):
-        return []
-
-    snippet_tokens = _IDENTIFIER_RE.findall(snippet)
-    title_tokens = {token.casefold() for token in _IDENTIFIER_RE.findall(title)}
-    candidates = []
-    for token in snippet_tokens:
-        normalized = token.casefold()
-        if normalized in title_tokens and normalized not in _NON_SYMBOL_WORDS:
-            candidates.append(token)
-    return list(dict.fromkeys(candidates))
-
-
-def _symbol_occurs_outside_anchor(symbol: str, snippet: str, evidence: str) -> bool:
-    """Return true only for a high-confidence syntactic reference.
-
-    A raw identifier count is unsafe here: comments, docstrings, and a local
-    declaration that shadows the import all contain the same token. The LLM
-    verifier handles ambiguous cases; this deterministic shortcut is limited to
-    common call/type/member syntax that clearly references the imported name.
-    """
-    del snippet  # Import declarations are removed from the evidence below.
-    source = _TRIPLE_QUOTED_LITERAL_RE.sub("", evidence or "")
-    source = _BLOCK_COMMENT_RE.sub("", source)
-    code_lines: List[str] = []
-    for raw_line in source.splitlines():
-        line = raw_line.lstrip("+ ")
-        line = _QUOTED_LITERAL_RE.sub("", line)
-        # This deliberately strips a few comment syntaxes aggressively. A lost
-        # reference merely makes this shortcut fail open and leaves verification
-        # to the model; treating comment text as code would drop a real finding.
-        line = re.split(r"//|--|#(?!\[)", line, maxsplit=1)[0]
-        if re.match(r"^\s*(?:import|from|use|using|#include)\b", line):
-            continue
-        code_lines.append(line)
-
-    code = "\n".join(code_lines)
-    escaped = re.escape(symbol)
-    shadowing_declaration = re.compile(
-        rf"(?m)^\s*(?:(?:class|interface|trait|enum|def|function|type)\s+"
-        rf"{escaped}\b|(?:const|let|var)\s+{escaped}\b|{escaped}\s*=)",
-        re.IGNORECASE,
-    )
-    if shadowing_declaration.search(code):
-        return False
-
-    high_confidence_reference = re.compile(
-        rf"(?:\bnew\s+{escaped}\b|\b{escaped}\s*(?:::|\.|->)|"
-        rf"\b{escaped}\s*\(|\b(?:extends|implements|instanceof)\s+{escaped}\b|"
-        rf"(?::|->)\s*{escaped}\b|@\s*{escaped}\b|<\s*{escaped}(?:\s|/|>))"
-    )
-    return bool(high_confidence_reference.search(code))
 
 
 def _clause_after(text: str, start: int) -> str:
@@ -856,46 +780,6 @@ def _drop_non_publishable_issues(
     return (kept, dropped_ids) if dropped_ids else (issues, [])
 
 
-def _drop_deterministically_contradicted_issues(
-    issues: List[CodeReviewIssue],
-    evidence_by_path: Dict[str, Optional[str]],
-    previous_open_ids: Optional[set[str]] = None,
-    candidate_ledger: Optional[CandidateEvidenceLedger] = None,
-) -> Tuple[List[CodeReviewIssue], List[str]]:
-    """Drop only issues whose own named symbol is visibly used outside its import."""
-    kept: List[CodeReviewIssue] = []
-    dropped_ids: List[str] = []
-    for index, issue in enumerate(issues):
-        if _issue_is_resolved(issue):
-            kept.append(issue)
-            continue
-        snippet = _issue_field(issue, "codeSnippet")
-        evidence = _lookup_path_evidence(evidence_by_path, _issue_field(issue, "file"))
-        candidates = _unused_import_candidates(issue)
-        contradicted = bool(evidence and any(
-            _symbol_occurs_outside_anchor(symbol, snippet, evidence)
-            for symbol in candidates
-        ))
-        if contradicted:
-            if _resolve_historical_candidate(
-                issue,
-                previous_open_ids or set(),
-                "Closed because current source evidence contradicts the prior finding.",
-            ):
-                kept.append(issue)
-            else:
-                dropped_ids.append(_verification_issue_id(index, issue))
-                if candidate_ledger is not None:
-                    candidate_ledger.reject(
-                        issue,
-                        gate="source_evidence",
-                        code="deterministic_contradiction",
-                    )
-        else:
-            kept.append(issue)
-    return kept, dropped_ids
-
-
 def _snippet_occurs_in_current_source(snippet: str, source: str) -> bool:
     """Match the model-provided anchor without weakening the exact-copy contract."""
     normalized_snippet = snippet.replace("\r\n", "\n").replace("\r", "\n")
@@ -1122,14 +1006,13 @@ def canonicalize_prompt_visible_line_anchor(
     processed_diff: Optional[ProcessedDiff],
     visible_hunk_ids: set[str],
 ) -> tuple[str, ...]:
-    """Canonicalize a Stage 2 line anchor from exact prompt-visible diff data.
+    """Canonicalize a line anchor from exact prompt-visible diff data.
 
     Stage 2 sees unified-diff records, so otherwise correct model output can
     carry the leading ``+`` marker or Markdown backticks in ``codeSnippet``.
-    When the supplied snippet already identifies any reviewable hunk, it is
-    left untouched. Otherwise, an explicit in-hunk line hint may recover the
-    exact current-source line, but only when the decorated snippet agrees with
-    that line (or the model omitted the snippet entirely).
+    A unique decorated source line may recover a stale line hint. Ambiguous
+    matches still require the explicit in-hunk line. Removed bytes in modified
+    files never become current-source evidence through this normalization.
     """
     if processed_diff is None or not visible_hunk_ids:
         return ()
@@ -1155,6 +1038,21 @@ def canonicalize_prompt_visible_line_anchor(
     supplied_variants = _anchor_text_variants(
         _issue_field(issue, "codeSnippet")
     )
+    matches = []
+    if supplied_variants:
+        for hunk in _reviewable_hunks(diff_file):
+            if hunk.id not in visible_hunk_ids:
+                continue
+            base_side = diff_file.change_type is DiffChangeType.DELETED
+            start = hunk.old_start if base_side else hunk.new_start
+            source = _base_hunk_source(hunk) if base_side else _current_hunk_source(hunk)
+            for number, source_line in enumerate(source.splitlines(), start):
+                if source_line and source_line.strip() in supplied_variants:
+                    matches.append((hunk.id, number, source_line))
+        if len(matches) == 1:
+            hunk_id, number, source_line = matches[0]
+            issue.file, issue.line, issue.codeSnippet = diff_file.path, number, source_line
+            return (hunk_id,)
     for hunk in _reviewable_hunks(diff_file):
         if hunk.id not in visible_hunk_ids:
             continue
@@ -1223,6 +1121,7 @@ def apply_candidate_provenance_gate(
             )
             record_rejection(record.stage, "unbound_review_unit")
             continue
+        canonicalize_prompt_visible_line_anchor(issue, processed_diff, set(record.prompt_hunk_ids))
         anchor_hunks = reviewable_hunk_ids_for_issue(
             issue,
             request,
@@ -1402,7 +1301,7 @@ def run_deterministic_evidence_gate(
     processed_diff: Optional[ProcessedDiff] = None,
     candidate_ledger: Optional[CandidateEvidenceLedger] = None,
 ) -> List[CodeReviewIssue]:
-    """Apply fail-closed contradiction checks to issues from any review stage."""
+    """Apply publication and exact-anchor checks to issues from any review stage."""
     if not issues:
         return issues
 
@@ -1457,18 +1356,6 @@ def run_deterministic_evidence_gate(
     if not filtered:
         return []
 
-    filtered, dropped_ids = _drop_deterministically_contradicted_issues(
-        filtered,
-        evidence_by_path,
-        open_issue_ids,
-        candidate_ledger,
-    )
-    if dropped_ids:
-        logger.info(
-            "Deterministic evidence gate dropped %d contradicted issue(s): %s",
-            len(dropped_ids),
-            dropped_ids,
-        )
     return filtered
 
 
@@ -1606,167 +1493,164 @@ async def _run_verification_tool_loop(
     deadline: Optional[float] = None,
     source_bindings: Optional[Dict[str, str]] = None,
 ) -> VerificationResult:
-    if not hasattr(llm, "bind_tools"):
-        return VerificationResult(incomplete_reason="tool_binding_unavailable")
+    async with provider_execution_scope(llm):
+        if not hasattr(llm, "bind_tools"):
+            return VerificationResult(incomplete_reason="tool_binding_unavailable")
 
-    # Keep this module importable by provider-free quality tooling; load the
-    # shared agent implementation only when the optional verifier executes.
-    from service.agent import AgentExecutionService
+        # Keep this module importable by provider-free quality tooling; load the
+        # shared agent implementation only when the optional verifier executes.
+        from service.agent import AgentExecutionService
 
-    try:
-        model_session = AgentExecutionService(llm=llm, client=None).create_model_session(
-            tool_definitions=[search_file_content, *optional_tools],
-            reasoning_effort=ReasoningEffort.HIGH,
-            usage_stage="stage_1_verification",
-        )
-    except Exception:
-        logger.info("Optional verifier tool binding unavailable; retaining candidates")
-        return VerificationResult(incomplete_reason="tool_binding_unavailable")
-    optional_by_name = {tool.name: tool for tool in optional_tools}
-    retrieval_cache: dict[str, tuple[str, str]] = {}
-    nonprogress: dict[str, int] = {}
-    observations = observations if observations is not None else {}
-    assessments: Dict[str, VerificationAssessment] = {}
-    attempted = False
-    incomplete_reason = ""
-    loop = asyncio.get_running_loop()
-    deadline = deadline if deadline is not None else loop.time() + optional_work_budget(optional_timeout_seconds("REVIEW_VERIFICATION_TIMEOUT_SECONDS", 60))
-    acquisition_deadline = deadline - min(20.0, max(0.0, deadline - loop.time()) / 2)
-    terminal_instruction = {
-        "role": "user",
-        "content": "Tool acquisition has ended and tools are disabled. Return ONLY the requested assessments JSON for every Verification ID, using the exact source and complete observations above. Do not request tools. Preserve completed assessments; use unknown with focused unresolved_questions wherever evidence is incomplete. Missing or omitted tool evidence cannot disprove a finding.",
-    }
-    messages: List[Any] = [
-        {"role": "system", "content": "You verify code-review findings and return only valid JSON."},
-        {"role": "user", "content": prompt},
-    ]
-
-    def collect(response: Any) -> bool:
-        nonlocal incomplete_reason
-        content = extract_llm_response_text(response)
-        if not content.strip():
-            return False
         try:
-            parsed = _parse_verification_result(content)
-        except (ValueError, TypeError):
-            return False
-        assessments.update((assessment.issue_id, assessment) for assessment in parsed.assessments)
-        incomplete_reason = parsed.incomplete_reason
-        return bool(parsed.assessments)
+            model_session = AgentExecutionService(llm=llm, client=None).create_model_session(
+                tool_definitions=[search_file_content, *optional_tools],
+                reasoning_effort=ReasoningEffort.HIGH,
+                usage_stage="stage_1_verification",
+            )
+        except Exception:
+            logger.info("Optional verifier tool binding unavailable; retaining candidates")
+            return VerificationResult(incomplete_reason="tool_binding_unavailable")
+        optional_by_name = {tool.name: tool for tool in optional_tools}
+        retrieval_cache: dict[str, tuple[str, str]] = {}
+        observations = observations if observations is not None else {}
+        assessments: Dict[str, VerificationAssessment] = {}
+        attempted = False
+        incomplete_reason = ""
+        loop = asyncio.get_running_loop()
+        deadline = deadline if deadline is not None else loop.time() + optional_work_budget(optional_timeout_seconds("REVIEW_VERIFICATION_TIMEOUT_SECONDS", 60))
+        acquisition_deadline = deadline - min(20.0, max(0.0, deadline - loop.time()) / 2)
+        terminal_instruction = {
+            "role": "user",
+            "content": "Tool acquisition has ended and tools are disabled. Return ONLY the requested assessments JSON for every Verification ID, using the exact source and complete observations above. Do not request tools. Preserve completed assessments; use unknown with focused unresolved_questions wherever evidence is incomplete. Missing or omitted tool evidence cannot disprove a finding.",
+        }
+        messages: List[Any] = [
+            {"role": "system", "content": "You verify code-review findings and return only valid JSON."},
+            {"role": "user", "content": prompt},
+        ]
 
-    # Keep whole admitted observations. A large new response is omitted explicitly,
-    # rather than erasing earlier evidence or clipping source into misleading fragments.
-    pending_calls: List[Any] = []
-    try:
-        async with asyncio.timeout_at(acquisition_deadline):
-            for iteration in range(VERIFICATION_MAX_TOOL_ROUNDS):
-                if _estimated_verification_tokens([*messages, terminal_instruction], optional_tools) > input_token_target:
-                    incomplete_reason = "input_budget_exhausted"
-                    break
-                attempted = True
-                response = await model_session.ainvoke(messages)
-                messages.append(response)
-                parsed = collect(response)
-                pending_calls = list(getattr(response, "tool_calls", None) or [])
-                if not pending_calls:
-                    if parsed:
-                        return VerificationResult(assessments=list(assessments.values()),
-                                                  incomplete_reason=incomplete_reason, attempted=True)
-                    incomplete_reason = "invalid_assessment_response"
-                    break
-                while pending_calls:
-                    tool_call = pending_calls[0]
-                    name = _tool_call_attr(tool_call, "name")
-                    args = dict(_tool_call_attr(tool_call, "args") or {})
-                    tool_call_id = _tool_call_attr(tool_call, "id") or f"verification_tool_{iteration}"
-                    evidence_id = ""
-                    if name in optional_by_name:
-                        from service.agent.evidence_acquisition import observation_status, evidence_payload
-                        if name == "getReviewFileContent":
-                            if not source_bindings:
-                                raise ValueError("Exact source reader requires host repository identity")
-                            args.update(source_bindings)
-                            args.pop("branch", None)
-                            start = max(1, int(args.get("startLine") or 1))
-                            args["startLine"] = start
-                            args["endLine"] = max(start, min(int(args.get("endLine") or start + 159), start + 159))
-                        fingerprint = hashlib.sha256(json.dumps([name, args], sort_keys=True, default=str).encode()).hexdigest()
-                        evidence_id = "verification:" + fingerprint[:20]
-                        if fingerprint in retrieval_cache:
-                            tool_result, status = retrieval_cache[fingerprint]
-                        elif nonprogress.get(name, 0) >= 2:
-                            tool_result, status = "Optional evidence unavailable after repeated empty/failing queries; use exact source or preserve uncertainty.", "unavailable"
+        def collect(response: Any) -> bool:
+            nonlocal incomplete_reason
+            content = extract_llm_response_text(response)
+            if not content.strip():
+                return False
+            try:
+                parsed = _parse_verification_result(content)
+            except (ValueError, TypeError):
+                return False
+            assessments.update((assessment.issue_id, assessment) for assessment in parsed.assessments)
+            incomplete_reason = parsed.incomplete_reason
+            return bool(parsed.assessments)
+
+        # Keep whole admitted observations. A large new response is omitted explicitly,
+        # rather than erasing earlier evidence or clipping source into misleading fragments.
+        pending_calls: List[Any] = []
+        try:
+            async with asyncio.timeout_at(acquisition_deadline):
+                for iteration in range(VERIFICATION_MAX_TOOL_ROUNDS):
+                    if _estimated_verification_tokens([*messages, terminal_instruction], optional_tools) > input_token_target:
+                        incomplete_reason = "input_budget_exhausted"
+                        break
+                    attempted = True
+                    response = await model_session.ainvoke(messages)
+                    messages.append(response)
+                    parsed = collect(response)
+                    pending_calls = list(getattr(response, "tool_calls", None) or [])
+                    if not pending_calls:
+                        if parsed:
+                            return VerificationResult(assessments=list(assessments.values()),
+                                                      incomplete_reason=incomplete_reason, attempted=True)
+                        incomplete_reason = "invalid_assessment_response"
+                        break
+                    while pending_calls:
+                        tool_call = pending_calls[0]
+                        name = _tool_call_attr(tool_call, "name")
+                        args = dict(_tool_call_attr(tool_call, "args") or {})
+                        tool_call_id = _tool_call_attr(tool_call, "id") or f"verification_tool_{iteration}"
+                        evidence_id = ""
+                        if name in optional_by_name:
+                            from service.agent.evidence_acquisition import observation_status, evidence_payload
+                            if name == "getReviewFileContent":
+                                if not source_bindings:
+                                    raise ValueError("Exact source reader requires host repository identity")
+                                args.update(source_bindings)
+                                args.pop("branch", None)
+                                start = max(1, int(args.get("startLine") or 1))
+                                args["startLine"] = start
+                                args["endLine"] = max(start, min(int(args.get("endLine") or start + 159), start + 159))
+                            fingerprint = hashlib.sha256(json.dumps([name, args], sort_keys=True, default=str).encode()).hexdigest()
+                            evidence_id = "verification:" + fingerprint[:20]
+                            if fingerprint in retrieval_cache:
+                                tool_result, status = retrieval_cache[fingerprint]
+                            else:
+                                try:
+                                    raw_result = await optional_by_name[name].ainvoke(args)
+                                    payload = evidence_payload(raw_result)
+                                    tool_result = payload if isinstance(payload, str) else json.dumps(payload, default=str)
+                                    status = observation_status(raw_result)
+                                    if name == "runVerificationCheck":
+                                        status = "acquired" if isinstance(payload, dict) and payload.get("status") in {"passed", "failed"} else "unavailable"
+                                except Exception as error:
+                                    tool_result, status = type(error).__name__, "unavailable"
+                                retrieval_cache[fingerprint] = (tool_result, status)
+                            source = tool_result
+                            if name == "getReviewFileContent" and status == "acquired":
+                                try:
+                                    source = json.loads(tool_result).get("fileContent", tool_result)
+                                except (ValueError, AttributeError):
+                                    pass
+                            observations[evidence_id] = {"text": source, "status": status, "tool": name}
+                            record_compute_decision("verification_evidence", tool=name, evidenceId=evidence_id, outcome=status)
+                            tool_result = json.dumps({"evidence_id": evidence_id, "status": status, "observation": tool_result})
+                            if name == "getReviewFileContent" and status == "acquired":
+                                tool_result += _decoded_verification_source_view(tool_result)
+                        elif name != "search_file_content":
+                            tool_result = f"Error: unsupported tool '{name}'."
                         else:
-                            try:
-                                raw_result = await optional_by_name[name].ainvoke(args)
-                                payload = evidence_payload(raw_result)
-                                tool_result = payload if isinstance(payload, str) else json.dumps(payload, default=str)
-                                status = observation_status(raw_result)
-                                if name == "runVerificationCheck":
-                                    status = "acquired" if isinstance(payload, dict) and payload.get("status") in {"passed", "failed"} else "unavailable"
-                            except Exception as error:
-                                tool_result, status = type(error).__name__, "unavailable"
-                            retrieval_cache[fingerprint] = (tool_result, status)
-                            nonprogress[name] = nonprogress.get(name, 0) + 1 if status != "acquired" else 0
-                        source = tool_result
-                        if name == "getReviewFileContent" and status == "acquired":
-                            try:
-                                source = json.loads(tool_result).get("fileContent", tool_result)
-                            except (ValueError, AttributeError):
-                                pass
-                        observations[evidence_id] = {"text": source, "status": status, "tool": name}
-                        record_compute_decision("verification_evidence", tool=name, evidenceId=evidence_id, outcome=status)
-                        tool_result = json.dumps({"evidence_id": evidence_id, "status": status, "observation": tool_result})
-                        if name == "getReviewFileContent" and status == "acquired":
-                            tool_result += _decoded_verification_source_view(tool_result)
-                    elif name != "search_file_content":
-                        tool_result = f"Error: unsupported tool '{name}'."
-                    else:
-                        tool_result = _invoke_search_file_content(args)
-                    message = {"role": "tool", "content": str(tool_result), "tool_call_id": tool_call_id}
-                    if _estimated_verification_tokens([*messages, message, terminal_instruction], tools_enabled=False) > input_token_target:
-                        message["content"] = "Observation omitted because the complete response exceeds the verification input budget. Its evidence is unavailable; preserve uncertainty."
-                        if evidence_id:
-                            observations[evidence_id]["status"] = "unavailable"
-                        incomplete_reason = "observation_exceeds_input_budget"
-                    messages.append(message)
-                    pending_calls.pop(0)
+                            tool_result = _invoke_search_file_content(args)
+                        message = {"role": "tool", "content": str(tool_result), "tool_call_id": tool_call_id}
+                        if _estimated_verification_tokens([*messages, message, terminal_instruction], tools_enabled=False) > input_token_target:
+                            message["content"] = "Observation omitted because the complete response exceeds the verification input budget. Its evidence is unavailable; preserve uncertainty."
+                            if evidence_id:
+                                observations[evidence_id]["status"] = "unavailable"
+                            incomplete_reason = "observation_exceeds_input_budget"
+                        messages.append(message)
+                        pending_calls.pop(0)
+                        if incomplete_reason:
+                            break
                     if incomplete_reason:
                         break
-                if incomplete_reason:
-                    break
-    except TimeoutError:
-        incomplete_reason = "acquisition_deadline_exhausted"
-    except Exception as error:
-        incomplete_reason = "acquisition_unavailable"
-        logger.info("Optional verifier acquisition unavailable (%s); finalizing acquired evidence", type(error).__name__)
-
-    # Every requested tool ID needs a response even when its acquisition was skipped.
-    for tool_call in pending_calls:
-        messages.append({"role": "tool", "tool_call_id": _tool_call_attr(tool_call, "id"),
-                         "content": f"Tool not completed: {incomplete_reason}. Evidence is unavailable; preserve uncertainty."})
-    messages.append(terminal_instruction)
-    if loop.time() >= deadline:
-        incomplete_reason = "verification_deadline_exhausted"
-    elif _estimated_verification_tokens(messages, tools_enabled=False) > input_token_target:
-        incomplete_reason = "input_budget_exhausted"
-    else:
-        try:
-            async with asyncio.timeout_at(deadline):
-                async with review_model_slot("stage_1_verification_finalization"):
-                    attempted = True
-                    response = await llm.ainvoke(messages, **reasoning_request_kwargs(llm, ReasoningEffort.HIGH))
-                    record_model_response(response)
-            if getattr(response, "tool_calls", None):
-                incomplete_reason = "finalization_requested_tools"
-            elif not collect(response):
-                incomplete_reason = "invalid_assessment_response"
         except TimeoutError:
-            incomplete_reason = "finalization_deadline_exhausted"
+            incomplete_reason = "acquisition_deadline_exhausted"
         except Exception as error:
-            incomplete_reason = "finalization_unavailable"
-            logger.info("Optional verifier finalization unavailable (%s); retaining completed assessments", type(error).__name__)
-    return VerificationResult(assessments=list(assessments.values()), incomplete_reason=incomplete_reason, attempted=attempted)
+            incomplete_reason = "acquisition_unavailable"
+            logger.info("Optional verifier acquisition unavailable (%s); finalizing acquired evidence", type(error).__name__)
+
+        # Every requested tool ID needs a response even when its acquisition was skipped.
+        for tool_call in pending_calls:
+            messages.append({"role": "tool", "tool_call_id": _tool_call_attr(tool_call, "id"),
+                             "content": f"Tool not completed: {incomplete_reason}. Evidence is unavailable; preserve uncertainty."})
+        messages.append(terminal_instruction)
+        if loop.time() >= deadline:
+            incomplete_reason = "verification_deadline_exhausted"
+        elif _estimated_verification_tokens(messages, tools_enabled=False) > input_token_target:
+            incomplete_reason = "input_budget_exhausted"
+        else:
+            try:
+                async with asyncio.timeout_at(deadline):
+                    async with review_model_slot("stage_1_verification_finalization"):
+                        attempted = True
+                        response = await llm.ainvoke(messages, **reasoning_request_kwargs(llm, ReasoningEffort.HIGH))
+                        record_model_response(response)
+                if getattr(response, "tool_calls", None):
+                    incomplete_reason = "finalization_requested_tools"
+                elif not collect(response):
+                    incomplete_reason = "invalid_assessment_response"
+            except TimeoutError:
+                incomplete_reason = "finalization_deadline_exhausted"
+            except Exception as error:
+                incomplete_reason = "finalization_unavailable"
+                logger.info("Optional verifier finalization unavailable (%s); retaining completed assessments", type(error).__name__)
+        return VerificationResult(assessments=list(assessments.values()), incomplete_reason=incomplete_reason, attempted=attempted)
 
 
 def _cap_verification_batches(
@@ -1835,6 +1719,7 @@ async def run_verification_agent(
     candidate_ledger: Optional[CandidateEvidenceLedger] = None,
     inference_profile: Optional[Any] = None,
     agent_service: Optional[Any] = None,
+    observed_file_contents: Optional[Mapping[str, str]] = None,
 ) -> List[CodeReviewIssue]:
     """
     Stage 1.5: LLM-Driven Verification.
@@ -1907,21 +1792,6 @@ async def run_verification_agent(
     if not issues:
         return []
 
-    issues, deterministic_drop_ids = _drop_deterministically_contradicted_issues(
-        issues,
-        evidence_by_path,
-        open_issue_ids,
-        candidate_ledger,
-    )
-    if deterministic_drop_ids:
-        logger.info(
-            "Stage 1.5: Deterministic evidence gate dropped %d contradicted issue(s): %s",
-            len(deterministic_drop_ids),
-            deterministic_drop_ids,
-        )
-    if not issues:
-        return []
-
     active_issues = [issue for issue in issues if not _issue_is_resolved(issue)]
     if not active_issues:
         return issues
@@ -1937,6 +1807,10 @@ async def run_verification_agent(
             for file in (processed_diff.files if processed_diff is not None else [])
         )
     }
+    enriched_paths = {normalize_repository_path(path) for path in full_file_contents}
+    for path, content in (observed_file_contents or {}).items():
+        if path not in enriched_paths:
+            full_file_contents.setdefault(path, content)
     optional_tools = ()
     source_bindings = {
         "workspace": getattr(request, "projectVcsWorkspace", None),

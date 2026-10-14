@@ -261,8 +261,13 @@ async def test_dry_run_captures_complete_baseline_without_provider_calls(
         "deterministicRagRequests": len(rag.requests),
         "mcpToolsEnabled": True,
     }
-    assert list(result["promptCountsByStage"]) == ["stage_0", "stage_1", "stage_3"]
-    assert [prompt["sequence"] for prompt in result["prompts"]] == [1, 2, 3]
+    assert list(result["promptCountsByStage"]) == ["stage_0", "stage_1"]
+    assert [prompt["sequence"] for prompt in result["prompts"]] == [1, 2]
+    # Empty final verification still completes the pipeline without a model prompt.
+    assert result["pipeline"]["completed"] is True
+    assert "stage_3_started" in result["pipeline"]["eventStates"]
+    assert result["pipeline"]["evidence"]["candidates"]["published"] == 0
+    assert result["pipeline"]["evidence"]["candidates"]["verification"]["candidates"] == 0
     assert result["promptCount"] == len(result["prompts"])
     assert result["totalCharacterCount"] == sum(
         prompt["characterCount"] for prompt in result["prompts"]
@@ -343,7 +348,8 @@ async def test_agent_dry_run_without_structural_retrieval_is_vcs_only(
 
 
 @pytest.mark.asyncio
-async def test_dry_run_preserves_neutral_mixed_language_manifest(monkeypatch):
+@pytest.mark.parametrize("findings_per_file", [0, 1])
+async def test_dry_run_preserves_neutral_mixed_language_manifest(monkeypatch, findings_per_file):
     monkeypatch.setattr(
         "llm.llm_factory.LLMFactory.create_llm",
         lambda *_args, **_kwargs: pytest.fail("provider construction is forbidden"),
@@ -354,13 +360,15 @@ async def test_dry_run_preserves_neutral_mixed_language_manifest(monkeypatch):
         request,
         DeterministicRagSpy(),
         include_deterministic_rag=True,
+        simulated_findings_per_file=findings_per_file,
     )
 
     serialized = json.dumps(result)
     assert result["providerCalls"] == 0
     assert result["promptCountsByStage"]["stage_0"] == 1
     assert result["promptCountsByStage"]["stage_1"] >= 1
-    assert result["promptCountsByStage"]["stage_3"] == 1
+    assert result["promptCountsByStage"].get("stage_3", 0) == findings_per_file
+    assert result["pipeline"]["completed"] is True
     assert all(path in serialized for path in request.changedFiles)
     assert "return account.active" in serialized
     assert "record Account(boolean active)" in serialized
@@ -688,12 +696,15 @@ async def test_pipeline_suppresses_incremental_missing_task_false_positive():
         event.get("state") == "task_coverage_candidates_suppressed"
         for event in events
     )
-    stage_3_prompt = next(
-        prompt["renderedPrompt"]
-        for prompt in session.prompts
-        if prompt["stage"] == "stage_3"
+    assert not any(
+        prompt["stage"] == "stage_3" for prompt in session.prompts
     )
-    assert "PR does not implement" not in stage_3_prompt
+    assert "No active findings" in result["comment"]
+    completion = next(
+        event for event in events if event.get("state") == "review_evidence_completed"
+    )
+    assert completion["candidates"]["published"] == 0
+    assert completion["candidates"]["verification"]["candidates"] == 0
 
 
 @pytest.mark.asyncio

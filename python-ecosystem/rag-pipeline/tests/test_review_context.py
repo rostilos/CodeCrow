@@ -1759,3 +1759,89 @@ def test_missing_historical_exact_seed_does_not_shadow_available_active_seed(tmp
         assert metadata["base_generation_manifest_sha256"] == receipt["generation_manifest_sha256"]
     finally:
         manager.close()
+
+
+@pytest.mark.parametrize("source_kind", ["checkout", "worktree", "archive"])
+@pytest.mark.parametrize("seeded", [False, True])
+def test_real_git_proposed_generation_keeps_source_identity_and_head_bytes(tmp_path, source_kind, seeded):
+    """The composed HEAD must not inherit a base checkout's .git identity."""
+    import subprocess
+    import hashlib
+    repository = tmp_path / "git-repository"
+    repository.mkdir()
+
+    def git(*arguments):
+        return subprocess.check_output(["git", "-C", str(repository), *arguments],
+                                       text=True, stderr=subprocess.PIPE).strip()
+
+    git("init")
+    git("config", "user.name", "Regression Test")
+    git("config", "user.email", "regression@example.invalid")
+    base_files = {
+        "changed.py": "def value():\n    return 'base'\n",
+        "deleted.py": "deleted = True\n", "renamed.py": "renamed = True\n",
+        "unchanged.py": "unchanged = True\n",
+    }
+    for path, content in base_files.items():
+        (repository / path).write_text(content)
+    git("add", ".")
+    git("commit", "-m", "base")
+    base_revision = git("rev-parse", "HEAD")
+    (repository / "changed.py").write_text("def value():\n    return 'head'\n")
+    (repository / "added.py").write_text("added = True\n")
+    (repository / "deleted.py").unlink()
+    (repository / "renamed.py").rename(repository / "renamed-head.py")
+    git("add", "-A")
+    git("commit", "-m", "head")
+    head_revision = git("rev-parse", "HEAD")
+    expected = {path.name: path.read_text() for path in repository.glob("*.py")}
+    git("checkout", "--detach", base_revision)
+    target = repository
+    if source_kind == "worktree":
+        target = tmp_path / "base-worktree"
+        git("worktree", "add", "--detach", str(target), base_revision)
+        assert (target / ".git").is_file()
+    elif source_kind == "archive":
+        target = tmp_path / "base-archive"
+        shutil.copytree(repository, target, ignore=shutil.ignore_patterns(".git"))
+    original_source = attest_repository_source_tree(target, base_revision)
+    overlay = tmp_path / "overlay"
+    _write_overlay(overlay, changed=("changed.py", "added.py", "renamed-head.py"),
+                   deleted=("deleted.py", "renamed.py"),
+                   bodies={path: text for path, text in expected.items() if path != "unchanged.py"})
+    manager = RAGIndexManager(RAGConfig(structural_index_root=str(tmp_path / "indexes")))
+    manager._mutation_coordinator.close()
+    manager._mutation_coordinator = _Coordinator()
+    try:
+        binding = {}
+        if seeded:
+            manager.index_repository(repo_path=str(target), workspace="workspace", project="project",
+                                     branch="main", commit=base_revision, collection_target="seed")
+            binding = {"base_collection_target": "seed", "base_generation_manifest_sha256":
+                       manager.store.read_receipt("seed")["generation_manifest_sha256"]}
+        manager.index_repository = MagicMock(wraps=manager.index_repository)
+        manager.index_proposed_tree_delta = MagicMock(wraps=manager.index_proposed_tree_delta)
+        generation = ProposedTreeReviewContextService(manager).prepare_generation(
+            target_repo_path=str(target), review_overlay_path=str(overlay), workspace="workspace",
+            project="project", target_branch="main", base_revision=base_revision,
+            source_revision=head_revision, **binding)
+        assert manager.index_proposed_tree_delta.call_count == int(seeded)
+        assert manager.index_repository.call_count == int(not seeded)
+        assert generation.receipt["repository_revision"] == head_revision
+        with manager.open_reader(workspace="workspace", project="project", branch="main",
+                revision=head_revision, collection_target=generation.collection_target,
+                generation_manifest_sha256=generation.receipt["generation_manifest_sha256"]) as reader:
+            facts = reader.repository_facts()
+            assert facts["paths"] == sorted(expected)
+            assert facts["fileSha256"] == {
+                path: hashlib.sha256(content.encode()).hexdigest() for path, content in expected.items()
+            }
+        proposed = tmp_path / "inspected-composition"
+        materialize_proposed_tree(target, load_review_overlay(overlay), proposed)
+        assert not (proposed / ".git").exists()
+        assert attest_repository_source_tree(proposed, head_revision).tree_sha256 == generation.proposed_source_tree_sha256
+        assert attest_repository_source_tree(target, base_revision) == original_source
+        assert {path.name: path.read_text() for path in target.glob("*.py")} == base_files
+        assert git("status", "--porcelain") == ""
+    finally:
+        manager.close()

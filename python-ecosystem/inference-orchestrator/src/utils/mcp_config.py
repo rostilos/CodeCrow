@@ -22,7 +22,8 @@ class MCPConfigBuilder:
             jvm_props: Optional[Mapping[str, str]] = None,
     ) -> Tuple[list[str], Dict[str, str]]:
         """Return nonsecret JVM args and request-scoped child credentials."""
-        jvm_args: list[str] = []
+        # Request-lived I/O workers must not all warm up optimizing JIT/GC pools.
+        jvm_args: list[str] = ["-XX:TieredStopAtLevel=1", "-XX:+UseSerialGC", "-Xms16m"]
         server_env: Dict[str, str] = {}
 
         for key, value in (jvm_props or {}).items():

@@ -3292,7 +3292,7 @@ class TestRenderedInputPacking:
         assert "getStructuralUnit" in agent_call.args[1]
         assert "searchRepositoryCode" not in agent_call.args[1]
         assert "getRootDirectory" not in agent_call.args[1]
-        assert "getDirectoryByPath" not in agent_call.args[1]
+        assert "getDirectoryByPath" in agent_call.args[1]
         assert "Protected Local Roots" not in agent_call.args[1]
         assert agent_call.kwargs["agent_service"] is not None
         assert agent_call.kwargs["agent_allowed_tool_names"] == (
@@ -4104,7 +4104,7 @@ class TestRenderedInputPacking:
         assert "queryCodeGraph" not in prompt
         assert "getStructuralUnit" not in prompt
         assert agent_call.kwargs["agent_allowed_tool_names"] == (
-            STAGE1_LEGACY_VCS_TOOL_NAMES
+            STAGE1_LEGACY_VCS_TOOL_NAMES | {"getDirectoryByPath"}
         )
         assert rag_state.exact_evidence_by_id == {}
         assert rag_state.deterministic_retrieval_states == []
@@ -4330,6 +4330,18 @@ class TestCreateSmartBatchesWrapper:
 
 
 class TestStage1Scheduling:
+    @pytest.fixture(autouse=True)
+    def explicit_packed_batches(self):
+        # These tests exercise scheduling after packing, with one core batch
+        # per file. Graph groups no longer dictate final prompt boundaries.
+        with patch(
+            "service.review.orchestrator.stage_1_file_review._repack_stage1_batches_by_rendered_input",
+            side_effect=lambda batches, *_args: [
+                [item] for batch in batches for item in batch
+            ],
+        ):
+            yield
+
     @pytest.mark.asyncio(loop_scope="function")
     async def test_all_isolated_files_run_when_profile_cap_is_lower_than_core_batches(self):
         files = [
@@ -4616,3 +4628,132 @@ def test_runtime_verification_is_admitted_only_from_initialized_inventory(invent
     from service.review.orchestrator.stage_1_file_review import _available_stage1_agent_tools
     agent = SimpleNamespace(available_tool_names=inventory)
     assert ("runVerificationCheck" in _available_stage1_agent_tools(agent)) is expected
+
+
+class TestPackedSourceAllowance:
+    @staticmethod
+    def case(count):
+        paths = [f"src/source_{i}.py" for i in range(count)]
+        sources = {p: f"# {p}\n" + "value = 1\n" * 900 for p in paths}
+        request = _packing_request(paths, SimpleNamespace(
+            fileContents=[SimpleNamespace(path=p, content=s, skipped=False) for p, s in sources.items()],
+            fileMetadata=[], relationships=[],
+        ))
+        request.ragEnabled = False
+        batches = [[{"file": ReviewFile(path=p, focus_areas=[], risk_level="MEDIUM"),
+                     "priority": "MEDIUM", "has_relationships": True}] for p in paths]
+        return request, batches, sources
+
+    def test_rendered_packing_matches_frozen_per_file_allowance(self):
+        from copy import deepcopy
+        from service.review.orchestrator import stage_1_file_review as stage
+        request, graph_batches, sources = self.case(6)
+        prepared = _build_stage_1_prepared_context(request, None, False)
+        legacy = _build_stage_1_prepared_context(request, None, False)
+        # Exact arithmetic and flatten order of the measured report hook.
+        items = [item for batch in graph_batches for item in batch]
+        allowance = stage.STAGE1_MAX_CURRENT_FILE_CHARS * max(1, len(items))
+        prepared.current_source_batch_char_budget = allowance
+        with patch.object(stage, "STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET", allowance):
+            expected = _repack_stage1_batches_by_rendered_input([deepcopy(items)], request, legacy, False, 12_000)
+            expected_prompts = [_render_stage1_prompt(
+                _prepare_stage1_prompt_material(request, b, legacy, False), ""
+            )[0] for b in expected]
+        actual = _repack_stage1_batches_by_rendered_input([deepcopy(items)], request, prepared, False, 12_000)
+        assert actual == expected
+        assert len(actual) > 1  # Source retention still respects rendered limits.
+        prompts = []
+        for batch in actual:
+            material = _prepare_stage1_prompt_material(request, batch, prepared, False)
+            prompt = _render_stage1_prompt(material, "")[0]
+            prompts.append(prompt)
+            assert _estimated_prompt_tokens(prompt) <= 12_000
+            assert material.current_source_per_file_budget == stage.STAGE1_MAX_CURRENT_FILE_CHARS
+            assert material.complete_current_file_paths == set(material.batch_file_paths)
+            assert all(sources[p] in prompt for p in material.batch_file_paths)
+        assert prompts == expected_prompts
+        assert [i["file"].path for b in actual for i in b] == list(sources)
+        # Direct callers without the post-graph override keep their old budget.
+        fallback = _prepare_stage1_prompt_material(request, items, legacy, False)
+        assert fallback.current_source_per_file_budget == STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET // 6
+        assert fallback.complete_current_file_paths == set()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_post_graph_packing_is_request_local_through_specialists(self):
+        from service.review.orchestrator import stage_1_file_review as stage
+        cases = [self.case(n) for n in (1, 6)]
+        expected = {id(r): (b, s) for r, b, s in cases}
+        contexts = {}; completed_roles = []; primary_started = set()
+        both_running = asyncio.Event()
+        original_budget = stage.STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET
+
+        async def graph(**kwargs):
+            assert kwargs["prepared_context"].current_source_batch_char_budget is None
+            await asyncio.sleep(0)
+            return expected[id(kwargs["request"])][0]
+
+        async def review(_llm, request, batch, _rag, prepared, is_incremental=False, **kwargs):
+            count = len(expected[id(request)][1])
+            assert prepared.current_source_batch_char_budget == stage.STAGE1_MAX_CURRENT_FILE_CHARS * count
+            if id(request) in contexts:
+                assert contexts[id(request)] is prepared
+            contexts[id(request)] = prepared
+            role = kwargs.get("specialist")
+            if role is None:
+                primary_started.add(id(request))
+                if len(primary_started) == 2:
+                    both_running.set()
+                await asyncio.wait_for(both_running.wait(), 2)
+            assert stage.STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET == original_budget
+            material = _prepare_stage1_prompt_material(request, batch, prepared, False)
+            assert material.current_source_per_file_budget == stage.STAGE1_MAX_CURRENT_FILE_CHARS
+            assert material.complete_current_file_paths == set(material.batch_file_paths)
+            completed_roles.append((id(request), role.name if role else "primary"))
+            return []
+
+        def select(batches, prepared, cap):
+            assert sum(len(b) for b in batches) == prepared.current_source_batch_char_budget // stage.STAGE1_MAX_CURRENT_FILE_CHARS
+            return [(SimpleNamespace(name="security"), batches[0])]
+
+        profile = SimpleNamespace(invocation_cap=lambda key: {
+            "stage_1_total": 8, "stage_1_per_unit": 2, "specialist_passes": 1,
+        }[key])
+        with patch.object(stage, "create_smart_batches_wrapper", side_effect=graph), \
+             patch.object(stage, "review_file_batch", side_effect=review), \
+             patch.object(stage, "select_specialist_batches", side_effect=select):
+            outputs = await asyncio.gather(*[
+                execute_stage_1_file_reviews(MagicMock(), request,
+                    ReviewPlan(analysis_summary="fixture", file_groups=[], cross_file_concerns=[]),
+                    None, inference_profile=profile)
+                for request, _, _ in cases
+            ])
+        assert outputs == [[], []]
+        assert len({id(c) for c in contexts.values()}) == 2
+        assert sorted(role for _, role in completed_roles) == ["primary", "primary", "security", "security"]
+        assert stage.STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET == original_budget
+
+    @pytest.mark.parametrize("specialist", [None, SimpleNamespace(name="security", instructions="Inspect security.")])
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_review_and_missing_path_prompt_share_allowance(self, specialist):
+        from service.review.orchestrator import stage_1_file_review as stage
+        request, graph_batches, sources = self.case(6)
+        batch = [item for group in graph_batches for item in group]
+        prepared = _build_stage_1_prepared_context(request, None, False)
+        prepared.current_source_batch_char_budget = stage.STAGE1_MAX_CURRENT_FILE_CHARS * 6
+        observed = []
+
+        async def invoke(_llm, prompt, paths, **kwargs):
+            assert set(kwargs["agent_complete_current_source_paths"]) == set(sources)
+            assert all(value in prompt for value in sources.values())
+            missing = list(sources)[-2:]
+            recovery = await kwargs["direct_fallback_prompt_factory"](missing)
+            assert all(sources[path] in recovery.prompt for path in missing)
+            assert all(sources[path] not in recovery.prompt for path in list(sources)[:-2])
+            assert ("SPECIALIST DISCOVERY: security" in recovery.prompt) == (specialist is not None)
+            observed.append((prompt, recovery.prompt))
+            return []
+
+        with patch.object(stage, "_invoke_stage_1_batch_llm", side_effect=invoke):
+            assert await review_file_batch(MagicMock(), request, batch, None,
+                prepared_context=prepared, specialist=specialist) == []
+        assert len(observed) == 1

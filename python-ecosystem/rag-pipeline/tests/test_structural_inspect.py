@@ -417,3 +417,52 @@ def test_graph_relation_cursor_never_repeats_multi_path_relation_across_unit_pag
     assert second["edges"] == []
     assert second["nextCursor"] is None
     connection.close()
+
+
+def test_complete_file_projection_conserves_counts_without_source_hydration(tmp_path):
+    from rag_pipeline.api.models import RepositoryIndexFilters
+    from rag_pipeline.api.routers.inspect import _file_graph
+
+    connection, writer = _database(tmp_path)
+    a = _unit(writer, "api/a.py", "A")
+    b = _unit(writer, "lib/b.py", "B")
+    for target, target_id, line in [("B", b, 1), ("B", b, 2), ("A", a, 3), ("external", None, 4)]:
+        writer.add_relation(kind="CALLS", source="A", relation="calls", target=target,
+                            path="api/a.py", line=line, origin="tree-sitter",
+                            source_unit_id=a, target_unit_id=target_id)
+    # An orphan with no matching endpoint/path is excluded by both projections.
+    writer.add_relation(kind="CALLS", source="missing", relation="calls", target="none",
+                        path="absent.py", line=1, origin="tree-sitter")
+    connection.commit()
+    graph = _file_graph(connection, {"branch": "main", "relation_count": 5}, RepositoryIndexFilters())
+    assert graph["nextCursor"] is None
+    assert graph["eligibleRelations"] == graph["returnedRelations"] == 4
+    assert graph["internalRelations"] == 1
+    assert graph["externalRelations"] == 1
+    assert sum(edge["weight"] for edge in graph["edges"]) + graph["internalRelations"] == 4
+    assert len([node for node in graph["nodes"] if node["recordType"] == "file_aggregate"]) == 2
+    assert all("text" not in node for node in graph["nodes"])
+    assert next(node for node in graph["nodes"] if node["recordType"] == "external_aggregate")["path"] is None
+    scoped = _file_graph(connection, {"branch": "main"}, RepositoryIndexFilters(path="lib/b.py"))
+    assert scoped["eligibleRelations"] == 2
+    assert {node["path"] for node in scoped["nodes"]} == {"api/a.py", "lib/b.py"}
+    connection.close()
+
+
+def test_file_map_cache_is_scoped_to_generation_tenant_and_filters(tmp_path):
+    from rag_pipeline.api.models import RepositoryIndexFilters
+    from rag_pipeline.api.routers.inspect import _file_graph, _FILE_MAP_CACHE
+
+    connection, writer = _database(tmp_path)
+    _unit(writer, "api/a.py", "A")
+    connection.commit()
+    receipt = {"branch": "main", "workspace": "one", "project": "project", "collection_target": "target", "generation_manifest_sha256": "digest"}
+    filters = RepositoryIndexFilters()
+    _FILE_MAP_CACHE.clear()
+    first = _file_graph(connection, receipt, filters)
+    assert _file_graph(connection, receipt, filters) is first
+    assert _file_graph(connection, {**receipt, "workspace": "two"}, filters) is not first
+    assert _file_graph(connection, {**receipt, "generation_manifest_sha256": "other"}, filters) is not first
+    assert _file_graph(connection, receipt, RepositoryIndexFilters(path="absent.py"))["nodes"] == []
+    connection.close()
+    _FILE_MAP_CACHE.clear()

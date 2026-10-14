@@ -190,3 +190,48 @@ def test_giant_query_metadata_does_not_skip_unshown_result_ids():
     _bounded(bounded, 512)
     assert bounded["results"] == [{"unitId": "unit:0"}]
     assert bounded["nextCursor"] == 11
+
+
+@pytest.mark.parametrize("previous_omissions", [0, 7, "7"])
+def test_final_coverage_metadata_does_not_discard_source_that_fits(previous_omissions):
+    fixture = json.loads((Path(__file__).parent / "fixtures/minimal-context-metadata-cliff.json").read_text())
+    response = fixture["response"]
+    before = json.dumps(response, sort_keys=True)
+    if previous_omissions:
+        response["coverage"].update(
+            omittedNodes=previous_omissions, omittedRelations=previous_omissions,
+        )
+        before = json.dumps(response, sort_keys=True)
+
+    bounded = bound_graph_response(response, fixture["provenance"]["token_budget"])
+
+    _bounded(bounded, 5000)
+    assert bounded["sourceWindows"] == response["sourceWindows"]
+    assert sum(len(window["content"]) for window in bounded["sourceWindows"]) == 5972
+    assert "response_envelope" not in bounded["coverage"]["budgetOmissions"]
+    assert bounded["snapshot"] == response["snapshot"]
+    assert bounded["focusPaths"] == response["focusPaths"]
+    assert bounded["focusSymbols"] == response["focusSymbols"]
+    for name, key in (("Nodes", "nodes"), ("Relations", "edges")):
+        coverage = bounded["coverage"]
+        assert 0 < len(bounded[key]) <= len(response[key]) <= 20
+        assert coverage["returned" + name] == len(bounded[key])
+        assert coverage["omitted" + name] == int(previous_omissions) + len(response[key]) - len(bounded[key])
+    source = bounded["coverage"]["source"]
+    assert len(bounded["sourceWindows"]) == source["returnedSourceUnits"] == 8
+    assert source["returnedSourceCharacters"] == 5972 <= source["maxSourceCharacters"]
+    assert json.dumps(response, sort_keys=True) == before
+
+    # Repacking must not add the same omissions on every size measurement.
+    repacked = bound_graph_response(bounded, 5000)
+    _bounded(repacked, 5000)
+    for name in ("omittedNodes", "omittedRelations"):
+        assert repacked["coverage"][name] == bounded["coverage"][name]
+    assert repacked["sourceWindows"] == bounded["sourceWindows"]
+
+
+def test_unused_coverage_count_is_not_coerced_without_its_response_list():
+    response = {"status": "ready", "coverage": {"returnedRoots": "unavailable"}}
+    bounded = bound_graph_response(response, 512)
+    _bounded(bounded, 512)
+    assert bounded["coverage"]["returnedRoots"] == "unavailable"

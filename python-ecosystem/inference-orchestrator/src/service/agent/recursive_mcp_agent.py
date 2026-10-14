@@ -24,7 +24,7 @@ from langchain.agents.middleware.types import (
 )
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, RemoveMessage, SystemMessage
+from langchain_core.messages import AIMessage, RemoveMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.channels import UntrackedValue
 from utils.mcp_runtime import configure_mcp_runtime
@@ -443,19 +443,6 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
                                 explorationLimit=self._exploration_model_calls,
                                 finalizationAttempt=synthesis_attempt,
                                 reason="exploration_budget_exhausted" if completed_calls >= self._exploration_model_calls else "early_finalization")
-        is_last_synthesis_call = (
-            self._structured_output and synthesis_attempt >= 2
-        )
-        if is_last_synthesis_call and isinstance(response_format, ToolStrategy):
-            # ToolStrategy normally turns a validation error into a ToolMessage
-            # and asks the model to try again. The second terminal attempt is the
-            # last synthesis call even when exploration ended early, so surface
-            # its validation error instead of requesting an impossible third one.
-            response_format = ToolStrategy(
-                schema=response_format.schema,
-                tool_message_content=response_format.tool_message_content,
-                handle_errors=False,
-            )
 
         logger.info(
             "MCP agent entering reserved final-response call: "
@@ -473,17 +460,21 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
             if isinstance(response_format, ToolStrategy)
             else None
         )
+        schema = self._schema_model(response_format)
+        # ToolStrategy replaces a named choice with "any" in LangChain. Bind the
+        # sole final tool explicitly and validate its result in this middleware.
+        final_tools = ([{
+            "type": "function",
+            "function": {
+                "name": schema_tool_name,
+                "description": schema.__doc__ or "Return the final structured response.",
+                "parameters": schema.model_json_schema(),
+            },
+        }] if schema is not None and schema_tool_name else [])
         return request.override(
-            tools=[],
-            # ToolStrategy otherwise leaves tool choice automatic. Some
-            # OpenAI-compatible providers can return an empty assistant turn
-            # instead of the schema call, which mcp-use reports as the
-            # misleading "No output generated" sentinel. Once repository
-            # exploration is over, the single schema tool is the only valid
-            # action, so require it just as the initial repository tool is
-            # required above.
+            tools=final_tools,
             tool_choice=schema_tool_name,
-            response_format=response_format,
+            response_format=None if final_tools else response_format,
             model_settings=model_settings,
             system_message=self._append_final_response_instruction(
                 request.system_message,
@@ -586,12 +577,13 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
             cls,
             response: Any,
             response_format: Any,
-    ) -> tuple[BaseModel | None, AIMessage | None]:
+    ) -> tuple[BaseModel | None, AIMessage | None, str | None]:
         """Validate provider JSON from the same call without another model turn."""
         schema = cls._schema_model(response_format)
         if schema is None:
-            return None, None
+            return None, None, None
 
+        invalid_message, validation_error = None, None
         response_messages = tuple(getattr(response, "result", ()) or ())
         for message in reversed(response_messages):
             if not isinstance(message, AIMessage):
@@ -610,9 +602,14 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
                             schema,
                             tool_call.get("args"),
                         )
-                    except (TypeError, ValueError):
+                    except (TypeError, ValueError) as error:
+                        invalid_message = message
+                        validation_error = (
+                            json.dumps(error.errors(include_input=False, include_url=False), default=str)
+                            if hasattr(error, "errors") else str(error)
+                        )
                         continue
-                    return recovered, message
+                    return recovered, message, None
 
             content = extract_llm_response_text(message)
             if not content.strip():
@@ -621,8 +618,8 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
                 recovered = cls._validate_structured_candidate(schema, content)
             except (TypeError, ValueError):
                 continue
-            return recovered, message
-        return None, None
+            return recovered, message, None
+        return None, invalid_message, validation_error
 
     @classmethod
     def _expose_structured_response(
@@ -640,12 +637,24 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
                 if isinstance(message, AIMessage)
             ), None)
         else:
-            structured_response, source_message = (
+            structured_response, source_message, validation_error = (
                 cls._recover_structured_response(
                     response,
                     response_format,
                 )
             )
+            if validation_error is not None and source_message is not None:
+                identified = source_message.model_copy(update={
+                    "response_metadata": {
+                        **source_message.response_metadata,
+                        "codecrow_schema_validation_error": validation_error,
+                    },
+                })
+                response = ModelResponse(
+                    result=[identified if message is source_message else message
+                            for message in response.result],
+                    structured_response=None,
+                )
             if structured_response is not None:
                 logger.info(
                     "MCP agent recovered structured response locally from "
@@ -746,7 +755,7 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
         response = handler(prepared_request)
         return self._expose_structured_response(
             response,
-            prepared_request.response_format,
+            request.response_format,
         )
 
     async def awrap_model_call(
@@ -758,7 +767,7 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
         response = await handler(prepared_request)
         return self._expose_structured_response(
             response,
-            prepared_request.response_format,
+            request.response_format,
         )
 
     @hook_config(can_jump_to=["model", "end"])
@@ -774,6 +783,9 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
         messages = state.get("messages") or ()
         latest_message = messages[-1] if messages else None
         latest_tool_calls = getattr(latest_message, "tool_calls", None)
+
+        if synthesis_start is None and completed_calls > self._exploration_model_calls:
+            synthesis_start = self._exploration_model_calls
 
         if synthesis_start is None:
             exploration_finished = (
@@ -814,8 +826,8 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
         if synthesis_calls_completed == 1:
             # ModelCallLimitMiddleware runs first on the reverse after-model
             # chain, so this count includes the first failed synthesis call.
-            # Jump exactly once; the next request disables ToolStrategy's
-            # internal retry and surfaces a validation failure directly.
+            # Jump exactly once; final schema parsing is local and never starts
+            # an unbounded ToolStrategy retry loop.
             logger.warning(
                 "MCP agent schema synthesis returned no structured response; "
                 "using separate correction call %s/%s",
@@ -826,6 +838,28 @@ class FinalResponseReserveMiddleware(AgentMiddleware):
             removal = self._noncompliant_free_form_removal(latest_message)
             if removal is not None:
                 retry["messages"] = [removal]
+            elif latest_tool_calls:
+                # A declined tool call still needs a result before the correction turn.
+                validation_error = (getattr(latest_message, "response_metadata", {}) or {}).get(
+                    "codecrow_schema_validation_error"
+                )
+                correction = (
+                    "The final response failed schema validation: " + validation_error
+                    + ". Correct only the invalid structure or fields. Preserve the review "
+                    "findings and source evidence already supplied. Return the required "
+                    "schema tool with native JSON arrays and objects, not JSON-encoded strings."
+                    if validation_error else
+                    "Repository exploration is complete. This tool call was not "
+                    "executed. Return the required structured final response "
+                    "using the available evidence."
+                )
+                retry["messages"] = [
+                    ToolMessage(
+                        content=correction,
+                        tool_call_id=call["id"], name=call["name"], status="error",
+                    )
+                    for call in latest_tool_calls
+                ]
             return retry
 
         if synthesis_calls_completed >= 2:

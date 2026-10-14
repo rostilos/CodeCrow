@@ -9,7 +9,10 @@ from codecrow_plugins import (
     ImportFileRecord,
     ImportRecordIndex,
     ImportedCall,
+    TreeSitterDocument,
 )
+
+from .syntax import import_record, parse_source
 
 
 PYTHON_EXTENSIONS = (".py", ".pyi", ".pyw")
@@ -30,12 +33,10 @@ def parse_import_record(artifact: FileArtifact) -> ImportFileRecord | None:
         or not artifact.path.casefold().endswith(PYTHON_EXTENSIONS)
     ):
         return None
-    tree = ast.parse(
-        artifact.content,
-        filename=artifact.path,
-        type_comments=True,
-    )
+    tree = parse_source(artifact)
     module = module_for_path(artifact.path)
+    if isinstance(tree, TreeSitterDocument):
+        return import_record(tree, artifact.path, module)
     exports: set[str] = set()
     imports: set[ImportBinding] = set()
     calls: set[ImportedCall] = set()

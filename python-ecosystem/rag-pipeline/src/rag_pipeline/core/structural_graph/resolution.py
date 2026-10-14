@@ -5,12 +5,50 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 
-from .shared import _BULK_RELATION_RESOLUTION_THRESHOLD, _normalized_name, _short_name
+from .shared import (
+    _BULK_RELATION_RESOLUTION_THRESHOLD, _normalized_name, _short_name, _unit_names,
+)
 
 from .write_state import GraphWriteState
+
+
+class _NamedUnit(NamedTuple):
+    unit_id: str
+    path: str
+    qualified_name: str
+    record_type: str
+    aliases: frozenset[str]
+
+
+def _named_unit(row: sqlite3.Row) -> _NamedUnit:
+    return _NamedUnit(
+        str(row["unit_id"]),
+        str(row["path"]),
+        str(row["qualified_name"] or ""),
+        str(row["record_type"]),
+        frozenset(alias.strip() for alias in _unit_names(
+            str(row["name"] or ""),
+            str(row["qualified_name"] or ""),
+            json.loads(row["metadata_json"] or "{}"),
+        ) if alias and alias.strip()),
+    )
+
+
+def _unambiguous_unit(rows: Sequence[_NamedUnit], requested: str) -> str | None:
+    # Folded lookup is discovery only. A unique differently-cased declaration
+    # is not the same identity (for example int64 versus a receiver's Int64).
+    requested = requested.strip()
+    exact = [row for row in rows if requested in row.aliases]
+    if len(exact) == 1:
+        return exact[0].unit_id
+    qualified = [row for row in exact if row.qualified_name == requested]
+    if len(qualified) == 1:
+        return qualified[0].unit_id
+    source_qualified = [row for row in qualified if row.record_type == "source_unit"]
+    return source_qualified[0].unit_id if len(source_qualified) == 1 else None
 
 
 class RelationResolver:
@@ -52,14 +90,14 @@ class RelationResolver:
             ),
         )
         rows = self.state.connection.execute(
-            "SELECT DISTINCT relation_names.relation_id FROM relation_names "
-            "JOIN delta_names USING (normalized_name)"
+            "SELECT DISTINCT relation_names.relation_id FROM delta_names "
+            "CROSS JOIN relation_names USING (normalized_name)"
         ).fetchall()
         self.state.touched_relation_ids.update(str(row["relation_id"]) for row in rows)
         self.state.connection.execute(
             "UPDATE relations SET source_unit_id = NULL WHERE "
             "relation_id IN (SELECT relation_names.relation_id FROM "
-            "relation_names JOIN delta_names USING (normalized_name) "
+            "delta_names CROSS JOIN relation_names USING (normalized_name) "
             "WHERE relation_names.role = 'source') AND relation_id NOT IN "
             "(SELECT relation_id FROM delta_explicit_sources) AND NOT ("
             "origin = 'structural-index' OR "
@@ -70,7 +108,7 @@ class RelationResolver:
         self.state.connection.execute(
             "UPDATE relations SET target_unit_id = NULL WHERE "
             "relation_id IN (SELECT relation_names.relation_id FROM "
-            "relation_names JOIN delta_names USING (normalized_name) "
+            "delta_names CROSS JOIN relation_names USING (normalized_name) "
             "WHERE relation_names.role = 'target') AND relation_id NOT IN "
             "(SELECT relation_id FROM delta_explicit_targets) AND NOT ("
             "origin = 'structural-index' OR kind = 'CONTAINS')"
@@ -82,7 +120,7 @@ class RelationResolver:
     ) -> None:
         """Resolve logical endpoints without guessing across repository files."""
 
-        relation_join = ""
+        relation_from = "relations"
         selected: tuple[str, ...] | None = None
         if relation_ids is not None:
             selected = tuple(sorted(set(relation_ids)))
@@ -97,8 +135,8 @@ class RelationResolver:
                 "INSERT OR IGNORE INTO delta_relations(relation_id) VALUES (?)",
                 ((relation_id,) for relation_id in selected),
             )
-            relation_join = (
-                " JOIN delta_relations ON "
+            relation_from = (
+                "delta_relations CROSS JOIN relations ON "
                 "delta_relations.relation_id = relations.relation_id"
             )
         # Full generations can contain hundreds of thousands of logical edges.
@@ -106,31 +144,34 @@ class RelationResolver:
         # table instead of issuing one or two SQLite SELECTs per endpoint.
         # Selective delta resolution intentionally keeps the smaller indexed
         # lookup path below.
-        resolve_name = self._unique_named_unit
+        named_units: dict[str, _NamedUnit] = {}
+
+        def resolve_name(
+            value: str,
+            *,
+            preferred_paths: Sequence[str] = (),
+            allow_short_name: bool = True,
+        ) -> str | None:
+            return self._unique_named_unit(
+                value, preferred_paths=preferred_paths,
+                allow_short_name=allow_short_name, named_units=named_units,
+            )
         if (
             relation_ids is None
             or len(selected or ()) >= _BULK_RELATION_RESOLUTION_THRESHOLD
         ):
-            candidates_by_name: dict[
-                str,
-                list[tuple[str, str, str, str]],
-            ] = {}
-            for candidate in self.state.connection.execute(
-                "SELECT unit_names.normalized_name, units.unit_id, units.path, "
-                "units.qualified_name, units.record_type FROM unit_names "
-                "JOIN units ON units.unit_id = unit_names.unit_id "
-                "ORDER BY unit_names.normalized_name, units.path, "
+            candidates_by_name: dict[str, list[_NamedUnit]] = {}
+            for row in self.state.connection.execute(
+                "SELECT unit_id, path, name, qualified_name, record_type, "
+                "metadata_json FROM units ORDER BY units.path, "
                 "units.start_line, units.end_line, units.unit_id"
             ):
-                candidates_by_name.setdefault(
-                    str(candidate["normalized_name"]),
-                    [],
-                ).append((
-                    str(candidate["unit_id"]),
-                    str(candidate["path"]),
-                    str(candidate["qualified_name"] or ""),
-                    str(candidate["record_type"]),
-                ))
+                # One metadata decode per unit, not per alias or relation.
+                # Re-derive aliases because the indexed display row retains
+                # only one spelling for case-colliding aliases on one unit.
+                candidate = _named_unit(row)
+                for name in {_normalized_name(alias) for alias in candidate.aliases}:
+                    candidates_by_name.setdefault(name, []).append(candidate)
 
             def resolve_preloaded(
                 value: str,
@@ -141,46 +182,23 @@ class RelationResolver:
                 def candidates(
                     normalized_name: str,
                     paths: Sequence[str],
-                ) -> list[tuple[str, str, str, str]]:
+                ) -> list[_NamedUnit]:
                     rows = candidates_by_name.get(normalized_name, ())
                     if not paths:
                         return list(rows)
                     path_set = set(paths)
-                    return [row for row in rows if row[1] in path_set]
-
-                def unambiguous(
-                    rows: Sequence[tuple[str, str, str, str]],
-                    requested: str,
-                ) -> str | None:
-                    if len(rows) == 1:
-                        return rows[0][0]
-                    if not rows:
-                        return None
-                    normalized_requested = _normalized_name(requested)
-                    qualified = [
-                        row
-                        for row in rows
-                        if _normalized_name(row[2]) == normalized_requested
-                    ]
-                    if len(qualified) == 1:
-                        return qualified[0][0]
-                    source_qualified = [
-                        row for row in qualified if row[3] == "source_unit"
-                    ]
-                    if len(source_qualified) == 1:
-                        return source_qualified[0][0]
-                    return None
+                    return [row for row in rows if row.path in path_set]
 
                 exact_name = _normalized_name(value)
                 if preferred_paths:
-                    preferred = unambiguous(
+                    preferred = _unambiguous_unit(
                         candidates(exact_name, preferred_paths),
                         value,
                     )
                     if preferred:
                         return preferred
                 exact_rows = candidates(exact_name, ())
-                exact = unambiguous(exact_rows, value)
+                exact = _unambiguous_unit(exact_rows, value)
                 if exact:
                     return exact
                 if exact_rows or not allow_short_name:
@@ -188,7 +206,7 @@ class RelationResolver:
                 short_name = _normalized_name(_short_name(value))
                 if short_name == exact_name:
                     return None
-                return unambiguous(
+                return _unambiguous_unit(
                     candidates(short_name, ()),
                     _short_name(value),
                 )
@@ -204,7 +222,7 @@ class RelationResolver:
             "relations.path AS path, relations.line AS line, "
             "relations.attributes_json AS attributes_json, "
             "group_concat(relation_paths.path, char(31)) AS indexed_paths "
-            "FROM relations" + relation_join + " LEFT JOIN relation_paths ON "
+            "FROM " + relation_from + " LEFT JOIN relation_paths ON "
             "relation_paths.relation_id = relations.relation_id "
             "GROUP BY relations.relation_id"
         )
@@ -346,44 +364,36 @@ class RelationResolver:
         *,
         preferred_paths: Sequence[str] = (),
         allow_short_name: bool = True,
+        named_units: dict[str, _NamedUnit] | None = None,
     ) -> str | None:
-        def candidates(normalized_name: str, paths: Sequence[str]) -> list[sqlite3.Row]:
+        if named_units is None:
+            named_units = {}
+
+        def candidates(normalized_name: str, paths: Sequence[str]) -> list[_NamedUnit]:
             parameters: list[Any] = [normalized_name]
             where = "unit_names.normalized_name = ?"
             if paths:
                 placeholders = ",".join("?" for _ in paths)
                 where += f" AND units.path IN ({placeholders})"
                 parameters.extend(paths)
-            return self.state.connection.execute(  # nosec B608 -- placeholders only
-                "SELECT units.* FROM unit_names JOIN units "
+            rows = self.state.connection.execute(  # nosec B608 -- placeholders only
+                "SELECT units.unit_id, units.path, units.name, units.qualified_name, "
+                "units.record_type, units.metadata_json FROM unit_names JOIN units "
                 "ON units.unit_id = unit_names.unit_id WHERE " + where
                 + " ORDER BY units.path, units.start_line, units.end_line, units.unit_id",
                 parameters,
             ).fetchall()
-
-        def unambiguous(rows: Sequence[sqlite3.Row], requested: str) -> str | None:
-            if len(rows) == 1:
-                return rows[0]["unit_id"]
-            if not rows:
-                return None
-            normalized_requested = _normalized_name(requested)
-            qualified = [
-                row for row in rows
-                if _normalized_name(str(row["qualified_name"] or ""))
-                == normalized_requested
-            ]
-            if len(qualified) == 1:
-                return qualified[0]["unit_id"]
-            source_qualified = [
-                row for row in qualified if row["record_type"] == "source_unit"
-            ]
-            if len(source_qualified) == 1:
-                return source_qualified[0]["unit_id"]
-            return None
+            result = []
+            for row in rows:
+                unit_id = str(row["unit_id"])
+                if unit_id not in named_units:
+                    named_units[unit_id] = _named_unit(row)
+                result.append(named_units[unit_id])
+            return result
 
         exact_name = _normalized_name(value)
         if preferred_paths:
-            preferred = unambiguous(
+            preferred = _unambiguous_unit(
                 candidates(exact_name, preferred_paths),
                 value,
             )
@@ -391,7 +401,7 @@ class RelationResolver:
                 return preferred
 
         exact_rows = candidates(exact_name, ())
-        exact = unambiguous(exact_rows, value)
+        exact = _unambiguous_unit(exact_rows, value)
         if exact:
             return exact
         if exact_rows:
@@ -403,4 +413,4 @@ class RelationResolver:
         if short_name == exact_name:
             return None
         short_rows = candidates(short_name, ())
-        return unambiguous(short_rows, _short_name(value))
+        return _unambiguous_unit(short_rows, _short_name(value))

@@ -742,6 +742,11 @@ class MultiStageReviewOrchestrator:
                     candidate_ledger,
                     inference_profile=inference_profile,
                     agent_service=self.agent_service if use_mcp else None,
+                    observed_file_contents={
+                        path: content
+                        for path, content in stage_1_rag_state.complete_file_contents.items()
+                        if isinstance(content, str)
+                    },
                 )
                 _emit_progress(self.event_callback, 75, f"Verification Complete: {len(file_issues)} total issues after verification")
             else:
@@ -1360,6 +1365,7 @@ def _register_stage_2_candidates(
             "Stage 2 candidates have no exact generation prompt provenance"
         )
     for index, issue in enumerate(issues):
+        original_issue = issue.model_dump(mode="json", by_alias=True)
         issue_id = str(issue.id or "")
         exact_prompt_digest = issue_prompt_digests.get(issue_id, prompt_digest)
         if not isinstance(exact_prompt_digest, str) or not exact_prompt_digest:
@@ -1436,6 +1442,8 @@ def _register_stage_2_candidates(
             prompt_hunk_ids=prompt_hunk_ids,
             prompt_digest=exact_prompt_digest,
             visible_evidence_by_id=exact_visible_evidence,
+            original_issue=original_issue,
+            generation_prompt_hunk_ids=exact_visible_hunks,
         )
 
 

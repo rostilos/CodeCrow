@@ -36,8 +36,8 @@ class GraphReconciler:
         if not self.state.track_mutations:
             return
         rows = self.state.connection.execute(
-            "SELECT DISTINCT unit_names.normalized_name FROM unit_names "
-            f"JOIN {unit_table} ON {unit_table}.unit_id = unit_names.unit_id"  # nosec B608
+            f"SELECT DISTINCT unit_names.normalized_name FROM {unit_table} "  # nosec B608
+            f"CROSS JOIN unit_names ON {unit_table}.unit_id = unit_names.unit_id"  # nosec B608
         ).fetchall()
         self.state.touched_names.update(str(row["normalized_name"]) for row in rows)
 
@@ -131,7 +131,9 @@ class GraphReconciler:
             old_document_paths = frozenset(
                 str(row["path"])
                 for row in self.state.connection.execute(
-                    "SELECT DISTINCT units.path FROM units JOIN delta_paths "
+                    # Drive indexed probes from the small delta, not all source
+                    # units in the multi-gigabyte base generation.
+                    "SELECT DISTINCT units.path FROM delta_paths CROSS JOIN units "
                     "ON delta_paths.path = units.path "
                     "WHERE units.record_type = 'source_unit' OR ("
                     "units.record_type = 'plugin_context' AND "
@@ -141,7 +143,7 @@ class GraphReconciler:
             )
             self.state.connection.execute(
                 "INSERT OR IGNORE INTO delta_units(unit_id, unit_rowid) "
-                "SELECT units.unit_id, units.rowid FROM units JOIN delta_paths "
+                "SELECT units.unit_id, units.rowid FROM delta_paths CROSS JOIN units "
                 "ON delta_paths.path = units.path"
             )
             self._remember_names_for_units("delta_units")

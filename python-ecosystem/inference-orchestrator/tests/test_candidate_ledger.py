@@ -1,5 +1,6 @@
 import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -8,15 +9,18 @@ from model.output_schemas import CodeReviewIssue
 from service.review.candidate_ledger import CandidateEvidenceLedger
 from service.review.orchestrator.verification_agent import (
     apply_candidate_provenance_gate,
+    run_deterministic_evidence_gate,
 )
 from service.review.orchestrator.orchestrator import (
     _register_stage_2_candidates,
 )
 from service.review.orchestrator.stage_1_file_review import (
-    Stage1ReviewUnitState,
+    Stage1ReviewUnitState, _register_stage_1_candidates,
 )
 from service.review.quality_capture import _terminal_pipeline_evidence
 from utils.diff_processor import DiffProcessor
+from utils.prompts.constants_shared import CAUSAL_ANCHOR_INSTRUCTIONS
+from utils.prompts.prompt_builder import PromptBuilder
 
 
 RAW_DIFF = """diff --git a/src/app.py b/src/app.py
@@ -59,6 +63,72 @@ def _request():
         previousCodeAnalysisIssues=[],
         enrichmentData=None,
     )
+
+
+@pytest.mark.parametrize("case", json.loads(
+    (Path(__file__).parent / "fixtures/causal_anchor_regressions.json").read_text()
+), ids=lambda case: case["name"])
+def test_captured_downstream_findings_require_a_causal_in_hunk_anchor(case):
+    """Gate replay with manual anchors; fresh model recovery needs a paired run."""
+    processed = DiffProcessor().process(case["diff"])
+    hunks = {hunk.id for hunk in processed.files[0].review_hunks}
+    request = _request()
+    request.enrichmentData = SimpleNamespace(fileContents=[SimpleNamespace(
+        path=case["path"], content=case["current_source"], skipped=False,
+    )])
+    prompt = PromptBuilder.build_stage_1_batch_prompt(files=[{
+        "path": case["path"], "diff": case["diff"], "current_code": case["current_source"],
+    }], priority="HIGH")
+    cross_file_prompt = PromptBuilder.build_stage_2_cross_file_prompt(
+        repo_slug="repo", pr_title="Causal anchor regression", commit_hash="head",
+        stage_1_findings_json="[]", architecture_context=case["diff"],
+        migrations="", cross_file_concerns=[],
+    )
+    for generated_prompt in (prompt, cross_file_prompt):
+        assert generated_prompt.count(CAUSAL_ANCHOR_INSTRUCTIONS) == 1
+        assert "relatedLocations" in generated_prompt
+        assert "removal boundary" in generated_prompt
+        assert "first line of the block for BLOCK" not in generated_prompt
+
+    def admit(update):
+        candidate = CodeReviewIssue(**{**case["original_issue"], **update})
+        ledger = CandidateEvidenceLedger()
+        ledger.register(candidate, stage="stage_1", source_key="captured-case",
+                        review_unit_ids=["unit"], prompt_hunk_ids=hunks,
+                        generation_prompt=prompt)
+        kept = apply_candidate_provenance_gate(
+            [candidate], request, processed, ledger, {h: {"unit"} for h in hunks})
+        return candidate, ledger, run_deterministic_evidence_gate(kept, request, processed, ledger)
+
+    original, ledger, kept = admit({})
+    assert not kept
+    assert ledger.record_for(original).rejection.code == case["original_rejection"]["code"]
+    corrected, ledger, kept = admit(case["manual_causal_anchor"])
+    assert kept == [corrected]
+    assert corrected.reason == original.reason
+    assert corrected.relatedLocations == case["manual_causal_anchor"]["relatedLocations"]
+    assert ledger.record_for(corrected).anchor_hunk_ids
+    assert not admit({**case["manual_causal_anchor"], "file": "unrelated/file.py"})[2]
+    assert not admit({**case["manual_causal_anchor"], "codeSnippet": "invented_source()"})[2]
+
+
+def test_unbound_stage1_owner_keeps_full_generation_packet_without_admission():
+    processed = DiffProcessor().process(RAW_DIFF)
+    hunk_id = processed.files[0].hunks[0].id
+    candidate = _issue().model_copy(update={"file": "src/not-in-batch.py"})
+    original = candidate.model_dump(mode="json", by_alias=True)
+    ledger = CandidateEvidenceLedger()
+    _register_stage_1_candidates([candidate], [
+        {"file": processed.files[0], "_hunk_ids": [hunk_id], "_review_unit_id": "unit"},
+        {"file": SimpleNamespace(path="src/other.py"), "_hunk_ids": ["other-hunk"], "_review_unit_id": "other-unit"},
+    ], ledger, "exact two-file generation prompt")
+    assert apply_candidate_provenance_gate([candidate], _request(), processed, ledger, {hunk_id: {"unit"}}) == []
+    record = ledger.summary()["records"][0]
+    assert record["originalIssue"] == original
+    assert record["promptHunkIds"] == []
+    assert record["reviewUnitIds"] == []
+    assert set(record["generationPromptHunkIds"]) == {hunk_id, "other-hunk"}
+    assert record["rejection"]["code"] == "unbound_review_unit"
 
 
 def test_consolidated_provenance_and_verification_coverage_remain_separate():
@@ -685,3 +755,5 @@ def test_terminal_capture_accepts_deterministic_candidate_ledger():
     assert evidence["candidates"]["generated"] == 1
     assert evidence["candidates"]["published"] == 1
     assert evidence["candidates"]["records"][0]["anchorHunkIds"] == [hunk_id]
+    assert evidence["candidates"]["records"][0]["originalIssue"] == issue.model_dump(mode="json", by_alias=True)
+    assert evidence["candidates"]["records"][0]["generationPromptHunkIds"] == [hunk_id]

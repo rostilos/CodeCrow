@@ -2,10 +2,48 @@
 from __future__ import annotations
 
 import inspect
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
+import logging
 import os
 from pathlib import Path
 import runpy
 import sys
+from uuid import uuid4
+
+import httpx
+
+logger = logging.getLogger(__name__)
+_OWNER = ContextVar("codecrow_subscription_owner", default=None)
+
+
+@asynccontextmanager
+async def subscription_execution_scope(bridge_url, bridge_token):
+    owner = uuid4().hex
+    binding = (bridge_url, owner)
+    token = _OWNER.set(binding)
+    try:
+        yield
+    finally:
+        try:
+            _OWNER.reset(token)
+        except ValueError:
+            # An async generator may be closed by its consumer's context.
+            if _OWNER.get() == binding:
+                _OWNER.set(None)
+            logger.debug("Subscription owner scope closed from another context")
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(
+                    bridge_url.rstrip("/") + "/conversations/release",
+                    headers={"Authorization": "Bearer " + bridge_token},
+                    json={"owner": owner},
+                )
+                response.raise_for_status()
+                if response.status_code == 202:
+                    logger.warning("Subscription conversation cleanup pending; bridge reaper remains active")
+        except Exception:
+            logger.warning("Subscription conversation cleanup unavailable; bridge reaper remains active", exc_info=True)
 
 
 def install_subscription_guard(factory, bridge_url: str, bridge_token: str, model_name: str = "gpt-6-luna"):
@@ -46,9 +84,21 @@ def install_subscription_guard(factory, bridge_url: str, bridge_token: str, mode
                 return bind_tools(self, tools, **options)
             # Use a class method so provider model_copy() retains updated token
             # settings instead of calling a closure bound to the original model.
-            subscription_type = type(f"Subscription{model_type.__name__}", (model_type,), {
-                "bind_tools": subscription_bind_tools, "__module__": __name__,
-            })
+            def execution_scope(self):
+                return subscription_execution_scope(bridge_url, bridge_token)
+
+            overrides = {"bind_tools": subscription_bind_tools,
+                         "provider_execution_scope": execution_scope, "__module__": __name__}
+            payload_builder = getattr(model_type, "_get_request_payload", None)
+            if callable(payload_builder):
+                def request_payload(self, *args, **kwargs):
+                    payload = payload_builder(self, *args, **kwargs)
+                    owner = _OWNER.get()
+                    if owner is not None and owner[0] == bridge_url:
+                        payload["extra_body"] = {**(payload.get("extra_body") or {}), "codecrow_owner": owner[1]}
+                    return payload
+                overrides["_get_request_payload"] = request_payload
+            subscription_type = type(f"Subscription{model_type.__name__}", (model_type,), overrides)
             object.__setattr__(model, "__class__", subscription_type)
         return model
 

@@ -39,64 +39,50 @@ class TestServiceSecretMiddleware:
         assert mw.secret == "explicit-secret"
 
     @pytest.mark.asyncio
-    async def test_public_paths_skip_auth(self):
+    @pytest.mark.parametrize("secret,path,provided,status", [
+        ("required", "/health", None, 200),
+        ("required", "/docs", None, 200),
+        ("required", "/openapi.json", None, 200),
+        ("required", "/redoc", None, 200),
+        ("", "/query/code-search", None, 200),
+        ("required", "/query/code-search", "required", 200),
+        ("required", "/query/code-search", "wrong", 401),
+        ("required", "/query/code-search", None, 401),
+        ("required", "/docs/private", None, 401),
+    ])
+    async def test_auth_preserves_receive_channel(self, secret, path, provided, status):
         from rag_pipeline.api.middleware import ServiceSecretMiddleware
+        from starlette.responses import JSONResponse
 
-        mock_app = MagicMock()
-        mw = ServiceSecretMiddleware(mock_app, secret="required-secret")
+        receive = AsyncMock(return_value={"type": "http.disconnect"})
+        sent = []
+        called = False
 
-        mock_request = MagicMock()
-        mock_request.url.path = "/health"
-        mock_call_next = AsyncMock(return_value=MagicMock(status_code=200))
+        async def send(message):
+            sent.append(message)
 
-        result = await mw.dispatch(mock_request, mock_call_next)
-        mock_call_next.assert_called_once_with(mock_request)
+        async def downstream(scope, actual_receive, actual_send):
+            nonlocal called
+            called = True
+            assert actual_receive is receive and actual_send is send
+            assert await actual_receive() == {"type": "http.disconnect"}
+            await JSONResponse({"ok": True})(scope, actual_receive, actual_send)
+
+        scope = {"type": "http", "path": path, "client": ("127.0.0.1", 1234),
+                 "headers": [(b"x-service-secret", provided.encode())] if provided else []}
+        await ServiceSecretMiddleware(downstream, secret=secret)(scope, receive, send)
+        assert next(message["status"] for message in sent if message["type"] == "http.response.start") == status
+        assert called is (status == 200)
+        assert receive.await_count == (1 if status == 200 else 0)
 
     @pytest.mark.asyncio
-    async def test_no_secret_allows_all(self):
+    async def test_non_http_scope_passes_through(self):
         from rag_pipeline.api.middleware import ServiceSecretMiddleware
 
-        mock_app = MagicMock()
-        mw = ServiceSecretMiddleware(mock_app, secret="")
-
-        mock_request = MagicMock()
-        mock_request.url.path = "/query/code-search"
-        mock_call_next = AsyncMock(return_value=MagicMock(status_code=200))
-
-        result = await mw.dispatch(mock_request, mock_call_next)
-        mock_call_next.assert_called_once_with(mock_request)
-
-    @pytest.mark.asyncio
-    async def test_valid_secret_passes(self):
-        from rag_pipeline.api.middleware import ServiceSecretMiddleware
-
-        mock_app = MagicMock()
-        mw = ServiceSecretMiddleware(mock_app, secret="my-secret")
-
-        mock_request = MagicMock()
-        mock_request.url.path = "/query/code-search"
-        mock_request.headers = {"x-service-secret": "my-secret"}
-        mock_call_next = AsyncMock(return_value=MagicMock(status_code=200))
-
-        result = await mw.dispatch(mock_request, mock_call_next)
-        mock_call_next.assert_called_once_with(mock_request)
-
-    @pytest.mark.asyncio
-    async def test_invalid_secret_returns_401(self):
-        from rag_pipeline.api.middleware import ServiceSecretMiddleware
-
-        mock_app = MagicMock()
-        mw = ServiceSecretMiddleware(mock_app, secret="my-secret")
-
-        mock_request = MagicMock()
-        mock_request.url.path = "/query/code-search"
-        mock_request.headers = {"x-service-secret": "wrong-secret"}
-        mock_request.client.host = "127.0.0.1"
-        mock_call_next = AsyncMock()
-
-        result = await mw.dispatch(mock_request, mock_call_next)
-        assert result.status_code == 401
-        mock_call_next.assert_not_called()
+        app, receive, send = AsyncMock(), AsyncMock(), AsyncMock()
+        scope = {"type": "lifespan"}
+        await ServiceSecretMiddleware(app, secret="required")(scope, receive, send)
+        app.assert_awaited_once_with(scope, receive, send)
 
 
 # ─────────────────────────────────────────────────────────────

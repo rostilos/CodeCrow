@@ -132,6 +132,7 @@ public class RepositoryIndexService {
         payload.put("limit", clampNumber(raw != null ? raw.get("limit") : null, 160, 20, 5000));
         payload.put("scan_limit", clampNumber(firstPresent(raw, "scanLimit", "scan_limit"), 2500, 100, 100000));
 
+        payload.put("projection", raw != null && "files".equals(raw.get("projection")) ? "files" : "symbols");
         String cursor = sanitizeString(raw != null ? raw.get("cursor") : null, 256);
         if (cursor != null) {
             payload.put("cursor", cursor);

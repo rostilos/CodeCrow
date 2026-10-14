@@ -79,6 +79,35 @@ def _pending_store(tmp_path):
     return store, pending, connection, StructuralGraphWriter(connection)
 
 
+def test_small_relation_delta_does_not_scan_unrelated_repository_rows(tmp_path):
+    work = []
+    for size in (100, 2000):
+        _, _, connection, writer = _pending_store(tmp_path / str(size))
+        try:
+            for index in range(size):
+                writer.add_unit(_node(f"src/item{index}.py", f"item{index}"))
+                relation_id = writer.add_relation(
+                    kind="reference", source=f"item{index}", relation="calls", target=f"item{index}",
+                    path=f"src/item{index}.py", line=1, origin="plugin", plugin_id="test",
+                )
+                if index == 0:
+                    selected = relation_id
+            writer = StructuralGraphWriter(connection, track_mutations=True)
+            writer._touched_names.add("item0")
+            instructions = []
+            connection.set_progress_handler(lambda: instructions.append(1) or 0, 100)
+            writer.invalidate_touched_name_resolutions()
+            writer.resolve_relations([selected])
+            connection.set_progress_handler(None, 0)
+            work.append(len(instructions))
+            resolved = connection.execute("SELECT source_unit_id, target_unit_id FROM relations WHERE relation_id = ?", (selected,)).fetchone()
+            assert resolved[0] and resolved[0] == resolved[1]
+        finally:
+            connection.close()
+    # A 20x larger unrelated repository must not make one changed name linear.
+    assert work[1] < max(20, work[0] * 3), work
+
+
 class _RecordingConnection:
     def __init__(self, connection):
         self.connection = connection

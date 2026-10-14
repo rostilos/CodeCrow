@@ -3,6 +3,8 @@ from service.review.execution_scheduler import review_model_slot, optional_work_
 from service.review.inference_usage import record_model_response, record_compute_decision
 from service.review.orchestrator.specialist_discovery import ReviewSpecialist, select_specialist_batches
 import asyncio
+from contextlib import AsyncExitStack
+from llm.provider_lifecycle import provider_execution_scope
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -171,8 +173,8 @@ STAGE1_MAX_CURRENT_FILE_CHARS = max(
     2_000,
     _env_int("REVIEW_STAGE1_MAX_CURRENT_FILE_CHARS", 12_000),
 )
-# Allocate one neutral batch-wide source budget fairly across files. The
-# complete diff remains primary evidence, and verification retains full source.
+# Initial graph preparation and direct batch callers use this shared allowance.
+# Full Stage 1 packing retains each file's allowance in request-local context.
 STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET = max(
     8_000,
     _env_int("REVIEW_STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET", 48_000),
@@ -1084,7 +1086,9 @@ def _prepare_stage1_prompt_material(
         STAGE1_MAX_CURRENT_FILE_CHARS,
         max(
             1,
-            STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET
+            (prepared_context.current_source_batch_char_budget
+             if prepared_context.current_source_batch_char_budget is not None
+             else STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET)
             // max(1, available_current_source_count),
         ),
     )
@@ -1251,6 +1255,7 @@ def _render_stage1_prompt(
     use_mcp_tools: Optional[bool] = None,
     structural_tools_available: Optional[bool] = None,
     review_file_tool_available: bool = False,
+    directory_tool_available: bool = False,
 ) -> tuple[str, str]:
     if material.plugin_context_override is not None:
         plugin_context_text = material.plugin_context_override
@@ -1295,6 +1300,7 @@ def _render_stage1_prompt(
             else structural_tools_available
         ),
         review_file_tool_available=review_file_tool_available,
+        directory_tool_available=directory_tool_available,
         target_branch=str(
             getattr(material.request, "localRepoRevision", None)
             or material.request.get_target_head_commit_hash()
@@ -2457,6 +2463,67 @@ def _tool_event_name(event: Any) -> str:
     return str(value or "unknown")
 
 
+def _retain_complete_stage1_file_content(
+    event: Any,
+    request: Optional[ReviewRequestDto],
+    rag_state: Optional[Stage1RagState],
+) -> None:
+    """Reuse only completed unchanged reads from this request's pinned target."""
+    if request is None or rag_state is None:
+        return
+    action = getattr(event, "action", None)
+    arguments = _decoded_tool_observation(
+        action.get("tool_input")
+        if isinstance(action, Mapping)
+        else getattr(action, "tool_input", None)
+    )
+    response = _decoded_tool_observation(getattr(event, "observation", None))
+    if (
+        not isinstance(arguments, Mapping) or not isinstance(response, Mapping)
+        or not isinstance(arguments.get("filePath"), str)
+        or not isinstance(response.get("filePath"), str)
+    ):
+        logger.info("Stage 1 source reuse skipped: malformed file observation")
+        return
+    path = normalize_repository_path(arguments.get("filePath"))
+    revision = getattr(request, "localRepoRevision", None)
+    repository_bound = all(
+        isinstance(expected, str) and bool(expected.strip())
+        and arguments.get(key) == expected
+        for key, expected in (
+            ("workspace", getattr(request, "projectVcsWorkspace", None)),
+            ("repoSlug", getattr(request, "projectVcsRepoSlug", None)),
+        )
+    )
+    changed_paths = {
+        normalize_repository_path(value)
+        for value in (request.changedFiles or []) + (request.deletedFiles or [])
+    }
+    if (
+        not repository_bound or not isinstance(revision, str) or not revision.strip()
+        or not path or path != normalize_repository_path(response.get("filePath"))
+        or path in changed_paths
+        or response.get("completeFile") is not True
+        or response.get("exists") is not True
+        or response.get("changed") is not False
+        or response.get("deleted") is not False
+        or response.get("unavailable") is not False
+        or response.get("source") != "target-head"
+        or not isinstance(response.get("fileContent"), str)
+        or response.get("isError") is True
+        or stage1_agent_tool_event_failures((event,))
+    ):
+        logger.info("Stage 1 source reuse skipped: incomplete or unbound file %s", path)
+        return
+    content = response["fileContent"]
+    if path in rag_state.complete_file_contents:
+        if rag_state.complete_file_contents[path] != content:
+            rag_state.complete_file_contents[path] = None
+            logger.warning("Stage 1 source reuse skipped: conflicting complete file %s", path)
+        return
+    rag_state.complete_file_contents[path] = content
+
+
 def _consume_stage1_agent_tool_events(
     events: Sequence[Any],
     *,
@@ -2465,6 +2532,7 @@ def _consume_stage1_agent_tool_events(
     ],
     rag_state: Optional[Stage1RagState],
     context_holder: Optional[Dict[str, Any]],
+    request: Optional[ReviewRequestDto] = None,
 ) -> Counter:
     """Account completed tool results, including a transcript before failure."""
     tool_counts: Counter = Counter()
@@ -2474,6 +2542,8 @@ def _consume_stage1_agent_tool_events(
         normalized_tool_name = _tool_event_name(event)
         tool_counts[normalized_tool_name] += 1
         observation = getattr(event, "observation", None)
+        if normalized_tool_name == STAGE1_REVIEW_FILE_TOOL_NAME:
+            _retain_complete_stage1_file_content(event, request, rag_state)
         _merge_structural_evidence(
             observed_evidence,
             structural_tool_observation_evidence(
@@ -2557,6 +2627,13 @@ async def execute_stage_1_file_reviews(
         prepared_context=prepared_context,
         is_incremental=is_incremental,
     )
+    # Preserve graph ordering and item metadata, then let actual rendered input
+    # determine prompt boundaries without diluting each file's source allowance.
+    items = [item for batch in batches for item in batch]
+    prepared_context.current_source_batch_char_budget = (
+        STAGE1_MAX_CURRENT_FILE_CHARS * max(1, len(items))
+    )
+    batches = [items] if items else []
     stage1_token_budget = _stage1_packing_token_limit(request)
     batches = _repack_stage1_batches_by_rendered_input(
         batches,
@@ -2568,7 +2645,7 @@ async def execute_stage_1_file_reviews(
     configured_stage1_invocation_cap = inference_profile.invocation_cap(
         "stage_1_total"
     )
-    # Every graph component batch owns changed-file/hunk coverage and must run
+    # Every rendered core batch owns changed-file/hunk coverage and must run
     # at least once. The profile cap limits supplemental oversized-evidence
     # passes; it must never discard a core file-review prompt.
     stage1_invocation_cap = max(
@@ -2578,7 +2655,7 @@ async def execute_stage_1_file_reviews(
     if stage1_invocation_cap > configured_stage1_invocation_cap:
         logger.info(
             "Stage 1 raised the invocation allowance from %d to %d so every "
-            "core dependency batch is reviewed",
+            "rendered core batch is reviewed",
             configured_stage1_invocation_cap,
             stage1_invocation_cap,
         )
@@ -2746,23 +2823,26 @@ async def execute_stage_1_file_reviews(
         specialist_cap, specialists = 0, []
     record_compute_decision("specialist_selection", admitted=[specialist.name for specialist, _ in specialists],
                             coreBatches=len(batches), cap=specialist_cap)
-    configured_timeout = optional_timeout_seconds("REVIEW_SPECIALIST_TIMEOUT_SECONDS", 60)
-    specialist_deadline = asyncio.get_running_loop().time() + optional_work_budget(configured_timeout)
+    configured_timeout = optional_timeout_seconds(
+        "REVIEW_SPECIALIST_TIMEOUT_SECONDS", STAGE1_AGENT_TIMEOUT_SECONDS,
+    )
     for specialist, batch in specialists:
-        remaining = max(0.0, specialist_deadline - asyncio.get_running_loop().time())
+        remaining = optional_work_budget(configured_timeout)
         specialist_ledger = CandidateEvidenceLedger() if candidate_ledger is not None else None
         try:
             if remaining <= 0:
                 outcome = "skipped_budget_exhausted"
             else:
-                async with asyncio.timeout(remaining):
-                    supplemental = await review_file_batch(
-                        llm, request, batch, rag_client, prepared_context,
-                        is_incremental=is_incremental, fallback_llm=fallback_llm,
-                        rag_state=rag_state, candidate_ledger=specialist_ledger,
-                        agent_service=agent_service, event_callback=event_callback,
-                        specialist=specialist,
-                    )
+                async with AsyncExitStack() as provider_resources:
+                    async with asyncio.timeout(remaining):
+                        await provider_resources.enter_async_context(provider_execution_scope(llm))
+                        supplemental = await review_file_batch(
+                            llm, request, batch, rag_client, prepared_context,
+                            is_incremental=is_incremental, fallback_llm=fallback_llm,
+                            rag_state=rag_state, candidate_ledger=specialist_ledger,
+                            agent_service=agent_service, event_callback=event_callback,
+                            specialist=specialist,
+                        )
                 all_issues.extend(supplemental)
                 outcome = "completed"
         except TimeoutError:
@@ -2951,6 +3031,7 @@ async def review_file_batch(
         structural_tools_available=structural_agent_mode,
         review_file_tool_available=review_file_tool_available,
         preloaded_structural_context=preloaded_structural_context,
+        directory_tool_available="getDirectoryByPath" in repository_agent_tools,
         preloaded_structural_evidence=preloaded_structural_evidence,
     )
     prompt = invocations[0][0]
@@ -3250,6 +3331,7 @@ async def review_file_batch(
                 )),
                 agent_visible_evidence_by_id=primary_visible_evidence,
                 rag_state=rag_state,
+                request=request,
                 invocation_trace=invocation_trace,
                 agent_context_holder=agent_context_holder,
                 agent_telemetry=agent_telemetry,
@@ -3279,6 +3361,7 @@ async def review_file_batch(
                     use_mcp_tools=True,
                     structural_tools_available=structural_agent_mode,
                     review_file_tool_available=review_file_tool_available,
+                    directory_tool_available="getDirectoryByPath" in repository_agent_tools,
                 )
                 visible_evidence_by_generation_prompt[
                     recovery_prompt
@@ -3316,6 +3399,7 @@ async def review_file_batch(
                         )),
                         agent_visible_evidence_by_id=recovery_visible_evidence,
                         rag_state=rag_state,
+                        request=request,
                         invocation_trace=invocation_trace,
                         agent_context_holder=recovery_context_holder,
                         agent_telemetry=agent_telemetry,
@@ -3413,6 +3497,7 @@ def _build_stage1_invocations(
     use_mcp_tools: bool,
     structural_tools_available: bool = True,
     review_file_tool_available: bool = False,
+    directory_tool_available: bool = False,
     preloaded_structural_context: str = "",
     preloaded_structural_evidence: Optional[
         Dict[str, tuple[Dict[str, Any], ...]]
@@ -3447,6 +3532,7 @@ def _build_stage1_invocations(
         use_mcp_tools=use_mcp_tools,
         structural_tools_available=structural_tools_available,
         review_file_tool_available=review_file_tool_available,
+        directory_tool_available=directory_tool_available,
     )
     return [(
         prompt,
@@ -3483,6 +3569,7 @@ async def _invoke_stage_1_batch_llm(
     agent_telemetry: Optional[Stage1AgentTelemetryRecorder] = None,
     review_accumulator: Optional[_Stage1BatchReviewAccumulator] = None,
     fail_closed_agent: bool = False,
+    request: Optional[ReviewRequestDto] = None,
 ) -> Optional[List[CodeReviewIssue]]:
     if invocation_trace is not None:
         invocation_trace["generation_prompt"] = prompt
@@ -3657,6 +3744,7 @@ async def _invoke_stage_1_batch_llm(
                 visible_evidence_by_id=agent_visible_evidence_by_id,
                 rag_state=rag_state,
                 context_holder=agent_context_holder,
+                request=request,
             )
             if agent_telemetry is not None:
                 tool_event_failures = agent_telemetry.record_agent_events(
@@ -3758,6 +3846,7 @@ async def _invoke_stage_1_batch_llm(
                     visible_evidence_by_id=agent_visible_evidence_by_id,
                     rag_state=rag_state,
                     context_holder=agent_context_holder,
+                    request=request,
                 )
                 if agent_telemetry is not None:
                     agent_telemetry.record_agent_events(
@@ -4067,4 +4156,8 @@ def _register_stage_1_candidates(
             ),
             generation_prompt=generation_prompt,
             visible_evidence_by_id=visible_evidence_by_id,
+            generation_prompt_hunk_ids={
+                hunk_id for item in batch_items
+                for hunk_id in (item.get("_hunk_ids") or ())
+            },
         )

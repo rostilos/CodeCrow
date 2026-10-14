@@ -30,21 +30,26 @@ class _Output(BaseModel):
 
 
 @pytest.mark.asyncio
-async def test_disabled_evidence_tool_stays_advertised_and_skips_backend(monkeypatch):
+async def test_failed_queries_do_not_block_different_evidence_requests(monkeypatch):
     from service.agent import evidence_acquisition
     monkeypatch.setattr(evidence_acquisition, "ToolMessage", lambda **kwargs: SimpleNamespace(**kwargs))
     middleware = evidence_acquisition.EvidenceAcquisitionMiddleware()
-    backend = AsyncMock(return_value=SimpleNamespace(content='{"status":"unavailable"}'))
+    backend = AsyncMock(side_effect=[
+        SimpleNamespace(content='{"status":"unavailable"}'),
+        SimpleNamespace(content='{"results":[]}'),
+        SimpleNamespace(content='{"sourceWindows":[{"content":"return err"}]}'),
+    ])
     for index in range(3):
         result = await middleware.awrap_tool_call(SimpleNamespace(tool_call={
             "id": str(index), "name": "queryCodeGraph", "args": {"target": str(index)},
         }), backend)
-    assert backend.await_count == 2
-    assert json.loads(result.content)["reason"] == "repeated_unproductive_queries"
-    request = SimpleNamespace(tools=[SimpleNamespace(name="queryCodeGraph"), SimpleNamespace(name="getReviewFileContent")])
-    handler = AsyncMock(return_value="response")
-    assert await middleware.awrap_model_call(request, handler) == "response"
-    handler.assert_awaited_once_with(request)
+    assert backend.await_count == 3
+    assert json.loads(result.content)["sourceWindows"][0]["content"] == "return err"
+    cached = await middleware.awrap_tool_call(SimpleNamespace(tool_call={
+        "id": "retry", "name": "queryCodeGraph", "args": {"target": "2"},
+    }), backend)
+    assert backend.await_count == 3
+    assert cached.content == result.content
 
 
 @pytest.mark.parametrize("benchmark", [False, True])
@@ -1420,9 +1425,9 @@ async def test_final_reserve_removes_tools_before_initial_choice_when_no_explora
 
     prepared = await reserve.awrap_model_call(request, apply_initial)
 
-    assert prepared.tools == []
+    assert [t["function"]["name"] for t in prepared.tools] == ["_Output"]
     assert prepared.tool_choice == "_Output"
-    assert prepared.response_format.schema is _Output
+    assert prepared.response_format is None
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -1449,11 +1454,10 @@ async def test_last_structured_synthesis_disables_tools_and_requires_schema_now(
 
     prepared = await middleware.awrap_model_call(request, return_request)
 
-    assert prepared.tools == []
+    assert [t["function"]["name"] for t in prepared.tools] == ["_Output"]
     assert prepared.tool_choice == "_Output"
     assert prepared.response_format is not response_format
-    assert prepared.response_format.schema is _Output
-    assert prepared.response_format.handle_errors is False
+    assert prepared.response_format is None
     assert "Return the final answer now" in prepared.system_message.content
 
 
@@ -1544,22 +1548,20 @@ async def test_final_response_reserve_keeps_one_schema_correction_call():
     assert exploring.messages is transcript
     assert exploring.response_format is response_format
     assert synthesis is not synthesis_request
-    assert synthesis.tools == []
+    assert [t["function"]["name"] for t in synthesis.tools] == ["_Output"]
     assert synthesis.tool_choice == "_Output"
     assert synthesis.messages is transcript
     assert synthesis.state is synthesis_request.state
-    assert synthesis.response_format is response_format
+    assert synthesis.response_format is None
     assert synthesis.system_message.content.startswith("Original instructions")
     assert "Do not request more repository" in synthesis.system_message.content
     assert correction is not correction_request
-    assert correction.tools == []
+    assert [t["function"]["name"] for t in correction.tools] == ["_Output"]
     assert correction.tool_choice == "_Output"
     assert correction.messages is transcript
     assert correction.state is correction_request.state
     assert correction.response_format is not response_format
-    assert correction.response_format.schema is _Output
-    assert correction.response_format.tool_message_content == "complete"
-    assert correction.response_format.handle_errors is False
+    assert correction.response_format is None
     assert correction_request.tools is tools
     assert correction_request.tool_choice == "auto"
     assert correction_request.system_message is original_system_message
@@ -1665,6 +1667,26 @@ def test_final_response_reserve_uses_exactly_one_missing_schema_retry():
         FinalResponseReserveMiddleware.after_model,
         "__can_jump_to__",
     ) == ["model", "end"]
+
+
+@pytest.mark.parametrize("call_count", [1, 2])
+def test_schema_retry_answers_declined_tools_before_next_model_call(monkeypatch, call_count):
+    from service.agent import recursive_mcp_agent
+
+    monkeypatch.setattr(recursive_mcp_agent, "ToolMessage", lambda **kwargs: SimpleNamespace(**kwargs))
+    middleware = FinalResponseReserveMiddleware(exploration_model_calls=6, structured_output=True)
+    calls = [{"name": "getReviewFileContent", "args": {}, "id": f"declined-{index}"}
+             for index in range(call_count)]
+    state = {"run_model_call_count": 7, "agent_final_response_start_call": 6,
+             "messages": [_FakeAIMessage("", tool_calls=calls)]}
+
+    retry = middleware.after_model(state, None)
+
+    assert retry["jump_to"] == "model"
+    assert {result.tool_call_id for result in retry["messages"]} == {call["id"] for call in calls}
+    assert all(result.status == "error" and "not executed" in result.content
+               for result in retry["messages"])
+    assert middleware.after_model({**state, "run_model_call_count": 8}, None) == {"jump_to": "end"}
 
 
 def test_schema_retry_removes_only_noncompliant_free_form_response():
@@ -2103,7 +2125,7 @@ async def test_final_response_reserve_recovers_provider_root_array_locally():
     )
 
     async def raw_json_handler(prepared_request):
-        assert prepared_request.tools == []
+        assert [t["function"]["name"] for t in prepared_request.tools] == ["_BatchOutput"]
         return _FakeModelResponse(result=[provider_message])
 
     with (
@@ -2367,3 +2389,59 @@ def test_review_package_exports_the_canonical_agent():
     )
 
     assert ReviewRecursiveMCPAgent is RecursiveMCPAgent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["return", "error", "cancel", "timeout"])
+async def test_execution_owner_closes_after_tool_response_for_every_exit(outcome):
+    from contextlib import asynccontextmanager
+    events = []
+    source_delivered = asyncio.Event()
+    action = SimpleNamespace(tool="allowedTool", tool_input={"path": "a.py"})
+
+    @asynccontextmanager
+    async def scope():
+        events.append("entered")
+        try:
+            yield
+        finally:
+            events.append("closed")
+
+    class Agent:
+        def __init__(self, **kwargs):
+            pass
+
+        async def stream(self, prompt, **kwargs):
+            assert events == ["entered"]
+            yield action, "exact source already returned"
+            source_delivered.set()
+            if outcome == "error":
+                raise ValueError("original source failure")
+            if outcome in {"cancel", "timeout"}:
+                await asyncio.Event().wait()
+            yield "useful review"
+
+    service = AgentExecutionService(
+        llm=SimpleNamespace(provider_execution_scope=scope), client=_FakeClient())
+    request = AgentExecutionRequest(
+        prompt="review", allowed_tool_names=frozenset({"allowedTool"}), max_steps=4,
+        timeout_seconds=0.01 if outcome == "timeout" else None)
+    with patch("service.agent.agent_execution_service.RecursiveMCPAgent", Agent):
+        task = asyncio.create_task(service.execute(request))
+        await source_delivered.wait()
+        if outcome == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        elif outcome in {"error", "timeout"}:
+            with pytest.raises(AgentExecutionError) as failure:
+                await task
+            assert len(failure.value.tool_events) == 1
+            assert failure.value.tool_events[0].observation == "exact source already returned"
+            if outcome == "error":
+                assert isinstance(failure.value.__cause__, ValueError)
+            else:
+                assert "deadline" in str(failure.value)
+        else:
+            assert (await task).output == "useful review"
+    assert events == ["entered", "closed"]

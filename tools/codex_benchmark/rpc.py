@@ -16,7 +16,8 @@ CONFIG = {
     "features.multi_agent": False,
     "agents.enabled": False,
     "features.shell_tool": False,
-    "features.code_mode": False,
+    "features.code_mode.enabled": False,
+    "features.code_mode.direct_only_tool_namespaces": ["functions"],
     "features.code_mode_host": True,
     "features.skill_search": False,
     "features.skip_host_skill_discovery": True,
@@ -33,6 +34,14 @@ class AppServer:
         self.events: dict[str, asyncio.Queue] = {}
         self.usage: dict[str, dict] = {}
         self.usage_callback = None
+        self.response_completed_callback = None
+        self.terminal_callback = None
+        self.terminals: dict[str, dict] = {}
+        self.raw_calls: dict[tuple[str, str], set[str]] = {}
+        self.call_responses: dict[tuple[str, str, str], str] = {}
+        self.completed_responses: set[tuple[str, str, str]] = set()
+        self.response_changes: dict[str, asyncio.Event] = {}
+        self.reader_failure: Exception | None = None
         self.counter = 0
         self.process = None
         self.reader = None
@@ -105,10 +114,23 @@ class AppServer:
                     continue
                 params = message.get("params") or {}
                 thread = params.get("threadId") or (params.get("thread") or {}).get("id")
+                self._track_response(message, thread)
+                if message.get("method") == "rawResponse/completed" and thread:
+                    if self.response_completed_callback is not None:
+                        self.response_completed_callback(
+                            thread, params.get("turnId"), params.get("responseId"),
+                            params.get("usage"), params.get("usageMetadata"),
+                        )
                 if message.get("method") == "thread/tokenUsage/updated":
                     self.usage[thread] = params.get("tokenUsage") or {}
                     if self.usage_callback is not None:
                         self.usage_callback(thread, params.get("turnId"), self.usage[thread])
+                if message.get("method") == "turn/completed" and thread:
+                    turn = params.get("turn") or {}
+                    status = {"turn": turn.get("id"), "status": turn.get("status")}
+                    self.terminals[thread] = status
+                    if self.terminal_callback is not None:
+                        self.terminal_callback(thread, turn.get("id"), turn.get("status"))
                 if thread:
                     await self.events.setdefault(thread, asyncio.Queue()).put(message)
                 elif "id" in message:
@@ -118,11 +140,60 @@ class AppServer:
         except Exception as error:
             failure = error
         finally:
+            self.reader_failure = failure
+            for changed in self.response_changes.values():
+                changed.set()
             for future in self.pending.values():
                 if not future.done():
                     future.set_exception(failure)
             for queue in self.events.values():
                 await queue.put({"method": "bridge/closed", "params": {"error": str(failure)}})
+
+    def _track_response(self, message, thread):
+        params = message.get("params") or {}
+        turn = params.get("turnId")
+        if not thread or not turn:
+            return
+        boundary = (thread, turn)
+        if message.get("method") == "rawResponseItem/completed":
+            item = params.get("item") or {}
+            call = item.get("call_id")
+            if item.get("type") in {"function_call", "custom_tool_call"} and isinstance(call, str) and call:
+                if (*boundary, call) not in self.call_responses:
+                    self.raw_calls.setdefault(boundary, set()).add(call)
+        elif message.get("method") == "rawResponse/completed":
+            response = params.get("responseId")
+            if not isinstance(response, str) or not response or (*boundary, response) in self.completed_responses:
+                return
+            # Raw items have no response ID. The native ordered stream closes
+            # these exact calls at this response boundary, including null usage.
+            self.completed_responses.add((*boundary, response))
+            for call in self.raw_calls.pop(boundary, set()):
+                self.call_responses[(*boundary, call)] = response
+            self.response_changes.setdefault(thread, asyncio.Event()).set()
+
+    def completed_call_responses(self, thread, turn, calls):
+        matched = {call: self.call_responses.get((thread, turn, call)) for call in calls}
+        return matched if matched and all(matched.values()) else {}
+
+    async def wait_call_responses(self, thread, turn, calls):
+        changed = self.response_changes.setdefault(thread, asyncio.Event())
+        while True:
+            matched = self.completed_call_responses(thread, turn, calls)
+            if matched:
+                return matched
+            if self.reader_failure is not None:
+                raise RuntimeError("Native response stream closed before matching completion") from self.reader_failure
+            changed.clear()
+            await changed.wait()
+
+    def forget_response_tracking(self, thread):
+        for mapping in (self.raw_calls, self.call_responses):
+            for key in list(mapping):
+                if key[0] == thread:
+                    del mapping[key]
+        self.completed_responses.difference_update(key for key in list(self.completed_responses) if key[0] == thread)
+        self.response_changes.pop(thread, None)
 
     async def start_thread(self, instructions: str, tools: list[dict], effort: str):
         supported = {e["reasoningEffort"] for e in self.model["supportedReasoningEfforts"]}
@@ -131,7 +202,8 @@ class AppServer:
         response = await self.request("thread/start", {
             "model": MODEL, "modelProvider": "openai", "allowProviderModelFallback": False,
             "cwd": str(self.workspace), "approvalPolicy": "never", "sandbox": "read-only",
-            "ephemeral": True, "personality": "none", "baseInstructions": instructions,
+            "ephemeral": True, "experimentalRawEvents": True,
+            "personality": "none", "baseInstructions": instructions,
             "developerInstructions": "Use only the supplied benchmark task and dynamic tools. Do not access local files, run commands, browse, or delegate. Return the task's requested output without progress commentary.",
             "dynamicTools": tools, "serviceTier": "default",
             "config": {"model_reasoning_effort": effort},
@@ -149,7 +221,8 @@ class AppServer:
             try:
                 await self.request("turn/interrupt", {"threadId": thread, "turnId": turn}, timeout=10)
             except (RuntimeError, TimeoutError):
-                pass
+                return False
+        return True
 
     async def close(self):
         if self.process and self.process.returncode is None:

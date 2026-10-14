@@ -369,13 +369,17 @@ class TestExecuteStage3Aggregation:
         stage_2.model_dump_json.return_value = "{}"
         stage_2.pr_recommendation = "APPROVE"
 
+        from utils.diff_processor import ProcessedDiff
+        processed_diff = ProcessedDiff(files=[], total_additions=1, total_deletions=0)
         with patch("service.review.orchestrator.stage_3_aggregation._stage_3_with_mcp") as mock_mcp:
             mock_mcp.return_value = {"report": "mcp report", "dismissed_issue_ids": ["x"]}
             result = await execute_stage_3_aggregation(
                 llm, request, plan, [], stage_2,
                 mcp_client=mcp_client, use_mcp_tools=True,
+                processed_diff=processed_diff,
             )
             mock_mcp.assert_called_once()
+            assert mock_mcp.call_args.kwargs["processed_diff"] is processed_diff
             assert result["dismissed_issue_ids"] == ["x"]
 
     @pytest.mark.asyncio(loop_scope="function")
@@ -813,7 +817,8 @@ class TestExecuteStage3Aggregation:
                 llm,
                 request,
                 plan,
-                [],
+                [CodeReviewIssue(file="source.py", line=1, severity="LOW",
+                    category="BUG_RISK", reason="Retained candidate", suggestedFixDescription="Fix")],
                 stage_2,
             )
 

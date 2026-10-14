@@ -2,12 +2,14 @@
 import asyncio
 import hashlib
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from model.output_schemas import CodeReviewIssue
+from llm.provider_lifecycle import provider_execution_scope
 from model.multi_stage import ReviewFile, ReviewPlan
 from service.review.candidate_ledger import CandidateEvidenceLedger
 from service.review.execution_scheduler import FairReviewScheduler, review_execution, review_model_slot, set_review_deadline
@@ -138,7 +140,7 @@ def test_base_head_are_distinct_deterministic_and_semantic_candidates():
     assert not issues_are_semantic_dedup_candidates(head, base)
 
 
-@pytest.mark.parametrize("failure", [None, "timeout", "error"])
+@pytest.mark.parametrize("failure", [None, "timeout", "error", "slow_success"])
 @pytest.mark.asyncio
 async def test_specialist_work_is_bounded_distinct_and_closes_partial_candidates(monkeypatch, failure):
     diff = DiffProcessor().process("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-return user\n+return user.name # authorization tenant transaction rollback\n")
@@ -147,7 +149,7 @@ async def test_specialist_work_is_bounded_distinct_and_closes_partial_candidates
     batches = [[{"file": file, "priority": "HIGH"}]]
     monkeypatch.setattr(stage1, "create_smart_batches_wrapper", AsyncMock(return_value=batches))
     monkeypatch.setenv("REVIEW_SPECIALIST_MAX_PASSES", "2")
-    monkeypatch.setenv("REVIEW_SPECIALIST_TIMEOUT_SECONDS", "0.025")
+    monkeypatch.setenv("REVIEW_SPECIALIST_TIMEOUT_SECONDS", "0.3" if failure == "slow_success" else "0.025")
     seen = []
     core = finding()
     partial = []
@@ -158,7 +160,9 @@ async def test_specialist_work_is_bounded_distinct_and_closes_partial_candidates
         seen.append((name, tuple(batch[0]["_hunk_ids"])))
         candidate = core if name == "core" else finding(hypothesis=name)
         register(kwargs["candidate_ledger"], candidate, name)
-        if specialist and failure:
+        if specialist and failure == "slow_success":
+            await asyncio.sleep(0.2)
+        elif specialist and failure:
             partial.append(candidate)
             if failure == "timeout":
                 await asyncio.Event().wait()
@@ -176,7 +180,7 @@ async def test_specialist_work_is_bounded_distinct_and_closes_partial_candidates
     assert result[0] is core and seen[0][0] == "core"
     assert all(hunks == seen[0][1] and hunks for _, hunks in seen)
     state.assert_complete()
-    if failure:
+    if failure and failure != "slow_success":
         assert result == [core]
         assert all(record["terminalState"] == "rejected" for record in ledger.summary()["records"] if record["sourceKey"] != "core")
         assert any(event.get("outcome") in {"timeout", "unavailable"} for event in events)
@@ -185,6 +189,100 @@ async def test_specialist_work_is_bounded_distinct_and_closes_partial_candidates
         assert len(result) == 3
     ledger.publish(result)
     ledger.assert_terminal()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["completed_output", "before_output", "scope_entry", "external_cancel"])
+async def test_specialist_work_deadline_excludes_joined_provider_cleanup(monkeypatch, boundary):
+    diff = DiffProcessor().process("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-return user\n+return user.name # authorization\n")
+    file = ReviewFile(path="a.py", focus_areas=["authorization"], risk_level="HIGH")
+    request = MagicMock(rawDiff="", deltaDiff=None, changedFiles=["a.py"], enrichmentData=None, taskContext=None, useMcpTools=False)
+    monkeypatch.setattr(stage1, "create_smart_batches_wrapper", AsyncMock(return_value=[[{"file": file, "priority": "HIGH"}]]))
+    monkeypatch.setenv("REVIEW_SPECIALIST_MAX_PASSES", "1")
+    monkeypatch.setenv("REVIEW_SPECIALIST_TIMEOUT_SECONDS", "1")
+    native_timeout = asyncio.timeout
+    work_timers = []
+
+    def timeout(seconds):
+        timer = native_timeout(seconds)
+        if seconds <= 1:
+            work_timers.append(timer)
+        return timer
+
+    monkeypatch.setattr(asyncio, "timeout", timeout)
+    cleanup_started, release_cleanup = asyncio.Event(), asyncio.Event()
+    events = []
+
+    @asynccontextmanager
+    async def scope():
+        events.append("entry")
+        try:
+            if boundary == "scope_entry":
+                work_timers[-1].reschedule(asyncio.get_running_loop().time())
+                await asyncio.Event().wait()
+            yield
+        finally:
+            try:
+                if boundary in {"completed_output", "external_cancel"}:
+                    events.append("cleanup")
+                    cleanup_started.set()
+                    await release_cleanup.wait()
+            finally:
+                events.append("joined")
+
+    model = SimpleNamespace(provider_execution_scope=scope)
+    core, supplemental = finding(), finding(hypothesis="specialist")
+    ledger = CandidateEvidenceLedger()
+
+    async def review(llm, _request, _batch, *_args, **kwargs):
+        if not kwargs.get("specialist"):
+            register(kwargs["candidate_ledger"], core)
+            return [core]
+        async with provider_execution_scope(llm):
+            if boundary == "before_output":
+                work_timers[-1].reschedule(asyncio.get_running_loop().time())
+                await asyncio.Event().wait()
+            events.append("output")
+            if boundary == "completed_output":
+                work_timers[-1].reschedule(asyncio.get_running_loop().time())
+        register(kwargs["candidate_ledger"], supplemental, "specialist")
+        events.append("registered")
+        return [supplemental]
+
+    monkeypatch.setattr(stage1, "review_file_batch", review)
+    state, statuses = Stage1ReviewUnitState(), []
+    profile = adapt_review_inference_profile(build_review_inference_profile(request, diff), issues=[core])
+    with review_execution(FairReviewScheduler(1), asyncio.Semaphore(1)):
+        set_review_deadline(asyncio.get_running_loop().time() + 30)
+        task = asyncio.create_task(stage1.execute_stage_1_file_reviews(
+            model, request, ReviewPlan(analysis_summary="review", file_groups=[], cross_file_concerns=[]), None,
+            processed_diff=diff, candidate_ledger=ledger, review_unit_state=state,
+            inference_profile=profile, event_callback=statuses.append))
+        if boundary in {"completed_output", "external_cancel"}:
+            await asyncio.wait_for(cleanup_started.wait(), 1)
+            if boundary == "external_cancel":
+                task.cancel("external review cancellation")
+            else:
+                # Let the accelerated work deadline pass while cleanup is joined.
+                await asyncio.sleep(0.001)
+                assert not task.done(), "cleanup must be joined before returning"
+                release_cleanup.set()
+        if boundary == "external_cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            result = await task
+            if boundary == "completed_output":
+                assert result == [core, supplemental]
+                assert events.index("registered") < events.index("cleanup")
+            else:
+                assert result == [core]
+                assert "registered" not in events
+                assert any(e.get("outcome") == "timeout" for e in statuses)
+            ledger.publish(result)
+            ledger.assert_terminal()
+    assert events.count("entry") == events.count("joined") == 1
+    state.assert_complete()
 
 
 def test_real_sdk_message_reducer_and_tool_recovery():

@@ -1,0 +1,92 @@
+{
+  "capture": "reports/benchmark-quality-20261010/file-effort-martian50/captures/project-104935-review-4-2279c4a8cf1a4daeb68a9e714cb378f6.json",
+  "capture_sha256": "a684de604e816c1eed071c9edee97f402e04e9046da00938c501e7c3cb0b6495",
+  "review_revision": "4f8aed295a29954023b2849c060ef4fb299d1b5d",
+  "request_head_diff": "diff --git a/app/controllers/embed_controller.rb b/app/controllers/embed_controller.rb\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..1f9905ae40e89af83b3f2bd775bf3f7d88d366cc\n--- /dev/null\n+++ b/app/controllers/embed_controller.rb\n@@ -0,0 +1,34 @@\n+class EmbedController < ApplicationController\n+  skip_before_filter :check_xhr\n+  skip_before_filter :preload_json\n+  before_filter :ensure_embeddable\n+\n+  layout 'embed'\n+\n+  def best\n+    embed_url = params.require(:embed_url)\n+    topic_id = TopicEmbed.topic_id_for_embed(embed_url)\n+\n+    if topic_id\n+      @topic_view = TopicView.new(topic_id, current_user, {best: 5})\n+    else\n+      Jobs.enqueue(:retrieve_topic, user_id: current_user.try(:id), embed_url: embed_url)\n+      render 'loading'\n+    end\n+\n+    discourse_expires_in 1.minute\n+  end\n+\n+  private\n+\n+    def ensure_embeddable\n+      raise Discourse::InvalidAccess.new('embeddable host not set') if SiteSetting.embeddable_host.blank?\n+      raise Discourse::InvalidAccess.new('invalid referer host') if URI(request.referer || '').host != SiteSetting.embeddable_host\n+\n+      response.headers['X-Frame-Options'] = \"ALLOWALL\"\n+    rescue URI::InvalidURIError\n+      raise Discourse::InvalidAccess.new('invalid referer host')\n+    end\n+\n+\n+end\ndiff --git a/app/jobs/regular/retrieve_topic.rb b/app/jobs/regular/retrieve_topic.rb\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..dd3c79cf4d627734917755ef6e066a4deb935b8b\n--- /dev/null\n+++ b/app/jobs/regular/retrieve_topic.rb\n@@ -0,0 +1,24 @@\n+require_dependency 'email/sender'\n+require_dependency 'topic_retriever'\n+\n+module Jobs\n+\n+  # Asynchronously retrieve a topic from an embedded site\n+  class RetrieveTopic < Jobs::Base\n+\n+    def execute(args)\n+      raise Discourse::InvalidParameters.new(:embed_url) unless args[:embed_url].present?\n+\n+      user = nil\n+      if args[:user_id]\n+        user = User.where(id: args[:user_id]).first\n+      end\n+\n+      TopicRetriever.new(args[:embed_url], no_throttle: user.try(:staff?)).retrieve\n+    end\n+\n+  end\n+\n+end\n+\n+\ndiff --git a/lib/topic_retriever.rb b/lib/topic_retriever.rb\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..dc63d310fc358d63dedefa77a476b3b3e0736dde\n--- /dev/null\n+++ b/lib/topic_retriever.rb\n@@ -0,0 +1,55 @@\n+class TopicRetriever\n+\n+  def initialize(embed_url, opts=nil)\n+    @embed_url = embed_url\n+    @opts = opts || {}\n+  end\n+\n+  def retrieve\n+    perform_retrieve unless (invalid_host? || retrieved_recently?)\n+  end\n+\n+  private\n+\n+    def invalid_host?\n+      SiteSetting.embeddable_host != URI(@embed_url).host\n+    rescue URI::InvalidURIError\n+      # An invalid URI is an invalid host\n+      true\n+    end\n+\n+    def retrieved_recently?\n+      # We can disable the throttle for some users, such as staff\n+      return false if @opts[:no_throttle]\n+\n+      # Throttle other users to once every 60 seconds\n+      retrieved_key = \"retrieved:#{@embed_url}\"\n+      if $redis.setnx(retrieved_key, \"1\")\n+        $redis.expire(retrieved_key, 60)\n+        return false\n+      end\n+\n+      true\n+    end\n+\n+    def perform_retrieve\n+      # It's possible another process or job found the embed already. So if that happened bail out.\n+      return if TopicEmbed.where(embed_url: @embed_url).exists?\n+\n+      # First check RSS if that is enabled\n+      if SiteSetting.feed_polling_enabled?\n+        Jobs::PollFeed.new.execute({})\n+        return if TopicEmbed.where(embed_url: @embed_url).exists?\n+      end\n+\n+      fetch_http\n+    end\n+\n+    def fetch_http\n+      user = User.where(username_lower: SiteSetting.embed_by_username.downcase).first\n+      return if user.blank?\n+\n+      TopicEmbed.import_remote(user, @embed_url)\n+    end\n+\n+end\n\\ No newline at end of file",
+  "issue": {
+    "anchorSide": "HEAD",
+    "category": "SECURITY",
+    "claimKind": "",
+    "codeSnippet": "Jobs.enqueue(:retrieve_topic, user_id: current_user.try(:id), embed_url: embed_url)",
+    "evidenceGaps": [],
+    "evidenceRefs": [],
+    "file": "app/controllers/embed_controller.rb",
+    "hypothesis": "",
+    "id": null,
+    "isResolved": false,
+    "line": 14,
+    "reason": "`ensure_embeddable` validates only the request's `Referer` host, while `best` accepts a separate `embed_url` parameter and queues it unchanged. The queued job passes that value directly to `TopicRetriever.new(...).retrieve` (`app/jobs/regular/retrieve_topic.rb:16`). Therefore a request can claim the configured Referer while supplying a different URL, causing server-side retrieval of an attacker-selected target; non-browser clients can also set the Referer header themselves. This enables outbound-request/queue abuse and may expose internal HTTP services unless a downstream guard exists. No such guard is visible in the reviewed controller or the retrieved job source.",
+    "relatedLocations": [
+      "app/jobs/regular/retrieve_topic.rb:16"
+    ],
+    "resolutionExplanation": null,
+    "resolutionReason": null,
+    "resolvedInCommit": null,
+    "scope": "FUNCTION",
+    "severity": "HIGH",
+    "suggestedFixDescription": "Parse and validate `embed_url` before lookup or enqueueing: allow only HTTP(S), reject malformed URLs, and require its normalized host (and any intended port/scheme constraints) to match the configured embeddable host. Do not treat `Referer` as authorization for an unrelated URL.",
+    "suggestedFixDiff": null,
+    "title": "Embed URL permits arbitrary server retrieval",
+    "visibility": null
+  },
+  "verification_id": "issue_13",
+  "raw_assessment": {
+    "issue_id": "issue_13",
+    "verdict": "disproven",
+    "reason": "Although the controller enqueues the supplied embed_url unchanged, the job passes it through TopicRetriever. For a URL whose host differs from SiteSetting.embeddable_host, the inequality predicate is true and retrieve does not call perform_retrieve; only the same host proceeds. This rules out the finding's claimed arbitrary different-host retrieval path.",
+    "supporting_evidence": [],
+    "contradicting_evidence": [
+      {
+        "file_path": "app/controllers/embed_controller.rb",
+        "snippet": "Jobs.enqueue(:retrieve_topic, user_id: current_user.try(:id), embed_url: embed_url)"
+      },
+      {
+        "file_path": "app/jobs/regular/retrieve_topic.rb",
+        "snippet": "TopicRetriever.new(args[:embed_url], no_throttle: user.try(:staff?)).retrieve"
+      },
+      {
+        "file_path": "lib/topic_retriever.rb",
+        "snippet": "def retrieve\n    perform_retrieve unless (invalid_host? || retrieved_recently?)\n  end"
+      },
+      {
+        "file_path": "lib/topic_retriever.rb",
+        "snippet": "def invalid_host?\n      SiteSetting.embeddable_host != URI(@embed_url).host\n    rescue URI::InvalidURIError\n      # An invalid URI is an invalid host\n      true\n    end"
+      }
+    ],
+    "unresolved_questions": []
+  },
+  "actually_visible_source_blocks": [
+    {
+      "path": "app/controllers/embed_controller.rb",
+      "start": 1,
+      "end": 34,
+      "revision": "4f8aed295a29954023b2849c060ef4fb299d1b5d",
+      "hunk": "sha256:ff3b7ade201e4447e319a3af01a19864e6b9ad0fba083557201553b38841450a",
+      "body": "class EmbedController < ApplicationController\n  skip_before_filter :check_xhr\n  skip_before_filter :preload_json\n  before_filter :ensure_embeddable\n\n  layout 'embed'\n\n  def best\n    embed_url = params.require(:embed_url)\n    topic_id = TopicEmbed.topic_id_for_embed(embed_url)\n\n    if topic_id\n      @topic_view = TopicView.new(topic_id, current_user, {best: 5})\n    else\n      Jobs.enqueue(:retrieve_topic, user_id: current_user.try(:id), embed_url: embed_url)\n      render 'loading'\n    end\n\n    discourse_expires_in 1.minute\n  end\n\n  private\n\n    def ensure_embeddable\n      raise Discourse::InvalidAccess.new('embeddable host not set') if SiteSetting.embeddable_host.blank?\n      raise Discourse::InvalidAccess.new('invalid referer host') if URI(request.referer || '').host != SiteSetting.embeddable_host\n\n      response.headers['X-Frame-Options'] = \"ALLOWALL\"\n    rescue URI::InvalidURIError\n      raise Discourse::InvalidAccess.new('invalid referer host')\n    end\n\n\nend",
+      "prompt_offset": 50140,
+      "body_sha256": "9a6531f76009d70db9a183a21533f45fe36b4d2822db2f8e3314f50b1b363dcb"
+    },
+    {
+      "path": "app/jobs/regular/retrieve_topic.rb",
+      "start": 1,
+      "end": 24,
+      "revision": "4f8aed295a29954023b2849c060ef4fb299d1b5d",
+      "hunk": "sha256:99639331ed0c9f14ebd4e719c8a6a3f3161b86e768595e1d6f4be758e294eadd",
+      "body": "require_dependency 'email/sender'\nrequire_dependency 'topic_retriever'\n\nmodule Jobs\n\n  # Asynchronously retrieve a topic from an embedded site\n  class RetrieveTopic < Jobs::Base\n\n    def execute(args)\n      raise Discourse::InvalidParameters.new(:embed_url) unless args[:embed_url].present?\n\n      user = nil\n      if args[:user_id]\n        user = User.where(id: args[:user_id]).first\n      end\n\n      TopicRetriever.new(args[:embed_url], no_throttle: user.try(:staff?)).retrieve\n    end\n\n  end\n\nend\n\n",
+      "prompt_offset": 51308,
+      "body_sha256": "d43418ad62aa2418611c6e75107c491c00f1ff936edffae681a703715728fd00"
+    },
+    {
+      "path": "lib/topic_retriever.rb",
+      "start": 1,
+      "end": 55,
+      "revision": "4f8aed295a29954023b2849c060ef4fb299d1b5d",
+      "hunk": "sha256:a25bf0a683a370c309c3fbc051030ffb738dd0f266761290b54f2ae815d32e8e",
+      "body": "class TopicRetriever\n\n  def initialize(embed_url, opts=nil)\n    @embed_url = embed_url\n    @opts = opts || {}\n  end\n\n  def retrieve\n    perform_retrieve unless (invalid_host? || retrieved_recently?)\n  end\n\n  private\n\n    def invalid_host?\n      SiteSetting.embeddable_host != URI(@embed_url).host\n    rescue URI::InvalidURIError\n      # An invalid URI is an invalid host\n      true\n    end\n\n    def retrieved_recently?\n      # We can disable the throttle for some users, such as staff\n      return false if @opts[:no_throttle]\n\n      # Throttle other users to once every 60 seconds\n      retrieved_key = \"retrieved:#{@embed_url}\"\n      if $redis.setnx(retrieved_key, \"1\")\n        $redis.expire(retrieved_key, 60)\n        return false\n      end\n\n      true\n    end\n\n    def perform_retrieve\n      # It's possible another process or job found the embed already. So if that happened bail out.\n      return if TopicEmbed.where(embed_url: @embed_url).exists?\n\n      # First check RSS if that is enabled\n      if SiteSetting.feed_polling_enabled?\n        Jobs::PollFeed.new.execute({})\n        return if TopicEmbed.where(embed_url: @embed_url).exists?\n      end\n\n      fetch_http\n    end\n\n    def fetch_http\n      user = User.where(username_lower: SiteSetting.embed_by_username.downcase).first\n      return if user.blank?\n\n      TopicEmbed.import_remote(user, @embed_url)\n    end\n\nend",
+      "prompt_offset": 66703,
+      "body_sha256": "bab77732bb51febcb190afa4c76cbda365af414a255266576e66ba1dd15749d8"
+    }
+  ],
+  "semantic_limit": "The full controller\u2192job\u2192TopicRetriever chain proves a submitted URL with a different parsed hostname cannot reach perform_retrieve through this route. This does not prove all SSRF impossible: same-host redirects, ports/schemes/DNS, and queueing work remain separate questions. The separately published redirect finding is preserved. The raw model disproves specifically the arbitrary different-host retrieval allegation, not those separate vectors.",
+  "unrelated_prefetch": "Observed source for issue_0, app/assets/javascripts/embed.js:16:\n{\"fileContent\":\"/* global discourseUrl */\\n/* global discourseEmbedUrl */\\n(function() {\\n\\n  var comments = document.getElementById('discourse-comments'),\\n      iframe = document.createElement('iframe');\\n  iframe.src = discourseUrl + \\\"embed/best?embed_url=\\\" + encodeURIComponent(discourseEmbedUrl);\\n  iframe.id = 'discourse-embed-frame';\\n  iframe.width = \\\"100%\\\";\\n  iframe.frameBorder = \\\"0\\\";\\n  iframe.scrolling = \\\"no\\\";\\n  comments.appendChild(iframe);\\n\\n\\n  function postMessageReceived(e) {\\n    if (!e) { return; }\\n    if (discourseUrl.indexOf(e.origin) === -1) { return; }\\n\\n    if (e.data) {\\n      if (e.data.type === 'discourse-resize' && e.data.height) {\\n        iframe.height = e.data.height + \\\"px\\\";\\n      }\\n    }\\n  }\\n  window.addEventListener('message', postMessageReceived, false);\\n\\n})();\\n\",\"startLine\":1,\"endLine\":28,\"totalLines\":28,\"completeFile\":true,\"filePath\":\"app/assets/javascripts/embed.js\",\"exists\":true,\"changed\":true,\"deleted\":false,\"unavailable\":false,\"source\":\"review-overlay\"}\n\nDecoded exact fileContent (quote these source characters, encoding them once in assessment JSON):\n/* global discourseUrl */\n/* global discourseEmbedUrl */\n(function() {\n\n  var comments = document.getElementById('discourse-comments'),\n      iframe = document.createElement('iframe');\n  iframe.src = discourseUrl + \"embed/best?embed_url=\" + encodeURIComponent(discourseEmbedUrl);\n  iframe.id = 'discourse-embed-frame';\n  iframe.width = \"100%\";\n  iframe.frameBorder = \"0\";\n  iframe.scrolling = \"no\";\n  comments.appendChild(iframe);\n\n\n  function postMessageReceived(e) {\n    if (!e) { return; }\n    if (discourseUrl.indexOf(e.origin) === -1) { return; }\n\n    if (e.data) {\n      if (e.data.type === 'discourse-resize' && e.data.height) {\n        iframe.height = e.data.height + \"px\";\n      }\n    }\n  }\n  window.addEventListener('message', postMessageReceived, false);\n\n})();\n"
+}

@@ -110,7 +110,7 @@ class MetadataExtractor:
         if language == 'python':
             match = re.search(r'"""([\s\S]*?)"""|\'\'\'([\s\S]*?)\'\'\'', content)
             if match:
-                return (match.group(1) or match.group(2)).strip()
+                return next(group for group in match.groups() if group is not None).strip()
         
         elif language in ('javascript', 'typescript', 'java', 'kotlin', 
                           'c_sharp', 'php', 'go', 'scala', 'c', 'cpp'):

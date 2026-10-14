@@ -1,4 +1,6 @@
 """Shared construction and execution lifecycle for prompt-scoped MCP agents."""
+
+from llm.provider_lifecycle import provider_execution_scope
 from service.review.execution_scheduler import review_model_slot
 from service.review.inference_usage import record_model_response
 
@@ -17,7 +19,7 @@ configure_mcp_runtime()
 
 from mcp_use import MCPClient
 from mcp_use.agents.adapters import LangChainAdapter
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, WithJsonSchema, create_model
 
 from llm.reasoning_policy import (
     ReasoningEffort,
@@ -36,6 +38,30 @@ from service.agent.models import (
     reject_mcp_use_model_call_limit_output,
 )
 from service.agent.recursive_mcp_agent import RecursiveMCPAgent
+
+
+class _SchemaPreservingLangChainAdapter(LangChainAdapter):
+    """Keep server numeric limits visible through MCP's lossy schema adapter."""
+
+    def _convert_tool(self, mcp_tool: Any, connector: Any) -> Any:
+        tool = super()._convert_tool(mcp_tool, connector)
+        if tool is None:
+            return None
+        for name, source in mcp_tool.inputSchema.get("properties", {}).items():
+            field = tool.args_schema.model_fields.get(name)
+            if field is None or not isinstance(source, dict):
+                continue
+            has_bounds = any(
+                key in source
+                for key in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf")
+            )
+            if has_bounds:
+                # Advertise the existing server contract without adding client
+                # clamping or changing defaults and optional argument handling.
+                # LangChain copies metadata into its final tool-call schema.
+                field.metadata.append(WithJsonSchema(dict(source)))
+        tool.args_schema.model_rebuild(force=True)
+        return tool
 
 
 def _model_request_settings(
@@ -265,7 +291,7 @@ class AgentExecutionService(Generic[AgentOutputT]):
                         optional_errors[server_name] = exception
                     sessions = self._client.get_all_active_sessions()
 
-            adapter = LangChainAdapter()
+            adapter = _SchemaPreservingLangChainAdapter()
             adapter._record_telemetry = False
             available_tools: list[Any] = []
             optional_names = set(optional_server_names)
@@ -359,91 +385,92 @@ class AgentExecutionService(Generic[AgentOutputT]):
             request: AgentExecutionRequest[AgentOutputT],
     ) -> AsyncIterator[AgentExecutionEvent[AgentOutputT]]:
         """Stream one prompt agent within the caller's review concurrency."""
-        await self.initialize()
+        async with provider_execution_scope(self._llm):
+            await self.initialize()
 
-        metadata: Mapping[str, Any] = dict(request.metadata)
-        allowed_tool_names = set(request.allowed_tool_names)
-        selected_tools = self.available_tools_for(allowed_tool_names)
-        selected_tool_names = {
-            getattr(tool, "name", None) for tool in selected_tools
-        }
-        missing_binding_tools = sorted(
-            set(request.tool_argument_bindings).difference(selected_tool_names)
-        )
-        if missing_binding_tools:
-            raise ValueError(
-                "Host argument bindings reference unavailable agent tool(s): "
-                f"{', '.join(missing_binding_tools)}"
-            )
-        selected_tools = tuple(
-            _tool_with_host_bound_arguments(
-                tool,
-                request.tool_argument_bindings[tool.name],
-            )
-            if tool.name in request.tool_argument_bindings
-            else tool
-            for tool in selected_tools
-        )
-        disallowed_tools = sorted(
-            self._available_tool_names.difference(allowed_tool_names)
-        )
-        initial_required_tool_name = request.initial_required_tool_name
-        if (
-            initial_required_tool_name is not None
-            and initial_required_tool_name not in {
+            metadata: Mapping[str, Any] = dict(request.metadata)
+            allowed_tool_names = set(request.allowed_tool_names)
+            selected_tools = self.available_tools_for(allowed_tool_names)
+            selected_tool_names = {
                 getattr(tool, "name", None) for tool in selected_tools
             }
-        ):
-            raise ValueError(
-                "Initial required agent tool is not available in this request: "
-                f"{initial_required_tool_name}"
+            missing_binding_tools = sorted(
+                set(request.tool_argument_bindings).difference(selected_tool_names)
+            )
+            if missing_binding_tools:
+                raise ValueError(
+                    "Host argument bindings reference unavailable agent tool(s): "
+                    f"{', '.join(missing_binding_tools)}"
+                )
+            selected_tools = tuple(
+                _tool_with_host_bound_arguments(
+                    tool,
+                    request.tool_argument_bindings[tool.name],
+                )
+                if tool.name in request.tool_argument_bindings
+                else tool
+                for tool in selected_tools
+            )
+            disallowed_tools = sorted(
+                self._available_tool_names.difference(allowed_tool_names)
+            )
+            initial_required_tool_name = request.initial_required_tool_name
+            if (
+                initial_required_tool_name is not None
+                and initial_required_tool_name not in {
+                    getattr(tool, "name", None) for tool in selected_tools
+                }
+            ):
+                raise ValueError(
+                    "Initial required agent tool is not available in this request: "
+                    f"{initial_required_tool_name}"
+                )
+
+            if not request.allowed_tool_names and request.output_schema is not None:
+                output = await self._invoke_structured_without_tools(request)
+                yield AgentOutputEvent(output=output, metadata=metadata)
+                return
+
+            agent = RecursiveMCPAgent(
+                llm=self._llm,
+                client=self._client,
+                max_steps=request.max_steps,
+                recursion_limit=request.recursion_limit,
+                output_schema=request.output_schema,
+                additional_instructions=request.additional_instructions,
+                disallowed_tools=disallowed_tools,
+                preloaded_tools=selected_tools,
+                initial_required_tool_name=initial_required_tool_name,
+                usage_stage=str(metadata.get("stage") or "mcp_agent"),
+                model_request_settings=_model_request_settings(
+                    self._llm,
+                    reasoning_effort=request.reasoning_effort,
+                    max_output_tokens=request.max_output_tokens,
+                ),
+                memory_enabled=False,
             )
 
-        if not request.allowed_tool_names and request.output_schema is not None:
-            output = await self._invoke_structured_without_tools(request)
-            yield AgentOutputEvent(output=output, metadata=metadata)
-            return
-
-        agent = RecursiveMCPAgent(
-            llm=self._llm,
-            client=self._client,
-            max_steps=request.max_steps,
-            recursion_limit=request.recursion_limit,
-            output_schema=request.output_schema,
-            additional_instructions=request.additional_instructions,
-            disallowed_tools=disallowed_tools,
-            preloaded_tools=selected_tools,
-            initial_required_tool_name=initial_required_tool_name,
-            usage_stage=str(metadata.get("stage") or "mcp_agent"),
-            model_request_settings=_model_request_settings(
-                self._llm,
-                reasoning_effort=request.reasoning_effort,
-                max_output_tokens=request.max_output_tokens,
-            ),
-            memory_enabled=False,
-        )
-
-        async for item in agent.stream(
-            request.prompt,
-            max_steps=request.max_steps,
-            manage_connector=False,
-            # The schema is bound inside the existing agent graph. mcp-use's
-            # output_schema path would make a separate post-formatting model
-            # call over only the raw answer and is deliberately bypassed.
-            output_schema=None,
-        ):
-            # Keep the shared execution boundary safe even if a future agent
-            # implementation bypasses RecursiveMCPAgent's upstream workaround.
-            reject_mcp_use_model_call_limit_output(item)
-            if isinstance(item, tuple) and len(item) == 2:
-                action, observation = item
-                yield AgentToolEvent(
-                    action=action,
-                    observation=observation,
-                    metadata=metadata,
-                )
-            else:
-                yield AgentOutputEvent(output=item, metadata=metadata)
+            async for item in agent.stream(
+                request.prompt,
+                max_steps=request.max_steps,
+                manage_connector=False,
+                # The schema is bound inside the existing agent graph. mcp-use's
+                # output_schema path would make a separate post-formatting model
+                # call over only the raw answer and is deliberately bypassed.
+                output_schema=None,
+            ):
+                # Keep the shared execution boundary safe even if a future agent
+                # implementation bypasses RecursiveMCPAgent's upstream workaround.
+                reject_mcp_use_model_call_limit_output(item)
+                if isinstance(item, tuple) and len(item) == 2:
+                    action, observation = item
+                    yield AgentToolEvent(
+                        action=action,
+                        observation=observation,
+                        metadata=metadata,
+                    )
+                else:
+                    yield AgentOutputEvent(output=item, metadata=metadata)
 
     async def _invoke_structured_without_tools(
             self,

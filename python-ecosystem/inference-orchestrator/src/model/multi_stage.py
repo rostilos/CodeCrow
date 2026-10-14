@@ -7,6 +7,7 @@ These models are used for the multi-stage PR review process:
 - Stage 2: Cross-file analysis (CrossFileAnalysisResult)
 """
 
+import json
 from typing import Optional, List
 from pydantic import BaseModel, Field, field_validator
 
@@ -49,6 +50,22 @@ class FileReviewOutput(BaseModel):
 class FileReviewBatchOutput(BaseModel):
     """Stage 1 Output: Batch of file reviews."""
     reviews: List[FileReviewOutput] = Field(description="List of review results for the files in the batch")
+
+    @field_validator("reviews", mode="before")
+    @classmethod
+    def decode_json_reviews(cls, value):
+        """Normalize an encoded array without changing any review or finding."""
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            # Some providers include the enclosing object's final brace inside
+            # this string. Only that redundant delimiter is unambiguous.
+            decoded, end = json.JSONDecoder().raw_decode(value.lstrip())
+            if isinstance(decoded, list) and value.lstrip()[end:].strip() == "}":
+                return decoded
+            raise
 
 
 class ReviewFile(BaseModel):

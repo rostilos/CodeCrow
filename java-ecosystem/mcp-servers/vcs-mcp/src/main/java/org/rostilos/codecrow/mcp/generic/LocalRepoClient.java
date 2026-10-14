@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Provider-neutral VCS client adapter that serves one pinned repository tree
@@ -23,6 +24,7 @@ import java.util.Set;
 public final class LocalRepoClient implements VcsMcpClient {
     private static final String REVIEW_OVERLAY_MANIFEST = "manifest.json";
     private static final String REVIEW_OVERLAY_FILES = "files";
+    private static final int DIRECTORY_ENTRY_LIMIT = 200;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private volatile VcsMcpClient remoteClient;
@@ -165,18 +167,65 @@ public final class LocalRepoClient implements VcsMcpClient {
     }
 
     private String readDirectory(String dirPath) throws IOException {
-        Path directory = resolveExistingPath(dirPath);
-        if (!Files.isDirectory(directory)) {
-            throw new IOException("Repository path is not a directory: " + dirPath);
+        String normalized = dirPath == null || dirPath.isBlank() || dirPath.equals(".")
+                ? "" : normalizeRepositoryPath(dirPath);
+        String prefix = normalized.isEmpty() ? "" : normalized + "/";
+        if (reviewOverlay != null && reviewOverlay.changedFiles().stream().anyMatch(path ->
+                !reviewOverlay.deletedFiles().contains(path)
+                        && (normalized.equals(path) || normalized.startsWith(path + "/")))) {
+            throw new IOException("Proposed repository path is not a directory: " + dirPath);
         }
-        try (var entries = Files.list(directory)) {
-            return String.join("\n", entries
-                    .sorted((left, right) -> left.getFileName().toString()
-                            .compareTo(right.getFileName().toString()))
-                    .map(entry -> entry.getFileName().toString()
-                            + (Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS) ? "/" : ""))
-                    .toList());
+        boolean deletedBasePath = reviewOverlay != null && reviewOverlay.deletedFiles().contains(normalized);
+        TreeSet<String> names = new TreeSet<>();
+        boolean localDirectoryExists = false;
+        try {
+            if (deletedBasePath) {
+                // A deleted BASE file may become a directory in the overlay.
+                throw new NoSuchFileException(normalized);
+            }
+            Path directory = resolveExistingPath(normalized);
+            if (!Files.isDirectory(directory)) {
+                throw new IOException("Repository path is not a directory: " + dirPath);
+            }
+            localDirectoryExists = true;
+            try (var entries = Files.list(directory)) {
+                entries.forEach(entry -> {
+                    String name = entry.getFileName().toString();
+                    // Every overlay leaf supersedes the BASE entry's type,
+                    // including a directory replaced by an ordinary file.
+                    if (reviewOverlay == null || !reviewOverlay.changedFiles().contains(prefix + name)) {
+                        names.add(name + (Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS) ? "/" : ""));
+                    }
+                });
+            }
+        } catch (NoSuchFileException absentFromSnapshot) {
+            // A new directory may exist only in the proposed-tree overlay.
         }
+        if (reviewOverlay != null) {
+            for (String path : reviewOverlay.changedFiles()) {
+                if (!path.startsWith(prefix) || reviewOverlay.deletedFiles().contains(path)) {
+                    continue;
+                }
+                String child = path.substring(prefix.length());
+                int separator = child.indexOf('/');
+                names.add(separator < 0 ? child : child.substring(0, separator + 1));
+            }
+        }
+        if (!localDirectoryExists && names.isEmpty()) {
+            if (deletedBasePath) {
+                throw new IOException("Proposed repository directory is deleted: " + dirPath);
+            }
+            throw new NoSuchFileException(normalized);
+        }
+        String listing = String.join("\n", names.stream().limit(DIRECTORY_ENTRY_LIMIT).toList());
+        if (names.size() > DIRECTORY_ENTRY_LIMIT) {
+            listing += "\n[TRUNCATED: showing first " + DIRECTORY_ENTRY_LIMIT + " of " + names.size()
+                    + " entries; an omitted name is not evidence of absence.]";
+        }
+        if (reviewOverlayFailure != null) {
+            listing += "\n[Review overlay unavailable: listing pinned target only.]";
+        }
+        return listing;
     }
 
     private String readLocalFile(String filePath) throws IOException {

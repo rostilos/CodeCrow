@@ -2,6 +2,8 @@
 Prompt template for Stage 2: Cross-file & architectural analysis.
 """
 
+from utils.prompts.constants_shared import CAUSAL_ANCHOR_INSTRUCTIONS
+
 STAGE_2_CROSS_FILE_PROMPT_TEMPLATE = """SYSTEM ROLE:
 You are a staff architect reviewing this PR for concrete systemic defects.
 Focus on data flow, authorization patterns, consistency, and service boundaries.
@@ -157,7 +159,8 @@ Constraints:
 - Only flag normal cross-file/architectural concerns if at least 2 files are
   involved. Task-coverage gaps are the exception: they are PR-wide checks and
   may be anchored to one changed file after considering the complete PR.
-- CRITICAL ANCHORING: For each cross_file_issue, you MUST set "primary_file" to the single most relevant changed file where the issue should be annotated in a reviewable PR diff hunk. You MUST set "line" to a specific line number in that hunk. You MUST set "codeSnippet" to the EXACT verbatim current-source line from that hunk, using a Stage 1 finding anchor when applicable. For a whole-file deletion, use an exact removed BASE-side line and its old line number to anchor a regression caused by removal. Full-file or retrieved code outside the hunk may support impact but cannot be the annotation anchor. Issues without an in-hunk codeSnippet are withheld.
+- For whole-file deletions, cite an exact removed BASE-side line and old line number, explaining the current regression caused by removal. Otherwise codeSnippet must copy current source verbatim; off-hunk source supports impact but cannot be the annotation anchor.
+""" + CAUSAL_ANCHOR_INSTRUCTIONS + """
 - If there are no cross_file_issues and no unresolved task-coverage gap, set pr_recommendation to "PASS"
 - If any LOW, MEDIUM, or HIGH cross_file_issue exists, set pr_recommendation to at least "PASS_WITH_WARNINGS"
 - If any CRITICAL cross_file_issue exists, set pr_recommendation to "FAIL"

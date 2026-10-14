@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from ...utils.path_identity import normalize_repository_path
+from ...utils.utils import LANGUAGE_MAP
 
 STRUCTURAL_STORE_SCHEMA = "codecrow.structural-graph"
 STRUCTURAL_STORE_SCHEMA_REVISION = 7
@@ -33,6 +34,8 @@ _ENDPOINT_RELATION_KINDS = frozenset({
     "SPRING_ROUTE",
 })
 
+
+_SOURCE_SUFFIXES = frozenset(LANGUAGE_MAP) | {'.kts'}
 
 @contextmanager
 def _timed_graph_phase(connection: sqlite3.Connection, phase: str, *, target: str = ""):
@@ -126,6 +129,13 @@ def _normalize_path(value: str) -> str:
     return candidate.as_posix()
 
 
+def _looks_like_path(target: str) -> bool:
+    final = target.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    suffix = "." + final.rsplit(".", 1)[-1].casefold() if "." in final else ""
+    return "/" in target or "\\" in target or suffix in _SOURCE_SUFFIXES
+
+
+
 def _optional_path(value: object) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -176,6 +186,34 @@ def _relation_id(projection: Mapping[str, Any]) -> str:
 
 def _normalized_name(value: str) -> str:
     return value.strip().casefold()
+
+
+def _unit_names(
+    name: str,
+    qualified_name: str,
+    metadata: Mapping[str, Any],
+) -> frozenset[str]:
+    """Keep original alias spellings separate from casefolded search keys."""
+    names = {
+        name,
+        qualified_name,
+        _short_name(name),
+        _short_name(qualified_name),
+        *_string_list(metadata.get("symbol_names")),
+        *_string_list(metadata.get("architecture_identifiers")),
+    }
+    namespace = str(metadata.get("namespace") or "").strip(" \\")
+    parent_class = str(metadata.get("parent_class") or "").strip()
+    if namespace and parent_class and name:
+        qualified_owner = f"{namespace}\\{parent_class}"
+        names.update({
+            qualified_owner,
+            f"{qualified_owner}::{name}",
+            f"{qualified_owner}.{name}",
+        })
+    elif namespace and name:
+        names.add(f"{namespace}\\{name}")
+    return frozenset(names)
 
 
 def _short_name(value: str) -> str:

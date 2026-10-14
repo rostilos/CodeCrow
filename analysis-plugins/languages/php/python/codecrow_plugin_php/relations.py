@@ -247,12 +247,12 @@ class PhpRelationResolver:
                         target=target.qualified_name,
                         path=source.path,
                         line=line_number,
-                        attributes=tuple(sorted((
-                            ("sourceKind", source.kind),
-                            ("targetKind", target.kind),
-                            *relation_attributes,
-                            *method_contract,
-                        ))),
+                        attributes=tuple(sorted({
+                            "sourceKind": source.kind,
+                            "targetKind": target.kind,
+                            **dict(relation_attributes),
+                            **dict(method_contract),
+                        }.items())),
                     ))
                     continue
                 identity = (
@@ -298,12 +298,12 @@ class PhpRelationResolver:
                     target=target.qualified_name,
                     path=source.path,
                     line=line_number,
-                    attributes=tuple(sorted((
-                        ("sourceKind", source.kind),
-                        ("targetKind", target.kind),
-                        *relation_attributes,
-                        *method_contract,
-                    ))),
+                    attributes=tuple(sorted({
+                        "sourceKind": source.kind,
+                        "targetKind": target.kind,
+                        **dict(relation_attributes),
+                        **dict(method_contract),
+                    }.items())),
                     related_paths=fact_related_paths,
                 ))
                 related_by_path.setdefault(source.path, set()).update(
@@ -420,7 +420,6 @@ class PhpRelationResolver:
             ("retrievalIdentifier:targetMethod", target_method),
             ("targetMethod", target_method),
             *chain_attributes,
-            *target_contract,
         )
         fact_related_paths = tuple(sorted(related_paths))
         return (
@@ -431,7 +430,10 @@ class PhpRelationResolver:
                 target=current.qualified_name,
                 path=source.path,
                 line=line_number,
-                attributes=tuple(sorted(relation_attributes)),
+                attributes=tuple(sorted({
+                    **dict(relation_attributes),
+                    **dict(target_contract),
+                }.items())),
                 related_paths=fact_related_paths,
             ),
             fact_related_paths,
@@ -521,6 +523,7 @@ class PhpRelationResolver:
         ):
             return (), ""
         contract = {
+            "targetMethod": exact_name,
             "targetMethodDeclared": "true",
             "targetMethodDeclarationOrigin": declaration_origin,
             "targetMethodDeclaredOn": declaring_target.qualified_name,

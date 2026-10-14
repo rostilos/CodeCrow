@@ -102,10 +102,19 @@ VCS REPOSITORY (repoSlug/projectKey): {repo_slug}
 STAGE_3_MCP_VERIFICATION_SECTION = """
 ## Candidate evidence assessment
 Before producing the final report, assess every assigned Verification ID.
-Use the available exact-revision source reads to try to disprove the highest-impact
+Use the available exact-revision source observations to try to disprove the highest-impact
 unresolved hypotheses. A previous review's assertion is not independent evidence.
 Acquisition is bounded and optional failures must retain findings, but every
 candidate needs an explicit supported, disproven or unknown assessment.
+
+Blocks labelled Request HEAD source are host-supplied exact current-side source
+at the REVIEWED REVISION. Every admitted block is bound to all assigned
+Verification IDs and may be cited for any of them. Each hunk is a separate
+partial source window; omitted code is not evidence of absence. For HEAD-anchored
+findings, observed source covers primary and related line/range anchors within its
+path and bounds. A related file without line numbers needs an observed window in
+that file. BASE and primary path-only anchors still require successful
+Verification-ID-bound file-content reads.
 
 Available tools:
 {stage_3_file_tool}
@@ -121,10 +130,12 @@ RULES:
    records whose persisted Original ID is empty.
 5. Pass that same Verification ID in every file-content call. The host binds the
    returned source window to the finding and verifies that it covers its line.
-6. If a finding has related_locations, every affected location must be read with
-   the same Verification ID before dismissing the consolidated root finding.
+6. If a finding has related_locations, every affected location needs source
+   coverage under these rules before dismissing the consolidated root finding.
 7. If verification reveals a false positive, note its Verification ID for dismissal.
-8. Missing, failed, partial, or ambiguous evidence means KEEP the finding.
+8. Missing, failed, ambiguous, or insufficient evidence means KEEP the finding.
+   A bounded source window can prove a concrete guard or behavior; absence
+   outside that window proves nothing.
 9. After acquisition, return the structured assessment and executive summary.
 
 REVIEWED REVISION: {review_revision}
@@ -135,16 +146,19 @@ Return one JSON object, without a Markdown fence. Put the executive summary
 Markdown in report and one assessment per assigned Verification ID in assessments:
 {{"report":"Executive summary Markdown", "assessments":[{{"issue_id":"issue_0","verdict":"unknown","reason":"Source evidence is insufficient","supporting_evidence":[],"contradicting_evidence":[],"unresolved_questions":["Which guard handles the concrete trigger?"]}}]}}
 Allowed verdicts: supported, disproven, unknown. Cite supporting_evidence for supported.
-Evidence citations have file_path and snippet copied exactly from an observed read.
-An issue cannot be dismissed without a disproven assessment citing exact contradictory
-source retrieved for that verification ID. Reading an anchor alone is not falsification.
+Evidence citations have file_path and snippet copied exactly from an observed
+file-content read or an admitted Request HEAD source block. A disproven assessment
+must cite exact contradictory source from an admitted Request HEAD source block
+or a tool read bound to that Verification ID. Reading an anchor alone is not falsification.
 Missing files (including whole-file deletions), failed tools and missing evidence remain
 unknown. Semantic interpretation of an exact source quote remains your judgment.
 
 RULES for dismissal:
-- Only dismiss issues you VERIFIED as false positives via successful file-content
-  tool calls against the reviewed revision.
-- Do NOT dismiss issues based on guessing — you must have read the relevant file.
+- Only dismiss issues disproven by exact observed source at the reviewed revision,
+  with every primary and related anchor covered by an admitted HEAD range as above
+  or a successful Verification-ID-bound file-content read.
+- Do NOT dismiss issues based on guessing: the contradictory source must be present
+  in an admitted Request HEAD source block or a successful file-content read.
 - Do not dismiss a concrete architecture/maintainability defect merely because it
   has no immediate runtime crash; verify the claim as written.
 - A disproven assessment proposes dismissal; the host checks the source evidence.

@@ -324,3 +324,92 @@ def test_python_package_initializer_wins_over_same_name_module():
         and fact.related_paths == ("app/policy/__init__.py",)
         for fact in _facts(analysis)
     )
+
+
+def test_python_newer_syntax_preserves_repository_import_and_call_edges():
+    files = {
+        "app/policy.py": "def allow(user):\n    return bool(user)\n",
+        "app/service.py": (
+            "from app.policy import allow as permitted\n"
+            "type Pair[T] = tuple[T, T]\n"
+            "def run[T](user: T) -> bool:\n"
+            "    return permitted(user)\n"
+        ),
+        "app/labels.py": (
+            "import app.policy as policy\n"
+            "def label(user):\n"
+            '    text = f"{user["name"]}"\n'
+            "    return policy.allow(text)\n"
+        ),
+    }
+    _, _, _, analysis = _analyze(files)
+    facts = _facts(analysis)
+    assert any(fact.kind == "python-import-binding"
+               and fact.source == "app.service::permitted" and fact.line == 1
+               and fact.related_paths == ("app/policy.py",) for fact in facts)
+    assert any(fact.kind == "python-call-resolution" and fact.path == "app/service.py"
+               and fact.line == 4 and fact.target == "app.policy::allow" for fact in facts)
+    assert any(fact.kind == "python-call-resolution" and fact.path == "app/labels.py"
+               and fact.line == 4 and fact.target == "app.policy::allow" for fact in facts)
+
+
+def test_python_newer_syntax_keeps_local_import_call_and_declaration_facts():
+    source = (
+        "from app.policy import allow\n"
+        "type Pair[T] = tuple[T, T]\n"
+        "class Service[T](Base):\n"
+        "    @staticmethod\n"
+        "    def run(user: T) -> bool:\n"
+        "        return allow(user)\n"
+    )
+    catalog, capabilities = _capabilities(["app/service.py"])
+    facts, diagnostics = PluginRuntime(catalog).graph_facts(
+        FileArtifact("app/service.py", source), capabilities,
+    )
+    assert diagnostics == ()
+    assert any(fact.kind == "python-import" and fact.target == "app.policy.allow" for fact in facts)
+    assert any(fact.kind == "python-type" and fact.target == "app.service.Service" for fact in facts)
+    assert any(fact.kind == "python-inheritance" and fact.target == "Base" for fact in facts)
+    assert any(fact.kind == "python-callable" and fact.source == "app.service.Service"
+               and fact.target == "run" and fact.line == 5 for fact in facts)
+    assert any(fact.kind == "python-call" and fact.target == "allow" and fact.line == 6 for fact in facts)
+    assert any(fact.kind == "python-decorator" and fact.target == "staticmethod" for fact in facts)
+
+
+def test_python_malformed_syntax_stays_observably_unavailable():
+    catalog, capabilities = _capabilities(["app/broken.py"])
+    runtime = PluginRuntime(catalog)
+    artifact = FileArtifact("app/broken.py", "def broken(:\n    return 1\n")
+    facts, diagnostics = runtime.graph_facts(artifact, capabilities)
+    assert not facts
+    assert any(d.code == "python-parse-failed" for d in diagnostics)
+    handle = runtime.start_repository_analysis(capabilities, "revision")
+    handle.ingest((artifact,))
+    _, diagnostics = handle.finish()
+    assert any(d.code == "plugin-repository-file-skipped" and d.path == artifact.path for d in diagnostics)
+
+
+def test_python_syntax_fallback_preserves_regular_fact_semantics():
+    source = (
+        "from .policy import allow as allowed\n"
+        "import os.path as paths\n"
+        "answer = 42\n"
+        "@decorate(flag=True)\n"
+        "class Service(Generic[int]):\n"
+        "    @staticmethod\n"
+        "    async def run(value):\n"
+        "        return allowed(paths.join(value))\n"
+    )
+    path = "app/service.py"
+    catalog, capabilities = _capabilities([path])
+    runtime = PluginRuntime(catalog)
+    native, diagnostics = runtime.graph_facts(FileArtifact(path, source), capabilities)
+    assert not diagnostics
+    # Select grammar fallback without changing line coordinates or ordinary facts.
+    newer = source.replace("class Service(", "class Service[T](")
+    fallback, diagnostics = runtime.graph_facts(FileArtifact(path, newer), capabilities)
+    assert not diagnostics
+    assert fallback == native
+    _, _, _, native_analysis = _analyze({path: source})
+    _, _, _, fallback_analysis = _analyze({path: newer})
+    assert fallback_analysis.snapshots == native_analysis.snapshots

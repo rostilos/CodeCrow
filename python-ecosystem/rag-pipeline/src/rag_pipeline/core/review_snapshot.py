@@ -213,6 +213,9 @@ def materialize_proposed_tree(
         destination,
         symlinks=True,
         copy_function=_link_or_copy,
+        # This tree composes HEAD source; inherited checkout metadata still
+        # identifies BASE, including the .git file used by linked worktrees.
+        ignore=shutil.ignore_patterns(".git"),
     )
     for relative_path in overlay.deleted_paths:
         target = _destination_without_symlink_ancestor(destination, relative_path)
@@ -268,4 +271,3 @@ def _review_identity(
     }
     digest = _sha256_json(identity)
     return f"cc_review_g_{digest}", identity
-

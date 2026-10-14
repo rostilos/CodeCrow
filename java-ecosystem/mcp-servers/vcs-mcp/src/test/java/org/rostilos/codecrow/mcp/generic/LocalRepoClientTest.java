@@ -21,6 +21,89 @@ class LocalRepoClientTest {
     Path repository;
 
     @Test
+    void reviewDirectoriesDiscoverAddedPathsAndOmitDeletedPaths() throws Exception {
+        Files.createDirectories(repository.resolve("adapters/scheduling"));
+        Files.writeString(repository.resolve("adapters/scheduling/index.js"), "exports.init = init;");
+        Files.writeString(repository.resolve("adapters/Old.js"), "old");
+        Path overlay = repository.resolve("review-overlay");
+        Files.createDirectories(overlay.resolve("files/adapters/new-directory"));
+        Files.writeString(overlay.resolve("files/adapters/new-directory/new.js"), "new");
+        Files.writeString(overlay.resolve("manifest.json"), """
+                {"changedFiles":["adapters/New.js","adapters/new-directory/new.js","adapters/Old.js"],
+                 "deletedFiles":["adapters/Old.js"]}
+                """);
+        VcsMcpClient remote = mock(VcsMcpClient.class);
+        LocalRepoClient client = new LocalRepoClient(remote, repository.toString(),
+                "team", "repo", "main", "base-sha", overlay.toString());
+
+        assertThat(client.getDirectoryByPath("team", "repo", "base-sha", "adapters"))
+                .isEqualTo("New.js\nnew-directory/\nscheduling/");
+        assertThat(client.getDirectoryByPath("team", "repo", "base-sha", "adapters/new-directory"))
+                .isEqualTo("new.js");
+        assertThat(client.getDirectoryByPath("team", "repo", "base-sha", "adapters/scheduling"))
+                .isEqualTo("index.js");
+        verifyNoInteractions(remote);
+    }
+
+    @Test
+    void localDirectoryDiscoveryIsBoundedAndLabelsTruncation() throws Exception {
+        Files.createDirectories(repository.resolve("large"));
+        for (int index = 0; index < 205; index++) {
+            Files.writeString(repository.resolve("large/file-%03d.js".formatted(index)), "source");
+        }
+        LocalRepoClient client = new LocalRepoClient(mock(VcsMcpClient.class),
+                repository.toString(), "team", "repo", "main", "base-sha");
+
+        String listing = client.getDirectoryByPath("team", "repo", "base-sha", "large");
+        assertThat(listing.lines().count()).isEqualTo(201);
+        assertThat(listing).contains("file-000.js", "file-199.js", "TRUNCATED")
+                .doesNotContain("file-200.js");
+    }
+
+    @Test
+    void proposedFileReplacesBaseDirectoryInListings() throws Exception {
+        Files.createDirectories(repository.resolve("item"));
+        Files.writeString(repository.resolve("item/old.js"), "old");
+        Path overlay = repository.resolve("review-overlay");
+        Files.createDirectories(overlay.resolve("files"));
+        Files.writeString(overlay.resolve("files/item"), "new file");
+        Files.writeString(overlay.resolve("manifest.json"), """
+                {"changedFiles":["item","item/old.js"],"deletedFiles":["item/old.js"]}
+                """);
+        VcsMcpClient remote = mock(VcsMcpClient.class);
+        LocalRepoClient client = new LocalRepoClient(remote, repository.toString(),
+                "team", "repo", "main", "base-sha", overlay.toString());
+
+        assertThat(client.getDirectoryByPath("team", "repo", "base-sha", ""))
+                .isEqualTo("item\nreview-overlay/");
+        assertThatThrownBy(() -> client.getDirectoryByPath("team", "repo", "base-sha", "item"))
+                .isInstanceOf(IOException.class).hasMessageContaining("not a directory");
+        assertThat(client.getReviewFileContent("team", "repo", "item").content()).isEqualTo("new file");
+        verifyNoInteractions(remote);
+    }
+
+    @Test
+    void proposedDirectoryReplacesDeletedBaseFile() throws Exception {
+        Files.writeString(repository.resolve("item"), "old file");
+        Path overlay = repository.resolve("review-overlay");
+        Files.createDirectories(overlay.resolve("files/item"));
+        Files.writeString(overlay.resolve("files/item/new.js"), "new");
+        Files.writeString(overlay.resolve("manifest.json"), """
+                {"changedFiles":["item","item/new.js"],"deletedFiles":["item"]}
+                """);
+        VcsMcpClient remote = mock(VcsMcpClient.class);
+        LocalRepoClient client = new LocalRepoClient(remote, repository.toString(),
+                "team", "repo", "main", "base-sha", overlay.toString());
+
+        assertThat(client.getDirectoryByPath("team", "repo", "base-sha", ""))
+                .isEqualTo("item/\nreview-overlay/");
+        assertThat(client.getDirectoryByPath("team", "repo", "base-sha", "item"))
+                .isEqualTo("new.js");
+        assertThat(client.getReviewFileContent("team", "repo", "item/new.js").content()).isEqualTo("new");
+        verifyNoInteractions(remote);
+    }
+
+    @Test
     void matchingTargetBranchAndRevisionReadFromLocalSnapshot() throws Exception {
         Files.createDirectories(repository.resolve("src"));
         Files.writeString(repository.resolve("src/App.java"), "class App {}\n");

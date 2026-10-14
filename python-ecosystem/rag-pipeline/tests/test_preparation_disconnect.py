@@ -6,6 +6,7 @@ import pytest
 from fastapi import FastAPI
 
 from rag_pipeline.api.build_workers import BuildWorkerPool
+from rag_pipeline.api.middleware import ServiceSecretMiddleware
 from rag_pipeline.api.routers import query
 from rag_pipeline.core.review_generation import ReviewGenerationService
 
@@ -49,7 +50,8 @@ def asgi_call(app, root):
         "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
         "method": "POST", "scheme": "http", "path": "/query/review-generation",
         "raw_path": b"/query/review-generation", "query_string": b"",
-        "headers": [(b"content-type", b"application/json")],
+        "headers": [(b"content-type", b"application/json"),
+                    (b"x-service-secret", b"test-secret")],
         "client": ("127.0.0.1", 1234), "server": ("127.0.0.1", 8001),
     }, incoming.get, send))
     return task, incoming, sent
@@ -64,6 +66,7 @@ async def test_http_disconnect_respects_coalesced_ownership(monkeypatch, tmp_pat
     monkeypatch.setattr(query, "_manager", lambda: object())
     monkeypatch.setattr(ReviewGenerationService, "preparation_key", lambda self, **kw: (kw["workspace"], kw["source_revision"]))
     app = FastAPI()
+    app.add_middleware(ServiceSecretMiddleware, secret="test-secret")
     app.include_router(query.router)
     first, incoming, sent = asgi_call(app, tmp_path)
     other = None
@@ -99,10 +102,20 @@ async def test_completed_preparation_wins_over_disconnect(monkeypatch, tmp_path)
     monkeypatch.setattr(query, "get_build_workers", lambda: pool)
     monkeypatch.setattr(query, "_manager", lambda: object())
     monkeypatch.setattr(ReviewGenerationService, "preparation_key", lambda self, **kw: ("ready",))
+    run_coalesced = pool.run_coalesced
+
+    async def completed_then_disconnected(*args):
+        result = await run_coalesced(*args)
+        # A ready release Event does not mean threaded preparation has finished.
+        # Make both the completed result and disconnect visible without yielding.
+        incoming.put_nowait({"type": "http.disconnect"})
+        return result
+
+    monkeypatch.setattr(pool, "run_coalesced", completed_then_disconnected)
     app = FastAPI()
+    app.add_middleware(ServiceSecretMiddleware, secret="test-secret")
     app.include_router(query.router)
     task, incoming, sent = asgi_call(app, tmp_path)
-    incoming.put_nowait({"type": "http.disconnect"})
     await asyncio.wait_for(task, 2)
     assert next(x["status"] for x in sent if x["type"] == "http.response.start") == 200
     assert not pool.cancelled

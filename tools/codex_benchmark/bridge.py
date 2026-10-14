@@ -1,7 +1,7 @@
 """Benchmark-only Chat Completions facade over managed Codex subscriptions.
 
 No OpenAI/OpenRouter API requests are made here. The Codex CLI owns OAuth and
-model transport. Dynamic calls suspend natively until CodeCrow returns results.
+model transport. Native conversations belong to the host's bounded tool loop.
 """
 from __future__ import annotations
 
@@ -12,13 +12,14 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import time
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from .rpc import AppServer, MODEL
 
@@ -35,6 +36,14 @@ def digest(value):
 
 def serialized_bytes(value):
     return len(canonical(value).encode("utf-8"))
+
+
+def receipt_deadline(header, started):
+    try:
+        seconds = float(header)
+    except (TypeError, ValueError):
+        return None
+    return started + seconds if math.isfinite(seconds) and seconds > 0 else None
 
 
 def text_content(content):
@@ -100,6 +109,16 @@ class Conversation:
     tool_delivery_batches: int = 0
     terminal_tools: frozenset[str] = frozenset()
     reported_usage: dict[str, int] = field(default_factory=dict)
+    owner: str | None = None
+    release_task: asyncio.Task | None = None
+
+
+@dataclass
+class ConversationOwner:
+    closed: bool = False
+    tasks: set[asyncio.Task] = field(default_factory=set)
+    creations: set[asyncio.Task] = field(default_factory=set)
+    release_task: asyncio.Task | None = None
 
 
 class SubscriptionBridge:
@@ -111,14 +130,32 @@ class SubscriptionBridge:
         self.slots = asyncio.Semaphore(capacity)
         self.by_call: dict[str, Conversation] = {}
         self.sessions: dict[str, Conversation] = {}
+        self.owners: dict[str, ConversationOwner] = {}
+        self.usage_sequences: dict[str, int] = {}
         self.reaper = None
         self.rpc.usage_callback = self.record_native_usage
+        self.rpc.response_completed_callback = self.record_native_response_completed
+        self.rpc.terminal_callback = self.record_native_terminal
+
+    def record_native_response_completed(self, thread, turn, response_id, usage, usage_metadata):
+        session = self.sessions.get(thread)
+        self.record({"event": "native_response_completed", "thread": thread, "turn": turn,
+                     "response_id": response_id, "native_usage": usage,
+                     "usage_metadata": usage_metadata,
+                     "owner": session.owner if session else None,
+                     "conversation_active": session is not None})
 
     def record_native_usage(self, thread, turn, usage):
+        self.usage_sequences[thread] = self.usage_sequences.get(thread, 0) + 1
         self.record({"event": "native_usage_updated", "thread": thread, "turn": turn,
+                     "usage_sequence": self.usage_sequences[thread],
                      "native_total_usage": usage.get("total"),
                      "native_last_usage": usage.get("last"),
                      "conversation_active": thread in self.sessions})
+
+    def record_native_terminal(self, thread, turn, status):
+        self.record({"event": "native_turn_terminal", "thread": thread, "turn": turn,
+                     "status": status, "usage_sequence": self.usage_sequences.get(thread, 0)})
 
     def response_usage(self, session):
         totals = self.rpc.usage.get(session.thread, {}).get("total") or {}
@@ -148,22 +185,83 @@ class SubscriptionBridge:
             logger.warning("Optional subscription ledger unavailable", exc_info=True)
 
     async def release(self, session, *, reason="completed"):
+        if session.release_task is None:
+            session.release_task = asyncio.create_task(self._release(session, reason=reason))
+        return await asyncio.shield(session.release_task)
+
+    async def _release(self, session, *, reason):
         self.sessions.pop(session.thread, None)
         for call_id in list(session.pending):
             self.by_call.pop(call_id, None)
-        await self.rpc.interrupt(session.thread, session.turn)
+        cleanup_errors = []
+        try:
+            interrupted = await self.rpc.interrupt(session.thread, session.turn)
+            if interrupted is False:
+                cleanup_errors.append("interrupt")
+        except Exception:
+            cleanup_errors.append("interrupt")
+            logger.warning("Native interrupt unavailable", exc_info=True)
         # Closing the subscription unloads an ephemeral thread when no clients remain.
+        unsubscribed = False
         try:
             await self.rpc.request("thread/unsubscribe", {"threadId": session.thread}, timeout=10)
-        except (RuntimeError, TimeoutError):
-            pass
+            unsubscribed = True
+        except Exception:
+            cleanup_errors.append("unsubscribe")
+            logger.warning("Native unsubscribe unavailable", exc_info=True)
         native = self.rpc.usage.get(session.thread, {})
-        self.record({"event": "conversation_terminal", "thread": session.thread, "turn": session.turn,
+        self.record({"event": "conversation_terminal" if unsubscribed else "conversation_cleanup_pending",
+                     "thread": session.thread, "turn": session.turn,
+                     "owner": session.owner,
                      "reason": reason, "native_total_usage": native.get("total"),
                      "native_last_usage": native.get("last"), "reported_native_usage": session.reported_usage,
+                     "native_terminal_status": getattr(self.rpc, "terminals", {}).get(session.thread),
+                     "cleanup_errors": cleanup_errors,
+                     "usage_sequence": self.usage_sequences.get(session.thread, 0),
                      "usage_accounting": "per-thread cumulative snapshot; do not sum snapshots or last usage"})
-        self.rpc.events.pop(session.thread, None)
-        self.rpc.usage.pop(session.thread, None)
+        if unsubscribed:
+            self.rpc.events.pop(session.thread, None)
+            self.rpc.usage.pop(session.thread, None)
+            forget = getattr(self.rpc, "forget_response_tracking", None)
+            if forget is not None:
+                forget(session.thread)
+        else:
+            # Keep failed disposal visible to the existing reaper. No new
+            # invocation is permitted for the ended owner.
+            self.sessions[session.thread] = session
+            for call_id in session.pending:
+                self.by_call[call_id] = session
+            session.release_task = None
+        return unsubscribed
+
+    async def release_owner(self, owner):
+        state = self.owners.setdefault(owner, ConversationOwner())
+        state.closed = True
+        if state.release_task is None or (state.release_task.done() and not state.release_task.result()):
+            state.release_task = asyncio.create_task(self._release_owner(owner, state))
+        return await asyncio.shield(state.release_task)
+
+    async def _release_owner(self, owner, state):
+        try:
+            # One native creation is bounded by the existing 60s RPC timeout;
+            # interrupt/unsubscribe each have an existing 10s bound.
+            async with asyncio.timeout(80):
+                tasks = list(state.tasks)
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                await asyncio.gather(*list(state.creations), return_exceptions=True)
+                released = await asyncio.gather(*(self.release(session, reason="owner_closed")
+                    for session in list(self.sessions.values()) if session.owner == owner))
+                if not all(released):
+                    self.record({"event": "owner_cleanup_unavailable", "owner": owner})
+                    return False
+            self.record({"event": "owner_closed", "owner": owner})
+            return True
+        except Exception:
+            self.record({"event": "owner_cleanup_unavailable", "owner": owner})
+            logger.warning("Native owner cleanup unavailable", exc_info=True)
+            return False
 
     async def reap(self):
         while True:
@@ -173,7 +271,47 @@ class SubscriptionBridge:
                     self.record({"event": "abandoned_tool_wait", "thread": session.thread})
                     await self.release(session, reason="abandoned_tool_wait")
 
-    async def complete(self, payload):
+    async def complete(self, payload, *, response_deadline=None):
+        owner = payload.get("codecrow_owner") or None
+        if owner is not None and not isinstance(owner, str):
+            raise ValueError("Conversation owner must be a string")
+        state = self.owners.setdefault(owner, ConversationOwner()) if owner else None
+        if state is not None and state.closed:
+            raise ValueError("Conversation owner has already ended")
+        task = asyncio.current_task()
+        if state is not None:
+            state.tasks.add(task)
+        try:
+            return await self._complete(payload, owner, state, response_deadline=response_deadline)
+        finally:
+            if state is not None:
+                state.tasks.discard(task)
+
+    async def _start_conversation(self, *, owner, state, instructions, tools, normalized,
+                                  effort, terminal_tools, request_id, prompt, response_format):
+        thread = await self.rpc.start_thread(instructions, tools, effort)
+        session = Conversation(thread, tools, normalized, reasoning_effort=effort,
+                               terminal_tools=frozenset(terminal_tools), owner=owner)
+        self.sessions[thread] = session
+        self.record({"event": "conversation_started", "id": request_id, "thread": thread,
+                     "owner": owner, "instructions_bytes": len(instructions.encode("utf-8")),
+                     "native_prompt_bytes": len(prompt.encode("utf-8"))})
+        try:
+            if state is None or not state.closed:
+                params = {"threadId": thread, "input": [{"type": "text", "text": prompt}],
+                          "effort": effort, "summary": "none"}
+                if response_format.get("type") == "json_schema":
+                    params["outputSchema"] = response_format["json_schema"]["schema"]
+                result = await self.rpc.request("turn/start", params)
+                session.turn = result["turn"]["id"]
+            if state is not None and state.closed:
+                await self.release(session, reason="owner_closed")
+            return session
+        except BaseException:
+            await self.release(session, reason="creation_failed")
+            raise
+
+    async def _complete(self, payload, owner, state, *, response_deadline=None):
         if payload.get("model") != MODEL:
             raise ValueError(f"Benchmark accepts only {MODEL}")
         if any(k in payload for k in ("provider", "api_key", "base_url")):
@@ -202,6 +340,8 @@ class SubscriptionBridge:
         if len(owners) > 1:
             raise ValueError("Tool results belong to different conversations")
         session = self.sessions[next(iter(owners))] if owners else None
+        if session is not None and session.owner != owner:
+            raise ValueError("Tool results belong to another execution owner")
         continuation = bool(session and trailing
                             and normalized[:len(session.expected)] == session.expected
                             and len(normalized) == len(session.expected) + len(trailing)
@@ -229,6 +369,7 @@ class SubscriptionBridge:
         unmapped = {k: payload[k] for k in ("temperature", "top_p", "max_tokens", "max_completion_tokens", "parallel_tool_calls") if k in payload}
         effort = (session.reasoning_effort if session else None) or payload.get("reasoning_effort") or self.rpc.model.get("defaultReasoningEffort", "medium")
         self.record({"event": "request", "id": request_id, "request_sha256": digest(payload),
+                     "owner": owner,
                      "continuation": continuation, "unmapped_parameters": unmapped,
                      "thread": session.thread if session else None,
                      "tool_choice": payload.get("tool_choice"), "terminal_tools": terminal_tools,
@@ -240,6 +381,7 @@ class SubscriptionBridge:
                      "effective_reasoning_effort": effort,
                      "parameter_names": sorted(payload),
                      "tool_names": [t["name"] for t in tools]})
+        creation = None
         try:
             async with self.slots:
                 if session is None:
@@ -251,17 +393,16 @@ class SubscriptionBridge:
                         instructions += "\nYour first action must invoke the required function: " + required
                         if required not in terminal_tools:
                             instructions += ". After receiving its result, choose tools or finish according to the task."
-                    thread = await self.rpc.start_thread(instructions, tools, effort)
-                    session = Conversation(thread, tools, normalized, reasoning_effort=effort, terminal_tools=frozenset(terminal_tools))
-                    self.sessions[thread] = session
-                    self.record({"event": "conversation_started", "id": request_id, "thread": thread,
-                                 "instructions_bytes": len(instructions.encode("utf-8")), "native_prompt_bytes": len(prompt.encode("utf-8"))})
-                    params = {"threadId": thread, "input": [{"type": "text", "text": prompt}],
-                              "effort": effort, "summary": "none"}
-                    if response_format.get("type") == "json_schema":
-                        params["outputSchema"] = response_format["json_schema"]["schema"]
-                    result = await self.rpc.request("turn/start", params)
-                    session.turn = result["turn"]["id"]
+                    creation = asyncio.create_task(self._start_conversation(
+                        owner=owner, state=state, instructions=instructions, tools=tools,
+                        normalized=normalized, effort=effort, terminal_tools=terminal_tools,
+                        request_id=request_id, prompt=prompt, response_format=response_format))
+                    if state is not None:
+                        state.creations.add(creation)
+                        creation.add_done_callback(state.creations.discard)
+                    session = await asyncio.shield(creation)
+                if state is not None and state.closed:
+                    raise ValueError("Conversation owner has already ended")
                 async with session.lock:
                     session.touched = time.monotonic()
                     if continuation:
@@ -283,6 +424,7 @@ class SubscriptionBridge:
                             }})
                     session.text = ""
                     result_message, finish = await asyncio.wait_for(self._answer(session), 1200)
+                    await self._terminal_completion(session, result_message, response_deadline)
                     session.expected = normalized + [normalized_message(result_message)]
                     session.touched = time.monotonic()
                     native = self.rpc.usage.get(session.thread, {})
@@ -304,9 +446,51 @@ class SubscriptionBridge:
                     return response
         except BaseException as error:
             self.record({"event": "error", "id": request_id, "error_type": type(error).__name__, "detail": str(error)[:1000]})
+            if session is None and creation is not None:
+                try:
+                    # Keep the thread/start result reachable even when its HTTP
+                    # caller disconnects before the native thread is registered.
+                    session = await asyncio.shield(creation)
+                except Exception:
+                    logger.warning("Native creation cleanup unavailable", exc_info=True)
             if session:
                 await self.release(session, reason="cancelled" if isinstance(error, asyncio.CancelledError) else "error")
             raise
+
+    async def _terminal_completion(self, session, message, response_deadline):
+        calls = message.get("tool_calls") or []
+        if not calls:
+            return
+        # Ordinary calls can also be interrupted by the next reconstructed request.
+        # Preserve the assembled batch while its exact native response completes.
+        started = time.monotonic()
+        # Preserve the existing interrupt + unsubscribe allowances (10s each).
+        limit = min(1.0, max(0.0, response_deadline - started - 20.0)) if response_deadline is not None else 0.0
+        matched, status = {}, "no_allowance"
+        call_ids = [c["id"] for c in calls]
+        try:
+            matched = self.rpc.completed_call_responses(session.thread, session.turn, call_ids)
+            if matched:
+                status = "matched"
+            elif limit:
+                status = "matched"
+                async with asyncio.timeout(limit):
+                    matched = await self.rpc.wait_call_responses(
+                        session.thread, session.turn, call_ids)
+        except TimeoutError:
+            status = "timeout"
+        except asyncio.CancelledError:
+            status = "cancelled"
+            raise
+        except Exception:
+            status = "unavailable"
+            logger.warning("Optional terminal response completion unavailable", exc_info=True)
+        finally:
+            self.record({"event": "terminal_response_wait", "thread": session.thread,
+                         "turn": session.turn, "owner": session.owner,
+                         "call_ids": call_ids, "response_ids_by_call": matched,
+                         "status": status, "limit_seconds": limit,
+                         "elapsed_seconds": time.monotonic() - started})
 
     async def _answer(self, session):
         queue = self.rpc.events[session.thread]
@@ -390,10 +574,12 @@ def create_app(bridge: SubscriptionBridge, token: str):
 
     @app.post("/v1/chat/completions")
     async def complete(request: Request):
+        started = time.monotonic()
         if request.headers.get("authorization") != f"Bearer {token}":
             raise HTTPException(401, "Invalid benchmark bridge token")
         payload = await request.json()
-        task = asyncio.create_task(bridge.complete(payload))
+        deadline = receipt_deadline(request.headers.get("x-stainless-read-timeout"), started)
+        task = asyncio.create_task(bridge.complete(payload, response_deadline=deadline))
         try:
             while not task.done():
                 await asyncio.wait({task}, timeout=1)
@@ -426,6 +612,17 @@ def create_app(bridge: SubscriptionBridge, token: str):
             yield "data: " + canonical({**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": response["choices"][0]["finish_reason"]}], "usage": response["usage"]}) + "\n\n"
             yield "data: [DONE]\n\n"
         return StreamingResponse(events(), media_type="text/event-stream")
+
+    @app.post("/v1/conversations/release")
+    async def release_owner(request: Request):
+        if request.headers.get("authorization") != f"Bearer {token}":
+            raise HTTPException(401, "Invalid benchmark bridge token")
+        owner = (await request.json()).get("owner")
+        if not isinstance(owner, str) or not owner:
+            raise HTTPException(400, "Conversation owner is required")
+        released = await bridge.release_owner(owner)
+        return JSONResponse({"status": "closed" if released else "cleanup_pending"},
+                            status_code=200 if released else 202)
 
     return app
 

@@ -1,0 +1,148 @@
+{
+  "status": "ambiguous",
+  "error": "Graph target resolves to multiple structural units",
+  "snapshot": {
+    "kind": "proposed_tree",
+    "branch": "base_pr_14395_20260125_2198",
+    "revision": "c8b8f92420138488ba8d0104472bedab126e24c4",
+    "generationManifestSha256": "89071efcd57dbad2a8fee4f2018d695e1e29444f7da36b9ae1c38d260fec4d36",
+    "baseRevision": "3a860c17563896d1ac61b3bfea73f1bdbf8a2be6",
+    "baseCollectionTarget": "cc_http_g_ea69f637d34b4e168118752e8a523aa6",
+    "baseGenerationManifestSha256": "ea33cd5ed50ac0ca9e788b250a28d88be234d7a97a0ab6788ed9192ae9e7bffc",
+    "sourceRevision": "c8b8f92420138488ba8d0104472bedab126e24c4",
+    "targetSourceTreeSha256": "797349800876d04a1f21c56280f4cbd4c8e1707fc897806089e930199043faad",
+    "overlaySha256": "8f14c774a4010fda048402bf02fd83811094f3c96975b394d72a0dd75559a335"
+  },
+  "pattern": "references_to",
+  "target": "TitleBarStyle",
+  "candidates": [
+    {
+      "unitId": "unit:93cf5c53ce2badd59ff8268f92d3b622e96270e18523655976ac957634992480",
+      "path": "crates/tauri-utils/src/config_v1/mod.rs",
+      "kind": "enum",
+      "name": "TitleBarStyle",
+      "qualifiedName": "crates/tauri-utils/src/config_v1/mod.rs:2974-2989:TitleBarStyle",
+      "startLine": 2974,
+      "endLine": 2989,
+      "language": "rust",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:35d16d0dd3b7bb1f87333e237a4e82c1fd7c11f9e61fb3032e672ce927a042e5",
+      "path": "crates/tauri-utils/src/config_v1/mod.rs",
+      "kind": "impl",
+      "name": "TitleBarStyle",
+      "qualifiedName": "crates/tauri-utils/src/config_v1/mod.rs:2991-2998:TitleBarStyle",
+      "startLine": 2991,
+      "endLine": 2998,
+      "language": "rust",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:77b1507724f2005dd50fd9f8ec1d46f1be2b79f2150bc8cde0decaa58f0d6d6a",
+      "path": "crates/tauri-utils/src/config_v1/mod.rs",
+      "kind": "impl",
+      "name": "TitleBarStyle",
+      "qualifiedName": "crates/tauri-utils/src/config_v1/mod.rs:3000-3012:TitleBarStyle",
+      "startLine": 3000,
+      "endLine": 3012,
+      "language": "rust",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:df7bec3fce4085acaeea21bda05cb50a2beb19496a10fc5b2f783bdc7df1d6de",
+      "path": "crates/tauri-utils/src/config_v1/mod.rs",
+      "kind": "impl",
+      "name": "TitleBarStyle",
+      "qualifiedName": "crates/tauri-utils/src/config_v1/mod.rs:3014-3026:TitleBarStyle",
+      "startLine": 3014,
+      "endLine": 3026,
+      "language": "rust",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:d586f410e09afe6947fac45d4346d5d522ccd94c379b1913ad97c1a767c6c2e8",
+      "path": "crates/tauri-utils/src/lib.rs",
+      "kind": "enum",
+      "name": "TitleBarStyle",
+      "qualifiedName": "crates/tauri-utils/src/lib.rs:163-178:TitleBarStyle",
+      "startLine": 163,
+      "endLine": 178,
+      "language": "rust",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:eca44b5f9cd24e64c506329304f44d73fb4cb537d0c702579a928a93b41f4bd1",
+      "path": "crates/tauri-utils/src/lib.rs",
+      "kind": "impl",
+      "name": "TitleBarStyle",
+      "qualifiedName": "crates/tauri-utils/src/lib.rs:180-187:TitleBarStyle",
+      "startLine": 180,
+      "endLine": 187,
+      "language": "rust",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:082b8c4dbf4a2d8c6fd629b92ca09b7fedca0657f25dc68ee2d4cbe93c94e68b",
+      "path": "crates/tauri-utils/src/lib.rs",
+      "kind": "impl",
+      "name": "TitleBarStyle",
+      "qualifiedName": "crates/tauri-utils/src/lib.rs:189-201:TitleBarStyle",
+      "startLine": 189,
+      "endLine": 201,
+      "language": "rust",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:5e6e40a6fa2f589155465807ff7c7c579639ceac911aac1aae724a2eea1c07b3",
+      "path": "crates/tauri-utils/src/lib.rs",
+      "kind": "impl",
+      "name": "TitleBarStyle",
+      "qualifiedName": "crates/tauri-utils/src/lib.rs:203-215:TitleBarStyle",
+      "startLine": 203,
+      "endLine": 215,
+      "language": "rust",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:31c3d117ee3955570c7fa166dad7c940a3c85314fd564fd4047b290b52b62666",
+      "path": "packages/api/src/window.ts",
+      "kind": "type",
+      "name": "TitleBarStyle",
+      "qualifiedName": "packages/api/src/window.ts:64-64:TitleBarStyle",
+      "startLine": 64,
+      "endLine": 64,
+      "language": "typescript",
+      "recordType": "source_unit"
+    }
+  ],
+  "candidateCount": 9,
+  "candidateResultCount": 9,
+  "candidatesTruncated": false,
+  "hint": "Retry with a candidate unitId.",
+  "results": [],
+  "cursor": 0,
+  "nextCursor": null,
+  "truncated": false,
+  "resultCount": 0,
+  "operation": "query_review_graph",
+  "sourceWindows": [],
+  "coverage": {
+    "state": "bounded",
+    "truncated": true,
+    "partialReasons": [
+      "ambiguous_target"
+    ],
+    "maxResults": 20,
+    "returnedResults": 0,
+    "sourceIncluded": true,
+    "source": {
+      "state": "unavailable",
+      "truncated": false,
+      "availableSourceUnits": 0,
+      "returnedSourceUnits": 0,
+      "omittedSourceUnits": 0,
+      "truncatedSourceWindows": 0
+    }
+  }
+}

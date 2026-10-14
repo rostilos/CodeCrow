@@ -886,6 +886,9 @@ async def test_capture_retains_optional_candidate_verification_and_provenance(ca
         "verificationAssessments": [{"verdict": "unknown", "reasonCode": "timeout",
             "reason": "provider-secret remains protected", "apiKey": "hidden"}],
         "consolidatedCandidateIds": ["sha256:" + "3" * 64],
+        "originalIssue": {"file": "src/example.py", "line": 10,
+            "codeSnippet": "provider-secret remains protected"},
+        "generationPromptHunkIds": ["sha256:" + "4" * 64],
     }
     event = {
         "state": "review_evidence_completed",
@@ -905,9 +908,11 @@ async def test_capture_retains_optional_candidate_verification_and_provenance(ca
     captured = artifact["pipelineEvidence"]["candidates"]
     assert captured["verification"] == event["candidates"]["verification"]
     record = captured["records"][0]
-    for field in ("sourceKey", "hypothesis", "evidenceGaps", "consolidatedCandidateIds"):
+    for field in ("sourceKey", "hypothesis", "evidenceGaps", "consolidatedCandidateIds", "generationPromptHunkIds"):
         assert record[field] == candidate[field]
     assert record["verificationAssessments"] == [{"verdict": "unknown", "reasonCode": "timeout",
         "reason": "[REDACTED] remains protected", "apiKey": "[REDACTED]"}]
+    assert record["originalIssue"] == {"file": "src/example.py", "line": 10,
+        "codeSnippet": "[REDACTED] remains protected"}
     assert forwarded == [event]
     assert event["candidates"]["records"][0]["verificationAssessments"][0]["apiKey"] == "hidden"

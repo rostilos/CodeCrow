@@ -84,3 +84,27 @@ def test_fallback_file_is_one_complete_searchable_owned_source_unit(tmp_path):
         assert reader.search_units('last_contract_marker')
     finally:
         connection.close()
+
+
+def test_swift_fallback_retains_source_without_inventing_semantic_relations(tmp_path):
+    path = 'Shared/Strings.swift'
+    source = 'import Foundation\nstruct Strings {\n    static func message() -> String { return localize("key") }\n}\n'
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    runtime = PluginRuntime(catalog)
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(revision='revision', paths=(path,)))
+    assert 'swift' not in capabilities.repository_plugins
+    store = StructuralGenerationStore(tmp_path / 'structural')
+    connection = store.initialize(store.pending_paths('swift-fallback'))
+    try:
+        indexer = FileIndexer(None, ASTCodeSplitter(plugin_runtime=runtime), runtime)
+        skipped = set()
+        indexer.index_document(Document(source, {'path': path, 'language': 'swift'}),
+            writer=StructuralGraphWriter(connection), dispositions={}, capabilities=capabilities,
+            skipped_paths=skipped, check_cancelled=lambda: None)
+        rows = connection.execute("SELECT kind,content,metadata_json FROM units WHERE record_type='source_unit'").fetchall()
+        assert len(rows) == 1 and rows[0]['kind'] == 'fallback'
+        assert rows[0]['content'] == source and not skipped
+        assert json.loads(rows[0]['metadata_json'])['content_type'] == 'fallback'
+        assert {row[0] for row in connection.execute('SELECT kind FROM relations')} == {'CONTAINS'}
+    finally:
+        connection.close()

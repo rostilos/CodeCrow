@@ -342,6 +342,65 @@ class TestCreateSmartBatches:
 
 # ── build_dependency_aware_batches ───────────────────────────
 
+@pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("with_partial_relationships", [False, True])
+async def test_content_enrichment_does_not_hide_structural_relationships(with_partial_relationships):
+    """The benchmark sends fileContents even when relation extraction is absent."""
+    from unittest.mock import AsyncMock
+    from model.enrichment import PrEnrichmentDataDto
+
+    enrichment = PrEnrichmentDataDto(
+        fileContents=[{"path": "a.py", "content": "from b import run"}],
+        relationships=[{"sourceFile": "a.py", "targetFile": "b.py", "relationshipType": "IMPORTS"}]
+        if with_partial_relationships else [],
+    )
+    client = SimpleNamespace(get_structural_relations=AsyncMock(return_value={
+        "relations": [{"kind": "IMPORTS", "relatedPaths": ["b.py", "c.py"]}],
+    }))
+    groups = [_make_group("HIGH", [_make_file(p) for p in ("a.py", "b.py", "c.py")])]
+    builder = DependencyGraphBuilder(client)
+    batches = await builder.get_smart_batches_async(
+        groups, "ws", "proj", ["main"], enrichment_data=enrichment,
+        structural_binding={"repository_revision": "abc", "collection_target": "sealed",
+                            "repository_generation_manifest_sha256": "a" * 64},
+    )
+    client.get_structural_relations.assert_awaited_once()
+    components = {frozenset(item["file"].path for item in batch) for batch in batches}
+    assert frozenset(("a.py", "b.py", "c.py")) in components if with_partial_relationships else frozenset(("b.py", "c.py")) in components
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_failed_optional_structural_lookup_keeps_enrichment_edges():
+    from unittest.mock import AsyncMock
+
+    client = SimpleNamespace(get_structural_relations=AsyncMock(side_effect=OSError("offline")))
+    builder = DependencyGraphBuilder(client)
+    batches = await builder.get_smart_batches_async(
+        [_make_group("HIGH", [_make_file("a.py"), _make_file("b.py")])],
+        "ws", "proj", ["main"],
+        enrichment_data=_make_enrichment(relationships=[("a.py", "b.py", "IMPORTS")]),
+        structural_binding={"repository_revision": "abc"},
+    )
+    client.get_structural_relations.assert_awaited_once()
+    assert len(batches) == 1
+    assert {item["file"].path for item in batches[0]} == {"a.py", "b.py"}
+
+
+@pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("entrypoint", ["get_smart_batches_async", "build_graph_from_structural_relations"])
+async def test_reused_builder_cannot_leak_another_review_graph(entrypoint):
+    builder = DependencyGraphBuilder()
+    builder.build_graph_from_enrichment(
+        [_make_group("HIGH", [_make_file("old-a.py"), _make_file("old-b.py")])],
+        _make_enrichment(relationships=[("old-a.py", "old-b.py", "IMPORTS")]),
+    )
+    await getattr(builder, entrypoint)(
+        [_make_group("LOW", [_make_file("new.py")])], "other-tenant", "repo", ["other-sha"],
+    )
+    assert set(builder.nodes) == {"new.py"}
+    assert builder.relationships == []
+
+
 class TestBuildDependencyAwareBatches:
     def test_empty(self):
         assert build_dependency_aware_batches([]) == []

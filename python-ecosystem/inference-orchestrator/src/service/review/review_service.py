@@ -54,7 +54,9 @@ class ReviewService:
 
     # Hard timeout ceiling per review (seconds). Configurable via .env
     REVIEW_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "1500"))
-    REVIEW_GRAPH_PREPARATION_TIMEOUT_SECONDS = optional_timeout_seconds("REVIEW_GRAPH_PREPARATION_TIMEOUT_SECONDS", 120)
+    REVIEW_GRAPH_PREPARATION_TIMEOUT_SECONDS = optional_timeout_seconds(
+        "REVIEW_GRAPH_PREPARATION_TIMEOUT_SECONDS", REVIEW_TIMEOUT_SECONDS,
+    )
     MCP_SESSION_INITIALIZATION_TIMEOUT_SECONDS = float(os.environ.get(
         "MCP_SESSION_INITIALIZATION_TIMEOUT_SECONDS",
         "30",
@@ -124,6 +126,7 @@ class ReviewService:
                 raise
             if isinstance(response, dict):
                 response["inferenceUsage"] = current_inference_usage()
+                self._include_coverage_notice(request, response)
             if quality_capture is not None:
                 await quality_capture.complete(
                     response,
@@ -136,6 +139,24 @@ class ReviewService:
                     "qualityCapture": quality_capture.receipt(),
                 })
             return response
+
+    @staticmethod
+    def _include_coverage_notice(request: ReviewRequestDto, response: Dict[str, Any]) -> None:
+        result = response.get("result")
+        if not isinstance(result, dict) or "issues" not in result or review_response_indicates_failure(response):
+            return
+        limitations = []
+        if getattr(request, "ragReviewGenerationStatus", None) == "unavailable":
+            limitations.append("Structural graph preparation was unavailable; review used the available source context.")
+        incomplete = [
+            decision for decision in response.get("inferenceUsage", {}).get("decisions", [])
+            if decision.get("kind") == "specialist_result" and decision.get("outcome") != "completed"
+        ]
+        if incomplete:
+            limitations.append(f"{len(incomplete)} admitted specialist pass(es) did not complete.")
+        if limitations:
+            notice = "**Review completed with reduced coverage.** " + " ".join(limitations)
+            result["comment"] = notice + "\n\n" + (result.get("comment") or "")
 
     async def _process_prompt_dry_run(
             self,
@@ -973,16 +994,15 @@ class ReviewService:
                 "Preparing one exact proposed-tree graph before Stage 1"
             ),
         })
-        # Include queue wait in the optional budget. Always retain at least 80%
-        # of the remaining deadline for model work and cleanup, even when an
-        # operator configures a preparation timeout longer than the review.
+        # The review already has an overall deadline. A second hard-coded
+        # cutoff cancelled healthy large-repository builds before model work.
         remaining = (
             max(0.0, review_deadline - asyncio.get_running_loop().time())
             if review_deadline is not None else float(self.REVIEW_TIMEOUT_SECONDS)
         )
         preparation_budget = max(0.0, min(
             self.REVIEW_GRAPH_PREPARATION_TIMEOUT_SECONDS,
-            remaining * 0.2,
+            remaining,
         ))
         try:
             async with asyncio.timeout(preparation_budget):

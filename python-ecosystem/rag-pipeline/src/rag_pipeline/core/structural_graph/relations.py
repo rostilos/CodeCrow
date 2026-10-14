@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,9 @@ class RelationWriter:
     def __init__(self, state: GraphWriteState):
         self.state = state
         self.buffer = RelationBuffer(state)
+        # Repository finalization repeats the same paths across many facts.
+        # Cache validation only for this writer's lifetime.
+        self._normalize_path = cache(_normalize_path)
 
     def flush_pending(self) -> None:
         self.buffer.flush()
@@ -175,7 +179,7 @@ class RelationWriter:
             source=source,
             relation=str(fact.relation),
             target=target,
-            path=_normalize_path(str(fact.path)),
+            path=str(fact.path),
             line=max(1, int(fact.line)),
             origin="plugin",
             plugin_id=plugin_id,
@@ -205,9 +209,9 @@ class RelationWriter:
         target_unit_id: str | None = None,
         identity_discriminator: str | None = None,
     ) -> str:
-        normalized_path = _normalize_path(path)
+        normalized_path = self._normalize_path(path)
         normalized_related = tuple(sorted({
-            _normalize_path(value) for value in related_paths if value
+            self._normalize_path(value) for value in related_paths if value
         }))
         normalized_plugin_ids = tuple(sorted({
             value.strip()

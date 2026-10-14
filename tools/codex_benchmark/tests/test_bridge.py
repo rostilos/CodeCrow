@@ -19,6 +19,7 @@ class FakeRPC:
         self.created = []
         self.turns = []
         self.cancelled = []
+        self.requests = []
 
     async def start_thread(self, instructions, tools, effort):
         thread = f"thread-{len(self.created)}"
@@ -27,6 +28,7 @@ class FakeRPC:
         return thread
 
     async def request(self, method, params, **kwargs):
+        self.requests.append((method, params))
         if method == "turn/start":
             self.turns.append(params)
             return {"turn": {"id": "turn-1"}}
@@ -37,6 +39,19 @@ class FakeRPC:
 
     async def interrupt(self, thread, turn):
         self.cancelled.append((thread, turn))
+
+
+async def tool_response(bridge, rpc, owner, call_id):
+    task = asyncio.create_task(bridge.complete({
+        "model": MODEL, "messages": MESSAGES, "tools": TOOLS, "codecrow_owner": owner,
+    }))
+    await wait_for(lambda: any(session.owner == owner and session.turn for session in bridge.sessions.values()))
+    thread = next(session.thread for session in bridge.sessions.values() if session.owner == owner)
+    await rpc.events[thread].put({"id": call_id, "method": "item/tool/call", "params": {
+        "threadId": thread, "turnId": "turn-1", "callId": call_id,
+        "tool": "read_code", "arguments": {"path": "source"},
+    }})
+    return thread, await task
 
 
 TOOLS = [{"type": "function", "function": {"name": "read_code", "description": "Read bound source", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}]
@@ -295,6 +310,211 @@ async def test_cancellation_interrupts_owned_native_turn(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_owner_timeout_after_successful_tool_response_stops_native_work(tmp_path):
+    rpc = FakeRPC()
+    bridge = SubscriptionBridge(rpc, tmp_path)
+    response_delivered = asyncio.Event()
+    native_retry_boundary = asyncio.Event()
+    extra_inferences = []
+
+    async def specialist():
+        try:
+            thread, response = await tool_response(bridge, rpc, "specialist", "pending-source")
+            assert response["choices"][0]["finish_reason"] == "tool_calls"
+            response_delivered.set()
+            await asyncio.Event().wait()  # Host source acquisition outlives its budget.
+        finally:
+            await bridge.release_owner("specialist")
+
+    async def native_retry():
+        await native_retry_boundary.wait()
+        if not rpc.cancelled:
+            extra_inferences.append("unconsumed retry")
+
+    retry = asyncio.create_task(native_retry())
+    task = asyncio.create_task(specialist())
+    await response_delivered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    native_retry_boundary.set()
+    await retry
+    assert not extra_inferences and rpc.cancelled == [("thread-0", "turn-1")]
+    assert not bridge.sessions and not bridge.by_call
+    assert len(rpc.turns) == 1
+    await bridge.release_owner("specialist")
+    assert len(rpc.cancelled) == 1
+
+
+@pytest.mark.asyncio
+async def test_release_during_thread_creation_disposes_late_thread_without_turn(tmp_path):
+    rpc = FakeRPC()
+    creation_started, finish_creation = asyncio.Event(), asyncio.Event()
+    start_thread = rpc.start_thread
+
+    async def delayed_creation(*args):
+        creation_started.set()
+        await finish_creation.wait()
+        return await start_thread(*args)
+
+    rpc.start_thread = delayed_creation
+    bridge = SubscriptionBridge(rpc, tmp_path)
+    request = asyncio.create_task(bridge.complete({"model": MODEL, "messages": MESSAGES,
+                                                  "codecrow_owner": "ending"}))
+    await creation_started.wait()
+    release = asyncio.create_task(bridge.release_owner("ending"))
+    await wait_for(lambda: bridge.owners["ending"].closed)
+    finish_creation.set()
+    await release
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    assert rpc.created and not rpc.turns
+    assert not bridge.sessions and not bridge.by_call and not bridge.owners["ending"].creations
+    assert ("thread/unsubscribe", {"threadId": "thread-0"}) in rpc.requests
+    with pytest.raises(ValueError, match="already ended"):
+        await bridge.complete({"model": MODEL, "messages": MESSAGES, "codecrow_owner": "ending"})
+    assert len(rpc.created) == 1
+
+
+@pytest.mark.asyncio
+async def test_owner_cleanup_leaves_concurrent_tool_continuation_intact(tmp_path):
+    rpc = FakeRPC()
+    bridge = SubscriptionBridge(rpc, tmp_path)
+    first_thread, _ = await tool_response(bridge, rpc, "ending", "first")
+    second_thread, response = await tool_response(bridge, rpc, "continuing", "second")
+    await bridge.release_owner("ending")
+    history = MESSAGES + [response["choices"][0]["message"],
+                          {"role": "tool", "tool_call_id": "second", "content": "exact source"}]
+    with pytest.raises(ValueError, match="another execution owner"):
+        await bridge.complete({"model": MODEL, "messages": history, "tools": TOOLS, "codecrow_owner": "unrelated"})
+    continuing = asyncio.create_task(bridge.complete({
+        "model": MODEL, "messages": history, "tools": TOOLS, "codecrow_owner": "continuing"}))
+    await wait_for(lambda: bool(rpc.sent))
+    await rpc.events[second_thread].put({"method": "item/completed", "params": {
+        "item": {"type": "agentMessage", "text": "review complete"}}})
+    await rpc.events[second_thread].put({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+    assert (await continuing)["choices"][0]["message"]["content"] == "review complete"
+    await bridge.release_owner("continuing")
+    assert rpc.cancelled == [(first_thread, "turn-1"), (second_thread, "turn-1")]
+    assert len(rpc.created) == 2 and not bridge.by_call and not bridge.sessions
+
+
+@pytest.mark.asyncio
+async def test_release_http_disconnect_does_not_cancel_native_cleanup(tmp_path):
+    import httpx
+    rpc = FakeRPC()
+    bridge = SubscriptionBridge(rpc, tmp_path)
+    await tool_response(bridge, rpc, "ending", "source")
+    interrupt_started, finish_interrupt = asyncio.Event(), asyncio.Event()
+    interrupt = rpc.interrupt
+
+    async def delayed_interrupt(*args):
+        interrupt_started.set()
+        await finish_interrupt.wait()
+        await interrupt(*args)
+
+    rpc.interrupt = delayed_interrupt
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(bridge, "token")), base_url="http://local") as client:
+        release = asyncio.create_task(client.post("/v1/conversations/release", json={"owner": "ending"},
+                                                 headers={"Authorization": "Bearer token"}))
+        await interrupt_started.wait()
+        release.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await release
+        assert not bridge.owners["ending"].release_task.done()
+        finish_interrupt.set()
+        await bridge.owners["ending"].release_task
+    assert rpc.cancelled == [("thread-0", "turn-1")]
+    assert not bridge.sessions and not bridge.by_call
+
+
+@pytest.mark.asyncio
+async def test_native_cleanup_failure_keeps_completed_result(tmp_path, caplog):
+    rpc = FakeRPC()
+
+    async def failing_interrupt(*args):
+        raise RuntimeError("transport unavailable")
+
+    rpc.interrupt = failing_interrupt
+    bridge = SubscriptionBridge(rpc, tmp_path)
+    task = asyncio.create_task(bridge.complete({"model": MODEL, "messages": MESSAGES, "codecrow_owner": "owner"}))
+    await wait_for(lambda: bool(bridge.sessions))
+    thread = next(iter(bridge.sessions))
+    await rpc.events[thread].put({"method": "item/completed", "params": {"item": {"type": "agentMessage", "text": "useful review"}}})
+    await rpc.events[thread].put({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+    assert (await task)["choices"][0]["message"]["content"] == "useful review"
+    await bridge.release_owner("owner")
+    assert "Native interrupt unavailable" in caplog.text
+    records = [json.loads(line) for line in (tmp_path / "subscription-ledger.jsonl").read_text().splitlines()]
+    assert next(r for r in records if r['event'] == 'conversation_terminal')['cleanup_errors'] == ['interrupt']
+
+
+@pytest.mark.asyncio
+async def test_subscription_scope_survives_model_copy_and_binding(monkeypatch):
+    from langchain_openai import ChatOpenAI
+    from tools.codex_benchmark import inference_entrypoint as entrypoint
+    released = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def post(self, url, **kwargs):
+            from types import SimpleNamespace
+            released.append(kwargs['json']['owner'])
+            return SimpleNamespace(raise_for_status=lambda: None, status_code=200)
+
+    class Factory:
+        @staticmethod
+        def create_llm(ai_provider, ai_model, ai_api_key, ai_base_url=None):
+            return ChatOpenAI(model=ai_model, api_key=ai_api_key, base_url=ai_base_url)
+
+    monkeypatch.setattr(entrypoint.httpx, 'AsyncClient', Client)
+    install_subscription_guard(Factory, "http://bridge/v1", "local-token", MODEL)
+    original = Factory.create_llm("openai_compatible", MODEL, "local-token", "http://bridge/v1")
+    copied = original.model_copy(update={"max_tokens": 321})
+    bound = copied.bind_tools(TOOLS)
+    async with bound.provider_execution_scope():
+        payload = bound.bound._get_request_payload(MESSAGES, **bound.kwargs)
+        owner = payload['extra_body']['codecrow_owner']
+        assert original._get_request_payload(MESSAGES)['extra_body']['codecrow_owner'] == owner
+        assert bound.bound.max_tokens == 321
+    assert released == [owner]
+    assert 'codecrow_owner' not in original._get_request_payload(MESSAGES).get('extra_body', {})
+
+
+@pytest.mark.asyncio
+async def test_generator_close_from_other_context_still_releases_owner(monkeypatch):
+    from tools.codex_benchmark import inference_entrypoint as entrypoint
+    from types import SimpleNamespace
+    released = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def post(self, url, **kwargs):
+            released.append(kwargs['json']['owner'])
+            return SimpleNamespace(raise_for_status=lambda: None, status_code=200)
+
+    monkeypatch.setattr(entrypoint.httpx, 'AsyncClient', Client)
+    async def stream():
+        async with entrypoint.subscription_execution_scope('http://bridge/v1', 'token'):
+            yield entrypoint._OWNER.get()[1]
+
+    iterator = stream()
+    owner = await asyncio.create_task(anext(iterator))
+    await iterator.aclose()
+    assert released == [owner] and entrypoint._OWNER.get() is None
+
+
+@pytest.mark.asyncio
 async def test_default_capacity_admits_64_calls_and_releases_waiting_work(tmp_path):
     rpc = FakeRPC()
     bridge = SubscriptionBridge(rpc, tmp_path)
@@ -382,3 +602,85 @@ def test_selected_model_blocks_luna6_and_other_provider_routes(selected):
         Factory.create_llm("openai_compatible", "gpt-6-luna", "local-token", "http://bridge/v1")
     with pytest.raises(ValueError):
         Factory.create_llm("openrouter", selected, "local-token", "http://bridge/v1")
+
+
+@pytest.mark.asyncio
+async def test_failed_native_disposal_is_pending_and_existing_reaper_retries(tmp_path, monkeypatch):
+    import httpx
+    from tools.codex_benchmark import bridge as bridge_module
+    rpc = AppServer(tmp_path)
+    bridge = SubscriptionBridge(rpc, tmp_path)
+    calls = []
+    recovered = False
+
+    async def request(method, params, **kwargs):
+        calls.append(method)
+        if not recovered:
+            raise RuntimeError("temporary native transport failure")
+        return {}
+
+    rpc.request = request
+    session = Conversation("thread", [], [], owner="owner", turn="turn", touched=0)
+    session.pending["call"] = {"id": 7}
+    bridge.sessions[session.thread] = session
+    bridge.by_call["call"] = session
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(bridge, "token")), base_url="http://local") as client:
+        response = await client.post("/v1/conversations/release", json={"owner": "owner"},
+                                     headers={"Authorization": "Bearer token"})
+        assert response.status_code == 202 and response.json()["status"] == "cleanup_pending"
+        assert calls == ["turn/interrupt", "thread/unsubscribe"]
+        assert bridge.sessions["thread"] is session and bridge.by_call["call"] is session
+        assert session.release_task is None and bridge.owners["owner"].closed
+        records = [json.loads(line) for line in (tmp_path / "subscription-ledger.jsonl").read_text().splitlines()]
+        assert not any(r["event"] in {"owner_closed", "conversation_terminal"} for r in records)
+        assert next(r for r in records if r["event"] == "conversation_cleanup_pending")["cleanup_errors"] == ["interrupt", "unsubscribe"]
+        recovered = True
+        first_tick, next_tick = True, asyncio.Event()
+
+        async def reaper_tick(seconds):
+            nonlocal first_tick
+            if first_tick:
+                first_tick = False
+                return
+            next_tick.set()
+            await asyncio.Event().wait()
+
+        # Advance only the existing reaper timer; no inference or wall-clock wait.
+        with monkeypatch.context() as patcher:
+            patcher.setattr(bridge_module.asyncio, "sleep", reaper_tick)
+            patcher.setattr(bridge_module.time, "monotonic", lambda: 1000)
+            reaper = asyncio.create_task(bridge.reap())
+            await next_tick.wait()
+            reaper.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reaper
+        assert not bridge.sessions and not bridge.by_call
+        response = await client.post("/v1/conversations/release", json={"owner": "owner"},
+                                     headers={"Authorization": "Bearer token"})
+        assert response.status_code == 200 and response.json()["status"] == "closed"
+    assert calls == ["turn/interrupt", "thread/unsubscribe"] * 2
+
+
+@pytest.mark.asyncio
+async def test_native_terminal_receipt_records_authoritative_status_and_usage_sequence(tmp_path):
+    from types import SimpleNamespace
+    rpc = AppServer(tmp_path)
+    bridge = SubscriptionBridge(rpc, tmp_path)
+    reader = asyncio.StreamReader()
+    events = [
+        {"method": "thread/tokenUsage/updated", "params": {"threadId": "thread", "turnId": "turn",
+         "tokenUsage": {"total": {"totalTokens": 11}}}},
+        {"method": "turn/completed", "params": {"threadId": "thread", "turn": {"id": "turn", "status": "interrupted"}}},
+        {"method": "thread/tokenUsage/updated", "params": {"threadId": "thread", "turnId": "turn",
+         "tokenUsage": {"total": {"totalTokens": 15}}}},
+    ]
+    for event in events:
+        reader.feed_data((json.dumps(event) + "\n").encode())
+    reader.feed_eof()
+    rpc.process = SimpleNamespace(stdout=reader)
+    await rpc._read()
+    records = [json.loads(line) for line in (tmp_path / "subscription-ledger.jsonl").read_text().splitlines()]
+    terminal = next(r for r in records if r["event"] == "native_turn_terminal")
+    assert terminal["status"] == "interrupted" and terminal["usage_sequence"] == 1
+    assert records[-1]["usage_sequence"] == 2 and records[-1]["native_total_usage"]["totalTokens"] == 15
+    assert rpc.terminals["thread"] == {"turn": "turn", "status": "interrupted"}

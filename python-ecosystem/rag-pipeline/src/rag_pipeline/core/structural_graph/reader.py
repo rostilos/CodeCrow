@@ -15,6 +15,7 @@ from .shared import (
     _sha256_text,
     _normalize_path,
     _optional_path,
+    _looks_like_path,
     _normalized_name,
     _short_name,
     _escape_like,
@@ -248,6 +249,16 @@ class StructuralGraphReader:
         if row is None:
             return None
         source_evidence = row["record_type"] in {"source_unit", "plugin_context"}
+        if source_evidence:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, ValueError):
+                metadata = {}
+            # Generated outlines retain owner locations, not literal source bytes.
+            source_evidence = row["kind"] != "simplified" and not (
+                isinstance(metadata, Mapping)
+                and metadata.get("content_type") == "simplified_code"
+            )
         return {
             "snapshot": self.snapshot(),
             "unit": unit_to_manifest(row, include_content=source_evidence),
@@ -685,7 +696,9 @@ class StructuralGraphReader:
 
         exact_name = _normalized_name(target)
         rows, count = named_rows(exact_name)
-        if count:
+        # Preserve exact qualified symbols such as Parser.Json. Only the
+        # short-name fallback would confuse an absent file with its extension.
+        if count or _looks_like_path(target):
             return rows, count
         short_name = _normalized_name(_short_name(target))
         if short_name != exact_name:

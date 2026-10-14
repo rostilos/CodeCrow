@@ -57,7 +57,8 @@ class RepositoryIndexServiceTest {
                     5,
                     "service-secret");
             Map<String, Object> request = Map.of(
-                    "filters", Map.of("branches", List.of("feature/exact")));
+                    "filters", Map.of("branches", List.of("feature/exact")),
+                    "projection", "files");
 
             service.getGraph(workspace, project, request);
             service.getPoint(workspace, project, "point/id", request);
@@ -88,6 +89,9 @@ class RepositoryIndexServiceTest {
 
         Map<String, Object> body = objectMapper.readValue(request.getBody().readUtf8(), MAP_TYPE);
         assertThat(body).containsEntry("collection_target", "opaque-generation-target");
+        if (expectedPath.endsWith("/graph")) {
+            assertThat(body).containsEntry("projection", "files");
+        }
         Map<?, ?> filters = (Map<?, ?>) body.get("filters");
         assertThat(filters.get("branches")).isEqualTo(List.of("feature/exact"));
     }

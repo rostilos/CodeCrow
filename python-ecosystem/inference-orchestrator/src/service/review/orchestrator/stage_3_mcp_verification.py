@@ -5,6 +5,8 @@ operations through :class:`Stage3McpRuntime`.  Keeping those operations behind
 this narrow adapter lets the verification loop remain independent from Stage
 3 prompt packing and final-report composition.
 """
+
+from llm.provider_lifecycle import provider_execution_scope
 from service.review.execution_scheduler import review_model_slot, optional_work_budget, optional_timeout_seconds
 from service.review.inference_usage import record_model_response, record_compute_decision
 
@@ -12,6 +14,7 @@ import json
 import asyncio
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Protocol
 
@@ -22,7 +25,12 @@ from service.agent import AgentExecutionService
 from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
 from utils.llm_response import extract_llm_response_text
 from utils.path_identity import repository_source_location
-from service.review.orchestrator.verification_agent import VerificationAssessment, _validated_assessment, _decoded_verification_source_view
+from utils.diff_processor import DiffChangeType
+from service.review.orchestrator.verification_agent import (
+    PREDICATE_VERIFICATION_INSTRUCTION, VerificationAssessment,
+    _validated_assessment, _decoded_verification_source_view,
+    _current_hunk_source, _reviewable_hunks,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -34,13 +42,14 @@ STAGE3_AGENT_MAX_OUTPUT_TOKENS = 16_384
 _TERMINAL_FINALIZATION_INSTRUCTION = (
     "Repository verification is complete and tools are now disabled. Produce "
     "the final executive-summary report from the original review material and "
-    "the complete tool results above. Do not request another tool call. "
+    "the complete tool results and admitted Request HEAD source blocks above. Do not request another tool call. "
     "Return one JSON object with report (the executive summary) and assessments "
     "(one assessment for every assigned Verification ID). Each assessment has "
     "issue_id, verdict (supported/disproven/unknown), reason, supporting_evidence, "
     "contradicting_evidence and unresolved_questions. Cite exact observed source "
     "with file_path and snippet; use unknown when evidence is insufficient. "
-    "Do not infer verification success from completed discovery or agreement."
+    "Do not infer verification success from completed discovery or agreement. "
+    + PREDICATE_VERIFICATION_INSTRUCTION
 )
 
 
@@ -226,6 +235,8 @@ def mcp_read_covers_location(
     file_path: str,
     line: int,
     review_revision: str,
+    *,
+    allow_related_excerpt: bool = False,
 ) -> bool:
     args = entry.get("args", {})
     tool_name = entry.get("tool")
@@ -242,20 +253,20 @@ def mcp_read_covers_location(
         tool_name in {"getBranchFileContent", "getReviewFileContent"}
         and entry.get("success") is True
         and entry.get("evidence_valid") is True
-        and str(args.get("verificationId") or "") == verification_id
+        and verification_id in entry.get("verification_ids", [str(args.get("verificationId") or "")])
         and location_file_path(str(args.get("filePath") or "")) == file_path
         and revision_is_bound
     ):
         return False
     if entry.get("evidence_complete_file") is True:
         return True
-    if line <= 0:
-        return False
     try:
         start_line = int(entry.get("evidence_start_line") or 0)
         end_line = int(entry.get("evidence_end_line") or 0)
     except (TypeError, ValueError):
         return False
+    if line <= 0:
+        return allow_related_excerpt and 0 < start_line <= end_line
     return start_line > 0 and start_line <= line <= end_line
 
 
@@ -265,6 +276,7 @@ def validated_mcp_dismissals(
     executor: McpToolExecutor,
     review_revision: str,
     assessments: Dict[str, dict] | None = None,
+    admitted_head_ranges: List[tuple[str, str, int, int]] | None = None,
 ) -> List[str]:
     """Accept dismissals only when every affected anchor has bound evidence."""
     validated: List[str] = []
@@ -280,29 +292,45 @@ def validated_mcp_dismissals(
             )
             continue
         required_locations = required_verification_locations(issue)
+        is_head = str(safe_issue_field(issue, "anchorSide")).upper() == "HEAD"
+        primary_path = location_file_path(str(safe_issue_field(issue, "file") or ""))
+        # A file-only related reference requires observed source, not whole-file coverage.
+        head_covered = {
+            (path, line) for path, line in required_locations
+            if is_head and any(
+                revision == review_revision and source_path == path and 0 < start <= end
+                and (start <= line <= end or (line == 0 and path != primary_path))
+                for revision, source_path, start, end in admitted_head_ranges or []
+            )
+        }
         missing_locations = {
             location
             for location in required_locations
-            if not any(
+            if location not in head_covered and not any(
                 mcp_read_covers_location(
                     entry,
                     verification_id,
                     location[0],
                     location[1],
                     review_revision,
+                    allow_related_excerpt=is_head and location[0] != primary_path,
                 )
                 for entry in executor.call_log
             )
         }
         if not required_locations or missing_locations:
+            missing = sorted(f"{path}:{line}" if line > 0 else path
+                             for path, line in missing_locations)
             logger.warning(
                 "[Stage 3] Keeping %s: dismissal lacks successful reviewed-revision "
                 "evidence for %s",
                 verification_id,
-                sorted(
-                    f"{path}:{line}" if line > 0 else path
-                    for path, line in missing_locations
-                ),
+                missing,
+            )
+            assessments[verification_id].update(
+                verdict="unknown", reasonCode="dismissal_evidence_incomplete",
+                reason=("Falsification lacks reviewed-revision evidence for required locations: "
+                        + ", ".join(missing or ["no valid source anchor"]) + "; candidate retained"),
             )
             continue
         validated.append(verification_id)
@@ -350,7 +378,6 @@ def extract_verification_assessments(content: str, executor: McpToolExecutor,
     for key in issues:
         assessments.setdefault(key, {"verdict": "unknown", "reason": "no valid final verification assessment",
             "reasonCode": missing_reason, "stage": "stage_3_verification", "attempted": True, "completed": False})
-        record_compute_decision("final_verification", verificationId=key, **assessments[key])
     return content, assessments
 
 
@@ -368,9 +395,44 @@ def _retained_assessment_receipts(issues, state, reason):
                 issues, reason, attempted=state.get("attempted", False)))]
 
 
+def _assessed_verification_result(content, executor, issues, review_revision, state):
+    report, dismissed = extract_dismissed_issues(content)
+    report, assessments = extract_verification_assessments(report, executor, issues)
+    state["report"] = report
+    completed = state.setdefault("assessments", {})
+    completed.update({key: value for key, value in assessments.items() if value["completed"]})
+    assessments.update(completed)
+    dismissed = sorted(set(dismissed) | {key for key, value in assessments.items() if value["verdict"] == "disproven"})
+    validated = validated_mcp_dismissals(
+        dismissed, issues, executor, review_revision, assessments, state.get("admitted_head_ranges"))
+    for key, assessment in assessments.items():
+        record_compute_decision("final_verification", verificationId=key, **assessment)
+    return {
+        "report": report,
+        "verification_assessments": [
+            {"candidateObjectId": id(issues[key]), **assessment}
+            for key, assessment in assessments.items()
+        ],
+        "dismissed_issue_ids": [
+            str(safe_issue_field(issues[key], "id") or "") for key in validated
+            if str(safe_issue_field(issues[key], "id") or "")
+        ],
+        "dismissed_issue_keys": validated,
+        "dismissed_issue_object_ids": [id(issues[key]) for key in validated],
+    }
+
+
 async def _verification_report_fallback(llm, prompt, runtime, state, issues, reason, fallback_llm=None,
                                         reasoning_effort=ReasoningEffort.LOW):
     """Preserve complete acquired observations when optional verification stops."""
+    if state.get("report_fallback_consumed", False):
+        record_compute_decision("final_verification_report", outcome="fallback_already_consumed")
+        return {
+            "report": state.get("report") or "Optional verification was unavailable; review findings have been retained.",
+            "dismissed_issue_ids": [], "dismissed_issue_keys": [], "dismissed_issue_object_ids": [],
+            "verification_assessments": _retained_assessment_receipts(issues, state, reason),
+        }
+    prompt = state.get("source_augmented_prompt", prompt)
     records = state.get("records", [])
     admitted = []
     try:
@@ -387,12 +449,32 @@ async def _verification_report_fallback(llm, prompt, runtime, state, issues, rea
     except Exception as exc:
         logger.warning("Optional verification evidence could not be rendered: %s", exc)
         record_compute_decision("final_verification_evidence", outcome=type(exc).__name__)
-    if issues:
+        admitted = []
+    # The timeout recovery already pays for one completion. Assess its complete
+    # observed source rather than throwing it away in a summary-only response.
+    assess_observations = (
+        reason == "verification_timeout" and issues and state.get("executor") is not None
+        and admitted and len(admitted) == sum(len(record["toolResults"]) for record in records)
+        and any(state["executor"].verification_source.values())
+    )
+    if assess_observations:
+        assess_observations = runtime.estimate_messages_tokens([
+            {"role": "user", "content": prompt + "\n\n" + _TERMINAL_FINALIZATION_INSTRUCTION}
+        ], use_mcp_tools=False) <= state["token_target"]
+    if assess_observations:
+        prompt += "\n\n" + _TERMINAL_FINALIZATION_INSTRUCTION
+    elif issues:
         prompt += ("\nOptional verification ended: " + reason + ". Produce the executive summary only. "
                    "Findings remain unverified; do not claim verified confidence or dismiss any candidate.")
     try:
+        # The outer optional timeout can cancel this call and re-enter recovery.
+        # Its single fallback slot stays consumed even when cancellation wins.
+        state["report_fallback_consumed"] = True
         result = await runtime.invoke_report(llm, prompt, fallback_llm=fallback_llm,
                                              allow_retry=False, reasoning_effort=reasoning_effort)
+        if assess_observations:
+            return _assessed_verification_result(result.get("report", ""), state["executor"],
+                issues, state["executor"].review_revision, state)
     except Exception as exc:
         logger.warning("Optional verification report fallback failed: %s", exc)
         record_compute_decision("final_verification_report", outcome=type(exc).__name__)
@@ -401,6 +483,47 @@ async def _verification_report_fallback(llm, prompt, runtime, state, issues, rea
     result.update(dismissed_issue_ids=[], dismissed_issue_keys=[], dismissed_issue_object_ids=[])
     result["verification_assessments"] = _retained_assessment_receipts(issues, state, reason)
     return result
+
+
+def _admit_request_head_hunks(processed_diff, prompt, messages, executor, issues,
+                             review_revision, runtime, state):
+    """Reuse admitted request HEAD source for citations and anchor coverage."""
+    if processed_diff is None or not review_revision or not issues:
+        return prompt
+    terminal = {"role": "user", "content": _TERMINAL_FINALIZATION_INSTRUCTION}
+    for diff_file in processed_diff.get_included_files():
+        if diff_file.change_type is DiffChangeType.DELETED:
+            continue
+        for hunk in _reviewable_hunks(diff_file):
+            if hunk.evidence_kind != "changed_source" or hunk.new_start <= 0 or hunk.new_count <= 0:
+                continue
+            source = _current_hunk_source(hunk)
+            source_line_count = sum(line.startswith(("+", " ")) for line in hunk.content.splitlines()[1:])
+            if not source or source_line_count != hunk.new_count:
+                record_compute_decision("final_verification_evidence", outcome="request_hunk_unavailable", hunkId=hunk.id)
+                continue
+            path = location_file_path(diff_file.path)
+            if not path:
+                continue
+            heading = (f"\n\nRequest HEAD source: {path}:{hunk.new_start}-{hunk.new_start + hunk.new_count - 1}"
+                       f"; revision={review_revision}; hunk={hunk.id}\n")
+            candidate_prompt = prompt + heading + source
+            candidate_messages = [{"role": "user", "content": candidate_prompt}, *messages[1:], terminal]
+            continuation = [*runtime.continuation_messages(candidate_prompt, state["records"]), terminal]
+            if (runtime.estimate_messages_tokens(candidate_messages, use_mcp_tools=True) > state["token_target"]
+                    or runtime.estimate_messages_tokens(continuation, use_mcp_tools=False) > state["token_target"]):
+                record_compute_decision("final_verification_evidence", outcome="request_hunk_context_limit", hunkId=hunk.id)
+                continue
+            prompt = candidate_prompt
+            messages[0] = {"role": "user", "content": prompt}
+            state["source_augmented_prompt"] = prompt
+            state.setdefault("admitted_head_ranges", []).append(
+                (review_revision, path, hunk.new_start, hunk.new_start + hunk.new_count - 1))
+            for verification_id in issues:
+                executor.verification_source.setdefault((verification_id, path), []).append(source)
+            record_compute_decision("final_verification_evidence", outcome="request_hunk_observed",
+                                    hunkId=hunk.id, filePath=path, revision=review_revision)
+    return prompt
 
 
 async def execute_stage_3_mcp_verification(
@@ -412,32 +535,34 @@ async def execute_stage_3_mcp_verification(
     issue_by_verification_id: Dict[str, CodeReviewIssue],
     runtime: Stage3McpRuntime,
     fallback_llm=None,
+    processed_diff=None,
 ) -> Dict[str, Any]:
     """Bound optional verification, leaving time to report retained candidates."""
-    seconds = optional_timeout_seconds("REVIEW_FINAL_VERIFICATION_TIMEOUT_SECONDS", 60)
-    budget = optional_work_budget(seconds)
-    state = {"records": [], "token_target": runtime.input_token_target(request), "attempted": False,
-             "acquisition_deadline": asyncio.get_running_loop().time() + max(0, budget - min(20, budget / 2))}
-    try:
-        async with asyncio.timeout(budget):
-            return await _execute_stage_3_mcp_verification(llm, request, prompt, mcp_client, review_revision,
-                issue_by_verification_id, runtime, fallback_llm, state)
-    except TimeoutError:
-        record_compute_decision("final_verification", outcome="timeout", verdict="unknown")
-        logger.warning("Optional final verification timed out; retaining candidates for report synthesis")
-        return await _verification_report_fallback(llm, prompt, runtime, state,
-            issue_by_verification_id, "verification_timeout", fallback_llm)
-    except Exception as exc:
-        logger.warning("Optional final verification failed; retaining candidates: %s", exc)
-        record_compute_decision("final_verification", outcome=type(exc).__name__, verdict="unknown")
-        return await _verification_report_fallback(llm, prompt, runtime, state,
-            issue_by_verification_id, "verification_unavailable", fallback_llm)
+    async with provider_execution_scope(llm):
+        seconds = optional_timeout_seconds("REVIEW_FINAL_VERIFICATION_TIMEOUT_SECONDS", 60)
+        budget = optional_work_budget(seconds)
+        state = {"records": [], "token_target": runtime.input_token_target(request), "attempted": False,
+                 "acquisition_deadline": asyncio.get_running_loop().time() + max(0, budget - min(20, budget / 2))}
+        try:
+            async with asyncio.timeout(budget):
+                return await _execute_stage_3_mcp_verification(llm, request, prompt, mcp_client, review_revision,
+                    issue_by_verification_id, runtime, fallback_llm, state, processed_diff)
+        except TimeoutError:
+            record_compute_decision("final_verification", outcome="timeout", verdict="unknown")
+            logger.warning("Optional final verification timed out; retaining candidates for report synthesis")
+            return await _verification_report_fallback(llm, prompt, runtime, state,
+                issue_by_verification_id, "verification_timeout", fallback_llm)
+        except Exception as exc:
+            logger.warning("Optional final verification failed; retaining candidates: %s", exc)
+            record_compute_decision("final_verification", outcome=type(exc).__name__, verdict="unknown")
+            return await _verification_report_fallback(llm, prompt, runtime, state,
+                issue_by_verification_id, "verification_unavailable", fallback_llm)
 
 
 async def _execute_stage_3_mcp_verification(
     llm, request: ReviewRequestDto, prompt: str, mcp_client, review_revision: str,
     issue_by_verification_id: Dict[str, CodeReviewIssue], runtime: Stage3McpRuntime, fallback_llm=None,
-    state=None,
+    state=None, processed_diff=None,
 ) -> Dict[str, Any]:
     """Run the bounded optional tool loop and return a report plus dismissals."""
     executor = McpToolExecutor(
@@ -458,14 +583,90 @@ async def _execute_stage_3_mcp_verification(
     max_iterations = 2
     token_target = runtime.input_token_target(request)
 
+    if issue_by_verification_id:
+        prompt += "\n\n" + PREDICATE_VERIFICATION_INSTRUCTION
     messages = [{"role": "user", "content": prompt}]
     state = state if state is not None else {"records": [], "token_target": token_target, "attempted": False,
                                           "acquisition_deadline": float("inf")}
+    state["executor"] = executor
     verification_records: List[Dict[str, Any]] = state["records"]
+
+    # Prefetch candidate anchors within the existing call/time/context budgets. Otherwise one
+    # tool-selection turn commonly reads only issue_0 and leaves the remaining
+    # findings unknown. The executor binds overlapping windows to all covered
+    # candidates, so nearby findings need only one repository read.
+    anchor_record = {"iteration": 0, "assistantContent": "Host-acquired candidate anchors", "toolResults": []}
+    for verification_id, issue in issue_by_verification_id.items():
+        path = location_file_path(str(safe_issue_field(issue, "file") or ""))
+        try:
+            line = int(safe_issue_field(issue, "line") or 0)
+        except (ValueError, TypeError):
+            continue
+        if (not path or line <= 0
+                or str(safe_issue_field(issue, "anchorSide")).upper() == "BASE"):
+            continue
+        if any(mcp_read_covers_location(entry, verification_id, path, line, review_revision)
+               for entry in executor.call_log):
+            continue
+        if executor.call_count >= executor.max_calls:
+            record_compute_decision("final_verification_evidence", outcome="anchor_call_limit", verificationId=verification_id)
+            break
+        tool = "getReviewFileContent" if executor.local_only else "getBranchFileContent"
+        arguments = {"verificationId": verification_id, "filePath": f"{path}:{line}"}
+        source_lengths = {key: len(windows) for key, windows in executor.verification_source.items()}
+        log_start = len(executor.call_log)
+        try:
+            async with asyncio.timeout(max(0, state["acquisition_deadline"] - asyncio.get_running_loop().time())):
+                result = await executor.execute_tool(tool, arguments)
+        except TimeoutError:
+            record_compute_decision("final_verification_evidence", outcome="anchor_timeout", verificationId=verification_id)
+            break
+        rendered = str(result) + _decoded_verification_source_view(str(result))
+        bound_ids = sorted({key for log in executor.call_log[log_start:]
+                            for key in log.get("verification_ids", [])}) or [verification_id]
+        entry = {"role": "user", "content": f"Observed source for {', '.join(bound_ids)}, {path}:{line}:\n{rendered}"}
+        if runtime.estimate_messages_tokens([*messages, entry], use_mcp_tools=True) > token_target:
+            # Source not shown to the model cannot authorize its verdict.
+            for key, windows in executor.verification_source.items():
+                del windows[source_lengths.get(key, 0):]
+            for log in executor.call_log[log_start:]:
+                log["evidence_valid"] = False
+                log["evidence_not_admitted"] = True
+            record_compute_decision("final_verification_evidence", outcome="anchor_context_limit", verificationId=verification_id)
+            break
+        messages.append(entry)
+        valid = any(mcp_read_covers_location(log, verification_id, path, line, review_revision)
+                    for log in executor.call_log[log_start:])
+        record_compute_decision("final_verification_evidence", outcome="anchor_observed" if valid else "anchor_unavailable",
+                                verificationId=verification_id, boundVerificationIds=bound_ids)
+        anchor_record["toolResults"].append({"toolCallId": f"anchor_{len(anchor_record['toolResults'])}",
+            "name": tool, "arguments": arguments, "result": rendered})
+    if anchor_record["toolResults"]:
+        verification_records.append(anchor_record)
+
+    source_started = time.perf_counter()
+    try:
+        prompt = _admit_request_head_hunks(
+            processed_diff, prompt, messages, executor, issue_by_verification_id,
+            review_revision, runtime, state,
+        )
+    except Exception as exc:
+        logger.warning("Optional request HEAD evidence unavailable; keeping acquired source: %s", exc)
+        record_compute_decision("final_verification_evidence", outcome="request_hunk_unavailable", errorType=type(exc).__name__)
+        prompt = state.get("source_augmented_prompt", prompt)
+    finally:
+        record_compute_decision("final_verification_evidence", outcome="request_hunk_preparation",
+                                elapsedMs=round((time.perf_counter() - source_started) * 1000, 3))
 
     for iteration in range(max_iterations):
         try:
-            use_mcp_tools = iteration == 0
+            # Prefetch may consume every repository call. Spend the remaining
+            # time assessing acquired source instead of asking for unusable tools.
+            use_mcp_tools = (
+                iteration == 0
+                and not executor.budget_exhausted
+                and asyncio.get_running_loop().time() < state["acquisition_deadline"]
+            )
             if not use_mcp_tools:
                 messages = [
                     *messages,
@@ -574,13 +775,8 @@ async def _execute_stage_3_mcp_verification(
                     return await _verification_report_fallback(llm, prompt, runtime, state,
                         issue_by_verification_id, "verification_output_limit", fallback_llm)
                 content = extract_llm_response_text(response)
-                report, dismissed = extract_dismissed_issues(content)
-                report, assessments = extract_verification_assessments(report, executor, issue_by_verification_id)
-                state["report"] = report
-                completed = state.setdefault("assessments", {})
-                completed.update({key: value for key, value in assessments.items() if value["completed"]})
-                assessments.update(completed)
-                if iteration == 0 and any(not assessment["completed"] for assessment in assessments.values()):
+                result = _assessed_verification_result(content, executor, issue_by_verification_id, review_revision, state)
+                if iteration == 0 and any(not assessment["completed"] for assessment in result["verification_assessments"]):
                     # Summary-only prose is not candidate verification. Reserve
                     # the second call for explicit, tools-disabled assessments.
                     continue
@@ -590,30 +786,7 @@ async def _execute_stage_3_mcp_verification(
                     iteration + 1,
                     executor.call_count,
                 )
-                dismissed = sorted(set(dismissed) | {key for key, value in assessments.items() if value["verdict"] == "disproven"})
-                validated = validated_mcp_dismissals(
-                    dismissed,
-                    issue_by_verification_id,
-                    executor,
-                    review_revision,
-                    assessments,
-                )
-                return {
-                    "report": report,
-                    "verification_assessments": [
-                        {"candidateObjectId": id(issue_by_verification_id[key]), **assessment}
-                        for key, assessment in assessments.items()
-                    ],
-                    "dismissed_issue_ids": [
-                        str(safe_issue_field(issue_by_verification_id[key], "id") or "")
-                        for key in validated
-                        if str(safe_issue_field(issue_by_verification_id[key], "id") or "")
-                    ],
-                    "dismissed_issue_keys": validated,
-                    "dismissed_issue_object_ids": [
-                        id(issue_by_verification_id[key]) for key in validated
-                    ],
-                }
+                return result
 
             iteration_record: Dict[str, Any] = {
                 "iteration": iteration + 1,
