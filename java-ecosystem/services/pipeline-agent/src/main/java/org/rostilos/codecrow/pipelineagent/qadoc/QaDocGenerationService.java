@@ -223,6 +223,24 @@ public class QaDocGenerationService {
         payload.put("issues_found", issuesFound);
         payload.put("files_analyzed", filesAnalyzed);
 
+        payload.put("pr_change_summary", ctx.prChangeSummary());
+        payload.put("source_revision", ctx.sourceRevision());
+        payload.put("project_workspace", project.getWorkspace() != null ? project.getWorkspace().getName() : "");
+        payload.put("project_namespace", project.getNamespace());
+        var repoInfo = project.getEffectiveVcsRepoInfo();
+        if (repoInfo != null && repoInfo.getVcsConnection() != null) {
+            try {
+                var credentials = new org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor(tokenEncryptionService)
+                        .extractCredentials(repoInfo.getVcsConnection());
+                payload.put("access_token", credentials.accessToken());
+                payload.put("oauth_client", credentials.oAuthClient());
+                payload.put("oauth_secret", credentials.oAuthSecret());
+                payload.put("vcs_base_url", credentials.vcsBaseUrl());
+            } catch (Exception exception) {
+                log.warn("QA repository tools credentials unavailable; documentation continues from saved context");
+            }
+        }
+
         // ── AI credentials ──────────────────────────────────────────
         addAiCredentials(payload, project);
 

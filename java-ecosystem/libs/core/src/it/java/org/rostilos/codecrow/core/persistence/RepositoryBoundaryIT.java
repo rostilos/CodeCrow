@@ -148,4 +148,50 @@ class RepositoryBoundaryIT {
         }
     }
 
+
+    @Autowired org.rostilos.codecrow.core.persistence.repository.codeanalysis.PrChangeSummaryRepository changeSummaries;
+
+    @Test @Transactional void changeSummarySurvivesReloadAndRequiresProjectPrAndRevision() {
+        var owner = binding("summary-owner", "repo", "one", workspace()).getProject();
+        var other = binding("summary-other", "repo", "two", workspace()).getProject();
+        var analysis = new CodeAnalysis(); analysis.setProject(owner);
+        analysis.setAnalysisType(AnalysisType.PR_REVIEW); analysis.setPrNumber(9L);
+        analysis.setCommitHash("abc123"); em.persist(analysis); em.flush();
+        String payload = "{\"summary\":\"Added input guard\",\"files\":[{\"path\":\"a.py\"}]}";
+        changeSummaries.saveAndFlush(new PrChangeSummary(analysis, payload));
+        em.clear();
+        assertThat(changeSummaries.findFirstByProjectIdAndPrNumberAndSourceRevisionOrderByCreatedAtDesc(
+                owner.getId(), 9L, "abc123")).get().extracting(PrChangeSummary::getPayload).isEqualTo(payload);
+        assertThat(changeSummaries.findFirstByProjectIdAndPrNumberAndSourceRevisionOrderByCreatedAtDesc(
+                other.getId(), 9L, "abc123")).isEmpty();
+        assertThat(changeSummaries.findFirstByProjectIdAndPrNumberAndSourceRevisionOrderByCreatedAtDesc(
+                owner.getId(), 10L, "abc123")).isEmpty();
+        assertThat(changeSummaries.findFirstByProjectIdAndPrNumberAndSourceRevisionOrderByCreatedAtDesc(
+                owner.getId(), 9L, "new123")).isEmpty();
+    }
+
+    @Test void changeSummaryMigrationStoresGraphAndCascadesDeletion() throws Exception {
+        String schema = "summary_test_" + UUID.randomUUID().toString().replace("-", "");
+        try (var conn = dataSource.getConnection(); var sql = conn.createStatement()) {
+            sql.execute("CREATE SCHEMA " + schema);
+            try {
+                conn.setSchema(schema);
+                sql.execute("CREATE TABLE project (id bigint PRIMARY KEY)");
+                sql.execute("CREATE TABLE code_analysis (id bigint PRIMARY KEY)");
+                try (var source = getClass().getResourceAsStream("/db/migration/managed/V2.35.0__pr_change_summary.sql")) {
+                    assertThat(source).isNotNull();
+                    sql.execute(new String(source.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+                }
+                sql.execute("INSERT INTO project VALUES (7); INSERT INTO code_analysis VALUES (101)");
+                sql.execute("INSERT INTO pr_change_summary (analysis_id,project_id,pr_number,source_revision,payload) VALUES (101,7,9,'abc','{\"files\":[]}')");
+                try (var rows = sql.executeQuery("SELECT payload FROM pr_change_summary WHERE project_id=7 AND pr_number=9 AND source_revision='abc'")) {
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getString(1)).isEqualTo("{\"files\":[]}");
+                }
+                sql.execute("DELETE FROM code_analysis WHERE id=101");
+                try (var rows = sql.executeQuery("SELECT count(*) FROM pr_change_summary")) {
+                    rows.next(); assertThat(rows.getInt(1)).isZero();
+                }
+            } finally { conn.setSchema("public"); sql.execute("DROP SCHEMA " + schema + " CASCADE"); }
+        }
+    }
 }

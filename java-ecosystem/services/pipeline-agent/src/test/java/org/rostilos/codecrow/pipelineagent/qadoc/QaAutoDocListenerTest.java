@@ -58,7 +58,7 @@ class QaAutoDocListenerTest {
                 qaDocStateRepository,
                 qaDocDocumentService,
                 qaDocPublicPreviewService,
-                enrichmentService);
+                enrichmentService, org.mockito.Mockito.mock(org.rostilos.codecrow.core.service.PrChangeSummaryService.class));
         AnalysisCompletedEvent event = new AnalysisCompletedEvent(
                 this,
                 "correlation-id",

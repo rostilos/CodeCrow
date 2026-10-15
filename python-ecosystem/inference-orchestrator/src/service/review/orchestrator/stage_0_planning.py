@@ -142,6 +142,15 @@ async def execute_stage_0_planning(
     processed_diff: Optional[ProcessedDiff] = None,
     use_local_planning: bool = False,
 ) -> ReviewPlan:
+    if isinstance(getattr(request, "prChangeSummary", None), dict):
+        plan = _build_fallback_review_plan(
+            request, processed_diff,
+            analysis_summary=request.prChangeSummary.get("summary", "PR change scan completed."),
+        )
+        for group in plan.file_groups:
+            group.group_id = "SCANNED_PR_FILES"
+            group.rationale = "Review all acquired source changes using the completed PR-wide scan."
+        return plan
     diff_by_path = _build_diff_lookup(processed_diff)
     planning_paths = _reviewable_planning_paths(request, processed_diff)
 

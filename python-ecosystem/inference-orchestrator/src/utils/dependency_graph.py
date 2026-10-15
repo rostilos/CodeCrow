@@ -207,36 +207,26 @@ class DependencyGraphBuilder:
             )
             return self.nodes
 
-        try:
-            relation_map = self.rag_client.get_structural_relations(
-                paths=all_file_paths,
-                workspace=workspace,
-                project=project,
-                branch=branches[0],
-                max_relations=min(500, max(80, len(all_file_paths) * 20)),
-                **binding,
-            )
-            if inspect.isawaitable(relation_map):
-                relation_map = await relation_map
-            if error := _rag_response_error(relation_map):
-                logger.warning(
-                    "Structural batching lookup failed; batching without "
-                    "inferred edges: %s",
-                    error,
+        # The relation endpoint accepts at most 100 anchors per request. Keep
+        # the full changed-path set when projecting links across these chunks.
+        for start in range(0, len(all_file_paths), 100):
+            try:
+                relation_map = self.rag_client.get_structural_relations(
+                    paths=all_file_paths[start:start + 100],
+                    workspace=workspace,
+                    project=project,
+                    branch=branches[0],
+                    max_relations=min(500, max(80, len(all_file_paths) * 20)),
+                    **binding,
                 )
-                return self.nodes
-        except Exception as e:
-            logger.warning(
-                "Structural batching lookup failed; batching without inferred "
-                "edges: %s",
-                e,
-            )
-            return self.nodes
-
-        self._extract_relationships_from_structural_map(
-            relation_map,
-            all_file_paths,
-        )
+                if inspect.isawaitable(relation_map):
+                    relation_map = await relation_map
+                if error := _rag_response_error(relation_map):
+                    logger.warning("Structural batching lookup incomplete: %s", error)
+                    continue
+                self._extract_relationships_from_structural_map(relation_map, all_file_paths)
+            except Exception as error:
+                logger.warning("Structural batching lookup incomplete: %s", error)
 
         logger.info(
             f"Structural dependency graph built: {len(self.nodes)} files, "

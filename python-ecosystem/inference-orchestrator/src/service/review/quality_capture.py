@@ -231,6 +231,7 @@ def _schema_definition(schema: Any) -> Optional[dict[str, Any]]:
 def _classify_stage(schema: Any, rendered: str, tools: tuple[dict[str, Any], ...]) -> str:
     by_schema = {
         "ReviewPlan": "stage_0",
+        "CumulativeChanges": "stage_0",
         "FileReviewBatchOutput": "stage_1",
         "CrossFileAnalysisResult": "stage_2",
         "DeduplicatedIssueList": "deduplication",

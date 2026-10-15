@@ -13,6 +13,7 @@ import os
 from typing import Dict, Any, List, Optional, Callable
 
 from model.dtos import ReviewRequestDto
+from service.review.change_summary import scan_pr_changes
 from model.output_schemas import CodeReviewIssue
 from model.multi_stage import CrossFileAnalysisResult
 from utils.diff_processor import ProcessedDiff
@@ -577,6 +578,11 @@ class MultiStageReviewOrchestrator:
         candidate_ledger = CandidateEvidenceLedger()
 
         try:
+            _emit_status(self.event_callback, "change_scan_started", "Scanning all PR changes before review...")
+            request.prChangeSummary = await scan_pr_changes(
+                self.llm, request, full_pr_processed_diff or processed_diff, self.event_callback,
+                self.rag_client,
+            )
             if (
                 processed_diff is not None
                 and not hunk_coverage.reviewable_hunk_ids
@@ -607,6 +613,7 @@ class MultiStageReviewOrchestrator:
                         "deleted, or another deterministic non-reviewable input."
                     ),
                     "issues": [],
+                    "prChangeSummary": request.prChangeSummary,
                 }
             
             # === STAGE 0: Planning ===
@@ -1148,6 +1155,7 @@ class MultiStageReviewOrchestrator:
             logger.info("Review hunk coverage complete: %s", hunk_coverage.summary())
 
             response = {
+                "prChangeSummary": request.prChangeSummary,
                 "comment": final_report,
                 "issues": [
                     _serialize_issue_for_client(issue)

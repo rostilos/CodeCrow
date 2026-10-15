@@ -605,4 +605,4 @@ class TestQaDocumentationService:
             task_context=None,
         )
 
-        orchestrator_type.assert_called_once_with(llm=llm)
+        orchestrator_type.assert_called_once_with(llm=llm, agent_service=None)

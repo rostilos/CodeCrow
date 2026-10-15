@@ -159,7 +159,7 @@ class BaseOrchestrator(ABC):
     # ── Request-aware semantic prompt packing ────────────────────────
 
     @staticmethod
-    def request_input_token_target(max_allowed_tokens: Any = None) -> int:
+    def request_input_token_target(max_allowed_tokens: Any = None, *, persisted_context: bool = False) -> int:
         """Return an input target with room left for provider-native output."""
         if isinstance(max_allowed_tokens, bool):
             max_allowed_tokens = None
@@ -172,18 +172,20 @@ class BaseOrchestrator(ABC):
         except (TypeError, ValueError):
             model_context_tokens = None
         if model_context_tokens is None or model_context_tokens <= 0:
-            return QA_INPUT_TOKEN_TARGET
+            if not persisted_context:
+                return QA_INPUT_TOKEN_TARGET
+            model_context_tokens = 200_000
         if model_context_tokens > QA_OUTPUT_CONTEXT_RESERVE_TOKENS:
             model_safe_target = (
                 model_context_tokens - QA_OUTPUT_CONTEXT_RESERVE_TOKENS
             )
         else:
             model_safe_target = max(1, model_context_tokens // 2)
-        return min(QA_INPUT_TOKEN_TARGET, model_safe_target)
+        return model_safe_target if persisted_context else min(QA_INPUT_TOKEN_TARGET, model_safe_target)
 
-    def set_request_input_token_target(self, max_allowed_tokens: Any = None) -> int:
+    def set_request_input_token_target(self, max_allowed_tokens: Any = None, *, persisted_context: bool = False) -> int:
         self.qa_input_token_target = self.request_input_token_target(
-            max_allowed_tokens
+            max_allowed_tokens, persisted_context=persisted_context,
         )
         return self.qa_input_token_target
 

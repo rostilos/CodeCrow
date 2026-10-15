@@ -22,7 +22,7 @@ class AiCommandClientRecordsTest {
                     1L, "workspace", "repo-slug", "project-workspace", "namespace",
                     "openai", "gpt-4", "api-key", null, 42L, "feature", "main", "abc123",
                     "oauth-client", "oauth-secret", "access-token", true, 4096, "bitbucket", null
-            );
+            , null);
 
             assertThat(request.projectId()).isEqualTo(1L);
             assertThat(request.projectVcsWorkspace()).isEqualTo("workspace");

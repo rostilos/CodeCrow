@@ -158,6 +158,7 @@ def structural_graph_query(request: StructuralGraphQueryRequest):
                 request.pattern,
                 request.target,
                 max_results=request.max_results,
+                cursor=request.cursor,
             )
     except (ExactIndexPreconditionError, ValueError) as exception:
         raise HTTPException(status_code=409, detail=str(exception))

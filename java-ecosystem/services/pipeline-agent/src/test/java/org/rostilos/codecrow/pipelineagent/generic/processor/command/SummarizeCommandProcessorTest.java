@@ -53,7 +53,7 @@ class SummarizeCommandProcessorTest {
                 summarizeCacheRepository,
                 aiCommandClient,
                 tokenEncryptionService
-        );
+        , org.mockito.Mockito.mock(org.rostilos.codecrow.core.service.PrChangeSummaryService.class));
     }
 
     @Test

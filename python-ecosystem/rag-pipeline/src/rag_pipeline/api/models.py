@@ -229,6 +229,7 @@ class StructuralGraphQueryRequest(StructuralQueryBinding):
     pattern: str = Field(min_length=1, max_length=100)
     target: str = Field(min_length=1, max_length=1000)
     max_results: int = Field(default=25, ge=1, le=100)
+    cursor: int = Field(default=0, ge=0)
 
 
 class StructuralUnitRequest(StructuralQueryBinding):

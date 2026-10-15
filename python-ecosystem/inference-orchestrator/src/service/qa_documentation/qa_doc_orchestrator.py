@@ -89,8 +89,10 @@ class QaDocOrchestrator(BaseOrchestrator):
         self,
         llm,
         event_callback: Optional[Callable[[Dict], None]] = None,
+        agent_service=None,
     ):
         super().__init__(llm, event_callback)
+        self.agent_service = agent_service
 
     @staticmethod
     def _messages(system_prompt: str, user_prompt: str) -> List[Dict[str, str]]:
@@ -319,6 +321,7 @@ class QaDocOrchestrator(BaseOrchestrator):
         output_language: Optional[str] = "English",
         max_allowed_tokens: Optional[int] = None,
         maxAllowedTokens: Optional[int] = None,
+        pr_change_summary: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Main entry point — runs the multi-stage QA doc pipeline.
@@ -336,7 +339,9 @@ class QaDocOrchestrator(BaseOrchestrator):
                 "maxAllowedTokens",
                 pr_metadata.get("max_allowed_tokens"),
             )
-        token_target = self.set_request_input_token_target(request_token_hint)
+        token_target = self.set_request_input_token_target(
+            request_token_hint, persisted_context=bool(pr_change_summary),
+        )
         logger.info(
             "QA documentation request-aware input target: %d tokens",
             token_target,
@@ -359,6 +364,12 @@ class QaDocOrchestrator(BaseOrchestrator):
             output_language=output_language,
         )
 
+        from service.review.change_summary import change_summary_context
+        context = change_summary_context(pr_change_summary)
+        if context:
+            placeholders["analysis_summary"] += context
+            placeholders["diff"] = "Changes are described by the persisted scheduler graph and summary above."
+
         # ── Relevance gate ───────────────────────────────────────────
         emit_status(self.event_callback, "relevance_check", "Checking if QA documentation is needed...")
         if not await self._is_documentation_needed(placeholders):
@@ -367,7 +378,7 @@ class QaDocOrchestrator(BaseOrchestrator):
 
         # ── Decide: multi-stage vs. single-pass ──────────────────────
         effective_diff = diff or ""
-        use_multi_stage = len(effective_diff) > SINGLE_PASS_THRESHOLD and changed_file_paths
+        use_multi_stage = not context and len(effective_diff) > SINGLE_PASS_THRESHOLD and changed_file_paths
 
         if use_multi_stage:
             logger.info(
@@ -953,7 +964,7 @@ class QaDocOrchestrator(BaseOrchestrator):
             failures = 0
             for packet_index, packet in enumerate(packets, start=1):
                 try:
-                    response = await self.llm.ainvoke(render_packet(packet))
+                    response = await self._invoke_document(render_packet(packet))
                     content = self._extract_text(response)
                     parsed = self._parse_json_from_response(content)
                     successful.append(parsed or {
@@ -1060,7 +1071,7 @@ class QaDocOrchestrator(BaseOrchestrator):
         outputs: List[str] = []
         for index, packet in enumerate(packets, start=1):
             try:
-                response = await self.llm.ainvoke(render_packet(packet))
+                response = await self._invoke_document(render_packet(packet))
             except Exception as exception:
                 raise RuntimeError(
                     f"{label} failed atomically at required semantic shard "
@@ -1352,6 +1363,38 @@ class QaDocOrchestrator(BaseOrchestrator):
     # Single-pass fallback (small PRs)
     # ==================================================================
 
+    async def _invoke_document(self, messages):
+        if self.agent_service is not None:
+            from langchain_core.messages import AIMessage
+            from service.agent.models import AgentExecutionRequest
+            from service.review.orchestrator.stage_1_tool_inventory import (
+                STAGE1_AGENT_TOOL_NAMES,
+            )
+            tools = self.agent_service.available_tool_names & STAGE1_AGENT_TOOL_NAMES
+            try:
+                result = await self.agent_service.execute(AgentExecutionRequest(
+                    prompt="\n\n".join(message["content"] for message in messages),
+                    allowed_tool_names=tools, max_steps=8, timeout_seconds=240,
+                    additional_instructions=(
+                        "Generate QA documentation from the saved PR changes, task and issue list. "
+                        "Use the available review repository/graph tools for concrete testing gaps. "
+                        "For graph tools, choose the relevant changed files as focusPaths "
+                        "(at most 100 per call); narrow the focus when checking a particular change. "
+                        "Do not re-read the full commit history. Missing optional context is unknown; "
+                        "document any limitations and still produce useful QA steps."
+                    ),
+                    metadata={"stage": "qa_documentation"},
+                ))
+                logger.info("QA repository tools completed: calls=%d", len(result.tool_events))
+                return AIMessage(content=str(result.output))
+            except Exception as error:
+                logger.warning("QA repository tools unavailable (%s); generating from saved context", type(error).__name__)
+                self.agent_service = None
+        from service.review.inference_usage import record_model_response
+        response = await self.llm.ainvoke(messages)
+        record_model_response(response)
+        return response
+
     async def _run_single_pass(
         self,
         *,
@@ -1383,7 +1426,7 @@ class QaDocOrchestrator(BaseOrchestrator):
         system_prompt = QA_DOC_SYSTEM_PROMPT.format(**sp_placeholders)
         messages = self._messages(system_prompt, user_prompt)
         if self.prompt_fits(messages):
-            response = await self.llm.ainvoke(messages)
+            response = await self._invoke_document(messages)
             content = self._extract_text(response)
         else:
             heavy_fields = [
@@ -1472,6 +1515,7 @@ class QaDocOrchestrator(BaseOrchestrator):
         placeholders: Dict[str, str],
     ) -> str:
         """Require exact, language-independent boundaries for both shareable sections."""
+        documentation = self._normalize_scenario_priorities(documentation)
         if self._has_complete_shareable_sections(documentation):
             return documentation
 
@@ -1555,11 +1599,26 @@ class QaDocOrchestrator(BaseOrchestrator):
             ).strip()
         if not repaired:
             raise ValueError("QA documentation sentinel repair returned no content")
+        repaired = self._normalize_scenario_priorities(repaired)
         if not self._has_complete_shareable_sections(repaired):
             raise ValueError(
                 "QA documentation is missing complete test-case or environment sentinel sections"
             )
         return repaired
+
+    @classmethod
+    def _normalize_scenario_priorities(cls, documentation: str) -> str:
+        section = cls._extract_sentinel_section(documentation, TEST_CASE_SENTINELS)
+        if section is None:
+            return documentation
+        start, end, _, _ = section
+        # Models sometimes bold the priority too; Java extracts it outside the title.
+        normalized = re.sub(
+            r"(?m)^([ \t]*)\*\*([^\n]+?) +\((HIGH|MEDIUM|LOW)\)\*\*([ \t]*)$",
+            r"\1**\2** (\3)\4",
+            documentation[start:end],
+        )
+        return documentation[:start] + normalized + documentation[end:]
 
     @classmethod
     def _has_complete_shareable_sections(cls, documentation: Optional[str]) -> bool:

@@ -22,6 +22,14 @@ router = APIRouter(tags=["qa-documentation"])
 
 class QaDocumentationRequest(BaseModel):
     """Request payload for QA documentation generation."""
+    pr_change_summary: Optional[Dict[str, Any]] = None
+    source_revision: Optional[str] = None
+    project_workspace: Optional[str] = None
+    project_namespace: Optional[str] = None
+    access_token: Optional[str] = Field(default=None, repr=False)
+    oauth_client: Optional[str] = Field(default=None, repr=False)
+    oauth_secret: Optional[str] = Field(default=None, repr=False)
+    vcs_base_url: Optional[str] = None
     project_id: int
     project_name: str
     pr_number: Optional[int] = None
@@ -111,6 +119,16 @@ async def generate_qa_documentation(
     qa_service = QaDocumentationService()
 
     result = await qa_service.generate(
+        pr_change_summary=payload.pr_change_summary,
+        repository_context={
+            "project_id": payload.project_id, "pr_number": payload.pr_number,
+            "source_revision": payload.source_revision,
+            "project_workspace": payload.project_workspace, "project_namespace": payload.project_namespace,
+            "workspace_slug": payload.workspace_slug, "repo_slug": payload.repo_slug,
+            "access_token": payload.access_token, "oauth_client": payload.oauth_client,
+            "oauth_secret": payload.oauth_secret, "vcs_provider": payload.vcs_provider,
+            "vcs_base_url": payload.vcs_base_url,
+        },
         project_id=payload.project_id,
         project_name=payload.project_name,
         pr_number=payload.pr_number,

@@ -2,6 +2,7 @@ package org.rostilos.codecrow.pipelineagent.qadoc;
 
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
+import org.rostilos.codecrow.core.service.PrChangeSummaryService;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
@@ -63,6 +64,7 @@ public class QaAutoDocListener {
     /** Prefix of the PR-tracking marker variant used by legacy and generated documents. */
     public static final String COMMENT_MARKER_PREFIX = "<!-- codecrow-qa-autodoc";
 
+    private final PrChangeSummaryService prChangeSummaryService;
     private final ProjectRepository projectRepository;
     private final TaskManagementConnectionRepository connectionRepository;
     private final TaskManagementClientFactory clientFactory;
@@ -83,7 +85,9 @@ public class QaAutoDocListener {
                               QaDocStateRepository qaDocStateRepository,
                               QaDocDocumentService qaDocDocumentService,
                               QaDocPublicPreviewService qaDocPublicPreviewService,
-                              PrFileEnrichmentService enrichmentService) {
+                              PrFileEnrichmentService enrichmentService,
+                              PrChangeSummaryService prChangeSummaryService) {
+        this.prChangeSummaryService = prChangeSummaryService;
         this.projectRepository = projectRepository;
         this.connectionRepository = connectionRepository;
         this.clientFactory = clientFactory;
@@ -209,11 +213,13 @@ public class QaAutoDocListener {
                     project.getId(), prNumber, e.getMessage());
         }
 
+        Map<String, Object> prChangeSummary = prChangeSummaryService.find(project.getId(), prNumber, currentCommitHash);
+
         // 5a. Fetch full PR diff
         String diff = null;
         VcsClient vcsClient = null;
 
-        if (vcsConnection != null) {
+        if (vcsConnection != null && prChangeSummary == null) {
             try {
                 vcsClient = vcsClientProvider.getClient(vcsConnection);
                 diff = vcsClient.getPullRequestDiff(workspace, repoSlug, prNumber);
@@ -335,6 +341,8 @@ public class QaAutoDocListener {
 
         // 8. Build generation context and generate QA documentation
         QaDocGenerationContext ctx = QaDocGenerationContext.builder()
+                .prChangeSummary(prChangeSummary)
+                .sourceRevision(currentCommitHash)
                 .qaConfig(qaConfig)
                 .taskDetails(taskDetails)
                 .analysis(analysis)

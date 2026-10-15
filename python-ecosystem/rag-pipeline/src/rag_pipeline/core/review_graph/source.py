@@ -16,12 +16,12 @@ from .projection import (
 
 
 def _source_detail(reader, unit: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    unit_id = _unit_id(unit)
     resolver = getattr(reader, "source_detail_for_manifest", None)
-    if callable(resolver):
-        detail = resolver(unit)
-    else:
-        unit_id = _unit_id(unit)
-        detail = reader.get_unit(unit_id) if unit_id else None
+    # A source window for a neighboring declaration must never turn an
+    # explicitly selected generated outline into literal source evidence.
+    detail = (reader.get_unit(unit_id) if unit_id else
+              resolver(unit) if callable(resolver) else None)
     return detail if isinstance(detail, Mapping) and detail.get("sourceEvidence") else None
 
 
@@ -36,6 +36,7 @@ def _bounded_source_windows(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     changed = set(changed_paths)
     relation_ids_by_unit: dict[str, list[str]] = {}
+    relation_ids_by_path: dict[str, list[str]] = {}
     for relation in relations:
         evidence_id = str(relation.get("evidenceId") or "")
         if not evidence_id:
@@ -44,6 +45,9 @@ def _bounded_source_windows(
             endpoint_id = _unit_id(endpoint)
             if endpoint_id:
                 relation_ids_by_unit.setdefault(endpoint_id, []).append(evidence_id)
+        if relation.get("relation") in {"resolves-import", "resolves-to", "calls-resolved-target"}:
+            for path in relation.get("relatedPaths") or ():
+                relation_ids_by_path.setdefault(path, []).append(evidence_id)
 
     windows: list[dict[str, Any]] = []
     window_by_source_id: dict[str, dict[str, Any]] = {}
@@ -56,7 +60,7 @@ def _bounded_source_windows(
     ordered_candidates = [
         candidate
         for _index, candidate in sorted(
-            enumerate(units),
+            enumerate([*units, *({"path": path} for path in relation_ids_by_path)]),
             key=lambda item: (
                 str(item[1].get("path") or "") in changed,
                 item[0],
@@ -79,6 +83,7 @@ def _bounded_source_windows(
         relation_ids = [
             *relation_ids_by_unit.get(candidate_id, ()),
             *relation_ids_by_unit.get(source_id, ()),
+            *relation_ids_by_path.get(str(source.get("path") or ""), ()),
         ]
         existing_window = window_by_source_id.get(source_id)
         if existing_window is not None:

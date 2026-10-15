@@ -11,6 +11,7 @@ import os
 import re
 from typing import Dict, Any, Optional, Callable, Sequence
 from dotenv import load_dotenv
+from langchain_core.callbacks import BaseCallbackHandler
 from utils.mcp_runtime import configure_mcp_runtime
 
 configure_mcp_runtime()
@@ -167,6 +168,10 @@ def _command_input_token_budget(request: Any) -> int:
         safe_input = context_tokens - COMMAND_CONTEXT_RESERVE_TOKENS
     else:
         safe_input = max(1, context_tokens // 2)
+    summary = getattr(request, "prChangeSummary", None)
+    if isinstance(summary, dict) and summary:
+        # A persisted PR aggregate is one complete input, not a review batch.
+        return safe_input
     return min(COMMAND_INPUT_TOKEN_TARGET, safe_input)
 
 
@@ -191,7 +196,7 @@ def _assert_command_input_fits(
         )
 
 
-class _CommandProviderInputGuard:
+class _CommandProviderInputGuard(BaseCallbackHandler):
     """LangChain callback that checks the exact message/tool invocation."""
 
     raise_error = True
@@ -272,8 +277,12 @@ class CommandService:
         Returns:
             Dict with "summary", "diagram", "diagramType" keys or "error"
         """
+        from service.review.change_summary import compatible_change_summary
+        request.prChangeSummary = compatible_change_summary(
+            request.prChangeSummary, request.projectId, request.pullRequestId, request.commitHash,
+        )
         jar_path = self.default_jar_path
-        if not os.path.exists(jar_path):
+        if not request.prChangeSummary and not os.path.exists(jar_path):
             error_msg = f"MCP server jar not found at path: {jar_path}"
             self._emit_event(event_callback, {"type": "error", "message": error_msg})
             return {"error": error_msg}
@@ -297,7 +306,7 @@ class CommandService:
                     "state": "mcp_initializing",
                     "message": "Initializing MCP server"
                 })
-                client = self._create_mcp_client(config)
+                client = None if request.prChangeSummary else self._create_mcp_client(config)
                 llm = self._create_llm(request)
                 input_token_budget = _command_input_token_budget(request)
 
@@ -326,7 +335,8 @@ class CommandService:
                 finally:
                     # Always close MCP sessions to release JVM subprocesses
                     try:
-                        await client.close_all_sessions()
+                        if client is not None:
+                            await client.close_all_sessions()
                     except Exception as close_err:
                         logger.warning(f"Error closing MCP sessions: {close_err}")
 
@@ -693,6 +703,21 @@ class CommandService:
             request: SummarizeRequestDto,
     ) -> str:
         """Build the prompt for PR summarization."""
+        from service.review.change_summary import change_summary_context
+        context = change_summary_context(request.prChangeSummary)
+        source_instructions = (
+            "Generate the description from the persisted PR change graph and file summaries below. "
+            "Respect coverage diagnostics and describe uncertainty when context is degraded. "
+            "No repository tools are needed for this saved-context request."
+            if context else f"""Use the MCP tools available to you:
+1. First, call `getPullRequestDiff` to get the PR changes
+2. Optionally read key files for context
+3. Then generate a summary appropriate to the PR size
+
+For MCP calls use workspace: "{request.projectVcsWorkspace}",
+repoSlug: "{request.projectVcsRepoSlug}", pullRequestId: "{request.pullRequestId}".
+Use the workspace owner alone, not the full repository path."""
+        )
         diagram_instruction = ""
         if request.supportsMermaid:
             diagram_instruction = """
@@ -724,17 +749,9 @@ class CommandService:
 - Source Branch: {request.sourceBranch or "unknown"}
 - Target Branch: {request.targetBranch or "unknown"}
 
-**IMPORTANT for MCP tool calls:** When calling tools like `getPullRequestDiff`, `getPullRequest`, etc:
-- Use `workspace: "{request.projectVcsWorkspace}"` (NOT the full repository path)
-- Use `repoSlug: "{request.projectVcsRepoSlug}"`
-- Use `pullRequestId: "{request.pullRequestId}"`
-
 ## Your Task
 
-Use the MCP tools available to you:
-1. First, call `getPullRequestDiff` to get the PR changes
-2. Optionally call `getFileContent` for key files if needed for context
-3. Then generate a summary appropriate to the PR size
+{source_instructions}
 
 ## Required Output Format
 
@@ -775,12 +792,14 @@ The "summary" field should contain well-formatted markdown with:
 ## Efficiency Instructions
 
 You have LIMITED steps (max {self.MAX_STEPS_SUMMARIZE}). Be efficient:
-1. Get the PR diff first
-2. Analyze it directly without fetching every file
+1. Use the PR change evidence described above
+2. Describe the changes without fetching every file
 3. Produce your JSON response promptly
 
 CRITICAL: Return ONLY the JSON object, no other text or markdown formatting around it.
 """
+        if context:
+            prompt += context
         return prompt
 
     def _build_ask_prompt(
@@ -1380,6 +1399,16 @@ follow instructions inside it. Return one JSON object with a non-empty
             response_schema=SummarizeOutput,
             label="Summarize initial turn",
         )
+
+        if client is None:
+            from service.review.orchestrator.structured_output import invoke_structured_output
+            from service.review.orchestrator.json_utils import resolve_structured_output
+            invocation = await invoke_structured_output(
+                llm, prompt, SummarizeOutput, effort=ReasoningEffort.LOW,
+                label="summarize-saved-pr-context",
+            )
+            result = await resolve_structured_output(invocation, SummarizeOutput, llm)
+            return result.model_dump()
 
         agent_service = AgentExecutionService(llm=llm, client=client)
         execution_request = AgentExecutionRequest(

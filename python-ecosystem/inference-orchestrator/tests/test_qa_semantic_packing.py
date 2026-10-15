@@ -62,6 +62,19 @@ def _all_prompt_text(llm):
 
 
 class TestQaSemanticPackingPrimitives:
+    @pytest.mark.parametrize("capacity, expected", [(200_000, 180_000), (50_000, 30_000), (12_000, 6_000), (None, 180_000)])
+    def test_persisted_context_reserves_output_within_model_capacity(self, capacity, expected):
+        assert BaseOrchestrator.request_input_token_target(capacity, persisted_context=True) == expected
+
+    def test_complete_aggregate_can_exceed_batch_target_but_not_model_capacity(self):
+        orchestrator = BaseOrchestrator(llm=MagicMock())
+        messages = [{"role": "user", "content": "x" * 240_000}]
+        assert not orchestrator.prompt_fits(messages)
+        orchestrator.set_request_input_token_target(200_000, persisted_context=True)
+        assert orchestrator.prompt_fits(messages)
+        orchestrator.set_request_input_token_target(50_000, persisted_context=True)
+        assert not orchestrator.prompt_fits(messages)
+
     def test_unicode_one_line_is_bounded_with_truthful_partial_coverage(self):
         text = "😀Привіт漢字" * 2_000
         record = QaSemanticRecord(

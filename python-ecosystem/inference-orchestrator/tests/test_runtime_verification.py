@@ -226,10 +226,16 @@ async def test_cancellation_removes_only_its_own_container(binding, monkeypatch)
 @pytest.mark.skipif(os.environ.get("CODECROW_TEST_CONTAINER_VERIFICATION") != "1", reason="requires explicitly enabled local cached-image runtime")
 async def test_real_container_timeout_and_output_bound(binding):
     image = os.environ.get("CODECROW_TEST_VERIFICATION_IMAGE", "busybox:latest")
-    check = VerificationCheck("timeout", image, ("sh", "-c", "yes noisy"), timeout_seconds=1)
-    runner = RuntimeVerification(binding, VerificationConfig(checks=(check,), max_output_bytes=128))
-    result = await runner.run("timeout")
-    assert result["status"] == "timeout", result
+    # Startup can consume a one-second deadline under load. Check output
+    # bounding separately so a valid startup timeout is not a false failure.
+    checks = (VerificationCheck("output", image, ("seq", "1", "1000"), timeout_seconds=30),
+              VerificationCheck("timeout", image, ("sleep", "30"), timeout_seconds=1))
+    runner = RuntimeVerification(binding, VerificationConfig(checks=checks, max_output_bytes=128))
+    result = await runner.run("output")
+    assert result["status"] == "passed", result
     assert result["outputTruncated"]
     assert len(result["output"].encode()) <= 128
     assert not result.get("cleanupDiagnostic")
+    timed_out = await runner.run("timeout")
+    assert timed_out["status"] == "timeout", timed_out
+    assert not timed_out.get("cleanupDiagnostic")

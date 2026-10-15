@@ -5,12 +5,29 @@ from unittest.mock import patch
 import pytest
 
 from rag_pipeline.api.models import (
+    StructuralGraphQueryRequest,
     ReviewGraphQueryRequest,
     ReviewImpactRadiusRequest,
     ReviewMinimalContextRequest,
     ReviewTraverseRequest,
     ReviewUnitRequest,
 )
+
+
+@patch('rag_pipeline.api.routers.query._open_reader')
+@patch('rag_pipeline.api.routers.query._manager')
+def test_base_graph_cursor_reaches_reader_without_changing_generation_binding(manager, open_reader):
+    from rag_pipeline.api.routers.query import structural_graph_query
+    request = StructuralGraphQueryRequest(workspace='tenant', project='project', branch='main',
+        repository_revision='base', collection_target='base-target',
+        repository_generation_manifest_sha256='a' * 64,
+        pattern='relations_of', target='changed.py', max_results=100, cursor=100)
+    reader = open_reader.return_value.__enter__.return_value
+    reader.query_graph.return_value = {'results': [], 'nextCursor': None}
+    assert structural_graph_query(request)['nextCursor'] is None
+    reader.query_graph.assert_called_once_with('relations_of', 'changed.py', max_results=100, cursor=100)
+    assert open_reader.call_args.args[1].workspace == 'tenant'
+    assert open_reader.call_args.args[1].collection_target == 'base-target'
 
 
 def _binding():

@@ -98,6 +98,7 @@ class RagClient:
         repository_revision: Optional[str] = None,
         repository_generation_manifest_sha256: Optional[str] = None,
         collection_target: Optional[str] = None,
+        cursor: int = 0,
     ) -> Dict[str, Any]:
         """Traverse a named graph relation around a symbol, unit, or path."""
         payload = structural_query_payload(
@@ -114,6 +115,7 @@ class RagClient:
             "pattern": pattern,
             "target": target,
             "max_results": max_results,
+            "cursor": cursor,
         })
         return await self.transport._post_structural_query(
             "/query/graph",

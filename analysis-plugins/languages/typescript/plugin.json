@@ -20,7 +20,15 @@
     "filesAll": [],
     "filesAny": [],
     "contentMarkers": [],
-    "alternatives": []
+    "alternatives": [
+      {
+        "filesAll": [],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": ["**/*.tsx"],
+        "contentMarkers": []
+      }
+    ]
   },
   "entrypoints": {
     "java": "org.rostilos.codecrow.plugins.typescript.TypescriptPlugin",

@@ -684,6 +684,7 @@ def test_review_context_indexes_and_caches_exact_proposed_topology(tmp_path, mon
     target = tmp_path / "target"
     (target / "src").mkdir(parents=True)
     (target / "src/service.py").write_text(
+        "from src.old import old_dependency\n\n"
         "def run():\n"
         "    # The body is intentionally large enough for semantic AST admission.\n"
         "    value = old_dependency()\n"
@@ -713,6 +714,7 @@ def test_review_context_indexes_and_caches_exact_proposed_topology(tmp_path, mon
         deleted=("src/old.py",),
         bodies={
             "src/service.py": (
+                "from src.new import proposed_dependency\n\n"
                 "def run():\n"
                 "    # Proposed implementation used to prove target topology is stale.\n"
                 "    value = proposed_dependency()\n"
@@ -737,9 +739,8 @@ def test_review_context_indexes_and_caches_exact_proposed_topology(tmp_path, mon
     original_coordinator = manager._mutation_coordinator
     original_coordinator.close()
     manager._mutation_coordinator = _Coordinator()
-    manager.plugin_catalog = None
-    manager.plugin_runtime = None
-    manager.plugin_selector = None
+    # The cross-file edge must come from an actual import, not the old global
+    # unique-name fallback. Keep repository plugins enabled for this fixture.
     service = ProposedTreeReviewContextService(manager)
     base_collection_target = "cc_test_base_generation"
     indexed_revision = "base-revision" if base_available else "older-base-revision"

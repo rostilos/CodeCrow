@@ -10,10 +10,10 @@ from rag_pipeline.core.structural_graph import resolution
 from tests.test_structural_store import _node, _pending_store, _reader
 
 
-def _reference(writer, target, *, path="caller.go", explicit=None):
+def _reference(writer, target, *, path="caller.go", explicit=None, related_paths=()):
     return writer.add_relation(
         kind="CALLS", source="Caller", relation="calls", target=target,
-        path=path, line=1, origin="tree-sitter", target_unit_id=explicit,
+        path=path, line=1, origin="tree-sitter", target_unit_id=explicit, related_paths=related_paths,
     )
 
 
@@ -81,7 +81,8 @@ def test_exact_aliases_disambiguate_case_and_preserve_declared_case_collisions(t
     expected = {"pkg.Foo": upper, "pkg.foo": lower, "pkg.FOO": None,
                 "Alias": aliased, "alias": aliased, "ALIAS": None,
                 "ExactToken": aliased, "exacttoken": None}
-    ids = {name: _reference(writer, name) for name in expected}
+    ids = {name: _reference(writer, name, related_paths=("aliases.py",) if "." not in name else ())
+           for name in expected}
     _resolve(writer, ids.values(), mode, monkeypatch)
     assert {name: _target(connection, rid) for name, rid in ids.items()} == expected
     connection.close()
@@ -94,23 +95,23 @@ def test_exact_shadow_name_and_qualified_receiver_survive_without_builtin_blackl
     shadow = writer.add_unit(_node("shadow.go", "int64"))
     method = writer.add_unit(_node("receiver.go", "Json.Int64"))
     qualified = _reference(writer, "Json.Int64")
-    same_spelling = _reference(writer, "int64")
+    same_spelling = _reference(writer, "int64", path="shadow.go")
     explicit = _reference(writer, "external spelling", explicit=method)
     short = _reference(writer, "unknownReceiver.Int64")
     _resolve(writer, [qualified, same_spelling, explicit, short], mode, monkeypatch)
     assert _target(connection, qualified) == method
     assert _target(connection, same_spelling) == shadow
     assert _target(connection, explicit) == method
-    # Existing unique short-name fallback remains a documented limitation.
-    assert _target(connection, short) == method
+    # A differently qualified receiver is not the same declaration.
+    assert _target(connection, short) is None
     connection.close()
 
 
 def test_clone_case_only_add_delete_rename_keeps_base_immutable(tmp_path):
     _, _, base, writer = _pending_store(tmp_path)
-    original = writer.add_unit(_node("old.go", "Int64"))
-    lower_ref = _reference(writer, "int64")
-    upper_ref = _reference(writer, "Int64")
+    original = writer.add_unit(_node("old.go", "pkg.Int64"))
+    lower_ref = _reference(writer, "pkg.int64")
+    upper_ref = _reference(writer, "pkg.Int64")
     writer.resolve_relations()
     base.commit()
     before = [tuple(row) for row in base.execute("SELECT * FROM relations ORDER BY relation_id")]
@@ -119,7 +120,7 @@ def test_clone_case_only_add_delete_rename_keeps_base_immutable(tmp_path):
     base.backup(clone)
     delta = StructuralGraphWriter(clone, track_mutations=True)
     delta.refresh_counts()
-    added = delta.add_unit(_node("added.go", "int64"))
+    added = delta.add_unit(_node("added.go", "pkg.int64"))
     delta.resolve_touched_relations()
     assert _target(clone, lower_ref) == added
     assert _target(clone, upper_ref) == original
@@ -127,7 +128,7 @@ def test_clone_case_only_add_delete_rename_keeps_base_immutable(tmp_path):
     delta.resolve_touched_relations()
     assert _target(clone, lower_ref) is None
     delta.remove_paths(("old.go",))
-    renamed = delta.add_unit(_node("renamed.go", "Int64"))
+    renamed = delta.add_unit(_node("renamed.go", "pkg.Int64"))
     delta.resolve_touched_relations()
     assert _target(clone, upper_ref) == renamed
     assert _target(clone, lower_ref) is None
@@ -143,7 +144,7 @@ def test_alias_metadata_is_decoded_at_most_once_per_unit_per_resolution(tmp_path
     node = _node("target.py", "pkg.Target")
     node.metadata["symbol_names"] = [f"Alias{index}" for index in range(40)]
     target = writer.add_unit(node)
-    ids = [_reference(writer, name) for name in node.metadata["symbol_names"]]
+    ids = [_reference(writer, name, related_paths=("target.py",)) for name in node.metadata["symbol_names"]]
     calls = []
     original = json.loads
     def counted(value, *args, **kwargs):
@@ -154,4 +155,25 @@ def test_alias_metadata_is_decoded_at_most_once_per_unit_per_resolution(tmp_path
     _resolve(writer, ids, mode, monkeypatch)
     assert all(_target(connection, relation_id) == target for relation_id in ids)
     assert len(calls) <= 1
+    connection.close()
+
+
+@pytest.mark.parametrize("mode", ["full", "selective", "bulk_selective"])
+def test_captured_python_builtins_and_external_types_do_not_bind_unrelated_typescript(tmp_path, monkeypatch, mode):
+    _, _, connection, writer = _pending_store(tmp_path)
+    for path, name in [("static/rangeMap.tsx", "RangeMap.min"), ("static/api.tsx", "Request"),
+                       ("unrelated.py", "another")]:
+        target = _node(path, name)
+        target.metadata['language'] = 'typescript' if path.endswith('.tsx') else 'python'
+        writer.add_unit(target)
+    local = writer.add_unit(_node('caller.py', 'local'))
+    imported = writer.add_unit(_node('dependency.ts', 'imported'))
+    ids = {name: _reference(writer, name, path='caller.py')
+           for name in ('min', 'Request', 'another', 'missing.min', 'local')}
+    ids['imported'] = _reference(writer, 'imported', path='caller.js', related_paths=('dependency.ts',))
+    _resolve(writer, ids.values(), mode, monkeypatch)
+    assert {name: _target(connection, value) for name, value in ids.items()} == {
+        'min': None, 'Request': None, 'another': None, 'missing.min': None,
+        'local': local, 'imported': imported,
+    }
     connection.close()

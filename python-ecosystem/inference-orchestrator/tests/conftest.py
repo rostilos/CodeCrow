@@ -66,7 +66,7 @@ _ensure_mock("langchain_core.language_models.chat_models", {
     "BaseChatModel": _MockBaseChatModel,
 })
 _ensure_mock("langchain_core.runnables")
-_ensure_mock("langchain_core.callbacks")
+_ensure_mock("langchain_core.callbacks", {"BaseCallbackHandler": object})
 _ensure_mock("langchain_core.callbacks.manager")
 _ensure_mock("langchain_core.output_parsers")
 _ensure_mock("langchain_core.prompts")

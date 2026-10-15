@@ -387,6 +387,23 @@ async def test_failed_optional_structural_lookup_keeps_enrichment_edges():
 
 
 @pytest.mark.asyncio(loop_scope="function")
+async def test_large_pr_chunks_relation_queries_and_keeps_cross_chunk_links():
+    from unittest.mock import AsyncMock
+    paths = [f'file{i}.py' for i in range(106)]
+    async def relations(**kwargs):
+        assert len(kwargs['paths']) <= 100
+        return {'relations': [{'kind': 'IMPORTS', 'relatedPaths': [paths[0], paths[-1]]}]}
+    client = SimpleNamespace(get_structural_relations=AsyncMock(side_effect=relations))
+    builder = DependencyGraphBuilder(client)
+    await builder.build_graph_from_structural_relations(
+        [_make_group('HIGH', [_make_file(p) for p in paths])], 'ws', 'proj', ['main'],
+        structural_binding={'repository_revision': 'abc'})
+    assert [len(call.kwargs['paths']) for call in client.get_structural_relations.await_args_list] == [100, 6]
+    assert paths[-1] in builder.nodes[paths[0]].related_files
+    assert len(builder.relationships) == 1
+
+
+@pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.parametrize("entrypoint", ["get_smart_batches_async", "build_graph_from_structural_relations"])
 async def test_reused_builder_cannot_leak_another_review_graph(entrypoint):
     builder = DependencyGraphBuilder()

@@ -354,6 +354,13 @@ class TestBuildAskPrompt:
 
 
 class TestCommandInputPacking:
+    @pytest.mark.parametrize("capacity, expected", [(200_000, 180_000), (50_000, 30_000), (8_000, 4_000), (None, 180_000)])
+    def test_saved_aggregate_uses_model_capacity_with_output_reserve(self, capacity, expected):
+        request = MagicMock(maxAllowedTokens=capacity, prChangeSummary={"summary": "Retained PR context"})
+        assert _command_input_token_budget(request) == expected
+        request.prChangeSummary = {}
+        assert _command_input_token_budget(request) == min(60_000, expected)
+
     def test_request_budget_reserves_output_without_setting_output_cap(self):
         assert _command_input_token_budget(MagicMock(maxAllowedTokens=50_000)) == 30_000
         assert _command_input_token_budget(MagicMock(maxAllowedTokens=200_000)) == 60_000

@@ -19,6 +19,7 @@ from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from model.multi_stage import FileReviewBatchOutput, FileReviewOutput, ReviewPlan
 from utils.prompts.prompt_builder import PromptBuilder
+from service.review.change_summary import change_summary_context, group_review_items_by_scan
 from utils.diff_processor import (
     DiffChangeType,
     ProcessedDiff,
@@ -1316,6 +1317,7 @@ def _render_stage1_prompt(
         plugin_context=plugin_context_text,
         batch_boundary_context=material.boundary_context,
     )
+    prompt += change_summary_context(getattr(material.request, "prChangeSummary", None), material.batch_file_paths)
     return prompt, plugin_context_text
 
 
@@ -1325,9 +1327,11 @@ def _estimated_prompt_tokens(prompt: str) -> int:
         len(prompt.encode("utf-8"))
         + _STAGE1_SCHEMA_DECLARATION_BYTES
     )
+    context_start = prompt.find('PR-WIDE CHANGE CONTEXT')
+    shared_bytes = len(prompt[context_start:].encode('utf-8')) if context_start >= 0 else 0
     return max(
         1,
-        (request_bytes + 3) // 4 + _STAGE1_ESTIMATOR_SAFETY_TOKENS,
+        (request_bytes + 3) // 4 + (shared_bytes + 3) // 4 + _STAGE1_ESTIMATOR_SAFETY_TOKENS,
     )
 
 
@@ -1371,9 +1375,13 @@ def _stage1_batch_token_limit(request: ReviewRequestDto) -> int:
         getattr(request, "maxAllowedTokens", None),
         200000,
     )
+    shared_context = change_summary_context(getattr(request, 'prChangeSummary', None))
+    # Keep the existing source-review allowance while accounting for the new
+    # PR-wide context, always within the configured model context window.
+    shared_tokens = (len(shared_context.encode('utf-8')) + 1) // 2
     return min(
         max(10_000, model_context_tokens - 20_000),
-        STAGE1_BATCH_TOKEN_BUDGET,
+        STAGE1_BATCH_TOKEN_BUDGET + shared_tokens,
     )
 
 
@@ -2633,7 +2641,7 @@ async def execute_stage_1_file_reviews(
     prepared_context.current_source_batch_char_budget = (
         STAGE1_MAX_CURRENT_FILE_CHARS * max(1, len(items))
     )
-    batches = [items] if items else []
+    batches = group_review_items_by_scan(items, getattr(request, "prChangeSummary", None))
     stage1_token_budget = _stage1_packing_token_limit(request)
     batches = _repack_stage1_batches_by_rendered_input(
         batches,

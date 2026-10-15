@@ -197,27 +197,7 @@ def _source_detail_for_manifest(reader, unit: Mapping[str, Any]) -> dict[str, An
     if callable(manifest_resolver):
         return manifest_resolver(unit)
     detail = reader.get_unit(str(unit.get("unitId") or ""))
-    if detail and detail.get("sourceEvidence"):
-        return detail
-    path = unit.get("path")
-    if not isinstance(path, str) or not path:
-        return None
-    try:
-        line = max(1, int(unit.get("startLine") or 1))
-    except (TypeError, ValueError):
-        line = 1
-    rows = reader.connection.execute(
-        "SELECT unit_id FROM units WHERE path = ? "
-        "AND record_type IN ('source_unit', 'plugin_context') "
-        "ORDER BY CASE WHEN start_line <= ? AND end_line >= ? THEN 0 ELSE 1 END, "
-        "abs(start_line - ?), start_line, unit_id",
-        (path, line, line, line),
-    )
-    for row in rows:
-        detail = reader.get_unit(row["unit_id"])
-        if detail and detail.get("sourceEvidence"):
-            return detail
-    return None
+    return detail if detail and detail.get("sourceEvidence") else None
 
 
 
@@ -542,6 +522,11 @@ def build_review_context(
             for endpoint in (relation.get("sourceUnit"), relation.get("targetUnit")):
                 if isinstance(endpoint, dict):
                     endpoint_candidates.append((endpoint, evidence_id))
+            # A resolved import path remains useful source evidence even when
+            # dynamic/member resolution cannot identify an exact declaration.
+            if relation.get("relation") in {"resolves-import", "resolves-to", "calls-resolved-target"}:
+                for path in relation.get("relatedPaths") or ():
+                    endpoint_candidates.append(({"path": path}, evidence_id))
     for unit in focus_matches:
         endpoint_candidates.append((unit, "focus:" + str(unit.get("unitId"))))
 

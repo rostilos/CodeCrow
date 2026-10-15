@@ -15,7 +15,7 @@ from codecrow_plugins import (
 )
 
 
-TYPESCRIPT_EXTENSIONS = (".cts", ".mts", ".ts")
+TYPESCRIPT_EXTENSIONS = (".cts", ".mts", ".ts", ".tsx")
 _IMPORT_FROM = re.compile(
     r"^\s*import\s+(?:type\s+)?(?P<clause>.*?)\s+from\s+"
     r"(?P<quote>['\"])(?P<module>[^'\"]+)(?P=quote)",
@@ -116,7 +116,7 @@ def analyze_typescript_artifact(
     document = TreeSitterDocument.parse(
         artifact.content,
         "tree_sitter_typescript",
-        "language_typescript",
+        "language_tsx" if artifact.path.casefold().endswith(".tsx") else "language_typescript",
     )
     module = module_for_path(artifact.path)
     facts: set[GraphFact] = {

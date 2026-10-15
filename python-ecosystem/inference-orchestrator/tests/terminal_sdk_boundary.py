@@ -48,10 +48,27 @@ async def exercise(model_type, correction):
         assert result['structured_response'].reviews[0].file == 'a.py'
         assert len(requests) == (2 if correction else 1)
 
+async def exercise_saved_context_description():
+    from service.command.command_service import CommandService
+    async def respond(request):
+        payload = json.loads(request.content)
+        assert payload['response_format']['type'] == 'json_schema'
+        return httpx.Response(200, json={
+            'id': 'offline-description', 'object': 'chat.completion', 'model': 'offline',
+            'choices': [{'index': 0, 'finish_reason': 'stop', 'message': {
+                'role': 'assistant', 'content': json.dumps({
+                    'summary': 'Description from saved PR context', 'diagram': '', 'diagramType': 'ASCII'})}}],
+            'usage': {'prompt_tokens': 10, 'completion_tokens': 10, 'total_tokens': 20}})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+        model = ChatOpenAI(api_key='offline-test-key', model='offline', http_async_client=http, max_retries=0)
+        result = await CommandService()._execute_summarize(model, None, 'Saved PR context', False, None)
+        assert result['summary'] == 'Description from saved PR context'
+
 async def main():
     for model_type in (ChatOpenAI, ChatOpenRouter):
         for correction in (None, 'repository', 'schema'):
             await exercise(model_type, correction)
-    print('Real SDK terminal tool binding, JSON-array normalization and bounded correction passed; 0 network/model calls')
+    await exercise_saved_context_description()
+    print('Real SDK terminal tools, normalization, correction and saved-context description passed; 0 network/model calls')
 
 asyncio.run(asyncio.wait_for(main(), timeout=15))

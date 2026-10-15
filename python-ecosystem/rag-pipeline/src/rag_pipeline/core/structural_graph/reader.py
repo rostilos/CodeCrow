@@ -265,6 +265,30 @@ class StructuralGraphReader:
             "sourceEvidence": source_evidence,
         }
 
+    def source_detail_for_manifest(self, unit: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Read real source for a declaration or a plugin-resolved file."""
+        detail = self.get_unit(str(unit.get("unitId") or ""))
+        if detail and detail.get("sourceEvidence"):
+            return detail
+        path = unit.get("path")
+        if not isinstance(path, str) or not path:
+            return None
+        try:
+            line = max(1, int(unit.get("startLine") or 1))
+        except (TypeError, ValueError):
+            line = 1
+        rows = self.connection.execute(
+            "SELECT unit_id FROM units WHERE path = ? "
+            "AND record_type IN ('source_unit', 'plugin_context') "
+            "ORDER BY CASE WHEN start_line <= ? AND end_line >= ? THEN 0 ELSE 1 END, "
+            "abs(start_line - ?), start_line, unit_id", (path, line, line, line),
+        )
+        for row in rows:
+            detail = self.get_unit(row["unit_id"])
+            if detail and detail.get("sourceEvidence"):
+                return detail
+        return None
+
     def get_relation(self, evidence_id: str) -> dict[str, Any] | None:
         """Read one exact fact only from this already-bound generation."""
         row = self.connection.execute(

@@ -256,7 +256,8 @@ public class AiCommandClient {
             boolean supportsMermaid,
             Integer maxAllowedTokens,
             String vcsProvider,
-            String vcsBaseUrl) {
+            String vcsBaseUrl,
+            Map<String, Object> prChangeSummary) {
     }
 
     /**

@@ -286,6 +286,33 @@ class TestIntermediateAnalysisPrompt:
 
 
 class TestIndependentTestCases:
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_normalizes_bold_priority_without_another_model_call(self):
+        document = """**Overview (HIGH)**
+<!-- codecrow-test-cases:start -->
+### Test Scenarios
+<!-- codecrow-test-cases:content -->
+**Upload an image within the allowed size (HIGH)**
+- **Expected Result:** The image uploads successfully.
+**Upload an animated image (MEDIUM)**
+- **Expected Result:** The image remains animated.
+<!-- codecrow-test-cases:end -->
+<!-- codecrow-environment:start -->
+### Environment and Setup Notes
+<!-- codecrow-environment:content -->
+**Setup note (LOW)**
+<!-- codecrow-environment:end -->"""
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock()
+        orchestrator = QaDocOrchestrator(llm=llm)
+        normalized = await orchestrator._ensure_shareable_sections(document, {})
+        assert normalized == document.replace(
+            "**Upload an image within the allowed size (HIGH)**",
+            "**Upload an image within the allowed size** (HIGH)",
+        ).replace("**Upload an animated image (MEDIUM)**", "**Upload an animated image** (MEDIUM)")
+        assert orchestrator._has_complete_shareable_sections(normalized)
+        llm.ainvoke.assert_not_awaited()
+
     def test_custom_template_requires_both_exact_sentinel_blocks(self):
         assert "custom template MUST NOT remove test cases" in QA_DOC_CUSTOM_PROMPT
         assert "<!-- codecrow-test-cases:start -->" in QA_DOC_CUSTOM_PROMPT
@@ -401,7 +428,7 @@ class TestIndependentTestCases:
             <!-- codecrow-test-cases:start -->
             ### Тестові сценарії
             <!-- codecrow-test-cases:content -->
-            **Checkout succeeds** (HIGH)
+            **Checkout succeeds (HIGH)**
             - **Expected Result:** Confirmation appears
             <!-- codecrow-test-cases:end -->
 

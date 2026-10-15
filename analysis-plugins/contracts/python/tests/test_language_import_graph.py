@@ -245,6 +245,39 @@ def test_typescript_import_and_call_resolve_to_exported_policy():
     assert catalog.implementation("typescript") is not None
 
 
+def test_tsx_only_repository_resolves_multiline_relative_imports_with_jsx_syntax():
+    files = {
+        "src/aggregateFields.tsx": "export const isBaseVisualize = (value: unknown) => Boolean(value);\n",
+        "src/index.tsx": (
+            "import {\n  isBaseVisualize,\n} from './aggregateFields';\n"
+            "export const Panel = () => <div>{String(isBaseVisualize({}))}</div>;\n"
+        ),
+    }
+    _, runtime, capabilities, analysis = _analyze(files)
+    facts = _facts(analysis)
+    binding = next(f for f in facts if f.kind == 'typescript-import-binding'
+                   and f.source == 'src::isBaseVisualize')
+    assert binding.related_paths == ('src/aggregateFields.tsx',)
+    assert any(f.kind == 'typescript-call-resolution' and f.target == 'src/aggregateFields::isBaseVisualize'
+               for f in facts)
+    # TSX retains its existing syntax owner; the repository graph is shared
+    # with TypeScript without routing JSX through the TypeScript-only grammar.
+    assert capabilities.file_plugins['src/index.tsx'] == ('tsx',)
+    assert runtime.syntax_contribution('src/index.tsx', capabilities) == (None, ())
+    assert runtime.repository_analysis_plugins(capabilities) == ('typescript',)
+
+
+def test_typescript_and_tsx_share_relative_import_resolution():
+    _, _, _, analysis = _analyze({
+        'src/policy.ts': 'export const allowed = () => true;\n',
+        'src/Panel.tsx': "import {allowed} from './policy';\nexport const Panel = () => <div>{String(allowed())}</div>;\n",
+        'src/page.ts': "import {Panel} from './Panel';\nexport const page = () => Panel();\n",
+    })
+    facts = _facts(analysis)
+    assert any(f.kind == 'typescript-call-resolution' and f.related_paths == ('src/policy.ts',) for f in facts)
+    assert any(f.kind == 'typescript-call-resolution' and f.related_paths == ('src/Panel.tsx',) for f in facts)
+
+
 def test_typescript_validator_rejects_coarse_or_contradicted_relation_claims():
     files = {
         "src/downloadPolicy.ts": (

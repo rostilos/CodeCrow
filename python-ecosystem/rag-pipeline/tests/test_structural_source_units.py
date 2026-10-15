@@ -14,6 +14,30 @@ from rag_pipeline.core.structural_store import StructuralGenerationStore, Struct
 PLUGINS_ROOT = Path(__file__).resolve().parents[3] / "analysis-plugins"
 
 
+def test_resolved_import_path_provides_source_without_fabricating_a_member_endpoint(tmp_path):
+    from rag_pipeline.core.review_graph.source import _bounded_source_windows
+    from tests.test_structural_store import _node, _pending_store, _reader
+    _, _, connection, writer = _pending_store(tmp_path)
+    try:
+        target_id = writer.add_unit(_node('dependency.py', 'dependency.py', "def actual():\n    return 7\n"))
+        relation_id = writer.add_relation(kind='python-call-resolution', source='caller::dynamic',
+            relation='calls-resolved-target', target='dependency::dynamic', path='caller.py',
+            line=3, origin='plugin', related_paths=('dependency.py',))
+        writer.resolve_relations()
+        reader = _reader(connection)
+        relation = reader.get_relation(relation_id)
+        assert relation['targetUnit'] is None
+        windows, coverage = _bounded_source_windows(reader, [], [relation], changed_paths=['caller.py'],
+            max_source_windows=1, max_source_characters=1000)
+        assert len(windows) == 1 and windows[0]['unitId'] == target_id
+        assert windows[0]['path'] == 'dependency.py' and 'return 7' in windows[0]['content']
+        assert windows[0]['relationEvidenceIds'] == [relation_id]
+        assert coverage['state'] == 'complete'
+        assert reader.get_relation(relation_id)['targetUnit'] is None
+    finally:
+        connection.close()
+
+
 def test_large_class_and_method_retain_exact_source_graph_ownership_and_tail_relations(tmp_path):
     pytest.importorskip("tree_sitter_python")
     path = "src/service.py"

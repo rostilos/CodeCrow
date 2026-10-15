@@ -260,12 +260,14 @@ class StructuralGraphWriter:
         value: str,
         *,
         preferred_paths: Sequence[str] = (),
-        allow_short_name: bool = True,
+        allow_global: bool = True,
+        allow_aliases: bool = True,
     ) -> str | None:
         return self._resolution._unique_named_unit(
             value,
             preferred_paths=preferred_paths,
-            allow_short_name=allow_short_name,
+            allow_global=allow_global,
+            allow_aliases=allow_aliases,
         )
 
     def build_lookup_indexes(self, cancellation_check: Callable[[], None] | None = None) -> None:

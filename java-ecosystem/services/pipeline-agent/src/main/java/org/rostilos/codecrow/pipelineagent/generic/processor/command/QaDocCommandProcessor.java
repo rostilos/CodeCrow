@@ -2,6 +2,7 @@ package org.rostilos.codecrow.pipelineagent.generic.processor.command;
 
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
+import org.rostilos.codecrow.core.service.PrChangeSummaryService;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
@@ -63,6 +64,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(QaDocCommandProcessor.class);
 
+    private final PrChangeSummaryService prChangeSummaryService;
     private final TaskManagementConnectionRepository connectionRepository;
     private final TaskManagementClientFactory clientFactory;
     private final QaDocGenerationService qaDocGenerationService;
@@ -82,8 +84,10 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             QaDocStateRepository qaDocStateRepository,
             QaDocDocumentService qaDocDocumentService,
             QaDocPublicPreviewService qaDocPublicPreviewService,
-            PrFileEnrichmentService enrichmentService
+            PrFileEnrichmentService enrichmentService,
+            PrChangeSummaryService prChangeSummaryService
     ) {
+        this.prChangeSummaryService = prChangeSummaryService;
         this.connectionRepository = connectionRepository;
         this.clientFactory = clientFactory;
         this.qaDocGenerationService = qaDocGenerationService;
@@ -237,11 +241,13 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             String sourceBranch = payload.sourceBranch();
             String targetBranch = payload.targetBranch();
 
+            Map<String, Object> prChangeSummary = prChangeSummaryService.find(project.getId(), prNumber, commitHash);
+
             // 5b. Fetch the raw PR diff from the VCS platform
             String diff = null;
             VcsClient vcsClient = null;
 
-            if (vcsConnection != null && prNumber != null) {
+            if (vcsConnection != null && prNumber != null && prChangeSummary == null) {
                 try {
                     vcsClient = vcsClientProvider.getClient(vcsConnection);
                     diff = vcsClient.getPullRequestDiff(workspace, repoSlug, prNumber);
@@ -345,6 +351,8 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
 
             // 7. Build generation context and generate QA documentation
             QaDocGenerationContext ctx = QaDocGenerationContext.builder()
+                    .prChangeSummary(prChangeSummary)
+                    .sourceRevision(commitHash)
                     .qaConfig(qaConfig)
                     .taskDetails(taskDetails)
                     .analysis(analysis)

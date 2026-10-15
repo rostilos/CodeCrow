@@ -297,8 +297,8 @@ async def test_dry_run_captures_complete_baseline_without_provider_calls(
         "addedSourceDuplicateOmissions"
     ] == 0
     stage_0 = result["prompts"][0]
-    assert stage_0["responseSchema"] == "ReviewPlan"
-    assert stage_0["responseSchemaDefinition"]["title"] == "ReviewPlan"
+    assert stage_0["responseSchema"] == "CumulativeChanges"
+    assert stage_0["responseSchemaDefinition"]["title"] == "CumulativeChanges"
     assert stage_0["characterCount"] > stage_0["renderedPromptCharacterCount"]
 
     serialized = json.dumps(result)
@@ -603,7 +603,7 @@ def _incremental_task_request() -> tuple[ReviewRequestDto, str, str]:
 
 
 @pytest.mark.asyncio
-async def test_incremental_prompt_pipeline_keeps_review_delta_small_and_stage_2_pr_aware(
+async def test_incremental_prompt_pipeline_shares_full_pr_context_but_reviews_delta(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -631,7 +631,11 @@ async def test_incremental_prompt_pipeline_keeps_review_delta_small_and_stage_2_
     )
     assert stage_0_and_1
     assert all(delta_path in prompt for prompt in stage_0_and_1)
-    assert all(prior_path not in prompt for prompt in stage_0_and_1)
+    assert all(prior_path in prompt for prompt in stage_0_and_1)
+    stage_1_prompts = [prompt["renderedPrompt"] for prompt in result["prompts"] if prompt["stage"] == "stage_1"]
+    assert all("PR-WIDE CHANGE CONTEXT" in prompt for prompt in stage_1_prompts)
+    # Earlier changes are descriptive context, not new incremental review units.
+    assert all(f"FILE #1: {prior_path}" not in prompt for prompt in stage_1_prompts)
     assert "FULL PR STATE LEDGER (base to current PR head)" in stage_2
     assert prior_path in stage_2
     assert "recordCustomEvent" in stage_2

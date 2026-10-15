@@ -14,6 +14,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.TaskImplementationEvidenceService;
+import org.rostilos.codecrow.core.service.PrChangeSummaryService;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.analysisengine.service.pr.PrIssueTrackingService;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
@@ -76,6 +77,7 @@ public class PullRequestAnalysisProcessor {
 
     private final CodeAnalysisService codeAnalysisService;
     private final TaskImplementationEvidenceService taskImplementationEvidenceService;
+    private final PrChangeSummaryService prChangeSummaryService;
     private final PullRequestService pullRequestService;
     private final AiAnalysisClient aiAnalysisClient;
     private final VcsServiceFactory vcsServiceFactory;
@@ -99,6 +101,7 @@ public class PullRequestAnalysisProcessor {
             PullRequestService pullRequestService,
             CodeAnalysisService codeAnalysisService,
             TaskImplementationEvidenceService taskImplementationEvidenceService,
+            PrChangeSummaryService prChangeSummaryService,
             AiAnalysisClient aiAnalysisClient,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
@@ -113,6 +116,7 @@ public class PullRequestAnalysisProcessor {
     ) {
         this.codeAnalysisService = codeAnalysisService;
         this.taskImplementationEvidenceService = taskImplementationEvidenceService;
+        this.prChangeSummaryService = prChangeSummaryService;
         this.pullRequestService = pullRequestService;
         this.aiAnalysisClient = aiAnalysisClient;
         this.vcsServiceFactory = vcsServiceFactory;
@@ -375,6 +379,7 @@ public class PullRequestAnalysisProcessor {
                         "message", "Review completed; usage accounting will reconcile from the saved analysis"));
             }
             persistTaskImplementationEvidence(newAnalysis, aiResponse.get("taskEvidence"));
+            prChangeSummaryService.persist(newAnalysis, aiResponse.get("prChangeSummary"));
 
             int issuesFound = newAnalysis.getTotalIssues();
 
@@ -922,6 +927,7 @@ public class PullRequestAnalysisProcessor {
     private void copyTaskImplementationEvidence(
             CodeAnalysis source,
             CodeAnalysis target) {
+        prChangeSummaryService.copyForAnalysis(source, target);
         try {
             TaskImplementationEvidenceService.PersistenceResult result =
                     taskImplementationEvidenceService.copyForAnalysis(source, target);

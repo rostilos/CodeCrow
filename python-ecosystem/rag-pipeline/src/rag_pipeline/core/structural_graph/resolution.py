@@ -9,7 +9,7 @@ from typing import Any, NamedTuple
 
 
 from .shared import (
-    _BULK_RELATION_RESOLUTION_THRESHOLD, _normalized_name, _short_name, _unit_names,
+    _BULK_RELATION_RESOLUTION_THRESHOLD, _normalized_name, _unit_names,
 )
 
 from .write_state import GraphWriteState
@@ -37,11 +37,12 @@ def _named_unit(row: sqlite3.Row) -> _NamedUnit:
     )
 
 
-def _unambiguous_unit(rows: Sequence[_NamedUnit], requested: str) -> str | None:
+def _unambiguous_unit(rows: Sequence[_NamedUnit], requested: str, *, allow_aliases: bool = True) -> str | None:
     # Folded lookup is discovery only. A unique differently-cased declaration
     # is not the same identity (for example int64 versus a receiver's Int64).
     requested = requested.strip()
-    exact = [row for row in rows if requested in row.aliases]
+    exact = [row for row in rows if requested in row.aliases
+             and (allow_aliases or requested == row.qualified_name)]
     if len(exact) == 1:
         return exact[0].unit_id
     qualified = [row for row in exact if row.qualified_name == requested]
@@ -150,11 +151,12 @@ class RelationResolver:
             value: str,
             *,
             preferred_paths: Sequence[str] = (),
-            allow_short_name: bool = True,
+            allow_global: bool = True,
+            allow_aliases: bool = True,
         ) -> str | None:
             return self._unique_named_unit(
                 value, preferred_paths=preferred_paths,
-                allow_short_name=allow_short_name, named_units=named_units,
+                allow_global=allow_global, allow_aliases=allow_aliases, named_units=named_units,
             )
         if (
             relation_ids is None
@@ -177,7 +179,8 @@ class RelationResolver:
                 value: str,
                 *,
                 preferred_paths: Sequence[str] = (),
-                allow_short_name: bool = True,
+                allow_global: bool = True,
+                allow_aliases: bool = True,
             ) -> str | None:
                 def candidates(
                     normalized_name: str,
@@ -194,22 +197,13 @@ class RelationResolver:
                     preferred = _unambiguous_unit(
                         candidates(exact_name, preferred_paths),
                         value,
+                        allow_aliases=allow_aliases,
                     )
                     if preferred:
                         return preferred
-                exact_rows = candidates(exact_name, ())
-                exact = _unambiguous_unit(exact_rows, value)
-                if exact:
-                    return exact
-                if exact_rows or not allow_short_name:
-                    return None
-                short_name = _normalized_name(_short_name(value))
-                if short_name == exact_name:
-                    return None
-                return _unambiguous_unit(
-                    candidates(short_name, ()),
-                    _short_name(value),
-                )
+                return (_unambiguous_unit(candidates(exact_name, ()), value,
+                                         allow_aliases=allow_aliases)
+                        if allow_global else None)
 
             resolve_name = resolve_preloaded
 
@@ -277,9 +271,6 @@ class RelationResolver:
                 if path
             ))
             source_paths = (row["path"],)
-            target_paths = tuple(
-                path for path in indexed_paths if path != row["path"]
-            ) + source_paths
             is_call = str(row["relation"] or "").casefold().startswith("call")
             located_source = (
                 callable_at(str(row["path"]), int(row["line"]))
@@ -291,7 +282,7 @@ class RelationResolver:
                 resolved = resolve_name(
                     row["source"],
                     preferred_paths=source_paths,
-                    allow_short_name="::" not in str(row["source"] or ""),
+                    allow_global=False,
                 )
                 if resolved:
                     updates["source_unit_id"] = resolved
@@ -309,11 +300,15 @@ class RelationResolver:
                     str(row["kind"] or "").upper() == "CONTAINS"
                     or any(delimiter in target for delimiter in (".", "/", "\\", ":"))
                 )
+                related_target_paths = tuple(path for path in indexed_paths if path != row["path"])
+                # A unique repository-wide short name is not lexical/import
+                # evidence: Python min must not bind a TypeScript RangeMap.min.
                 resolved = (
                     resolve_name(
                         target,
-                        preferred_paths=(target_paths if target_is_scoped else ()),
-                        allow_short_name="::" not in target,
+                        preferred_paths=related_target_paths or source_paths,
+                        allow_global=target_is_scoped and not related_target_paths,
+                        allow_aliases=target_is_scoped or bool(related_target_paths),
                     )
                     if target
                     else None
@@ -363,7 +358,8 @@ class RelationResolver:
         value: str,
         *,
         preferred_paths: Sequence[str] = (),
-        allow_short_name: bool = True,
+        allow_global: bool = True,
+        allow_aliases: bool = True,
         named_units: dict[str, _NamedUnit] | None = None,
     ) -> str | None:
         if named_units is None:
@@ -396,21 +392,11 @@ class RelationResolver:
             preferred = _unambiguous_unit(
                 candidates(exact_name, preferred_paths),
                 value,
+                allow_aliases=allow_aliases,
             )
             if preferred:
                 return preferred
 
-        exact_rows = candidates(exact_name, ())
-        exact = _unambiguous_unit(exact_rows, value)
-        if exact:
-            return exact
-        if exact_rows:
-            return None
-        if not allow_short_name:
-            return None
-
-        short_name = _normalized_name(_short_name(value))
-        if short_name == exact_name:
-            return None
-        short_rows = candidates(short_name, ())
-        return _unambiguous_unit(short_rows, _short_name(value))
+        return (_unambiguous_unit(candidates(exact_name, ()), value,
+                                 allow_aliases=allow_aliases)
+                if allow_global else None)

@@ -100,6 +100,7 @@ class ReviewRequestDto(BaseModel):
     analysisType: Optional[str] = None
     prTitle: Optional[str] = Field(default=None, description="Pull request title")
     prDescription: Optional[str] = Field(default=None, description="Pull request description")
+    prChangeSummary: Optional[Dict[str, Any]] = Field(default=None, exclude=True, description="Internal cumulative scheduler context")
     taskContext: Optional[Dict[str, Any]] = Field(
         default=None,
         validation_alias=AliasChoices("taskContext", "task_context"),
@@ -319,6 +320,7 @@ class ReviewResponseDto(BaseModel):
 
 
 class SummarizeRequestDto(BaseModel):
+    prChangeSummary: Optional[Dict[str, Any]] = None
     """Request model for PR summarization command."""
     projectId: int
     projectVcsWorkspace: str

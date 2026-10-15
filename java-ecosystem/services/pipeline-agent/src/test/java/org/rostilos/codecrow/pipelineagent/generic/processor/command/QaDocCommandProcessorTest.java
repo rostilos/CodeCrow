@@ -113,7 +113,7 @@ class QaDocCommandProcessorTest {
                 qaDocDocumentService,
                 qaDocPublicPreviewService,
                 enrichmentService
-        );
+        , org.mockito.Mockito.mock(org.rostilos.codecrow.core.service.PrChangeSummaryService.class));
 
         project = new Project();
         ReflectionTestUtils.setField(project, "id", PROJECT_ID);

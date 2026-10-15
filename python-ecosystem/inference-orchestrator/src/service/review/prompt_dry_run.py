@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
 from model.dtos import ReviewRequestDto
+from service.review.change_summary import CumulativeChanges, ChangeNode, ChangeArea
 from model.multi_stage import (
     CrossFileAnalysisResult,
     FileGroup,
@@ -138,6 +139,7 @@ def _schema_definition(schema: Any) -> Optional[dict[str, Any]]:
 def _classify_stage(schema: Any, rendered: str, tools: tuple[dict[str, Any], ...]) -> str:
     by_schema = {
         "ReviewPlan": "stage_0",
+        "CumulativeChanges": "stage_0",
         "FileReviewBatchOutput": "stage_1",
         "CrossFileAnalysisResult": "stage_2",
         "DeduplicatedIssueList": "deduplication",
@@ -288,6 +290,16 @@ class PromptCaptureSession:
         return CapturedAIMessage(content=content)
 
     def _structured_response(self, schema: Any, rendered: str) -> Any:
+        if schema is CumulativeChanges:
+            batch_text = re.split(r"\nBatch \d+/\d+:\n", rendered)[-1]
+            batch = json.loads(batch_text)
+            return CumulativeChanges(
+                summary="Dry-run synthetic cumulative change description; not a measured review result.",
+                files=[ChangeNode(path=item["path"], summary="Synthetic changed-file description") for item in batch],
+                relationships=[],
+                changeAreas=[ChangeArea(title="Synthetic dry-run area", paths=[item['path'] for item in batch],
+                    changes=["Synthetic fixture change for " + item['path'] for item in batch])],
+            )
         if schema is ReviewPlan:
             paths = list(dict.fromkeys(self.request.changedFiles or []))
             return ReviewPlan(

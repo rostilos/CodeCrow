@@ -624,6 +624,19 @@ class ReviewService:
                     )
 
 
+                if isinstance(result, dict) and isinstance(result.get("prChangeSummary"), dict):
+                    result["prChangeSummary"]["toolContext"] = {
+                        "rag": rag_mcp_context,
+                        "verification": verification_context,
+                        "repository": {
+                            "localRepoPath": request.localRepoPath,
+                            "localRepoTargetBranch": request.localRepoTargetBranch,
+                            "localRepoRevision": request.localRepoRevision,
+                            "localReviewOverlayPath": request.localReviewOverlayPath,
+                            "mcpLocalOnly": request.mcpLocalOnly,
+                        },
+                    }
+
                 # Post-process issues (no-op pass-through — Java handles all processing)
                 if result and 'issues' in result:
                     self._emit_event(event_callback, {
