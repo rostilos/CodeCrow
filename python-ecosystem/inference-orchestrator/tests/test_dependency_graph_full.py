@@ -1,4 +1,4 @@
-"""Extended tests for dependency_graph: RAG-based graph building, smart batches, connected components."""
+"""Extended dependency-graph and smart-batching tests."""
 import pytest
 from unittest.mock import MagicMock, patch
 from collections import defaultdict
@@ -31,7 +31,7 @@ class TestFileNode:
     def test_default_values(self):
         node = FileNode(path="a.py", priority="MEDIUM")
         assert node.path == "a.py"
-        assert node.relationship_strength == 0.0
+        assert node.relationship_degree == 0
         assert len(node.related_files) == 0
         assert node.priority == "MEDIUM"
 
@@ -43,17 +43,16 @@ class TestFileRelationship:
             target_file="b.py",
             relationship_type="imports",
             matched_on="Foo",
-            strength=1.0,
         )
         assert rel.source_file == "a.py"
-        assert rel.strength == 1.0
+        assert rel.matched_on == "Foo"
 
 
-class TestCalculateStrength:
-    def test_capped_at_5(self):
+class TestRelationshipDegree:
+    def test_counts_edges(self):
         graph = DependencyGraph()
         graph.nodes["a.py"] = FileNode(path="a.py", priority="HIGH")
-        # Add many high-weight relationships
+        # Add many structural relationships.
         for i in range(20):
             graph.relationships.append(
                 FileRelationship(
@@ -61,28 +60,27 @@ class TestCalculateStrength:
                     target_file=f"b{i}.py",
                     relationship_type="imports",
                     matched_on="",
-                    strength=1.0,
                 )
             )
-        result = graph._calculate_strength("a.py", {"b0.py"})
-        assert result == 5.0
+        result = graph._relationship_degree("a.py")
+        assert result == 20
 
     def test_zero_when_no_relationships(self):
         graph = DependencyGraph()
         graph.nodes["a.py"] = FileNode(path="a.py", priority="HIGH")
-        result = graph._calculate_strength("a.py", set())
-        assert result == 0.0
+        result = graph._relationship_degree("a.py")
+        assert result == 0
 
 
 class TestBuildBasicGraph:
-    def test_same_dir_files_related(self):
+    def test_same_dir_files_are_not_assumed_related(self):
         groups = _make_file_group([
             ("HIGH", ["src/a.py", "src/b.py"]),
         ])
         graph = DependencyGraph()
         nodes = graph._build_basic_graph(groups)
         assert "src/a.py" in nodes
-        assert "src/b.py" in nodes["src/a.py"].related_files
+        assert "src/b.py" not in nodes["src/a.py"].related_files
 
     def test_different_dirs_not_related(self):
         groups = _make_file_group([
@@ -136,7 +134,7 @@ class TestBuildGraphFromEnrichment:
         meta_a = MagicMock()
         meta_a.path = "a.py"
         meta_a.imports = ["Foo"]
-        meta_a.semanticNames = ["bar"]
+        meta_a.symbolNames = ["bar"]
         meta_a.extendsClasses = []
         meta_a.parentClass = None
         meta_a.namespace = None
@@ -144,7 +142,7 @@ class TestBuildGraphFromEnrichment:
         meta_b = MagicMock()
         meta_b.path = "b.py"
         meta_b.imports = []
-        meta_b.semanticNames = ["Foo"]
+        meta_b.symbolNames = ["Foo"]
         meta_b.extendsClasses = ["Base"]
         meta_b.parentClass = "Base"
         meta_b.namespace = "com.example"
@@ -158,24 +156,38 @@ class TestBuildGraphFromEnrichment:
         assert len(graph.relationships) > 0
 
 
-class TestBuildGraphFromRag:
-    def test_no_rag_client_fallback(self):
+class TestBuildGraphFromStructuralRelations:
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_no_structural_client_fallback(self):
         groups = _make_file_group([("HIGH", ["a.py"])])
         graph = DependencyGraph(rag_client=None)
-        nodes = graph.build_graph_from_rag(groups, "ws", "proj", ["main"])
+        nodes = await graph.build_graph_from_structural_relations(
+            groups,
+            "ws",
+            "proj",
+            ["main"],
+        )
         assert "a.py" in nodes
 
-    def test_rag_exception_fallback(self):
-        mock_rag = MagicMock()
-        mock_rag.get_deterministic_context.side_effect = Exception("fail")
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_structural_exception_fallback(self):
+        client = MagicMock()
+        client.get_structural_relations.side_effect = Exception("fail")
         groups = _make_file_group([("HIGH", ["a.py"])])
-        graph = DependencyGraph(rag_client=mock_rag)
-        nodes = graph.build_graph_from_rag(groups, "ws", "proj", ["main"])
+        graph = DependencyGraph(rag_client=client)
+        nodes = await graph.build_graph_from_structural_relations(
+            groups,
+            "ws",
+            "proj",
+            ["main"],
+            structural_binding={"repository_revision": "abc123"},
+        )
         assert "a.py" in nodes
 
-    def test_structured_rag_error_uses_basic_directory_fallback(self):
-        mock_rag = MagicMock()
-        mock_rag.get_deterministic_context.return_value = {
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_structured_error_does_not_invent_directory_edges(self):
+        client = MagicMock()
+        client.get_structural_relations.return_value = {
             "status": "error",
             "status_code": 503,
             "error": "unavailable",
@@ -184,124 +196,65 @@ class TestBuildGraphFromRag:
             ("HIGH", ["src/a.py", "src/b.py", "lib/c.py"]),
         ])
 
-        graph = DependencyGraph(rag_client=mock_rag)
-        nodes = graph.build_graph_from_rag(groups, "ws", "proj", ["main"])
+        graph = DependencyGraph(rag_client=client)
+        nodes = await graph.build_graph_from_structural_relations(
+            groups,
+            "ws",
+            "proj",
+            ["main"],
+            structural_binding={"repository_revision": "abc123"},
+        )
 
-        assert "src/b.py" in nodes["src/a.py"].related_files
+        assert "src/b.py" not in nodes["src/a.py"].related_files
         assert "lib/c.py" not in nodes["src/a.py"].related_files
 
 
-class TestMergeSmallBatches:
-    def test_mixed_priority_tie_uses_fixed_priority_order(self):
-        graph = DependencyGraph()
-
-        def item(path, priority):
-            file_info = MagicMock()
-            file_info.path = path
-            return {"file": file_info, "priority": priority}
-
-        merged = graph._merge_small_batches(
-            [
-                [item("low.py", "LOW"), item("critical.py", "CRITICAL")],
-                [item("high.py", "HIGH")],
-            ],
-            min_size=1,
-            max_size=4,
-        )
-
-        assert [
-            [entry["file"].path for entry in batch]
-            for batch in merged
-        ] == [["low.py", "critical.py"], ["high.py"]]
-
-
-class TestExtractRelationshipsFromRag:
-    def test_processes_changed_files_metadata(self):
+class TestExtractRelationshipsFromStructuralMap:
+    def test_processes_anchor_symbols(self):
         graph = DependencyGraph()
         graph.nodes["a.py"] = FileNode(path="a.py", priority="HIGH")
         graph.nodes["b.py"] = FileNode(path="b.py", priority="HIGH")
 
-        rag_response = {
-            "changed_files": {
-                "a.py": [
-                    {
-                        "metadata": {
-                            "primary_name": "Foo",
-                            "semantic_names": ["Foo", "FooBar"],
-                            "imports": ["Bar"],
-                            "parent_class": "Base",
-                            "namespace": "com.example",
-                            "extends": ["Base"],
-                        }
-                    }
-                ]
-            },
-            "related_definitions": {},
-            "class_context": {},
-            "namespace_context": {},
+        relation_map = {
+            "anchors": [{
+                "path": "a.py",
+                "symbols": [{
+                    "name": "Foo",
+                    "qualifiedName": "example.Foo",
+                }],
+            }],
+            "relations": [],
         }
-        graph._extract_relationships_from_rag(rag_response, ["a.py", "b.py"])
+        graph._extract_relationships_from_structural_map(
+            relation_map,
+            ["a.py", "b.py"],
+        )
         node_a = graph.nodes["a.py"]
         assert "Foo" in node_a.exports_symbols
-        assert "Base" in node_a.parent_classes
+        assert "example.Foo" in node_a.exports_symbols
 
-    def test_processes_related_definitions(self):
-        graph = DependencyGraph()
-        graph.nodes["a.py"] = FileNode(path="a.py", priority="HIGH")
-        graph.nodes["b.py"] = FileNode(path="b.py", priority="HIGH")
-        graph.nodes["a.py"].imports_symbols.add("MyFunc")
-
-        rag_response = {
-            "changed_files": {},
-            "related_definitions": {
-                "MyFunc": [
-                    {"metadata": {"path": "b.py"}}
-                ]
-            },
-            "class_context": {},
-            "namespace_context": {},
-        }
-        graph._extract_relationships_from_rag(rag_response, ["a.py"])
-        assert len(graph.relationships) > 0
-
-    def test_processes_class_context(self):
+    def test_processes_relation_paths(self):
         graph = DependencyGraph()
         graph.nodes["a.py"] = FileNode(path="a.py", priority="HIGH")
         graph.nodes["b.py"] = FileNode(path="b.py", priority="HIGH")
 
-        rag_response = {
-            "changed_files": {},
-            "related_definitions": {},
-            "class_context": {
-                "BaseClass": [
-                    {"metadata": {"path": "a.py"}},
-                    {"metadata": {"path": "b.py"}},
-                ]
-            },
-            "namespace_context": {},
+        relation_map = {
+            "anchors": [],
+            "relations": [{
+                "kind": "IMPORTS",
+                "source": "a.py",
+                "relation": "imports",
+                "target": "b.py",
+                "origin": {"path": "a.py", "line": 1},
+                "relatedPaths": ["a.py", "b.py"],
+            }],
         }
-        graph._extract_relationships_from_rag(rag_response, ["a.py", "b.py"])
-        assert "b.py" in graph.nodes["a.py"].related_files
-
-    def test_processes_namespace_context(self):
-        graph = DependencyGraph()
-        graph.nodes["a.py"] = FileNode(path="a.py", priority="HIGH")
-        graph.nodes["b.py"] = FileNode(path="b.py", priority="HIGH")
-
-        rag_response = {
-            "changed_files": {},
-            "related_definitions": {},
-            "class_context": {},
-            "namespace_context": {
-                "com.example": [
-                    {"metadata": {"path": "a.py"}},
-                    {"metadata": {"path": "b.py"}},
-                ]
-            },
-        }
-        graph._extract_relationships_from_rag(rag_response, ["a.py", "b.py"])
-        assert "b.py" in graph.nodes["a.py"].related_files
-
+        graph._extract_relationships_from_structural_map(
+            relation_map,
+            ["a.py", "b.py"],
+        )
+        assert graph.nodes["a.py"].related_files == {"b.py"}
+        assert len(graph.relationships) == 1
 
 class TestSmartBatches:
     def test_enrichment_path(self):
@@ -318,7 +271,7 @@ class TestSmartBatches:
         )
         assert len(batches) >= 1
 
-    def test_rag_fallback_path(self):
+    def test_basic_path_without_enrichment(self):
         groups = _make_file_group([("HIGH", ["a.py"])])
         graph = DependencyGraph(rag_client=None)
         batches = graph.get_smart_batches(

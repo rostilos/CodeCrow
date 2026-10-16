@@ -15,7 +15,7 @@ from codecrow_plugins import (
 )
 
 
-TYPESCRIPT_EXTENSIONS = (".cts", ".mts", ".ts")
+TYPESCRIPT_EXTENSIONS = (".cts", ".mts", ".ts", ".tsx")
 _IMPORT_FROM = re.compile(
     r"^\s*import\s+(?:type\s+)?(?P<clause>.*?)\s+from\s+"
     r"(?P<quote>['\"])(?P<module>[^'\"]+)(?P=quote)",
@@ -40,6 +40,15 @@ def module_for_path(path: str) -> str:
 
 def _named(node, field: str):
     return node.child_by_field_name(field)
+
+
+def _enclosing_class_name(document: TreeSitterDocument, node) -> str:
+    parent = node.parent
+    while parent is not None:
+        if parent.type == "class_declaration":
+            return document.text(_named(parent, "name"))
+        parent = parent.parent
+    return ""
 
 
 def _import_bindings(
@@ -107,7 +116,7 @@ def analyze_typescript_artifact(
     document = TreeSitterDocument.parse(
         artifact.content,
         "tree_sitter_typescript",
-        "language_typescript",
+        "language_tsx" if artifact.path.casefold().endswith(".tsx") else "language_typescript",
     )
     module = module_for_path(artifact.path)
     facts: set[GraphFact] = {
@@ -233,11 +242,16 @@ def analyze_typescript_artifact(
                 continue
             if local:
                 calls.add(ImportedCall(local, member, line))
+                target = f"{local}.{member}".rstrip(".")
+                if local == "this" and member:
+                    class_name = _enclosing_class_name(document, node)
+                    if class_name:
+                        target = f"{class_name}.{member}"
                 facts.add(GraphFact(
                     "typescript-call",
                     module,
                     "calls",
-                    f"{local}.{member}".rstrip("."),
+                    target,
                     artifact.path,
                     line,
                 ))

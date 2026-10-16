@@ -42,48 +42,50 @@ def summarize_oversized_diff(diff_content: str, path: str, max_changed_lines: in
     headers, and representative raw changed lines. It does not try to recognize
     language-specific signatures or infer what code constructs matter.
     """
-    added_lines = 0
-    removed_lines = 0
-    hunk_headers = []
-    changed_lines = []
-
-    for line in diff_content.split('\n'):
-        if line.startswith('+') and not line.startswith('+++'):
-            added_lines += 1
-            if len(changed_lines) < max_changed_lines:
-                changed_lines.append(line)
-        elif line.startswith('-') and not line.startswith('---'):
-            removed_lines += 1
-            if len(changed_lines) < max_changed_lines:
-                changed_lines.append(line)
-        # Capture hunk headers — they often contain the enclosing function name
-        elif line.startswith('@@'):
-            hunk_headers.append(line.strip())
-
-    # Deduplicate while preserving order
-    hunk_headers = list(dict.fromkeys(hunk_headers))[:20]
-    changed_lines = list(dict.fromkeys(changed_lines))[:max_changed_lines]
-
-    parts = [
-        f"diff --git a/{path} b/{path}",
-        f"--- a/{path}",
-        f"+++ b/{path}",
-        f"[CodeCrow Summary: diff too large for full inclusion — summary below]",
-        f"",
-        f"Change statistics: +{added_lines} lines added, -{removed_lines} lines removed",
+    lines = diff_content.splitlines()
+    added = sum(line.startswith("+") and not line.startswith("+++") for line in lines)
+    removed = sum(line.startswith("-") and not line.startswith("---") for line in lines)
+    header_end = next((i for i, line in enumerate(lines) if line.startswith("@@")), len(lines))
+    parts = lines[:header_end] + [
+        "[CodeCrow Summary: bounded exact diff fragments; omitted source is not reviewed]",
+        f"Change statistics: +{added} lines added, -{removed} lines removed",
     ]
-
-    if hunk_headers:
-        parts.append(f"\nAffected code regions ({len(hunk_headers)} hunks):")
-        for hh in hunk_headers:
-            parts.append(f"  {hh}")
-
-    if changed_lines:
-        parts.append(f"\nRepresentative changed lines ({len(changed_lines)} shown):")
-        parts.extend(changed_lines)
-    else:
-        parts.append("\n(No changed lines found in diff summary)")
-
+    remaining = max_changed_lines
+    pattern = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$")
+    index = header_end
+    while index < len(lines) and remaining > 0:
+        original_header = lines[index]
+        match = pattern.match(original_header)
+        index += 1
+        if match is None:
+            continue
+        body = []
+        old_count = new_count = changed = 0
+        # Keep contiguous, exact source, including context. Recompute coordinates
+        # for the retained fragment instead of attaching a full-hunk header to a
+        # selection of unrelated representative lines.
+        while index < len(lines) and not lines[index].startswith("@@"):
+            line = lines[index]
+            if remaining <= 0 or len(body) >= max_changed_lines * 4:
+                break
+            index += 1
+            if not line.startswith(("+", "-", " ", "\\")):
+                continue
+            body.append(line)
+            old_count += int(line.startswith(("-", " ")))
+            new_count += int(line.startswith(("+", " ")))
+            if line.startswith(("+", "-")):
+                remaining -= 1
+                changed += 1
+        if changed:
+            complete_hunk = index == len(lines) or lines[index].startswith("@@")
+            parts.append(
+                original_header if complete_hunk
+                else f"@@ -{match[1]},{old_count} +{match[2]},{new_count} @@{match[3]}"
+            )
+            parts.extend(body)
+        while index < len(lines) and not lines[index].startswith("@@"):
+            index += 1
     return "\n".join(parts)
 
 
@@ -117,6 +119,7 @@ class DiffHunk:
     new_count: int
     content: str
     disposition: HunkDisposition = HunkDisposition.REVIEWABLE
+    evidence_kind: str = "changed_source"
 
 
 @dataclass
@@ -130,12 +133,23 @@ class DiffFile:
     content: str = ""  # Diff content (unified diff format)
     full_content: Optional[str] = None  # Full file content (populated separately if needed)
     hunks: List[DiffHunk] = field(default_factory=list)
+    visible_hunks: Optional[List[DiffHunk]] = None
     is_binary: bool = False
     is_gitlink: bool = False
     is_skipped: bool = False
     skip_reason: Optional[str] = None
     plugin_disposition: Optional[str] = None
-    
+
+    @property
+    def review_hunks(self) -> List[DiffHunk]:
+        """Exact changed hunks and labelled source-backed path-impact units."""
+        return self.hunks if self.visible_hunks is None else self.visible_hunks
+
+    @property
+    def omitted_hunk_ids(self) -> tuple[str, ...]:
+        visible = {hunk.id for hunk in self.review_hunks}
+        return tuple(hunk.id for hunk in self.hunks if hunk.id not in visible)
+
     @property
     def total_changes(self) -> int:
         return self.additions + self.deletions
@@ -175,7 +189,11 @@ class ProcessedDiff:
         return "\n".join(parts)
 
     def hunk_manifest(self) -> List[DiffHunk]:
-        return [hunk for file in self.files for hunk in file.hunks]
+        return list({
+            hunk.id: hunk
+            for file in self.files
+            for hunk in [*file.hunks, *file.review_hunks]
+        }.values())
 
 
 class DiffProcessor:
@@ -200,45 +218,49 @@ class DiffProcessor:
         self.max_files = max_files
         self.max_total_size = max_total_size
         self.max_lines_per_file = max_lines_per_file
-    
+
     def process(self, raw_diff: str) -> ProcessedDiff:
         """
         Process raw diff and apply all filtering rules.
 
         Args:
             raw_diff: Raw unified diff content
-            
+
         Returns:
             ProcessedDiff with filtered and prioritized files
         """
         if not raw_diff:
             return ProcessedDiff(files=[], original_size_bytes=0)
-        
+
         original_size = len(raw_diff.encode('utf-8'))
-        
+
         # Parse diff into files
         files = self._parse_diff(raw_diff)
-        
+
         # Apply skip rules
         for f in files:
             if self._should_skip(f):
                 f.is_skipped = True
-        
+
         # Keep reviewable files before mechanically skipped files while preserving
         # the original diff order. The LLM planning/batching stages receive the
         # file metadata and make semantic judgments; diff ingestion should not.
         files = self._prioritize_files(files)
-        
+
         # Apply limits
         processed_files, truncated, truncation_reason = self._apply_limits(files)
-        
+
+        for file in processed_files:
+            if "[CodeCrow Summary:" in file.content:
+                file.visible_hunks = self._extract_hunks(file)
+
         # Calculate stats
         total_additions = sum(f.additions for f in processed_files if not f.is_skipped)
         total_deletions = sum(f.deletions for f in processed_files if not f.is_skipped)
         total_files = len([f for f in processed_files if not f.is_skipped])
         skipped_files = len([f for f in processed_files if f.is_skipped])
         processed_size = sum(f.size_bytes for f in processed_files if not f.is_skipped)
-        
+
         return ProcessedDiff(
             files=processed_files,
             total_additions=total_additions,
@@ -261,12 +283,12 @@ class DiffProcessor:
             "Balanced add/delete (~120 lines) suggests code move"
         """
         signals = []
-        
+
         # 1. Explicit renames
         for f in files:
             if f.change_type == DiffChangeType.RENAMED and f.old_path:
                 signals.append(f"File rename: {f.old_path} → {f.path}")
-        
+
         # 2. Paired add + delete of files with same basename
         added = {f.path: f for f in files if f.change_type == DiffChangeType.ADDED}
         deleted = {f.path: f for f in files if f.change_type == DiffChangeType.DELETED}
@@ -304,7 +326,9 @@ class DiffProcessor:
         current_file = None
         current_content = []
         
-        lines = raw_diff.split('\n')
+        # Treat the final line terminator as transport framing rather than part
+        # of the last file section. Internal blank lines remain intact.
+        lines = raw_diff.splitlines()
         i = 0
         
         while i < len(lines):
@@ -394,8 +418,6 @@ class DiffProcessor:
             disposition = HunkDisposition.REVIEWABLE
             if file.is_binary:
                 disposition = HunkDisposition.BINARY
-            elif file.change_type == DiffChangeType.DELETED:
-                disposition = HunkDisposition.DELETED
             elif file.is_gitlink:
                 disposition = HunkDisposition.GITLINK
             elif match is None:
@@ -438,16 +460,14 @@ class DiffProcessor:
             return True
 
         # Mode 160000 is a Git submodule pointer, not source content. The diff
-        # contains only old/new commit identifiers, so embedding it as a file
+        # contains only old/new commit identifiers, so including it as a file
         # creates retrieval noise and cannot support source-level findings.
         if file.is_gitlink:
             file.skip_reason = "Git submodule pointer"
             return True
         
-        # Skip deleted files (no code to review)
-        if file.change_type == DiffChangeType.DELETED:
-            file.skip_reason = "Deleted file"
-            return True
+        # Whole-file removals are source changes: callers and registrations can
+        # break even though this path has no head-side bytes.
 
         # A file section without text hunks can still be a valid Git
         # metadata-only change (mode change or rename without edited source).
@@ -466,24 +486,24 @@ class DiffProcessor:
             file.skip_reason = f"File too large: {file.size_bytes} bytes > {self.max_file_size}"
             file.content = summarize_oversized_diff(file.content, path)
             return False
-        
+
         # Summarize files with too many lines for the same reason.
         line_count = file.content.count('\n')
         if line_count > self.max_lines_per_file:
             file.skip_reason = f"Too many lines: {line_count} > {self.max_lines_per_file}"
             file.content = summarize_oversized_diff(file.content, path)
             return False
-        
+
         return False
-    
+
     def _prioritize_files(self, files: List[DiffFile]) -> List[DiffFile]:
         """Keep non-skipped files first and preserve original diff order."""
         def sort_key(item: Tuple[int, DiffFile]) -> Tuple[int, int]:
             index, f = item
             return (1 if f.is_skipped else 0, index)
-        
+
         return [f for _, f in sorted(enumerate(files), key=sort_key)]
-    
+
     def _apply_limits(self, files: List[DiffFile]) -> Tuple[List[DiffFile], bool, Optional[str]]:
         """
         Apply file count and total size limits to raw diff evidence.
@@ -491,20 +511,20 @@ class DiffProcessor:
         These limits protect prompt size; they are not review-scope filters.
         Reviewable text files beyond the raw evidence budget stay included with
         compact summaries so Stage 0/1/2 can decide how to use them.
-        
+
         Returns:
             (files, truncated, truncation_reason)
         """
         truncated = False
         truncation_reason = None
-        
+
         included_count = 0
         total_size = 0
-        
+
         for f in files:
             if f.is_skipped:
                 continue
-            
+
             # Check file count limit
             if included_count >= self.max_files:
                 self._compact_for_global_limit(
@@ -516,7 +536,7 @@ class DiffProcessor:
                     f"Diff compacted: exceeded {self.max_files} files full-diff limit"
                 )
                 continue
-            
+
             # Check total size limit
             if total_size + f.size_bytes > self.max_total_size:
                 self._compact_for_global_limit(
@@ -529,10 +549,10 @@ class DiffProcessor:
                 )
                 total_size += f.size_bytes
                 continue
-            
+
             included_count += 1
             total_size += f.size_bytes
-        
+
         return files, truncated, truncation_reason
 
     def _compact_for_global_limit(self, file: DiffFile, reason: str) -> None:
@@ -551,10 +571,10 @@ class DiffProcessor:
 def process_raw_diff(raw_diff: Optional[str]) -> ProcessedDiff:
     """
     Convenience function to process raw diff with default settings.
-    
+
     Args:
         raw_diff: Raw unified diff content or None
-        
+
     Returns:
         ProcessedDiff object
     """
@@ -577,12 +597,12 @@ def format_diff_for_prompt(
         processed_diff: ProcessedDiff from processor
         include_stats: Whether to include statistics header
         max_chars: Optional character limit
-        
+
     Returns:
         Formatted diff string
     """
     parts = []
-    
+
     if include_stats:
         parts.append(f"=== DIFF STATISTICS ===")
         parts.append(f"Files changed: {processed_diff.total_files}")
@@ -616,7 +636,7 @@ def format_diff_for_prompt(
     # Apply character limit if needed
     if max_chars and len(diff_content) > max_chars:
         diff_content = diff_content[:max_chars] + "\n... (truncated)"
-    
+
     parts.append(diff_content)
     
     return "\n".join(parts)

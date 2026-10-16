@@ -122,6 +122,22 @@
         </dependency>
 
         <!-- Test Dependencies -->
+        <!-- Exercise feedback management through the actual review request builder. -->
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-web-server</artifactId>
+            <version>1.0</version>
+            <scope>test</scope>
+            <!-- The fixture needs the feedback controller/service classes, not
+                 web-only auto-configuration (for example SMTP). Shared fixture
+                 dependencies are already declared by the pipeline module. -->
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
@@ -199,6 +215,13 @@
             </plugin>
             <plugin>
                 <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>library-for-host-composition</id>
+                        <goals><goal>jar</goal></goals>
+                        <configuration><classifier>library</classifier></configuration>
+                    </execution>
+                </executions>
                 <configuration>
                     <archive>
                         <manifestEntries>

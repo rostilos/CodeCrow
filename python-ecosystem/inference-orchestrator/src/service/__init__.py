@@ -21,10 +21,6 @@ _EXPORTS = {
         "post_process_analysis_result",
     ),
     "RagClient": ("service.rag", "RagClient"),
-    "RAG_MIN_RELEVANCE_SCORE": ("service.rag", "RAG_MIN_RELEVANCE_SCORE"),
-    "RAG_DEFAULT_TOP_K": ("service.rag", "RAG_DEFAULT_TOP_K"),
-    "LLMReranker": ("service.rag", "LLMReranker"),
-    "RerankResult": ("service.rag", "RerankResult"),
     "CommandService": ("service.command", "CommandService"),
 }
 

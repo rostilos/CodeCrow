@@ -10,6 +10,7 @@ import java.util.Optional;
 
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.ReviewIndexPolicy;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
@@ -105,7 +106,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         String currentCommit = request.getCommitHash();
         PullRequestData pullRequest = pullRequestData(
                 null, null, request.sourceBranchName, request.targetBranchName,
-                null, currentCommit);
+                null, null, currentCommit);
         PreparedDiff preparedDiff = PreparedDiff.empty(previousCommit, currentCommit);
 
         log.info("Building pull request analysis: project={}, AI model={}, provider={}, connection={}",
@@ -121,6 +122,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                         metadata.description(),
                         metadata.sourceBranch(),
                         metadata.targetBranch(),
+                        metadata.targetHeadCommit(),
                         metadata.baseCommit(),
                         metadata.headCommit());
             } catch (IOException metadataError) {
@@ -200,6 +202,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withTaskHistoryContext(taskHistory)
                 .withChangedFiles(preparedDiff.changedFiles())
                 .withDeletedFiles(preparedDiff.deletedFiles())
+                .withProposedTreeChangedFiles(preparedDiff.proposedTreeChangedFiles())
+                .withProposedTreeDeletedFiles(preparedDiff.proposedTreeDeletedFiles())
                 .withDiffSnippets(List.of())
                 .withRawDiff(preparedDiff.fullDiff())
                 .withTargetBranchName(request.targetBranchName)
@@ -209,6 +213,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                         ? preparedDiff.deltaDiff() : null)
                 .withPreviousCommitHash(previousCommit)
                 .withCurrentCommitHash(currentCommit)
+                .withTargetHeadCommitHash(pullRequest.targetHeadCommit())
                 .withBaseCommitHash(pullRequest.baseCommit())
                 .withEnrichmentData(enrichment)
                 .withProjectCapabilities(projectCapabilities);
@@ -254,7 +259,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         AiAnalysisRequestImpl.Builder<?> builder = baseBuilder(project, request, repository, aiConnection)
                 .withPullRequestId(null)
                 .withTargetBranchName(request.getTargetBranchName())
-                .withCurrentCommitHash(resolvedCommit);
+                .withCurrentCommitHash(resolvedCommit)
+                .withTargetHeadCommitHash(resolvedCommit);
 
         if (previousIssues != null && !previousIssues.isEmpty()) {
             builder.withPreviousIssues(previousIssues);
@@ -295,6 +301,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withPullRequestId(null)
                 .withTargetBranchName(branchRequest.getTargetBranchName())
                 .withCurrentCommitHash(resolvedCommit)
+                .withTargetHeadCommitHash(resolvedCommit)
                 .withChangedFiles(safeChangedFiles)
                 .withDeletedFiles(DiffParser.extractDeletedFiles(rawDiff != null ? rawDiff : ""))
                 .withDiffSnippets(DiffParser.extractDiffSnippets(rawDiff != null ? rawDiff : "", 20))
@@ -314,6 +321,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             AIConnection aiConnection) throws GeneralSecurityException {
         var effectiveConfig = project.getEffectiveConfig();
         var ragConfig = effectiveConfig.ragConfig();
+        var profile = effectiveConfig.analysisProfile();
         return AiAnalysisRequestImpl.builder()
                 .withProjectId(project.getId())
                 .withProjectAiConnection(aiConnection)
@@ -323,6 +331,11 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withUseLocalMcp(true)
                 .withUseMcpTools(effectiveConfig.useMcpTools())
                 .withRagEnabled(ragConfig != null && ragConfig.enabled())
+                .withRagIndexPolicy(new ReviewIndexPolicy(
+                        ragConfig != null ? ragConfig.includePatterns() : null,
+                        ragConfig != null ? ragConfig.excludePatterns() : null,
+                        profile != null ? profile.projectType() : null,
+                        profile != null ? profile.sourceRoot() : null))
                 .withMaxAllowedTokens(effectiveConfig.maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
@@ -508,6 +521,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             String description,
             String sourceBranch,
             String targetBranch,
+            String targetHeadCommit,
             String baseCommit,
             String headCommit) {
         return new PullRequestData(
@@ -515,6 +529,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 description,
                 sourceBranch,
                 targetBranch,
+                targetHeadCommit,
                 baseCommit,
                 headCommit);
     }
@@ -537,6 +552,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             String description,
             String sourceBranch,
             String targetBranch,
+            String targetHeadCommit,
             String baseCommit,
             String headCommit) {}
 

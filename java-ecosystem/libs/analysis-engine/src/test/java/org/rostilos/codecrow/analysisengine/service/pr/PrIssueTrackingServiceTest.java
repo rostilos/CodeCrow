@@ -36,12 +36,37 @@ class PrIssueTrackingServiceTest {
     @BeforeEach
     void setUp() {
         astScopeEnricher = new AstScopeEnricher();
-        service = new PrIssueTrackingService(issueRepository, reconciliationEngine, astScopeEnricher);
+        var analyses = mock(org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository.class);
+        lenient().when(analyses.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        var gateRepository = mock(org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository.class);
+        var analysisService = new org.rostilos.codecrow.core.service.CodeAnalysisService(analyses, issueRepository,
+                gateRepository, new org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator(gateRepository),
+                new org.rostilos.codecrow.core.service.IssueDeduplicationService(),
+                new org.rostilos.codecrow.core.service.PrChangeSummaryService(analyses, new com.fasterxml.jackson.databind.ObjectMapper()));
+        service = new PrIssueTrackingService(issueRepository, reconciliationEngine, astScopeEnricher, analysisService);
     }
 
     @AfterEach
     void tearDown() {
         astScopeEnricher.close();
+    }
+
+    @Test
+    void carriedResolutionRefreshesParentCounts() throws Exception {
+        String source = "class App {\n  riskyCall();\n}\n";
+        CodeAnalysis previous = analysis(10L, 42L, 1, "old");
+        CodeAnalysis current = analysis(11L, 42L, 2, "new");
+        CodeAnalysisIssue oldIssue = issue(100L, "src/App.txt", 2, "riskyCall();", source);
+        oldIssue.setResolved(true);
+        previous.addIssue(oldIssue);
+        current.addIssue(issue(101L, "src/App.txt", 2, "riskyCall();", source));
+
+        service.trackPrIteration(current, previous, Map.of("src/App.txt", source), Map.of("src/App.txt", source));
+
+        assertThat(current.getIssues().get(0).isResolved()).isTrue();
+        assertThat(current.getTotalIssues()).isZero();
+        assertThat(current.getHighSeverityCount()).isZero();
+        assertThat(current.getResolvedCount()).isEqualTo(1);
     }
 
     @Test

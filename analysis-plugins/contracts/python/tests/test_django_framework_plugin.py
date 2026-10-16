@@ -430,7 +430,7 @@ class Order(models.Model):
     assert unknown.value.code == "django-unknown-fact-kind"
 
 
-def test_django_direct_indexing_and_review_contributions_are_bounded():
+def test_django_direct_indexing_and_review_preserve_every_record():
     fields = "\n".join(
         f"    field_{index} = models.CharField(max_length=20)"
         for index in range(300)
@@ -439,8 +439,12 @@ def test_django_direct_indexing_and_review_contributions_are_bounded():
         "shop/models.py",
         "from django.db import models\nclass Large(models.Model):\n" + fields,
     )
-    review = _plugin().review(tuple(f"app_{index}/models.py" for index in range(100)))
+    review_paths = tuple(f"app_{index:03d}/models.py" for index in range(100))
+    review = _plugin().review(review_paths)
 
-    assert len(facts) == 160
+    assert len(facts) == 301
     assert {fact.kind for fact in facts} == {"django-model", "django-model-field"}
-    assert len(review.value.evidence_requests) == 40
+    assert any(fact.target.endswith(".field_299") for fact in facts)
+    assert tuple(
+        request.identifier for request in review.value.evidence_requests
+    ) == review_paths

@@ -8,8 +8,7 @@ public record FileRelationshipDto(
         String sourceFile,
         String targetFile,
         RelationshipType relationshipType,
-        String matchedOn,
-        int strength
+        String matchedOn
 ) {
     /**
      * Types of relationships between files.
@@ -18,9 +17,7 @@ public record FileRelationshipDto(
         IMPORTS,
         EXTENDS,
         IMPLEMENTS,
-        CALLS,
-        SAME_PACKAGE,
-        REFERENCES
+        CALLS
     }
 
     /**
@@ -31,8 +28,7 @@ public record FileRelationshipDto(
                 sourceFile,
                 targetFile,
                 RelationshipType.IMPORTS,
-                importStatement,
-                10 // High strength for direct imports
+                importStatement
         );
     }
 
@@ -44,8 +40,7 @@ public record FileRelationshipDto(
                 sourceFile,
                 targetFile,
                 RelationshipType.EXTENDS,
-                className,
-                15 // Highest strength for inheritance
+                className
         );
     }
 
@@ -57,8 +52,7 @@ public record FileRelationshipDto(
                 sourceFile,
                 targetFile,
                 RelationshipType.IMPLEMENTS,
-                interfaceName,
-                15 // Highest strength for interface implementation
+                interfaceName
         );
     }
 
@@ -70,21 +64,7 @@ public record FileRelationshipDto(
                 sourceFile,
                 targetFile,
                 RelationshipType.CALLS,
-                methodName,
-                8 // Medium-high strength for method calls
-        );
-    }
-
-    /**
-     * Create a same-package relationship.
-     */
-    public static FileRelationshipDto samePackage(String sourceFile, String targetFile, String packageName) {
-        return new FileRelationshipDto(
-                sourceFile,
-                targetFile,
-                RelationshipType.SAME_PACKAGE,
-                packageName,
-                3 // Low strength for implicit package relationship
+                methodName
         );
     }
 }

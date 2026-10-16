@@ -1,0 +1,67 @@
+{
+  "description": "Saved public benchmark observations, unchanged complete Discourse PR1 and partial Grafana PR90045; no model judgments. Unread control is the recorded Discourse PR2 unavailable search.",
+  "complete": {
+    "tool_call_id": "exec-29d9612c-573e-4dbc-89a7-730ad4fdd09a",
+    "capture_sha256": "105a9bf73ce34270549366868a21c90037e7974882df5964f2b7802e1b2f235b",
+    "visible_to_call": 14,
+    "repository_url": "https://github.com/ai-code-review-evaluation/discourse-graphite/pull/1",
+    "request": {
+      "projectVcsWorkspace": "ai-code-review-evaluation",
+      "projectVcsRepoSlug": "discourse-graphite",
+      "localRepoRevision": "3f71fa15c93bb0b751bb92abae1b5dc9a21bd4ca",
+      "changedFiles": [
+        "app/assets/javascripts/discourse/lib/utilities.js",
+        "app/controllers/uploads_controller.rb",
+        "app/models/optimized_image.rb"
+      ],
+      "deletedFiles": []
+    },
+    "action": {
+      "tool": "getReviewFileContent",
+      "tool_input": {
+        "endLine": 90,
+        "filePath": "lib/file_helper.rb",
+        "repoSlug": "discourse-graphite",
+        "startLine": 1,
+        "workspace": "ai-code-review-evaluation"
+      }
+    },
+    "observation": "{\"fileContent\":\"require \\\"open-uri\\\"\\n\\nclass FileHelper\\n\\n  def self.is_image?(filename)\\n    filename =~ images_regexp\\n  end\\n\\n  def self.download(url, max_file_size, tmp_file_name, follow_redirect=false)\\n    raise Discourse::InvalidParameters.new(:url) unless url =~ /^https?:\\\\/\\\\//\\n\\n    uri = parse_url(url)\\n    extension = File.extname(uri.path)\\n    tmp = Tempfile.new([tmp_file_name, extension])\\n\\n    File.open(tmp.path, \\\"wb\\\") do |f|\\n      downloaded = uri.open(\\\"rb\\\", read_timeout: 5, redirect: follow_redirect)\\n      while f.size <= max_file_size && data = downloaded.read(512.kilobytes)\\n        f.write(data)\\n      end\\n      # tiny files are StringIO, no close! on them\\n      downloaded.try(:close!) rescue nil\\n    end\\n\\n    tmp\\n  end\\n\\n  private\\n\\n  def self.images\\n    @@images ||= Set.new [\\\"jpg\\\", \\\"jpeg\\\", \\\"png\\\", \\\"gif\\\", \\\"tif\\\", \\\"tiff\\\", \\\"bmp\\\", \\\"svg\\\", \\\"webp\\\"]\\n  end\\n\\n  def self.images_regexp\\n    @@images_regexp ||= /\\\\.(#{images.to_a.join(\\\"|\\\")})$/i\\n  end\\n\\n  # HACK to support underscores in URLs\\n  # cf. http://stackoverflow.com/a/18938253/11983\\n  def self.parse_url(url)\\n    URI.parse(url)\\n  rescue URI::InvalidURIError\\n    host = url.match(\\\".+\\\\:\\\\/\\\\/([^\\\\/]+)\\\")[1]\\n    uri = URI.parse(url.sub(host, 'valid-host'))\\n    uri.instance_variable_set(\\\"@host\\\", host)\\n    uri\\n  end\\n\\nend\\n\",\"startLine\":1,\"endLine\":50,\"totalLines\":50,\"completeFile\":true,\"filePath\":\"lib/file_helper.rb\",\"exists\":true,\"changed\":false,\"deleted\":false,\"unavailable\":false,\"source\":\"target-head\"}",
+    "source_body_sha256": "593a2d674764cbfabfb4f267c085161ddb1bbed55909bc4e7b2ab313377c990b"
+  },
+  "partial": {
+    "tool_call_id": "exec-f00fe298-25ed-4296-9c17-eeb2ddde9da5",
+    "capture_sha256": "310272b11c906fded6f008f8f39d2b162e1acbc0f0b49d5129d224c0ba4a8e07",
+    "visible_to_call": 9,
+    "repository_url": "https://github.com/grafana/grafana/pull/90045",
+    "request": {
+      "projectVcsWorkspace": "grafana",
+      "projectVcsRepoSlug": "grafana",
+      "localRepoRevision": "66c4dff17e9147b11fb9b14c6ed63089a599da65",
+      "changedFiles": [
+        "go.work.sum",
+        "pkg/apiserver/rest/dualwriter_mode1_test.go",
+        "pkg/apiserver/rest/dualwriter_mode3.go",
+        "pkg/apiserver/rest/dualwriter_mode3_test.go",
+        "pkg/tests/apis/playlist/playlist_test.go"
+      ],
+      "deletedFiles": []
+    },
+    "action": {
+      "tool": "getReviewFileContent",
+      "tool_input": {
+        "endLine": 240,
+        "filePath": "pkg/apiserver/rest/dualwriter.go",
+        "repoSlug": "grafana",
+        "startLine": 1,
+        "workspace": "grafana"
+      }
+    },
+    "observation": "{\"fileContent\":\"package rest\\n\\nimport (\\n\\t\\\"bytes\\\"\\n\\t\\\"context\\\"\\n\\t\\\"encoding/json\\\"\\n\\t\\\"errors\\\"\\n\\t\\\"fmt\\\"\\n\\n\\t\\\"github.com/prometheus/client_golang/prometheus\\\"\\n\\t\\\"k8s.io/apimachinery/pkg/api/meta\\\"\\n\\tmetav1 \\\"k8s.io/apimachinery/pkg/apis/meta/v1\\\"\\n\\t\\\"k8s.io/apimachinery/pkg/runtime\\\"\\n\\t\\\"k8s.io/apimachinery/pkg/runtime/schema\\\"\\n\\t\\\"k8s.io/apiserver/pkg/registry/rest\\\"\\n\\t\\\"k8s.io/klog/v2\\\"\\n)\\n\\nvar (\\n\\t_ rest.Storage              = (DualWriter)(nil)\\n\\t_ rest.Scoper               = (DualWriter)(nil)\\n\\t_ rest.TableConvertor       = (DualWriter)(nil)\\n\\t_ rest.CreaterUpdater       = (DualWriter)(nil)\\n\\t_ rest.CollectionDeleter    = (DualWriter)(nil)\\n\\t_ rest.GracefulDeleter      = (DualWriter)(nil)\\n\\t_ rest.SingularNameProvider = (DualWriter)(nil)\\n)\\n\\n// Function that will create a dual writer\\ntype DualWriteBuilder func(gr schema.GroupResource, legacy LegacyStorage, storage Storage) (Storage, error)\\n\\n// Storage is a storage implementation that satisfies the same interfaces as genericregistry.Store.\\ntype Storage interface {\\n\\trest.Storage\\n\\trest.Scoper\\n\\trest.TableConvertor\\n\\trest.SingularNameProvider\\n\\trest.Getter\\n\\t// TODO: when watch is implemented, we can replace all the below with rest.StandardStorage\\n\\trest.Lister\\n\\trest.CreaterUpdater\\n\\trest.GracefulDeleter\\n\\trest.CollectionDeleter\\n}\\n\\n// LegacyStorage is a storage implementation that writes to the Grafana SQL database.\\ntype LegacyStorage interface {\\n\\trest.Storage\\n\\trest.Scoper\\n\\trest.SingularNameProvider\\n\\trest.CreaterUpdater\\n\\trest.Lister\\n\\trest.GracefulDeleter\\n\\trest.CollectionDeleter\\n\\trest.TableConvertor\\n\\trest.Getter\\n}\\n\\n// DualWriter is a storage implementation that writes first to LegacyStorage and then to Storage.\\n// If writing to LegacyStorage fails, the write to Storage is skipped and the error is returned.\\n// Storage is used for all read operations.  This is useful as a migration step from SQL based\\n// legacy storage to a more standard kubernetes backed storage interface.\\n//\\n// NOTE: Only values supported by legacy storage will be preserved in the CREATE/UPDATE commands.\\n// For example, annotations, labels, and managed fields may not be preserved.  Everything in upstream\\n// storage can be recrated from the data in legacy storage.\\n//\\n// The LegacyStorage implementation must implement the following interfaces:\\n// - rest.Storage\\n// - rest.TableConvertor\\n// - rest.Scoper\\n// - rest.SingularNameProvider\\n//\\n// These interfaces are optional, but they all should be implemented to fully support dual writes:\\n// - rest.Creater\\n// - rest.Updater\\n// - rest.GracefulDeleter\\n// - rest.CollectionDeleter\\n\\ntype DualWriter interface {\\n\\tStorage\\n\\tLegacyStorage\\n\\tMode() DualWriterMode\\n}\\n\\ntype DualWriterMode int\\n\\nconst (\\n\\t// Mode0 represents writing to and reading from solely LegacyStorage. This mode is enabled when the\\n\\t// `unifiedStorage` feature flag is not set. All reads and writes are made to LegacyStorage. None are made to Storage.\\n\\tMode0 DualWriterMode = iota\\n\\t// Mode1 represents writing to and reading from LegacyStorage for all primary functionality while additionally\\n\\t// reading and writing to Storage on a best effort basis for the sake of collecting metrics.\\n\\tMode1\\n\\t// Mode2 is the dual writing mode that represents writing to LegacyStorage and Storage and reading from LegacyStorage.\\n\\tMode2\\n\\t// Mode3 represents writing to LegacyStorage and Storage and reading from Storage.\\n\\tMode3\\n\\t// Mode4 represents writing and reading from Storage.\\n\\tMode4\\n)\\n\\n// TODO: make this function private as there should only be one public way of setting the dual writing mode\\n// NewDualWriter returns a new DualWriter.\\nfunc NewDualWriter(mode DualWriterMode, legacy LegacyStorage, storage Storage, reg prometheus.Registerer) DualWriter {\\n\\tmetrics := &dualWriterMetrics{}\\n\\tmetrics.init(reg)\\n\\tswitch mode {\\n\\t// It is not possible to initialize a mode 0 dual writer. Mode 0 represents\\n\\t// writing to legacy storage without `unifiedStorage` enabled.\\n\\tcase Mode1:\\n\\t\\t// read and write only from legacy storage\\n\\t\\treturn newDualWriterMode1(legacy, storage, metrics)\\n\\tcase Mode2:\\n\\t\\t// write to both, read from storage but use legacy as backup\\n\\t\\treturn newDualWriterMode2(legacy, storage, metrics)\\n\\tcase Mode3:\\n\\t\\t// write to both, read from storage only\\n\\t\\treturn newDualWriterMode3(legacy, storage, metrics)\\n\\tcase Mode4:\\n\\t\\t// read and write only from storage\\n\\t\\treturn newDualWriterMode4(legacy, storage, metrics)\\n\\tdefault:\\n\\t\\treturn newDualWriterMode1(legacy, storage, metrics)\\n\\t}\\n}\\n\\ntype updateWrapper struct {\\n\\tupstream rest.UpdatedObjectInfo\\n\\tupdated  runtime.Object\\n}\\n\\n// Returns preconditions built from the updated object, if applicable.\\n// May return nil, or a preconditions object containing nil fields,\\n// if no preconditions can be determined from the updated object.\\nfunc (u *updateWrapper) Preconditions() *metav1.Preconditions {\\n\\treturn u.upstream.Preconditions()\\n}\\n\\n// UpdatedObject returns the updated object, given a context and old object.\\n// The only time an empty oldObj should be passed in is if a \\\"create on update\\\" is occurring (there is no oldObj).\\nfunc (u *updateWrapper) UpdatedObject(ctx context.Context, oldObj runtime.Object) (newObj runtime.Object, err error) {\\n\\treturn u.updated, nil\\n}\\n\\ntype NamespacedKVStore interface {\\n\\tGet(ctx context.Context, key string) (string, bool, error)\\n\\tSet(ctx context.Context, key, value string) error\\n}\\n\\nfunc SetDualWritingMode(\\n\\tctx context.Context,\\n\\tkvs NamespacedKVStore,\\n\\tlegacy LegacyStorage,\\n\\tstorage Storage,\\n\\tentity string,\\n\\tdesiredMode DualWriterMode,\\n\\treg prometheus.Registerer,\\n) (DualWriterMode, error) {\\n\\t// Mode0 means no DualWriter\\n\\tif desiredMode == Mode0 {\\n\\t\\treturn Mode0, nil\\n\\t}\\n\\n\\ttoMode := map[string]DualWriterMode{\\n\\t\\t// It is not possible to initialize a mode 0 dual writer. Mode 0 represents\\n\\t\\t// writing to legacy storage without `unifiedStorage` enabled.\\n\\t\\t\\\"1\\\": Mode1,\\n\\t\\t\\\"2\\\": Mode2,\\n\\t\\t\\\"3\\\": Mode3,\\n\\t\\t\\\"4\\\": Mode4,\\n\\t}\\n\\terrDualWriterSetCurrentMode := errors.New(\\\"failed to set current dual writing mode\\\")\\n\\n\\t// Use entity name as key\\n\\tm, ok, err := kvs.Get(ctx, entity)\\n\\tif err != nil {\\n\\t\\treturn Mode0, errors.New(\\\"failed to fetch current dual writing mode\\\")\\n\\t}\\n\\n\\tcurrentMode, valid := toMode[m]\\n\\n\\tif !valid && ok {\\n\\t\\t// Only log if \\\"ok\\\" because initially all instances will have mode unset for playlists.\\n\\t\\tklog.Info(\\\"invalid dual writing mode for playlists mode:\\\", m)\\n\\t}\\n\\n\\tif !valid || !ok {\\n\\t\\t// Default to mode 1\\n\\t\\tcurrentMode = Mode1\\n\\n\\t\\terr := kvs.Set(ctx, entity, fmt.Sprint(currentMode))\\n\\t\\tif err != nil {\\n\\t\\t\\treturn Mode0, errDualWriterSetCurrentMode\\n\\t\\t}\\n\\t}\\n\\n\\t// Desired mode is 2 and current mode is 1\\n\\tif (desiredMode == Mode2) && (currentMode == Mode1) {\\n\\t\\t// This is where we go through the different gates to allow the instance to migrate from mode 1 to mode 2.\\n\\t\\t// There are none between mode 1 and mode 2\\n\\t\\tcurrentMode = Mode2\\n\\n\\t\\terr := kvs.Set(ctx, entity, fmt.Sprint(currentMode))\\n\\t\\tif err != nil {\\n\\t\\t\\treturn Mode0, errDualWriterSetCurrentMode\\n\\t\\t}\\n\\t}\\n\\tif (desiredMode == Mode1) && (currentMode == Mode2) {\\n\\t\\t// This is where we go through the different gates to allow the instance to migrate from mode 2 to mode 1.\\n\\t\\t// There are none between mode 1 and mode 2\\n\\t\\tcurrentMode = Mode1\\n\\n\\t\\terr := kvs.Set(ctx, entity, fmt.Sprint(currentMode))\\n\\t\\tif err != nil {\\n\\t\\t\\treturn Mode0, errDualWriterSetCurrentMode\\n\\t\\t}\\n\\t}\\n\\n\\t// \\t#TODO add support for other combinations of desired and current modes\\n\\n\\treturn currentMode, nil\\n}\\n\\nvar defaultConverter = runtime.UnstructuredConverter(runtime.DefaultUnstructuredConverter)\\n\\n// Compare asserts on the equality of objects returned from both stores\\t(object storage and legacy storage)\\nfunc Compare(storageObj, legacyObj runtime.Object) bool {\\n\\tif storageObj == nil || legacyObj == nil {\\n\\t\\treturn storageObj == nil && legacyObj == nil\\n\\t}\\n\\treturn bytes.Equal(removeMeta(storageObj), removeMeta(legacyObj))\\n}\\n\\nfunc removeMeta(obj runtime.Object) []byte {\\n\\tcpy := obj.DeepCopyObject()\\n\\tunstObj, err := defaultConverter.ToUnstructured(cpy)\\n\\tif err != nil {\\n\\t\\treturn nil\\n\\t}\",\"startLine\":1,\"endLine\":240,\"totalLines\":262,\"completeFile\":false,\"filePath\":\"pkg/apiserver/rest/dualwriter.go\",\"exists\":true,\"changed\":false,\"deleted\":false,\"unavailable\":false,\"source\":\"target-head\"}",
+    "source_body_sha256": "ad4a5265ca395a686c4a69b01629f539d7bf1e309436297498b5f228e86c413b"
+  },
+  "unread_search": {
+    "file_path": "app/controllers/application_controller.rb",
+    "search_string": "protect_from_forgery"
+  }
+}

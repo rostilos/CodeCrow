@@ -30,6 +30,7 @@ class GitLabClientTest {
                       "web_url": "https://gitlab.example/team/repo/-/merge_requests/17",
                       "diff_refs": {
                         "base_sha": "base-sha",
+                        "start_sha": "target-head-sha",
                         "head_sha": "head-sha"
                       }
                     }
@@ -51,6 +52,7 @@ class GitLabClientTest {
 
             assertThat(pullRequest.title()).isEqualTo("Self-managed review");
             assertThat(pullRequest.baseCommit()).isEqualTo("base-sha");
+            assertThat(pullRequest.targetHeadCommit()).isEqualTo("target-head-sha");
             assertThat(pullRequest.headCommit()).isEqualTo("head-sha");
             assertThat(diff).contains("diff --git a/src/App.java b/src/App.java")
                     .contains("+new");

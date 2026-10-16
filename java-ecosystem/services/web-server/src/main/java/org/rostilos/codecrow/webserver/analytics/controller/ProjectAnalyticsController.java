@@ -1,7 +1,7 @@
 package org.rostilos.codecrow.webserver.analytics.controller;
 
-import org.rostilos.codecrow.core.dto.analysis.AnalysisItemDTO;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
@@ -9,6 +9,7 @@ import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalys
 import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.analysis.dto.response.AnalysesHistoryResponse;
+import org.rostilos.codecrow.webserver.analysis.dto.response.AnalysisReportResponse;
 import org.rostilos.codecrow.webserver.analysis.dto.response.IssueStatusUpdateResponse;
 import org.rostilos.codecrow.webserver.analysis.service.AnalysisService;
 import org.rostilos.codecrow.webserver.analytics.service.ProjectAnalyticsService;
@@ -16,8 +17,6 @@ import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -123,7 +122,7 @@ public class ProjectAnalyticsController {
         if (branch != null && !branch.isBlank()) {
             org.rostilos.codecrow.core.service.BranchService.BranchStats stats = projectAnalyticsService.getBranchStats(projectId, branch);
             List<org.rostilos.codecrow.core.model.branch.BranchIssue> branchIssues = projectAnalyticsService.getBranchIssues(projectId, branch);
-            List<CodeAnalysis> history = projectAnalyticsService.getBranchAnalysisHistory(projectId, branch);
+            List<CodeAnalysis> history = projectAnalyticsService.getRecentReportAnalyses(projectId, branch);
 
             resp.setTotalIssues((int) stats.getTotalIssues());
             resp.setCriticalIssues((int) stats.getHighSeverityCount());
@@ -274,9 +273,7 @@ public class ProjectAnalyticsController {
             resp.setIssuesByType(issuesByType);
 
             // Recent analyses — paginated query (top 10 only, not all history)
-            Page<CodeAnalysis> recentPage = codeAnalysisRepository.findByProjectIdOrderByCreatedAtDesc(
-                    projectId, PageRequest.of(0, 10));
-            List<DetailedStatsResponse.RecentAnalysis> recent = recentPage.getContent().stream()
+            List<DetailedStatsResponse.RecentAnalysis> recent = projectAnalyticsService.getRecentReportAnalyses(projectId, null).stream()
                     .map(a -> {
                         DetailedStatsResponse.RecentAnalysis r = new DetailedStatsResponse.RecentAnalysis();
                         r.setDate(a.getCreatedAt() == null ? null : a.getCreatedAt().toString());
@@ -360,18 +357,27 @@ public class ProjectAnalyticsController {
             @PathVariable String projectNamespace,
             @RequestParam(name = "page", defaultValue = "1") int page,
             @RequestParam(name = "pageSize", defaultValue = "20") int pageSize,
-            @RequestParam(name = "branch", required = false) String branch
+            @RequestParam(name = "branch", required = false) String branch,
+            @RequestParam(name = "prNumber", required = false) Long prNumber,
+            @RequestParam(name = "status", required = false) AnalysisStatus status
     ) {
         Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspaceId, projectNamespace);
-        List<CodeAnalysis> analyses = projectAnalyticsService.getAnalysisHistory(project.getId(), branch);
+        return ResponseEntity.ok(projectAnalyticsService.getReportHistory(
+                project.getId(), branch, prNumber, status, page, pageSize));
+    }
 
-        List<AnalysisItemDTO> items = analyses.stream()
-                .map(AnalysisItemDTO::fromEntity)
-                .toList();
-
-        AnalysesHistoryResponse resp = new AnalysesHistoryResponse(items);
-        return ResponseEntity.ok(resp);
+    @GetMapping("/history/{analysisId}")
+    public ResponseEntity<AnalysisReportResponse> getAnalysisReport(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @PathVariable Long analysisId
+    ) {
+        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspaceId, projectNamespace);
+        return projectAnalyticsService.getAnalysisReport(project.getId(), analysisId)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /**
@@ -535,6 +541,8 @@ public class ProjectAnalyticsController {
             case ACCEPTED:
             case REJECTED:
                 return "completed";
+            case PARTIAL:
+                return "partial";
             case ERROR:
                 return "failed";
             case PENDING:

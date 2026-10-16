@@ -30,6 +30,24 @@ class QualityGateEvaluatorTest {
     }
 
     @Nested
+    @DisplayName("resolved issue accounting")
+    class ResolvedIssueAccounting {
+        @Test
+        void newIssueMetricDoesNotSubtractResolvedCountFromAlreadyActiveCount() {
+            CodeAnalysis analysis = new CodeAnalysis();
+            var active = new org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue();
+            active.setSeverity(IssueSeverity.HIGH); analysis.addIssue(active);
+            var resolved = new org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue();
+            resolved.setSeverity(IssueSeverity.HIGH); resolved.setResolved(true); analysis.addIssue(resolved);
+            QualityGate gate = createQualityGate("No open issues", true);
+            gate.addCondition(createCondition(QualityGateMetric.NEW_ISSUES, null, QualityGateComparator.GREATER_THAN, 0));
+            QualityGateResult result = evaluator.evaluate(analysis, gate);
+            assertThat(result.conditionResults().get(0).actualValue()).isEqualTo(1);
+            assertThat(result.isFailed()).isTrue();
+        }
+    }
+
+    @Nested
     @DisplayName("evaluate() - basic scenarios")
     class EvaluateBasicTests {
 

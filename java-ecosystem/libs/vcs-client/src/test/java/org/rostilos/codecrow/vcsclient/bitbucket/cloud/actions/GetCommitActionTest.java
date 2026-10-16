@@ -69,7 +69,7 @@ class GetCommitActionTest {
     }
 
     @Test
-    void propagatesProviderFailureWithoutEmbeddingRequestUrl() throws IOException {
+    void propagatesProviderFailureWithoutIncludingRequestUrl() throws IOException {
         GetCommitAction action = action();
         server.enqueue(new MockResponse()
                 .setResponseCode(404)

@@ -4,16 +4,22 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_search_rejected_without_secret(client):
-    resp = await client.post("/query/search", json={
-        "query": "test", "workspace": "ws", "project": "p", "branch": "main"
+    resp = await client.post("/query/code-search", json={
+        "query": "test", "workspace": "ws", "project": "p", "branch": "main",
+        "repository_revision": "revision-1",
+        "repository_generation_manifest_sha256": "a" * 64,
+        "collection_target": "generation-target",
     })
     assert resp.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_search_accepted_with_secret(client, auth_headers):
-    resp = await client.post("/query/search", json={
-        "query": "test", "workspace": "ws", "project": "p", "branch": "main"
+    resp = await client.post("/query/code-search", json={
+        "query": "test", "workspace": "ws", "project": "p", "branch": "main",
+        "repository_revision": "revision-1",
+        "repository_generation_manifest_sha256": "a" * 64,
+        "collection_target": "generation-target",
     }, headers=auth_headers)
     assert resp.status_code != 401
 
@@ -32,8 +38,11 @@ async def test_parse_rejected_without_secret(client):
 
 @pytest.mark.asyncio
 async def test_wrong_secret(client):
-    resp = await client.post("/query/search", json={
-        "query": "test", "workspace": "ws", "project": "p", "branch": "main"
+    resp = await client.post("/query/code-search", json={
+        "query": "test", "workspace": "ws", "project": "p", "branch": "main",
+        "repository_revision": "revision-1",
+        "repository_generation_manifest_sha256": "a" * 64,
+        "collection_target": "generation-target",
     }, headers={"x-service-secret": "wrong"})
     assert resp.status_code == 401
 

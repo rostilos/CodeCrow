@@ -50,14 +50,6 @@ class FileDisposition(str, Enum):
     EXCLUDED = "excluded"
 
 
-class RepositoryAnalysisMode(str, Enum):
-    """Describe how repository state will be consumed by the host."""
-
-    FULL_INDEX = "full-index"
-    PERSISTENT_INCREMENTAL = "persistent-incremental"
-    PR_OVERLAY = "pr-overlay"
-
-
 def _non_blank(value: str, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be a non-blank string")
@@ -427,7 +419,7 @@ class SyntaxContribution:
 
 @dataclass(frozen=True, order=True)
 class RepositorySnapshot:
-    """Opaque, plugin-owned state used for exact incremental graph overlays."""
+    """Opaque plugin state used to resume repository-wide analysis."""
 
     plugin_id: str
     kind: str
@@ -441,7 +433,7 @@ class RepositorySnapshot:
 
 @dataclass(frozen=True, order=True)
 class RepositoryContext:
-    """Exact plugin-selected source kept outside semantic embedding."""
+    """Exact plugin-selected source stored as a standalone structural record."""
 
     plugin_id: str
     kind: str
@@ -469,6 +461,7 @@ class GraphFact:
     line: int = 1
     attributes: tuple[tuple[str, str], ...] = ()
     related_paths: tuple[str, ...] = ()
+    contributing_plugin_ids: tuple[str, ...] = field(default=(), compare=False)
 
     def __post_init__(self) -> None:
         _non_blank(self.kind, "graph fact kind")
@@ -485,6 +478,12 @@ class GraphFact:
         if normalized_related != self.related_paths:
             raise ValueError("graph fact related paths must already be normalized")
         _sorted_unique(self.related_paths, "graph fact related paths")
+        for plugin_id in self.contributing_plugin_ids:
+            _plugin_id(plugin_id, "graph fact contributing plugin id")
+        _sorted_unique(
+            self.contributing_plugin_ids,
+            "graph fact contributing plugin ids",
+        )
         if any(
             not isinstance(key, str)
             or not key.strip()
@@ -504,6 +503,7 @@ class GraphFact:
                 "line": self.line,
                 "attributes": dict(self.attributes),
                 "related_paths": list(self.related_paths),
+                "contributing_plugin_ids": list(self.contributing_plugin_ids),
             }
         )
 
@@ -518,6 +518,7 @@ class SymbolDefinition:
     methods: tuple[str, ...] = ()
     constructor_types: tuple[str, ...] = ()
     attributes: tuple[tuple[str, str], ...] = ()
+    contributing_plugin_ids: tuple[str, ...] = field(default=(), compare=False)
 
     def __post_init__(self) -> None:
         _non_blank(self.qualified_name, "qualified symbol name")
@@ -531,6 +532,12 @@ class SymbolDefinition:
         _sorted_unique(self.methods, "symbol methods")
         _sorted_unique(self.constructor_types, "constructor types")
         _sorted_unique(self.attributes, "symbol attributes")
+        for plugin_id in self.contributing_plugin_ids:
+            _plugin_id(plugin_id, "symbol contributing plugin id")
+        _sorted_unique(
+            self.contributing_plugin_ids,
+            "symbol contributing plugin ids",
+        )
 
 
 @dataclass(frozen=True, order=True)

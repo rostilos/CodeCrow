@@ -192,6 +192,72 @@ class TestStage0Planning:
         assert "+added_line()" in prompt
         assert "FULL_DIFF_REVIEW" in prompt
 
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_planner_uses_bounded_representative_diff_scaffold(self):
+        """Large diffs cannot recreate a giant Stage 0 request."""
+        mock_llm = MagicMock()
+        expected_plan = ReviewPlan(
+            analysis_summary="Bounded plan",
+            file_groups=[FileGroup(
+                group_id="g1",
+                priority="MEDIUM",
+                rationale="Bounded summary",
+                files=[ReviewFile(path="src/large.py"), ReviewFile(path="src/peer.py")],
+            )],
+        )
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(return_value=expected_plan)
+        mock_llm.with_structured_output.return_value = structured
+        request = MagicMock()
+        request.changedFiles = ["src/large.py", "src/peer.py"]
+        request.deletedFiles = []
+        request.prTitle = "PR"
+        request.prDescription = "desc"
+        request.enrichmentData = None
+        request.projectRules = None
+        request.taskContext = None
+        request.projectVcsRepoSlug = "repo"
+        request.pullRequestId = 123
+        request.prAuthor = "dev"
+        request.sourceBranchName = "feature"
+        request.targetBranchName = "main"
+        request.currentCommitHash = "a" * 40
+        request.commitHash = "a" * 40
+        request.maxAllowedTokens = 24_000
+
+        large_diff = DiffFile(
+            path="src/large.py",
+            change_type=DiffChangeType.MODIFIED,
+            content=(
+                "diff --git a/src/large.py b/src/large.py\n"
+                "--- a/src/large.py\n"
+                "+++ b/src/large.py\n"
+                "@@ -1 +1,12000 @@\n"
+                + "+value = compute()\n" * 12_000
+            ),
+            additions=12_000,
+            deletions=0,
+        )
+        peer_diff = DiffFile(
+            path="src/peer.py",
+            change_type=DiffChangeType.MODIFIED,
+            content="@@ -1 +1 @@\n+peer = True\n",
+            additions=1,
+            deletions=0,
+        )
+
+        result = await execute_stage_0_planning(
+            mock_llm,
+            request,
+            processed_diff=ProcessedDiff(files=[large_diff, peer_diff]),
+        )
+
+        prompt = structured.ainvoke.await_args.args[0]
+        assert result is expected_plan
+        assert prompt.count("+value = compute()") == 16
+        assert len(prompt) < 20_000
+        mock_llm.ainvoke.assert_not_called()
+
     def test_fallback_plan_skips_only_mechanically_unreviewable_files(self):
         request = MagicMock()
         request.changedFiles = ["assets/logo.png", "src/app.py"]
@@ -269,7 +335,7 @@ class TestBranchAnalysis:
         mock_llm = MagicMock()
         mock_client = MagicMock()
 
-        with patch("service.review.orchestrator.agents.RecursiveMCPAgent") as MockAgent:
+        with patch("service.agent.agent_execution_service.RecursiveMCPAgent") as MockAgent:
             agent_instance = MagicMock()
             # Simulate streaming that yields a CodeReviewOutput directly
             output = CodeReviewOutput(issues=[], comment="No issues found.")

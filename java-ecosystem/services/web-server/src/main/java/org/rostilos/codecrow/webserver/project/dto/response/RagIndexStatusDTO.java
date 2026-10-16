@@ -14,8 +14,6 @@ public record RagIndexStatusDTO(
         OffsetDateTime lastIndexedAt,
         OffsetDateTime updatedAt,
         String errorMessage,
-        String collectionName,
-        Integer failedIncrementalCount,
         Integer chunkCount) {
     public static RagIndexStatusDTO fromEntity(RagIndexStatus entity) {
         if (entity == null) {
@@ -30,8 +28,6 @@ public record RagIndexStatusDTO(
                 entity.getLastIndexedAt(),
                 entity.getUpdatedAt(),
                 entity.getErrorMessage(),
-                entity.getCollectionName(),
-                entity.getFailedIncrementalCount(),
                 entity.getChunkCount());
     }
 }

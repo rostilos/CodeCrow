@@ -82,6 +82,16 @@ class QaDocDocumentServiceTest {
     }
 
     @Test
+    void refusesAnOlderReviewBeforeMutatingThePublishedDocument() {
+        var project = project(42L); var current = new QaDocDocument(project, 7L);
+        current.replaceContent("PROJ-123", 101L, "new-head", "current coverage");
+        when(qaDocDocumentRepository.findByProjectIdAndPrNumber(42L, 7L)).thenReturn(Optional.of(current));
+        assertThatThrownBy(() -> service.upsertLatestDocument(project, 7L, "PROJ-123", 100L, "old-head", "stale coverage"))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(current.getMarkdownContent()).isEqualTo("current coverage");
+    }
+
+    @Test
     @DisplayName("rejects blank markdown")
     void rejectsBlankMarkdown() {
         Project project = project(42L);

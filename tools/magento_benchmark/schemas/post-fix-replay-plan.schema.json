@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "post-fix-replay-plan.schema.json",
+  "title": "CodeCrow Magento 2 verified-F replay plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "generatedAt",
+    "forkRepository",
+    "corpusId",
+    "corpusDigest",
+    "executionCorpusDigest",
+    "primaryReplayLockDigest",
+    "snapshotPolicy",
+    "diffPolicy",
+    "cases",
+    "planDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-post-fix-replay-plan"
+    },
+    "generatedAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "forkRepository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "corpusId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "corpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "executionCorpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "primaryReplayLockDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "snapshotPolicy": {
+      "const": "verified_source_pr_final_head_F"
+    },
+    "diffPolicy": {
+      "const": "git_no_replace_full_index_B_to_F"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 50,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    },
+    "planDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha1": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "baseRef",
+        "baseSha",
+        "reviewHeadSha",
+        "finalRef",
+        "finalSha",
+        "diffSha256",
+        "fileCount",
+        "changedPaths",
+        "deletedPaths",
+        "ancestryEvidence"
+      ],
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "reviewHeadSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "finalRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finalSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "diffSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "fileCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "changedPaths": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "deletedPaths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "ancestryEvidence": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

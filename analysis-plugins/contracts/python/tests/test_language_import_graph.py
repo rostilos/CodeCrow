@@ -9,7 +9,6 @@ from codecrow_plugins import (
     PluginRuntime,
     ProjectCapabilities,
     ProjectSelector,
-    RepositoryAnalysisMode,
     RepositoryFacts,
     ValidationDecision,
 )
@@ -87,7 +86,6 @@ def test_python_import_and_call_resolve_to_unchanged_policy_path():
         capabilities,
         "fedcba9876543210",
         snapshots=analysis.snapshots,
-        mode=RepositoryAnalysisMode.PR_OVERLAY,
     )
     restored.ingest((FileArtifact(
         "app/export_service.py",
@@ -105,14 +103,11 @@ def test_python_import_and_call_resolve_to_unchanged_policy_path():
         and fact.related_paths == ("app/export_policy.py",)
         for fact in _facts(overlaid)
     )
-    removed_call = next(
-        fact
+    assert not any(
+        fact.kind == "python-call-resolution"
+        and fact.target == "app.export_policy::can_export"
         for fact in _facts(overlaid)
-        if fact.kind == "python-pr-removed-relation"
-        and dict(fact.attributes)["originalKind"] == "python-call-resolution"
     )
-    assert removed_call.target == "app.export_policy::can_export"
-    assert removed_call.related_paths == ("app/export_policy.py",)
 
 
 def test_java_same_package_call_resolves_to_policy_path():
@@ -159,7 +154,6 @@ def test_java_same_package_call_resolves_to_policy_path():
         capabilities,
         "fedcba9876543210",
         snapshots=analysis.snapshots,
-        mode=RepositoryAnalysisMode.PR_OVERLAY,
     )
     restored.ingest((FileArtifact(
         "src/main/java/example/RefundService.java",
@@ -175,14 +169,10 @@ def test_java_same_package_call_resolves_to_policy_path():
     overlaid, diagnostics = restored.finish()
 
     assert diagnostics == ()
-    removed = {
-        dict(fact.attributes)["originalKind"]: fact
+    assert not any(
+        fact.kind == "java-call-resolution"
+        and fact.target == "example::canRefund"
         for fact in _facts(overlaid)
-        if fact.kind == "java-pr-removed-relation"
-    }
-    assert removed["java-call-resolution"].target == "example::canRefund"
-    assert removed["java-call-resolution"].related_paths == (
-        "src/main/java/example/RefundPolicy.java",
     )
 
 
@@ -201,7 +191,6 @@ def test_line_only_movement_does_not_publish_removed_relation():
         capabilities,
         "fedcba9876543210",
         snapshots=analysis.snapshots,
-        mode=RepositoryAnalysisMode.PR_OVERLAY,
     )
     restored.ingest((FileArtifact(
         "app/service.py",
@@ -210,41 +199,10 @@ def test_line_only_movement_does_not_publish_removed_relation():
     overlaid, diagnostics = restored.finish()
 
     assert diagnostics == ()
-    assert not any(
-        fact.kind == "python-pr-removed-relation"
+    assert any(
+        fact.kind == "python-call-resolution"
+        and fact.target == "app.policy::allowed"
         for fact in _facts(overlaid)
-    )
-
-
-def test_persistent_incremental_does_not_store_pr_transition_facts():
-    files = {
-        "app/policy.py": "def allowed(user):\n    return user.active\n",
-        "app/service.py": (
-            "from app.policy import allowed\n"
-            "def can_run(user):\n"
-            "    return allowed(user)\n"
-        ),
-    }
-    _, runtime, capabilities, analysis = _analyze(files)
-    restored = runtime.start_repository_analysis(
-        capabilities,
-        "fedcba9876543210",
-        snapshots=analysis.snapshots,
-        mode=RepositoryAnalysisMode.PERSISTENT_INCREMENTAL,
-    )
-    restored.ingest((FileArtifact(
-        "app/service.py",
-        "def can_run(user):\n    return user.active\n",
-    ),))
-
-    updated, diagnostics = restored.finish()
-
-    assert diagnostics == ()
-    assert not any(
-        fact.kind.endswith("-pr-removed-relation")
-        or packet.kind.endswith("-import-graph-delta")
-        for packet in updated.packets
-        for fact in packet.facts
     )
 
 
@@ -287,6 +245,39 @@ def test_typescript_import_and_call_resolve_to_exported_policy():
     assert catalog.implementation("typescript") is not None
 
 
+def test_tsx_only_repository_resolves_multiline_relative_imports_with_jsx_syntax():
+    files = {
+        "src/aggregateFields.tsx": "export const isBaseVisualize = (value: unknown) => Boolean(value);\n",
+        "src/index.tsx": (
+            "import {\n  isBaseVisualize,\n} from './aggregateFields';\n"
+            "export const Panel = () => <div>{String(isBaseVisualize({}))}</div>;\n"
+        ),
+    }
+    _, runtime, capabilities, analysis = _analyze(files)
+    facts = _facts(analysis)
+    binding = next(f for f in facts if f.kind == 'typescript-import-binding'
+                   and f.source == 'src::isBaseVisualize')
+    assert binding.related_paths == ('src/aggregateFields.tsx',)
+    assert any(f.kind == 'typescript-call-resolution' and f.target == 'src/aggregateFields::isBaseVisualize'
+               for f in facts)
+    # TSX retains its existing syntax owner; the repository graph is shared
+    # with TypeScript without routing JSX through the TypeScript-only grammar.
+    assert capabilities.file_plugins['src/index.tsx'] == ('tsx',)
+    assert runtime.syntax_contribution('src/index.tsx', capabilities) == (None, ())
+    assert runtime.repository_analysis_plugins(capabilities) == ('typescript',)
+
+
+def test_typescript_and_tsx_share_relative_import_resolution():
+    _, _, _, analysis = _analyze({
+        'src/policy.ts': 'export const allowed = () => true;\n',
+        'src/Panel.tsx': "import {allowed} from './policy';\nexport const Panel = () => <div>{String(allowed())}</div>;\n",
+        'src/page.ts': "import {Panel} from './Panel';\nexport const page = () => Panel();\n",
+    })
+    facts = _facts(analysis)
+    assert any(f.kind == 'typescript-call-resolution' and f.related_paths == ('src/policy.ts',) for f in facts)
+    assert any(f.kind == 'typescript-call-resolution' and f.related_paths == ('src/Panel.tsx',) for f in facts)
+
+
 def test_typescript_validator_rejects_coarse_or_contradicted_relation_claims():
     files = {
         "src/downloadPolicy.ts": (
@@ -325,3 +316,133 @@ def test_typescript_validator_rejects_coarse_or_contradicted_relation_claims():
 
     assert coarse[0].decision is ValidationDecision.INSUFFICIENT_EVIDENCE
     assert contradicted[0].decision is ValidationDecision.REJECT
+
+
+def test_python_package_initializer_relative_import_resolves_inside_package():
+    _, _, _, analysis = _analyze({
+        "app/__init__.py": "from .policy import Policy\nPolicy.check()\n",
+        "app/policy.py": "class Policy:\n    def check(self): pass\n",
+    })
+    assert any(
+        fact.kind == "python-call-resolution"
+        and fact.path == "app/__init__.py"
+        and fact.related_paths == ("app/policy.py",)
+        for fact in _facts(analysis)
+    )
+
+
+def test_python_colocated_stub_does_not_replace_runtime_source_target():
+    _, _, _, analysis = _analyze({
+        "app/policy.py": "class Policy: pass\n",
+        "app/policy.pyi": "class Policy: ...\n",
+        "app/use.py": "from app.policy import Policy\n",
+    })
+    assert any(
+        fact.kind == "python-module-resolution"
+        and fact.path == "app/use.py"
+        and fact.related_paths == ("app/policy.py",)
+        for fact in _facts(analysis)
+    )
+
+
+def test_python_package_initializer_wins_over_same_name_module():
+    _, _, _, analysis = _analyze({
+        "app/policy.py": "class Policy: pass\n",
+        "app/policy/__init__.py": "class Policy: pass\n",
+        "app/use.py": "from app.policy import Policy\n",
+    })
+    assert any(
+        fact.kind == "python-module-resolution"
+        and fact.path == "app/use.py"
+        and fact.related_paths == ("app/policy/__init__.py",)
+        for fact in _facts(analysis)
+    )
+
+
+def test_python_newer_syntax_preserves_repository_import_and_call_edges():
+    files = {
+        "app/policy.py": "def allow(user):\n    return bool(user)\n",
+        "app/service.py": (
+            "from app.policy import allow as permitted\n"
+            "type Pair[T] = tuple[T, T]\n"
+            "def run[T](user: T) -> bool:\n"
+            "    return permitted(user)\n"
+        ),
+        "app/labels.py": (
+            "import app.policy as policy\n"
+            "def label(user):\n"
+            '    text = f"{user["name"]}"\n'
+            "    return policy.allow(text)\n"
+        ),
+    }
+    _, _, _, analysis = _analyze(files)
+    facts = _facts(analysis)
+    assert any(fact.kind == "python-import-binding"
+               and fact.source == "app.service::permitted" and fact.line == 1
+               and fact.related_paths == ("app/policy.py",) for fact in facts)
+    assert any(fact.kind == "python-call-resolution" and fact.path == "app/service.py"
+               and fact.line == 4 and fact.target == "app.policy::allow" for fact in facts)
+    assert any(fact.kind == "python-call-resolution" and fact.path == "app/labels.py"
+               and fact.line == 4 and fact.target == "app.policy::allow" for fact in facts)
+
+
+def test_python_newer_syntax_keeps_local_import_call_and_declaration_facts():
+    source = (
+        "from app.policy import allow\n"
+        "type Pair[T] = tuple[T, T]\n"
+        "class Service[T](Base):\n"
+        "    @staticmethod\n"
+        "    def run(user: T) -> bool:\n"
+        "        return allow(user)\n"
+    )
+    catalog, capabilities = _capabilities(["app/service.py"])
+    facts, diagnostics = PluginRuntime(catalog).graph_facts(
+        FileArtifact("app/service.py", source), capabilities,
+    )
+    assert diagnostics == ()
+    assert any(fact.kind == "python-import" and fact.target == "app.policy.allow" for fact in facts)
+    assert any(fact.kind == "python-type" and fact.target == "app.service.Service" for fact in facts)
+    assert any(fact.kind == "python-inheritance" and fact.target == "Base" for fact in facts)
+    assert any(fact.kind == "python-callable" and fact.source == "app.service.Service"
+               and fact.target == "run" and fact.line == 5 for fact in facts)
+    assert any(fact.kind == "python-call" and fact.target == "allow" and fact.line == 6 for fact in facts)
+    assert any(fact.kind == "python-decorator" and fact.target == "staticmethod" for fact in facts)
+
+
+def test_python_malformed_syntax_stays_observably_unavailable():
+    catalog, capabilities = _capabilities(["app/broken.py"])
+    runtime = PluginRuntime(catalog)
+    artifact = FileArtifact("app/broken.py", "def broken(:\n    return 1\n")
+    facts, diagnostics = runtime.graph_facts(artifact, capabilities)
+    assert not facts
+    assert any(d.code == "python-parse-failed" for d in diagnostics)
+    handle = runtime.start_repository_analysis(capabilities, "revision")
+    handle.ingest((artifact,))
+    _, diagnostics = handle.finish()
+    assert any(d.code == "plugin-repository-file-skipped" and d.path == artifact.path for d in diagnostics)
+
+
+def test_python_syntax_fallback_preserves_regular_fact_semantics():
+    source = (
+        "from .policy import allow as allowed\n"
+        "import os.path as paths\n"
+        "answer = 42\n"
+        "@decorate(flag=True)\n"
+        "class Service(Generic[int]):\n"
+        "    @staticmethod\n"
+        "    async def run(value):\n"
+        "        return allowed(paths.join(value))\n"
+    )
+    path = "app/service.py"
+    catalog, capabilities = _capabilities([path])
+    runtime = PluginRuntime(catalog)
+    native, diagnostics = runtime.graph_facts(FileArtifact(path, source), capabilities)
+    assert not diagnostics
+    # Select grammar fallback without changing line coordinates or ordinary facts.
+    newer = source.replace("class Service(", "class Service[T](")
+    fallback, diagnostics = runtime.graph_facts(FileArtifact(path, newer), capabilities)
+    assert not diagnostics
+    assert fallback == native
+    _, _, _, native_analysis = _analyze({path: source})
+    _, _, _, fallback_analysis = _analyze({path: newer})
+    assert fallback_analysis.snapshots == native_analysis.snapshots

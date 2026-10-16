@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.mcp.gitlab;
 
 import org.rostilos.codecrow.vcsclient.gitlab.GitLabClient;
+import org.rostilos.codecrow.mcp.generic.McpCredentialSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,7 +14,7 @@ public class GitLabClientFactory {
 
     public GitLabMcpClientImpl createClient() {
         // Use the same property names as other providers for consistency
-        String accessToken = System.getProperty("accessToken");
+        String accessToken = McpCredentialSource.accessToken();
         String namespace = System.getProperty("workspace");  // GitLab uses namespace, but we receive workspace
         String project = System.getProperty("repo.slug");
         String mrIid = System.getProperty("pullRequest.id");  // MR IID in GitLab

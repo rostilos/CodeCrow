@@ -1,6 +1,9 @@
 from pathlib import Path
 from typing import Dict
 import codecs
+import functools
+from fnmatch import fnmatchcase
+import re
 
 
 LANGUAGE_MAP: Dict[str, str] = {
@@ -65,56 +68,66 @@ def make_namespace(workspace: str, project: str, branch: str) -> str:
     return f"{workspace}__{project}__{branch}".replace("/", "_").replace(".", "_").lower()
 
 
-def make_project_namespace(workspace: str, project: str) -> str:
-    """Create a safe namespace identifier for project-level collection (no branch)"""
-    return f"{workspace}__{project}".replace("/", "_").replace(".", "_").lower()
+def _normalize_repository_glob_value(value: str) -> str:
+    """Normalize one repository-relative path or glob without hiding dotfiles."""
+    normalized = str(value or "").replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return re.sub(r"/{2,}", "/", normalized).lstrip("/")
 
 
-def clean_archive_path(path: str) -> str:
+def _repository_glob_matches(path: str, pattern: str) -> bool:
+    """Match one repository glob without allowing ``*`` to cross ``/``.
+
+    A globstar is a complete ``**`` segment and consumes zero or more path
+    segments. Therefore suffixes after a globstar remain mandatory instead of
+    being discarded as they were by the previous prefix-only implementation.
     """
-    Clean archive root prefix from file paths.
-    
-    Bitbucket and other VCS archives often create a root folder like:
-    - 'owner-repo-commitHash/' (Bitbucket)
-    - 'repo-branch/' (GitHub)
-    
-    This function strips that prefix to get clean paths like 'src/file.php'.
-    
-    Args:
-        path: File path potentially with archive prefix
-        
-    Returns:
-        Clean path without archive prefix
-    """
-    if not path:
-        return path
-    
-    parts = Path(path).parts
-    if len(parts) <= 1:
-        return path
-    
-    first_part = parts[0]
-    
-    # Common source directory markers - if first part is one of these, path is already clean
-    source_markers = {'src', 'lib', 'app', 'source', 'main', 'test', 'tests', 
-                      'pkg', 'cmd', 'internal', 'bin', 'scripts', 'docs'}
-    if first_part.lower() in source_markers:
-        return path
-    
-    # Check if first part looks like archive root:
-    # - Contains hyphens (owner-repo-commit pattern)
-    # - Or is very long (40+ chars for commit hash)
-    # - Or matches pattern like 'name-hexstring'
-    looks_like_archive = (
-        ('-' in first_part and len(first_part) > 20) or  # owner-repo-commit
-        (len(first_part) >= 40) or  # Just commit hash
-        (first_part.count('-') >= 2 and any(c.isdigit() for c in first_part))  # Has digits and multiple hyphens
+    normalized_path = _normalize_repository_glob_value(path)
+    normalized_pattern = _normalize_repository_glob_value(pattern)
+    if not normalized_path or not normalized_pattern:
+        return False
+
+    directory_prefix = normalized_pattern.endswith("/")
+    normalized_pattern = normalized_pattern.strip("/")
+    path_parts = tuple(part for part in normalized_path.split("/") if part != ".")
+
+    # Preserve the established basename-anywhere meaning of slashless patterns.
+    if "/" not in normalized_pattern and not directory_prefix:
+        return bool(path_parts) and fnmatchcase(path_parts[-1], normalized_pattern)
+
+    pattern_parts = tuple(
+        part for part in normalized_pattern.split("/") if part != "."
     )
-    
-    if looks_like_archive:
-        return '/'.join(parts[1:])
-    
-    return path
+    if directory_prefix:
+        pattern_parts += ("**",)
+
+    @functools.lru_cache(maxsize=None)
+    def match(path_index: int, pattern_index: int) -> bool:
+        if pattern_index == len(pattern_parts):
+            return path_index == len(path_parts)
+        token = pattern_parts[pattern_index]
+        if token == "**":
+            return match(path_index, pattern_index + 1) or (
+                path_index < len(path_parts)
+                and match(path_index + 1, pattern_index)
+            )
+        return (
+            path_index < len(path_parts)
+            and fnmatchcase(path_parts[path_index], token)
+            and match(path_index + 1, pattern_index + 1)
+        )
+
+    return match(0, 0)
+
+
+def _repository_paths_to_check(path: str) -> tuple[str, ...]:
+    normalized = _normalize_repository_glob_value(path)
+    candidates = [normalized]
+    if "/" in normalized:
+        # Preserve archive-root compatibility used by VCS archive ingestion.
+        candidates.append(normalized.split("/", 1)[1])
+    return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
 def should_include_file(path: str, include_patterns: list[str]) -> bool:
@@ -133,51 +146,11 @@ def should_include_file(path: str, include_patterns: list[str]) -> bool:
     if not include_patterns:
         return True
     
-    from fnmatch import fnmatch
-    
-    path_obj = Path(path)
-    path_str = str(path_obj)
-    path_parts = path_obj.parts
-    
-    # Handle archive root prefix
-    paths_to_check = [path_str]
-    if len(path_parts) > 1:
-        path_without_root = '/'.join(path_parts[1:])
-        paths_to_check.append(path_without_root)
-
-    for check_path in paths_to_check:
-        check_path_obj = Path(check_path)
-        check_parts = check_path_obj.parts
-        
-        for pattern in include_patterns:
-            # Handle ** (globstar) patterns
-            if '**' in pattern:
-                prefix = pattern.split('**')[0].rstrip('/')
-                if prefix:
-                    if check_path.startswith(prefix + '/') or check_path == prefix:
-                        return True
-                    for i in range(len(check_parts)):
-                        partial_path = '/'.join(check_parts[:i+1])
-                        if partial_path == prefix or partial_path.startswith(prefix + '/'):
-                            return True
-                else:
-                    # Pattern like '**/*.py' - suffix matching
-                    suffix = pattern.split('**')[-1].lstrip('/')
-                    if suffix and fnmatch(check_path_obj.name, suffix):
-                        return True
-            else:
-                # Standard fnmatch for non-globstar patterns
-                if fnmatch(check_path, pattern):
-                    return True
-                if fnmatch(check_path_obj.name, pattern):
-                    return True
-                # Handle directory prefix patterns like 'src/'
-                if pattern.endswith('/'):
-                    dir_prefix = pattern.rstrip('/')
-                    if check_path.startswith(dir_prefix + '/'):
-                        return True
-
-    return False
+    return any(
+        _repository_glob_matches(candidate, pattern)
+        for candidate in _repository_paths_to_check(path)
+        for pattern in include_patterns
+    )
 
 
 def should_exclude_file(path: str, excluded_patterns: list[str]) -> bool:
@@ -192,58 +165,11 @@ def should_exclude_file(path: str, excluded_patterns: list[str]) -> bool:
     Note: Also handles paths with archive root prefix (e.g., 'repo-commit123/lib/file.php' 
     will match pattern 'lib/**')
     """
-    from fnmatch import fnmatch
-    
-    path_obj = Path(path)
-    path_str = str(path_obj)
-    path_parts = path_obj.parts
-    
-    # Handle archive root prefix - if path starts with a single directory that looks like
-    # an archive root (contains hyphen typically from bitbucket archives), try matching
-    # against the path without that prefix as well
-    paths_to_check = [path_str]
-    if len(path_parts) > 1:
-        # Add the path without the first directory component (archive root)
-        path_without_root = '/'.join(path_parts[1:])
-        paths_to_check.append(path_without_root)
-
-    for check_path in paths_to_check:
-        check_path_obj = Path(check_path)
-        check_parts = check_path_obj.parts
-        
-        for pattern in excluded_patterns:
-            # Handle ** (globstar) patterns
-            if '**' in pattern:
-                # Convert globstar pattern to check if path starts with the prefix
-                # e.g., 'vendor/**' should match any path starting with 'vendor/'
-                prefix = pattern.split('**')[0].rstrip('/')
-                if prefix:
-                    # Check if path starts with the prefix directory
-                    if check_path.startswith(prefix + '/') or check_path == prefix:
-                        return True
-                    # Also check if any parent directory matches
-                    for i in range(len(check_parts)):
-                        partial_path = '/'.join(check_parts[:i+1])
-                        if partial_path == prefix or partial_path.startswith(prefix + '/'):
-                            return True
-                else:
-                    # Pattern like '**/*.min.js' - suffix matching
-                    suffix = pattern.split('**')[-1].lstrip('/')
-                    if suffix and fnmatch(check_path_obj.name, suffix):
-                        return True
-            else:
-                # Standard fnmatch for non-globstar patterns
-                if fnmatch(check_path, pattern):
-                    return True
-                if fnmatch(check_path_obj.name, pattern):
-                    return True
-                # Handle directory prefix patterns like 'vendor/' 
-                if pattern.endswith('/'):
-                    dir_prefix = pattern.rstrip('/')
-                    if check_path.startswith(dir_prefix + '/'):
-                        return True
-
-    return False
+    return any(
+        _repository_glob_matches(candidate, pattern)
+        for candidate in _repository_paths_to_check(path)
+        for pattern in excluded_patterns
+    )
 
 
 def is_binary_file(file_path: Path) -> bool:

@@ -212,7 +212,7 @@ public class BitbucketReportingService implements VcsReportingService {
             for (BitbucketInlineCommentFormatter.InlineComment comment : comments) {
                 try {
                     commentAction.postInlineComment(
-                            comment.path(), comment.line(), comment.body());
+                            comment.path(), comment.line(), comment.body(), comment.anchorSide());
                     posted++;
                 } catch (Exception e) {
                     // A stale or non-diff line can be rejected independently.

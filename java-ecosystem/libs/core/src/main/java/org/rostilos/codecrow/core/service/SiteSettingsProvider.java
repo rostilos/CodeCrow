@@ -50,7 +50,6 @@ public class SiteSettingsProvider {
             LlmSyncSettingsDTO.KEY_OPENAI_API_KEY,
             LlmSyncSettingsDTO.KEY_ANTHROPIC_API_KEY,
             LlmSyncSettingsDTO.KEY_GOOGLE_API_KEY,
-            EmbeddingSettingsDTO.KEY_OPENROUTER_API_KEY,
             SmtpSettingsDTO.KEY_PASSWORD,
             GitLabSettingsDTO.KEY_CLIENT_SECRET,
             GitHubSettingsDTO.KEY_WEBHOOK_SECRET,
@@ -110,18 +109,6 @@ public class SiteSettingsProvider {
     private String propLlmAnthropicKey;
     @Value("${llm.sync.google.api-key:}")
     private String propLlmGoogleKey;
-
-    // ── Embedding ──
-    @Value("${codecrow.embedding.provider:}")
-    private String propEmbeddingProvider;
-    @Value("${codecrow.embedding.ollama.base-url:}")
-    private String propEmbeddingOllamaBaseUrl;
-    @Value("${codecrow.embedding.ollama.model:}")
-    private String propEmbeddingOllamaModel;
-    @Value("${codecrow.embedding.openrouter.api-key:}")
-    private String propEmbeddingOpenrouterKey;
-    @Value("${codecrow.embedding.openrouter.model:}")
-    private String propEmbeddingOpenrouterModel;
 
     // ── SMTP ──
     @Value("${codecrow.smtp.enabled:}")
@@ -211,17 +198,6 @@ public class SiteSettingsProvider {
                 resolve(propLlmOpenaiKey, db, LlmSyncSettingsDTO.KEY_OPENAI_API_KEY, ""),
                 resolve(propLlmAnthropicKey, db, LlmSyncSettingsDTO.KEY_ANTHROPIC_API_KEY, ""),
                 resolve(propLlmGoogleKey, db, LlmSyncSettingsDTO.KEY_GOOGLE_API_KEY, "")
-        );
-    }
-
-    public EmbeddingSettingsDTO getEmbeddingSettings() {
-        Map<String, String> db = getDbValues(ESiteSettingsGroup.EMBEDDING);
-        return new EmbeddingSettingsDTO(
-                resolve(propEmbeddingProvider, db, EmbeddingSettingsDTO.KEY_PROVIDER, "ollama"),
-                resolve(propEmbeddingOllamaBaseUrl, db, EmbeddingSettingsDTO.KEY_OLLAMA_BASE_URL, "http://host.docker.internal:11434"),
-                resolve(propEmbeddingOllamaModel, db, EmbeddingSettingsDTO.KEY_OLLAMA_MODEL, "qwen3-embedding:0.6b"),
-                resolve(propEmbeddingOpenrouterKey, db, EmbeddingSettingsDTO.KEY_OPENROUTER_API_KEY, ""),
-                resolve(propEmbeddingOpenrouterModel, db, EmbeddingSettingsDTO.KEY_OPENROUTER_MODEL, "qwen/qwen3-embedding-8b")
         );
     }
 
@@ -325,26 +301,6 @@ public class SiteSettingsProvider {
 
     public boolean isGroupConfigured(ESiteSettingsGroup group) {
         return repository.existsByConfigGroup(group);
-    }
-
-    /**
-     * Whether the web-server has an explicit embedding configuration to publish
-     * to the RAG service.
-     *
-     * <p>The typed embedding getter supplies safe defaults even when neither
-     * deployment properties nor Site Admin values exist. Those defaults must
-     * not be mistaken for an operator choice: doing so would overwrite the
-     * RAG service's mounted deployment fallback (for example, an OpenRouter
-     * selection made by {@code deployment/setup.sh}) with default Ollama
-     * settings.</p>
-     */
-    public boolean isEmbeddingConfigurationExplicitlySet() {
-        return hasValue(propEmbeddingProvider)
-                || hasValue(propEmbeddingOllamaBaseUrl)
-                || hasValue(propEmbeddingOllamaModel)
-                || hasValue(propEmbeddingOpenrouterKey)
-                || hasValue(propEmbeddingOpenrouterModel)
-                || repository.existsByConfigGroup(ESiteSettingsGroup.EMBEDDING);
     }
 
     public ConfigurationStatusDTO getConfigurationStatus() {

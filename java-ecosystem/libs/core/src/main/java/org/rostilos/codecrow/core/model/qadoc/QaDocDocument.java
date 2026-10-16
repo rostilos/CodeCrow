@@ -33,6 +33,10 @@ public class QaDocDocument {
     @Column(nullable = false, updatable = false)
     private Long id;
 
+    @Version
+    @Column(name = "row_version", nullable = false)
+    private long rowVersion;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "project_id", nullable = false)
     private Project project;
@@ -72,6 +76,10 @@ public class QaDocDocument {
     @PreUpdate
     public void onUpdate() {
         this.updatedAt = OffsetDateTime.now();
+    }
+
+    public boolean isFromNewerAnalysis(Long analysisId) {
+        return analysisId != null && lastAnalysisId != null && lastAnalysisId > analysisId;
     }
 
     public void replaceContent(String taskId, Long analysisId, String commitHash, String markdownContent) {

@@ -16,6 +16,30 @@ MAGENTO_AREAS = (
     "webapi_soap",
 )
 
+# Magento view sources that repository enrichment consumes now or must retain
+# for a later view-merge stage. Keep this tuple shared by file admission and
+# repository ingestion so an architecture-only vendor source cannot be admitted
+# by the plugin and then silently dropped by its repository session.
+MAGENTO_VIEW_SOURCE_SUFFIXES = (
+    ".css",
+    ".gql",
+    ".graphql",
+    ".html",
+    ".js",
+    ".jsx",
+    ".less",
+    ".mjs",
+    ".phtml",
+    ".ts",
+    ".tsx",
+)
+
+MAGENTO_GRAPHQL_CLIENT_SUFFIXES = tuple(
+    suffix
+    for suffix in MAGENTO_VIEW_SOURCE_SUFFIXES
+    if suffix not in {".css", ".less"}
+)
+
 
 def is_magento_config_xml(path: str) -> bool:
     """Return whether an XML path participates in Magento config merging.
@@ -38,6 +62,38 @@ def is_magento_config_xml(path: str) -> bool:
         len(tail) == 1
         or (len(tail) == 2 and tail[0] in MAGENTO_AREAS)
     )
+
+
+def is_magento_view_xml(path: str) -> bool:
+    """Return whether XML participates in Magento view composition.
+
+    ``layouts.xml`` can live either in a module view area or below a Magento
+    module namespace in a theme, including a standalone theme package. The
+    bounded locations avoid treating an unrelated ``docs/layouts.xml`` as
+    framework architecture. Page-layout documents are admitted here but remain
+    opaque until the effective layout resolver consumes them.
+    """
+    normalized = "/" + path.replace("\\", "/").strip("/").casefold()
+    if not normalized.endswith(".xml"):
+        return False
+    if (
+        "/layout/" in normalized
+        or "/page_layout/" in normalized
+        or "/ui_component/" in normalized
+    ):
+        return True
+    if normalized.rsplit("/", 1)[-1] != "layouts.xml":
+        return False
+    if re.search(
+        r"/view/(?:base|frontend|adminhtml)/layouts\.xml$",
+        normalized,
+    ):
+        return True
+    parent = normalized.rsplit("/", 2)[-2]
+    return re.fullmatch(
+        r"[a-z][a-z0-9]*_[a-z][a-z0-9]*",
+        parent,
+    ) is not None
 
 
 def tag(element: ET.Element) -> str:
@@ -146,10 +202,10 @@ class PacketGraph:
 
     def packet(self, kind: str, key: str, **attributes: str) -> PacketAccumulator:
         identity = (kind, key)
-        packet = self._packets.setdefault(
-            identity,
-            PacketAccumulator(self.plugin_id, kind, key),
-        )
+        packet = self._packets.get(identity)
+        if packet is None:
+            packet = PacketAccumulator(self.plugin_id, kind, key)
+            self._packets[identity] = packet
         packet.attributes.update({key: value for key, value in attributes.items() if value})
         return packet
 

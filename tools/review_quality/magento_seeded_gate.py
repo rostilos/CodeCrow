@@ -53,15 +53,10 @@ def _load_lightweight_host_module(name: str, relative_path: str):
     return module
 
 
-_context_helpers = _load_lightweight_host_module(
-    "_codecrow_quality_context_helpers",
-    "service/review/orchestrator/context_helpers.py",
-)
 _plugin_context = _load_lightweight_host_module(
     "_codecrow_quality_plugin_context",
     "service/review/plugin_context.py",
 )
-rag_evidence_id = _context_helpers.rag_evidence_id
 apply_plugin_validation_gate = _plugin_context.apply_plugin_validation_gate
 
 
@@ -205,31 +200,53 @@ def _select_fact(facts: tuple[Any, ...], selector: Mapping[str, Any]) -> Any:
     return matches[0]
 
 
-def _evidence_record(fact: Any) -> tuple[str, dict[str, Any]]:
-    payload = _fact_payload(fact)
-    architecture_key = (
-        f"{fact.kind}:{fact.source}:{fact.relation}:{fact.target}"
-    )
-    chunk = {
-        "text": json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
-        "_match_type": "plugin_graph",
-        "metadata": {
-            "path": fact.path,
-            "architecture_key": architecture_key,
-        },
+def _evidence_record(
+    fact: Any,
+    packet: Any,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Project one plugin fact exactly as the structural graph stores it."""
+    attributes = dict(fact.attributes)
+    attributes["packetKind"] = packet.kind
+    attributes["packetKey"] = packet.key
+    projection = {
+        "kind": fact.kind,
+        "source": fact.source,
+        "relation": fact.relation,
+        "target": fact.target,
+        "path": fact.path,
+        "line": fact.line,
+        "origin": "plugin",
+        "pluginId": packet.plugin_id,
+        "attributes": attributes,
+        "relatedPaths": tuple(fact.related_paths),
     }
-    return rag_evidence_id(chunk), payload
+    evidence_id = "relation:" + hashlib.sha256(
+        _canonical_bytes(projection)
+    ).hexdigest()
+    relation = {
+        "evidenceId": evidence_id,
+        "kind": fact.kind,
+        "source": fact.source,
+        "relation": fact.relation,
+        "target": fact.target,
+        "origin": {
+            "path": fact.path,
+            "line": fact.line,
+            "extractor": "plugin",
+            "plugin": packet.plugin_id,
+        },
+        "sourceUnit": None,
+        "targetUnit": None,
+        "relatedPaths": list(fact.related_paths),
+        "attributes": attributes,
+    }
+    return evidence_id, _fact_payload(fact), relation
 
 
 def _build_runtime(
     corpus: Mapping[str, Any],
     digest: str,
-) -> tuple[Any, Any, tuple[Any, ...], tuple[Any, ...]]:
+) -> tuple[Any, Any, tuple[Any, ...], tuple[Any, ...], Mapping[Any, Any]]:
     artifacts = corpus["artifacts"]
     paths = tuple(sorted(artifacts))
     catalog = PluginCatalog.discover(PROJECT_ROOT / "analysis-plugins")
@@ -270,15 +287,27 @@ def _build_runtime(
                 for item in diagnostics
             )
         )
-    facts = tuple(sorted({
-        fact
-        for packet in analysis.packets
-        for fact in packet.facts
-        if fact.kind.startswith("magento-")
-    }))
+    packet_by_fact: dict[Any, Any] = {}
+    for packet in analysis.packets:
+        for fact in packet.facts:
+            if not fact.kind.startswith("magento-"):
+                continue
+            previous = packet_by_fact.get(fact)
+            if previous is not None and previous != packet:
+                raise RuntimeError(
+                    "fixture graph fact belongs to multiple architecture packets"
+                )
+            packet_by_fact[fact] = packet
+    facts = tuple(sorted(packet_by_fact))
     if not facts:
         raise RuntimeError("fixture produced no Magento graph facts")
-    return catalog, capabilities, facts, analysis.snapshots
+    return (
+        catalog,
+        capabilities,
+        facts,
+        analysis.snapshots,
+        packet_by_fact,
+    )
 
 
 def _request(
@@ -332,19 +361,27 @@ def _request(
 def run_gate(corpus_path: Path = DEFAULT_CORPUS) -> dict[str, Any]:
     corpus = _load_corpus(corpus_path)
     digest = hashlib.sha256(_canonical_bytes(corpus)).hexdigest()
-    _, capabilities, facts, snapshots = _build_runtime(corpus, digest)
+    _, capabilities, facts, snapshots, packet_by_fact = _build_runtime(
+        corpus,
+        digest,
+    )
 
     evidence_index: dict[str, list[dict[str, Any]]] = {}
+    relation_map: dict[str, dict[str, Any]] = {}
     issues: list[CodeReviewIssue] = []
     for candidate in corpus["candidates"]:
         selector = candidate.get("evidenceSelector")
         if selector is not None:
             fact = _select_fact(facts, selector)
-            evidence_ref, fact_payload = _evidence_record(fact)
+            evidence_ref, fact_payload, relation = _evidence_record(
+                fact,
+                packet_by_fact[fact],
+            )
             evidence_index.setdefault(evidence_ref, []).append(fact_payload)
+            relation_map[evidence_ref] = relation
             line = fact.line
         else:
-            evidence_ref = "RAG-invented000000"
+            evidence_ref = "invented:relation-not-in-structural-map"
             line = 1
         issues.append(
             CodeReviewIssue(
@@ -425,7 +462,14 @@ def run_gate(corpus_path: Path = DEFAULT_CORPUS) -> dict[str, Any]:
         "repositorySnapshots": {
             snapshot.plugin_id for snapshot in snapshots
         } >= {"php", "magento", "hyva"},
-        "retrievalState": True,
+        "structuralRelationPayloads": (
+            len(relation_map) == len(evidence_index)
+            and all(
+                evidence_id.startswith("relation:")
+                and relation.get("evidenceId") == evidence_id
+                for evidence_id, relation in relation_map.items()
+            )
+        ),
     }
     return {
         "status": "passed" if all(checks.values()) else "failed",
@@ -439,7 +483,13 @@ def run_gate(corpus_path: Path = DEFAULT_CORPUS) -> dict[str, Any]:
                 snapshot.plugin_id for snapshot in snapshots
             }),
             "evidenceIds": len(evidence_index),
-            "retrievalState": "complete",
+            "relationMap": {
+                "state": "complete",
+                "relations": [
+                    relation_map[evidence_id]
+                    for evidence_id in sorted(relation_map)
+                ],
+            },
         },
         "candidates": {
             "total": candidate_count,

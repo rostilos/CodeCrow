@@ -13,6 +13,7 @@ def _make_request():
     return SimpleNamespace(
         projectVcsWorkspace="ws",
         projectVcsRepoSlug="repo",
+        pullRequestId="42",
     )
 
 
@@ -28,6 +29,12 @@ class TestConstruction:
         e = McpToolExecutor(MagicMock(), _make_request(), "stage_3")
         assert "getPullRequestComments" in e.allowed_tools
         assert e.max_calls == 5
+
+    def test_local_only_stage_3_exposes_only_proposed_tree_source(self):
+        request = _make_request()
+        request.mcpLocalOnly = True
+        e = McpToolExecutor(MagicMock(), request, "stage_3")
+        assert e.allowed_tools == {"getReviewFileContent"}
 
     def test_invalid_stage(self):
         with pytest.raises(ValueError, match="Unknown stage"):
@@ -64,6 +71,29 @@ class TestExecuteTool:
         assert e.call_log[0]["result_chars"] == len("file content here")
         assert e.call_log[0]["evidence_valid"] is True
         assert e.call_log[0]["evidence_complete_file"] is True
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_current_client_uses_named_vcs_session(self):
+        vcs_session = MagicMock()
+        vcs_session.call_tool = AsyncMock(return_value=SimpleNamespace(
+            content=[SimpleNamespace(text="named session content")]
+        ))
+        rag_session = MagicMock()
+        client = MagicMock()
+        client.get_all_active_sessions.return_value = {
+            "codecrow-vcs-mcp": vcs_session,
+            "codecrow-rag-mcp": rag_session,
+        }
+
+        executor = McpToolExecutor(client, _make_request(), "stage_1")
+        result = await executor.execute_tool(
+            "getBranchFileContent",
+            {"filePath": "a.py", "branch": "main"},
+        )
+
+        assert result == "named session content"
+        vcs_session.call_tool.assert_awaited_once()
+        rag_session.call_tool.assert_not_called()
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_call_failure(self):
@@ -105,6 +135,29 @@ class TestExecuteTool:
         assert call_args[1]["repoSlug"] == "repo"
 
     @pytest.mark.asyncio(loop_scope="function")
+    async def test_request_identity_overwrites_model_provider_arguments(self):
+        mock_client = MagicMock()
+        mock_client.session.call_tool = AsyncMock(
+            return_value=SimpleNamespace(content=[])
+        )
+        executor = McpToolExecutor(
+            mock_client,
+            _make_request(),
+            "stage_3",
+        )
+
+        await executor.execute_tool("getPullRequestComments", {
+            "workspace": "other-tenant",
+            "repoSlug": "other-repository",
+            "pullRequestId": "999",
+        })
+
+        _, arguments = mock_client.session.call_tool.await_args.args
+        assert arguments["workspace"] == "ws"
+        assert arguments["repoSlug"] == "repo"
+        assert arguments["pullRequestId"] == "42"
+
+    @pytest.mark.asyncio(loop_scope="function")
     async def test_stage_3_pins_file_reads_to_reviewed_revision(self):
         mock_client = MagicMock()
         mock_client.session.call_tool = AsyncMock(
@@ -125,6 +178,88 @@ class TestExecuteTool:
         call_args = mock_client.session.call_tool.call_args[0][1]
         assert call_args["branch"] == "commit-abc"
         assert e.call_log[0]["args"]["branch"] == "commit-abc"
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_stage_3_uses_staged_proposed_tree_instead_of_remote_branch(self):
+        request = SimpleNamespace(
+            projectVcsWorkspace="ws",
+            projectVcsRepoSlug="repo",
+            localRepoPath="/tmp/target",
+            localRepoRevision="target-abc",
+            localRepoTargetBranch="main",
+            localReviewOverlayPath="/tmp/proposed",
+        )
+        mock_client = MagicMock()
+        mock_client.session.call_tool = AsyncMock(return_value=SimpleNamespace(
+            content=[SimpleNamespace(text=(
+                '{"fileContent":"source","startLine":1,'
+                '"endLine":20,"completeFile":false}'
+            ))]
+        ))
+        executor = McpToolExecutor(
+            mock_client,
+            request,
+            "stage_3",
+            review_revision="review-abc",
+        )
+
+        await executor.execute_tool("getBranchFileContent", {
+            "filePath": "src/a.py",
+            "branch": "model-selected-branch",
+            "verificationId": "issue_0",
+        })
+
+        actual_tool, actual_args = mock_client.session.call_tool.await_args.args
+        assert actual_tool == "getReviewFileContent"
+        assert "branch" not in actual_args
+        assert executor.call_log[0]["tool"] == "getReviewFileContent"
+        assert executor.call_log[0]["requested_tool"] == "getBranchFileContent"
+        assert executor.call_log[0]["evidence_revision"] == "review-abc"
+        assert (
+            executor.call_log[0]["evidence_source_authority"]
+            == "proposed_tree"
+        )
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_local_only_stage_3_rejects_comments_and_reads_proposed_tree(self):
+        request = SimpleNamespace(
+            projectVcsWorkspace="ws",
+            projectVcsRepoSlug="repo",
+            localRepoPath="/tmp/target",
+            localRepoRevision="target-abc",
+            localRepoTargetBranch="main",
+            localReviewOverlayPath="/tmp/proposed",
+            mcpLocalOnly=True,
+        )
+        mock_client = MagicMock()
+        mock_client.session.call_tool = AsyncMock(return_value=SimpleNamespace(
+            content=[SimpleNamespace(text=(
+                '{"fileContent":"source","startLine":1,'
+                '"endLine":20,"completeFile":false}'
+            ))]
+        ))
+        executor = McpToolExecutor(
+            mock_client,
+            request,
+            "stage_3",
+            review_revision="review-abc",
+        )
+
+        rejected = await executor.execute_tool(
+            "getPullRequestComments",
+            {"pullRequestId": "7"},
+        )
+        assert "not allowed" in rejected
+        mock_client.session.call_tool.assert_not_awaited()
+
+        await executor.execute_tool("getReviewFileContent", {
+            "filePath": "src/a.py",
+            "verificationId": "issue_0",
+        })
+        actual_tool, actual_args = mock_client.session.call_tool.await_args.args
+        assert actual_tool == "getReviewFileContent"
+        assert "branch" not in actual_args
+        assert executor.call_log[0]["evidence_source_authority"] == "proposed_tree"
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_stage_3_requests_window_around_bound_finding_anchor(self):
@@ -254,6 +389,17 @@ class TestGetToolDefinitions:
         assert "verificationId" in file_tool["function"]["parameters"]["required"]
         assert "branch" not in file_tool["function"]["parameters"]["required"]
 
+    def test_local_only_stage_3_definition_has_no_provider_or_branch_tool(self):
+        request = _make_request()
+        request.mcpLocalOnly = True
+        definitions = McpToolExecutor(
+            MagicMock(), request, "stage_3"
+        ).get_tool_definitions()
+
+        assert [item["function"]["name"] for item in definitions] == [
+            "getReviewFileContent"
+        ]
+
     def test_related_location_in_reason_drives_a_bound_source_window(self):
         issue = CodeReviewIssue(
             file="src/a.py", line=10, severity="HIGH", category="BUG_RISK",
@@ -294,3 +440,40 @@ class TestProperties:
         s = e.summary()
         assert "stage_1" in s
         assert "0/3" in s
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("file_path", ["apps/web/pages/api/webhook/app-credential.ts", "apps/web/pages/api/webhook/app-credential.ts:12-93"])
+async def test_real_related_range_reads_clean_path_and_both_endpoints(file_path):
+    request = _make_request()
+    issue = CodeReviewIssue(file="packages/app-store/_utils/oauth/refreshOAuthTokens.ts", line=15,
+        severity="HIGH", category="BUG_RISK", reason="Sync response contract mismatch", suggestedFixDescription="Normalize it",
+        relatedLocations=["apps/web/pages/api/webhook/app-credential.ts:12-93",
+                          "packages/app-store/_utils/oauth/refreshOAuthTokens.ts:3-20"])
+    client = MagicMock()
+    client.session.call_tool = AsyncMock(return_value=SimpleNamespace(content=[SimpleNamespace(text="source")]))
+    executor = McpToolExecutor(client, request, "stage_3", "review-sha", {"issue_0": issue})
+    await executor.execute_tool("getBranchFileContent", {"filePath": file_path, "verificationId": "issue_0",
+        "workspace": "other", "repoSlug": "other", "branch": "stale"})
+    _, args = client.session.call_tool.call_args.args
+    assert args["filePath"] == "apps/web/pages/api/webhook/app-credential.ts"
+    assert args["startLine"] <= 12 <= 93 <= args["endLine"]
+    assert args["endLine"] - args["startLine"] <= 160
+    assert (args["workspace"], args["repoSlug"], args["branch"]) == ("ws", "repo", "review-sha")
+
+
+@pytest.mark.asyncio
+async def test_large_source_range_stays_bounded_and_endpoint_can_be_requested():
+    request = _make_request()
+    issue = CodeReviewIssue(file="a.py", line=12, severity="HIGH", category="BUG_RISK",
+        reason="Concrete claim", suggestedFixDescription="Fix it", relatedLocations=["a.py:12-500"])
+    client = MagicMock()
+    client.session.call_tool = AsyncMock(return_value=SimpleNamespace(content=[SimpleNamespace(text="source")]))
+    executor = McpToolExecutor(client, request, "stage_3", "review-sha", {"issue_0": issue})
+    await executor.execute_tool("getBranchFileContent", {"filePath": "a.py", "verificationId": "issue_0"})
+    first = client.session.call_tool.call_args.args[1]
+    assert first["startLine"] == 12 and first["endLine"] == 172
+    await executor.execute_tool("getBranchFileContent", {"filePath": "a.py:500", "verificationId": "issue_0"})
+    last = client.session.call_tool.call_args.args[1]
+    assert last["filePath"] == "a.py" and last["startLine"] <= 500 <= last["endLine"]
+    assert last["endLine"] - last["startLine"] <= 160

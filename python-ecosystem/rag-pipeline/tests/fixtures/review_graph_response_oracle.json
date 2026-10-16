@@ -1,0 +1,218 @@
+[
+  {
+    "arguments": {
+      "strategy": "bfs",
+      "detail_level": "minimal",
+      "include_source": false,
+      "token_budget": 512
+    },
+    "responseSha256": "48b5891d92c4bb5db7b1bc895d860660d1c4b4edff34e11d9a7cc5ea5a727741"
+  },
+  {
+    "arguments": {
+      "strategy": "bfs",
+      "detail_level": "minimal",
+      "include_source": false,
+      "token_budget": 2000
+    },
+    "responseSha256": "a510f3ce758466285149167426eb394c7181af75286be336275401fafa3dd77d"
+  },
+  {
+    "arguments": {
+      "strategy": "bfs",
+      "detail_level": "minimal",
+      "include_source": false,
+      "token_budget": 16000
+    },
+    "responseSha256": "ac5a611dc779651669c14394a7a5e735e3050d0e43d29136b844ea11e0e4b9d3"
+  },
+  {
+    "arguments": {
+      "strategy": "bfs",
+      "detail_level": "minimal",
+      "include_source": true,
+      "token_budget": 512
+    },
+    "responseSha256": "3faa1de8b117955e7fdf0b06fc345be5d17a470e7f2261bb25db8623310d94f0"
+  },
+  {
+    "arguments": {
+      "strategy": "bfs",
+      "detail_level": "minimal",
+      "include_source": true,
+      "token_budget": 2000
+    },
+    "responseSha256": "5214ebf1e9aeb154b31888870345d0ab5ca69f260131a9e65f4a834e7d1b203d"
+  },
+  {
+    "arguments": {
+      "strategy": "bfs",
+      "detail_level": "minimal",
+      "include_source": true,
+      "token_budget": 16000
+    },
+    "responseSha256": "22372dc7b76bb7a2ca929499d7ae7aa6d86348ac289285343a221af50dd14b94"
+  },
+  {
+    "arguments": {
+      "strategy": "bfs",
+      "detail_level": "standard",
+      "include_source": false,
+      "token_budget": 512
+    },
+    "responseSha256": "3f7a30b9fc6b32519b673b7930e8329b1127e2bd8a12f2fe1b8d3a5d5c7edb97"
+  },
+  {
+    "arguments": {
+      "strategy": "bfs",
+      "detail_level": "standard",
+      "include_source": false,
+      "token_budget": 2000
+    },
+    "responseSha256": "acb4a94a24bffcab8fdb79bc70de03f58687bc60224b5fac164c808ec9c9afe0"
+  },
+  {
+    "arguments": {
+      "strategy": "bfs",
+      "detail_level": "standard",
+      "include_source": false,
+      "token_budget": 16000
+    },
+    "responseSha256": "bac9bb254ab54baed81dc983da7681751b9ad8a2340058fe17ac11061750ffd2"
+  },
+  {
+    "arguments": {
+      "strategy": "bfs",
+      "detail_level": "standard",
+      "include_source": true,
+      "token_budget": 512
+    },
+    "responseSha256": "14861d9d321e249a00be3ffe62259df1c73d71d4ebc4ce7df5d9f7f5312af480"
+  },
+  {
+    "arguments": {
+      "strategy": "bfs",
+      "detail_level": "standard",
+      "include_source": true,
+      "token_budget": 2000
+    },
+    "responseSha256": "9a3cd74a762d8aa68dd119617d3227c3d922ce0db452f449ad7063345a63f897"
+  },
+  {
+    "arguments": {
+      "strategy": "bfs",
+      "detail_level": "standard",
+      "include_source": true,
+      "token_budget": 16000
+    },
+    "responseSha256": "c21c06a1c27e5b365a4750804a6c585a7a1b3975aa42c6e74630babf43043f6e"
+  },
+  {
+    "arguments": {
+      "strategy": "dfs",
+      "detail_level": "minimal",
+      "include_source": false,
+      "token_budget": 512
+    },
+    "responseSha256": "abbbbc7e0f6552106a457a3237dfa526461a4bd136c2db5e24e931617c663d31"
+  },
+  {
+    "arguments": {
+      "strategy": "dfs",
+      "detail_level": "minimal",
+      "include_source": false,
+      "token_budget": 2000
+    },
+    "responseSha256": "5fa671874d59249f6776bdd5a1ebaeb59876207fa0c73a8b8004f4b576160315"
+  },
+  {
+    "arguments": {
+      "strategy": "dfs",
+      "detail_level": "minimal",
+      "include_source": false,
+      "token_budget": 16000
+    },
+    "responseSha256": "21107d5ba7b66c88bb75b22dcd253c9e33242f9b0dbf94df218b8cc509b94f03"
+  },
+  {
+    "arguments": {
+      "strategy": "dfs",
+      "detail_level": "minimal",
+      "include_source": true,
+      "token_budget": 512
+    },
+    "responseSha256": "e9bf4e553eccb9eb70d481a3793973e71dd2e61e5615275860aef98410a6216e"
+  },
+  {
+    "arguments": {
+      "strategy": "dfs",
+      "detail_level": "minimal",
+      "include_source": true,
+      "token_budget": 2000
+    },
+    "responseSha256": "ae215c6ef13e3b6f5fca914b4d147ec184b520c1804acfd906c34f0c13428876"
+  },
+  {
+    "arguments": {
+      "strategy": "dfs",
+      "detail_level": "minimal",
+      "include_source": true,
+      "token_budget": 16000
+    },
+    "responseSha256": "e80f501be293b6e4dfabbe9fa4445cb228215c6792a5dd39c053c30aeae0bdc7"
+  },
+  {
+    "arguments": {
+      "strategy": "dfs",
+      "detail_level": "standard",
+      "include_source": false,
+      "token_budget": 512
+    },
+    "responseSha256": "df6bc9a81b1c0279f1f424d8c951b06927451156406ccb5da0a4cc27a43f8950"
+  },
+  {
+    "arguments": {
+      "strategy": "dfs",
+      "detail_level": "standard",
+      "include_source": false,
+      "token_budget": 2000
+    },
+    "responseSha256": "fee1cedef97e38957a1ee18d81e8502cdd4de3225391895dbccc9ec78f3e1222"
+  },
+  {
+    "arguments": {
+      "strategy": "dfs",
+      "detail_level": "standard",
+      "include_source": false,
+      "token_budget": 16000
+    },
+    "responseSha256": "45b7499d91d72ffc6c761ec0a9562c6aec166509ee7488222a7743100f9cae4e"
+  },
+  {
+    "arguments": {
+      "strategy": "dfs",
+      "detail_level": "standard",
+      "include_source": true,
+      "token_budget": 512
+    },
+    "responseSha256": "ee4ebf62cb59c0413de0afba06e68539dfcbe79cfe79fe59ee0eb2df5e124c6c"
+  },
+  {
+    "arguments": {
+      "strategy": "dfs",
+      "detail_level": "standard",
+      "include_source": true,
+      "token_budget": 2000
+    },
+    "responseSha256": "0fc44fe3681d32b2c4fd07921cada610ed687e6f99a63f1da009056ad503d0cf"
+  },
+  {
+    "arguments": {
+      "strategy": "dfs",
+      "detail_level": "standard",
+      "include_source": true,
+      "token_budget": 16000
+    },
+    "responseSha256": "4477eec9c3b177c1947d142bd5fa0121a7bfdf0ff84393a0e071b9dc88b03e74"
+  }
+]

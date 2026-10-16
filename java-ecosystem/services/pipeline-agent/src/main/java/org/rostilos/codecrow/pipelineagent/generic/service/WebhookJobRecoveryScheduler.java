@@ -4,6 +4,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.job.JobType;
+import org.rostilos.codecrow.core.model.job.JobTriggerSource;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
+import org.rostilos.codecrow.pipelineagent.generic.processor.PipelineActionProcessor;
+import org.springframework.beans.factory.annotation.Qualifier;
+import java.util.concurrent.Executor;
+import java.util.Map;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
@@ -33,16 +41,25 @@ public class WebhookJobRecoveryScheduler {
     private final ObjectMapper objectMapper;
     private final WebhookHandlerFactory webhookHandlerFactory;
     private final WebhookAsyncProcessor webhookAsyncProcessor;
+    private final PipelineJobService pipelineJobService;
+    private final PipelineActionProcessor pipelineActionProcessor;
+    private final Executor actionExecutor;
 
     public WebhookJobRecoveryScheduler(
             JobService jobService,
             ObjectMapper objectMapper,
             WebhookHandlerFactory webhookHandlerFactory,
-            WebhookAsyncProcessor webhookAsyncProcessor) {
+            WebhookAsyncProcessor webhookAsyncProcessor,
+            PipelineJobService pipelineJobService,
+            PipelineActionProcessor pipelineActionProcessor,
+            @Qualifier("pipelineActionExecutor") Executor actionExecutor) {
         this.jobService = jobService;
         this.objectMapper = objectMapper;
         this.webhookHandlerFactory = webhookHandlerFactory;
         this.webhookAsyncProcessor = webhookAsyncProcessor;
+        this.pipelineJobService = pipelineJobService;
+        this.pipelineActionProcessor = pipelineActionProcessor;
+        this.actionExecutor = actionExecutor;
     }
 
     @Scheduled(
@@ -88,6 +105,10 @@ public class WebhookJobRecoveryScheduler {
         try {
             Optional<String> persistedPayload =
                     jobService.findWebhookDispatchPayload(job.getId());
+            if (job.getTriggerSource() == JobTriggerSource.PIPELINE) {
+                recoverPipeline(job, persistedPayload);
+                return;
+            }
             WebhookPayload payload = persistedPayload.isPresent()
                     ? objectMapper.readValue(persistedPayload.get(), WebhookPayload.class)
                     : recoverLegacyAnalysisPayload(job);
@@ -123,6 +144,41 @@ public class WebhookJobRecoveryScheduler {
             jobService.failJob(job,
                     "Failed to recover accepted webhook work: " + recoveryError.getMessage());
         }
+    }
+
+    private void recoverPipeline(Job job, Optional<String> persistedPayload) throws Exception {
+        if (persistedPayload.isEmpty()) {
+            jobService.failJob(job, "Older pipeline job has no durable request payload; retry the analysis");
+            return;
+        }
+        AnalysisProcessRequest request = job.getJobType() == JobType.PR_ANALYSIS
+                ? objectMapper.readValue(persistedPayload.get(), PrProcessRequest.class)
+                : objectMapper.readValue(persistedPayload.get(), BranchProcessRequest.class);
+        if (!job.getProject().getId().equals(request.getProjectId())) {
+            jobService.failJob(job, "Persisted pipeline request does not belong to this job's project");
+            return;
+        }
+        // Locks are process-owned and must never survive a restart in a replayed request.
+        if (request instanceof PrProcessRequest pr) {
+            pr.preAcquiredLockKey = null;
+        }
+        jobService.info(job, "requeued", "Resuming durably persisted pipeline work");
+        actionExecutor.execute(() -> {
+            if (!pipelineJobService.claimForExecution(job)) {
+                return;
+            }
+            try {
+                Map<String, Object> result = pipelineActionProcessor.processPipelineActionWithConsumer(
+                        request, pipelineJobService.createDualConsumer(job, null), job);
+                if ("locked".equals(result.get("status"))) {
+                    pipelineJobService.failJob(job, "Analysis lock timeout: " + result.get("message"));
+                } else {
+                    pipelineJobService.completeJob(job, result);
+                }
+            } catch (Exception error) {
+                pipelineJobService.failJob(job, "Recovered pipeline processing failed: " + error.getMessage());
+            }
+        });
     }
 
     private WebhookPayload recoverLegacyAnalysisPayload(Job job) {

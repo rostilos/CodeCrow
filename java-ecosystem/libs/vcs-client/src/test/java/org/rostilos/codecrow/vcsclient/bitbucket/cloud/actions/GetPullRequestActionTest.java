@@ -47,11 +47,17 @@ class GetPullRequestActionTest {
                 "source": {
                     "branch": {
                         "name": "feature"
+                    },
+                    "commit": {
+                        "hash": "source-head"
                     }
                 },
                 "destination": {
                     "branch": {
                         "name": "main"
+                    },
+                    "commit": {
+                        "hash": "target-head"
                     }
                 }
             }
@@ -68,6 +74,8 @@ class GetPullRequestActionTest {
         assertThat(result).isNotNull();
         assertThat(result.getTitle()).isEqualTo("Test PR");
         assertThat(result.getState()).isEqualTo("OPEN");
+        assertThat(result.getSourceCommit()).isEqualTo("source-head");
+        assertThat(result.getDestinationCommit()).isEqualTo("target-head");
         verify(response).close();
     }
 

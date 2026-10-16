@@ -893,8 +893,9 @@ public class BitbucketCloudClient implements VcsClient {
         GetPullRequestAction.PullRequestMetadata metadata =
                 new GetPullRequestAction(httpClient).getPullRequest(
                         workspaceId, repoIdOrSlug, String.valueOf(pullRequestNumber));
-        String baseCommit = resolveCommitHashIfNeeded(
+        String targetHeadCommit = resolveCommitHashIfNeeded(
                 workspaceId, repoIdOrSlug, metadata.getDestinationCommit());
+        String baseCommit = targetHeadCommit;
         String headCommit = resolveCommitHashIfNeeded(
                 workspaceId, repoIdOrSlug, metadata.getSourceCommit());
         String state = metadata.getState();
@@ -904,6 +905,7 @@ public class BitbucketCloudClient implements VcsClient {
                 metadata.getDescription(),
                 metadata.getSourceRef(),
                 metadata.getDestRef(),
+                targetHeadCommit,
                 baseCommit,
                 headCommit,
                 state,

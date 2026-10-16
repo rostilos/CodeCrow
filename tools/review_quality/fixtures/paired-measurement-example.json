@@ -1,0 +1,64 @@
+{
+  "scope": "synthetic reducer contract example; no CodeCrow quality or performance claim",
+  "baseline": "baseline",
+  "cases": [
+    {
+      "caseId": "synthetic-python",
+      "mode": "baseline",
+      "languages": ["python"],
+      "expected": ["fixture-defect-a", "fixture-defect-b"],
+      "published": ["fixture-defect-a", "fixture-noise"],
+      "changedLines": 20,
+      "reviewableHunks": 2,
+      "terminalHunks": 2,
+      "completionStatus": "complete",
+      "modelCalls": 2,
+      "inputTokens": 1000,
+      "outputTokens": 100,
+      "cost": null,
+      "wallTimeSeconds": 12,
+      "provenance": {"sourceRevision": "synthetic-source", "baseRevision": "synthetic-base", "judge": "handwritten-test-labels"}
+    },
+    {
+      "caseId": "synthetic-python",
+      "mode": "candidate",
+      "languages": ["python"],
+      "expected": ["fixture-defect-a", "fixture-defect-b"],
+      "published": ["fixture-defect-a", "fixture-noise"],
+      "changedLines": 20,
+      "reviewableHunks": 2,
+      "terminalHunks": 2,
+      "completionStatus": "complete",
+      "modelCalls": 2,
+      "inputTokens": 1000,
+      "outputTokens": 100,
+      "cost": null,
+      "wallTimeSeconds": 12,
+      "provenance": {"sourceRevision": "synthetic-source", "baseRevision": "synthetic-base", "judge": "handwritten-test-labels"}
+    },
+    {
+      "caseId": "synthetic-unfinished",
+      "mode": "baseline",
+      "languages": ["java"],
+      "expected": ["fixture-defect-c"],
+      "published": [],
+      "changedLines": 10,
+      "reviewableHunks": 1,
+      "terminalHunks": 0,
+      "completionStatus": "failed",
+      "provenance": {"sourceRevision": "synthetic-source-2", "baseRevision": "synthetic-base-2", "judge": "handwritten-test-labels"}
+    },
+    {
+      "caseId": "synthetic-unfinished",
+      "mode": "candidate",
+      "languages": ["java"],
+      "expected": ["fixture-defect-c"],
+      "published": [],
+      "changedLines": 10,
+      "reviewableHunks": 1,
+      "terminalHunks": 0,
+      "completionStatus": "missing",
+      "provenance": {"sourceRevision": "synthetic-source-2", "baseRevision": "synthetic-base-2", "judge": "handwritten-test-labels"}
+    }
+  ]
+}

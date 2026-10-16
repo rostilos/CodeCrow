@@ -26,59 +26,15 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class QaAutoDocListenerTest {
 
-    @Mock
-    private ProjectRepository projectRepository;
-    @Mock
-    private TaskManagementConnectionRepository connectionRepository;
-    @Mock
-    private TaskManagementClientFactory clientFactory;
-    @Mock
-    private QaDocGenerationService qaDocGenerationService;
-    @Mock
-    private CodeAnalysisService codeAnalysisService;
-    @Mock
-    private VcsClientProvider vcsClientProvider;
-    @Mock
-    private QaDocStateRepository qaDocStateRepository;
-    @Mock
-    private QaDocDocumentService qaDocDocumentService;
-    @Mock
-    private QaDocPublicPreviewService qaDocPublicPreviewService;
-    @Mock
-    private PrFileEnrichmentService enrichmentService;
-    @Test
-    void loadsProjectWithVcsConnectionsForAsyncProcessing() {
-        QaAutoDocListener listener = new QaAutoDocListener(
-                projectRepository,
-                connectionRepository,
-                clientFactory,
-                qaDocGenerationService,
-                codeAnalysisService,
-                vcsClientProvider,
-                qaDocStateRepository,
-                qaDocDocumentService,
-                qaDocPublicPreviewService,
-                enrichmentService);
-        AnalysisCompletedEvent event = new AnalysisCompletedEvent(
-                this,
-                "correlation-id",
-                402L,
-                null,
-                AnalysisCompletedEvent.CompletionStatus.SUCCESS,
-                Duration.ZERO,
-                0,
-                0,
-                null,
-                Map.of(),
-                "workspace",
-                "repository",
-                17L);
-        when(projectRepository.findByIdWithFullDetails(402L)).thenReturn(Optional.empty());
-
+    @Test void completionEnqueuesTheExactReviewAndFailureDoesNotBlockTheReview() {
+        var queue=org.mockito.Mockito.mock(QaDocQueueService.class);
+        var listener=new QaAutoDocListener(queue);
+        var event=new AnalysisCompletedEvent(this,"review",402L,null,
+                AnalysisCompletedEvent.CompletionStatus.SUCCESS,Duration.ZERO,0,0,null,
+                Map.of("analysisId",99L),"workspace","repository",17L);
+        org.mockito.Mockito.doThrow(new IllegalStateException("database unavailable")).when(queue).enqueue(402L,99L);
         listener.onAnalysisCompleted(event);
-
-        verify(projectRepository).findByIdWithFullDetails(402L);
-        verify(projectRepository, never()).findById(402L);
+        verify(queue).enqueue(402L,99L);
     }
 
     @Test

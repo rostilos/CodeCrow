@@ -71,6 +71,41 @@ def test_exact_hunk_completion_advances_every_reviewable_identity():
     assert ledger.summary()[HunkCoverageState.COMPLETED.value] == 2
 
 
+def test_budget_omitted_hunk_is_truthfully_excluded_from_reviewed_set():
+    processed = DiffProcessor().process(_diff("src/a.php") + _diff("src/b.php"))
+    ledger = HunkCoverageLedger.from_processed_diff(processed)
+    ledger.mark_planned(["src/a.php", "src/b.php"])
+    reviewed_id = processed.files[0].hunks[0].id
+    omitted_id = processed.files[1].hunks[0].id
+
+    ledger.mark_budget_omitted_hunks(
+        [omitted_id],
+        reason="large-profile Stage 1 per-unit invocation ceiling",
+    )
+    ledger.mark_reviewed_hunks([reviewed_id], allow_excluded=True)
+    ledger.mark_validated()
+    ledger.complete()
+    ledger.assert_complete()
+
+    assert ledger.summary()[HunkCoverageState.COMPLETED.value] == 1
+    assert ledger.summary()[HunkCoverageState.EXCLUDED.value] == 1
+    assert ledger._records[omitted_id].reason == (
+        "large-profile Stage 1 per-unit invocation ceiling"
+    )
+
+
+def test_budget_omission_does_not_weaken_strict_reviewed_default():
+    processed = DiffProcessor().process(_diff("src/a.php") + _diff("src/b.php"))
+    ledger = HunkCoverageLedger.from_processed_diff(processed)
+    ledger.mark_planned(["src/a.php", "src/b.php"])
+    reviewed_id = processed.files[0].hunks[0].id
+    omitted_id = processed.files[1].hunks[0].id
+    ledger.mark_budget_omitted_hunks([omitted_id], reason="finite call budget")
+
+    with pytest.raises(RuntimeError, match="omitted reviewable hunk identities"):
+        ledger.mark_reviewed_hunks([reviewed_id])
+
+
 def test_exact_hunk_completion_rejects_unknown_identity():
     processed = DiffProcessor().process(_diff())
     ledger = HunkCoverageLedger.from_processed_diff(processed)

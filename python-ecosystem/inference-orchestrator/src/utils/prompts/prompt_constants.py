@@ -39,6 +39,7 @@ from utils.prompts.constants_stage_3 import (   # noqa: F401
 )
 from utils.prompts.constants_mcp import (       # noqa: F401
     STAGE_1_MCP_TOOL_SECTION,
+    STAGE_1_VCS_TOOL_SECTION,
     STAGE_3_MCP_VERIFICATION_SECTION,
 )
 from utils.prompts.constants_qa_doc import (    # noqa: F401

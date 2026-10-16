@@ -188,9 +188,45 @@ class HunkCoverageLedger:
             raise RuntimeError("Stage 1 omitted reviewable hunk paths: " + ", ".join(missing))
         self._advance_paths(reviewed, HunkCoverageState.PLANNED, HunkCoverageState.REVIEWED)
 
-    def mark_reviewed_hunks(self, hunk_ids: Iterable[str]) -> None:
+    def mark_budget_omitted_hunks(
+        self,
+        hunk_ids: Iterable[str],
+        *,
+        reason: str,
+    ) -> None:
+        """Exclude planned hunks omitted by a finite invocation budget."""
+        omitted = set(hunk_ids)
+        unknown = sorted(omitted - set(self.reviewable_hunk_ids))
+        if unknown:
+            raise RuntimeError(
+                "Stage 1 reported unknown budget-omitted hunk identities: "
+                + ", ".join(unknown)
+            )
+        diagnostic = str(reason).strip() or "omitted by Stage 1 invocation budget"
+        for hunk_id in omitted:
+            record = self._records[hunk_id]
+            if record.state is not HunkCoverageState.PLANNED:
+                raise RuntimeError(
+                    f"Invalid hunk coverage transition for {record.hunk_id}: "
+                    f"{record.state.value} -> {HunkCoverageState.EXCLUDED.value}"
+                )
+            record.state = HunkCoverageState.EXCLUDED
+            record.reason = diagnostic
+
+    def mark_reviewed_hunks(
+        self,
+        hunk_ids: Iterable[str],
+        *,
+        allow_excluded: bool = False,
+    ) -> None:
         reviewed = set(hunk_ids)
         expected = set(self.reviewable_hunk_ids)
+        if allow_excluded:
+            expected -= {
+                record.hunk_id
+                for record in self._records.values()
+                if record.state is HunkCoverageState.EXCLUDED
+            }
         missing = sorted(expected - reviewed)
         if missing:
             raise RuntimeError(
@@ -248,6 +284,8 @@ class HunkCoverageLedger:
     def _advance_all(self, expected: HunkCoverageState, target: HunkCoverageState) -> None:
         for record in self._records.values():
             if record.disposition is not HunkDisposition.REVIEWABLE:
+                continue
+            if record.state is HunkCoverageState.EXCLUDED:
                 continue
             if record.state is not expected:
                 raise RuntimeError(

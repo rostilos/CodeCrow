@@ -86,124 +86,89 @@ public class BranchFullReconciliationService {
         if (branchOpt.isEmpty()) {
             throw new IllegalArgumentException("Branch not found: " + branchName);
         }
-        Branch branch = branchOpt.get();
-
-        String commitHash = resolveCommitHash(branch);
-
+        String requestedCommit = resolveCommitHash(branchOpt.get());
         Optional<String> lockKey = analysisLockService.acquireLockWithWait(
-                project, branchName, AnalysisLockType.BRANCH_ANALYSIS, commitHash, null, consumer);
-        if (lockKey.isEmpty()) {
-            throw new AnalysisLockedException(
-                    AnalysisLockType.BRANCH_ANALYSIS.name(), branchName, projectId);
-        }
+                project, branchName, AnalysisLockType.BRANCH_ANALYSIS, requestedCommit, null, consumer);
+        if (lockKey.isEmpty()) throw new AnalysisLockedException(AnalysisLockType.BRANCH_ANALYSIS.name(), branchName, projectId);
 
-        try {
-            EventNotificationEmitter.emitStatus(consumer, "started",
-                    "Full reconciliation started for branch: " + branchName);
-
-            PullRequestStatusSyncService.SyncResult prStatusSyncResult =
-                    pullRequestStatusSyncService.syncOpenPullRequestStates(project, consumer);
-            MergedPrSyncResult prSyncResult = syncMergedPrIssuesIntoBranch(
-                    project, branch, commitHash, consumer);
-
-            Branch branchBefore = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
-            long resolvedBefore = branchBefore.getIssues().stream().filter(BranchIssue::isResolved).count();
-            AnalysisScopeConfig analysisScope = AnalysisScopeFilter.scope(project);
-            List<BranchIssue> allUnresolved = branchBefore.getIssues().stream()
-                    .filter(bi -> !bi.isResolved())
-                    .filter(bi -> analysisScope.includes(bi.getFilePath()))
-                    .toList();
-            long openBefore = allUnresolved.size();
-
-            if (allUnresolved.isEmpty()) {
-                String message = resolvedBefore > 0
-                        ? "No unresolved issues to reconcile. " + resolvedBefore
-                                + " issues were already resolved."
-                        : "No unresolved issues to reconcile";
-                EventNotificationEmitter.emitStatus(consumer, "completed", message);
-                Map<String, Object> result = new LinkedHashMap<>();
-                result.put("status", "completed");
-                result.put("branch", branchName);
-                result.put("totalIssues", 0);
-                result.put("resolvedIssues", 0);
-                result.put("resolvedIssuesBefore", resolvedBefore);
-                result.put("resolvedIssuesAfter", resolvedBefore);
-                result.put("openIssuesBefore", 0);
-                result.put("openIssuesAfter", 0);
-                result.put("mergedPrsScanned", prSyncResult.mergedPrCount());
-                result.put("mergedPrsWithOpenIssues", prSyncResult.prsWithOpenIssues());
-                result.put("prIssueFilesChecked", prSyncResult.fileCount());
-                result.put("importedPrIssues", prSyncResult.importedIssueCount());
-                addPrStatusSyncMetrics(result, prStatusSyncResult);
-                result.put("filesChecked", 0);
-                result.put("message", message);
-                return result;
+        try (AnalysisLockService.LockLease lease = analysisLockService.maintainLockLease(
+                lockKey.get(), analysisLockService.getLeaseMinutes(AnalysisLockType.BRANCH_ANALYSIS))) {
+            requireOwnership(lease);
+            // Reload after waiting: another completed operation may have advanced the branch.
+            Branch branch = branchRepository.findByProjectIdAndBranchName(projectId, branchName).orElseThrow();
+            String commitHash = resolveCommitHash(branch);
+            analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                Branch current = branchRepository.findById(branch.getId()).orElseThrow();
+                current.beginReconciliation(false);
+                branchRepository.save(current);
+                return null;
+            });
+            EventNotificationEmitter.emitStatus(consumer, "started", "Full reconciliation started for branch: " + branchName);
+            var prStatusSyncResult = pullRequestStatusSyncService.syncOpenPullRequestStates(project, consumer);
+            requireOwnership(lease);
+            MergedPrPlan prPlan = prepareMergedPrIssues(project, branch);
+            Branch before = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
+            long resolvedBefore = before.getIssues().stream().filter(BranchIssue::isResolved).count();
+            Set<String> allFilePaths = before.getIssues().stream().filter(issue -> !issue.isResolved())
+                    .map(BranchIssue::getFilePath).filter(path -> path != null && !path.isBlank())
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            prPlan.pathsByPr().values().forEach(allFilePaths::addAll);
+            AnalysisScopeFilter.retainIncluded(allFilePaths, project);
+            Set<String> evidencePaths = branchIssueReconciliationService.findReconciliationPaths(branch, allFilePaths);
+            var request = buildSyntheticRequest(projectId, branchName, commitHash);
+            var snapshot = allFilePaths.isEmpty()
+                    ? BranchFileOperationsService.BranchFileSnapshot.unavailable(false, "No reconciliation candidates")
+                    : branchFileOperationsService.downloadBranchFileSnapshot(
+                            ProjectVcsInfoRetriever.getVcsInfo(project), commitHash, evidencePaths);
+            var prepared = allFilePaths.isEmpty()
+                    ? new BranchFileOperationsService.PreparedBranchFiles(Set.of(), Map.of())
+                    : branchFileOperationsService.prepareBranchFiles(evidencePaths, project, request, snapshot);
+            long imported = analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                Branch current = branchRepository.findById(branch.getId()).orElseThrow();
+                long countBefore = branchIssueRepository.countAllByBranchId(branch.getId());
+                for (var entry : prPlan.pathsByPr().entrySet()) {
+                    branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
+                            entry.getValue(), prepared.existingFiles(), current, project, entry.getKey());
+                }
+                branchFileOperationsService.persistPreparedFiles(current, project, request, prepared);
+                branchIssueReconciliationService.verifyIssueLineNumbersWithSnippets(prepared.contents().keySet(), project, current);
+                refreshAndSaveIssueCounts(current);
+                return Math.max(0, branchIssueRepository.countAllByBranchId(branch.getId()) - countBefore);
+            });
+            Branch reconciled = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
+            long openBefore = reconciled.getIssues().stream().filter(issue -> !issue.isResolved())
+                    .filter(issue -> AnalysisScopeFilter.scope(project).includes(issue.getFilePath())).count();
+            requireOwnership(lease);
+            var outcome = branchIssueReconciliationService.reanalyzeCandidateIssues(
+                    allFilePaths, prepared.existingFiles(), branch, project, request, consumer,
+                    prepared.contents(), null, snapshot.allowContentApiFallback(), action ->
+                            analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                                action.run();
+                                Branch current = branchRepository.findById(branch.getId()).orElseThrow();
+                                current.finishReconciliation(null);
+                                branchRepository.save(current);
+                                branchFileOperationsService.persistBranchFiles(prepared.existingFiles(), project, branchName);
+                                return null;
+                            }));
+            if (!outcome.complete()) {
+                analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                    Branch current = branchRepository.findById(branch.getId()).orElseThrow();
+                    current.finishReconciliation(outcome.diagnostic());
+                    branchRepository.save(current);
+                    return null;
+                });
             }
-
-            Set<String> allFilePaths = allUnresolved.stream()
-                    .map(BranchIssue::getFilePath)
-                    .filter(fp -> fp != null && !fp.isBlank())
-                    .collect(Collectors.toSet());
-
-            log.info("Full reconciliation: {} unresolved issues across {} files (branch={})",
-                    allUnresolved.size(), allFilePaths.size(), branchName);
-
-            EventNotificationEmitter.emitStatus(consumer, "checking_files",
-                    "Checking " + allFilePaths.size() + " files with "
-                            + allUnresolved.size() + " unresolved issues");
-
-            VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
-            BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
-                    branchFileOperationsService.downloadBranchFileSnapshot(
-                    vcsRepoInfoImpl, commitHash, allFilePaths);
-            log.info("Full reconciliation archive: {} files extracted for {} requested",
-                    branchFileSnapshot.contents().size(), allFilePaths.size());
-
-            Set<String> filesExistingInBranch = branchFileOperationsService.updateBranchFiles(
-                    allFilePaths, project, branchName, branchFileSnapshot);
-
-            EventNotificationEmitter.emitStatus(consumer, "updating_snapshots",
-                    "Updating file content snapshots for " + filesExistingInBranch.size()
-                            + " files");
-
-            BranchProcessRequest syntheticRequest = buildSyntheticRequest(projectId, branchName, commitHash);
-
-            branchFileOperationsService.updateFileSnapshotsForBranch(
-                    filesExistingInBranch, project, syntheticRequest, branchFileSnapshot);
-
-            EventNotificationEmitter.emitStatus(consumer, "reanalyzing_issues",
-                    "Reanalyzing " + allUnresolved.size() + " issues across "
-                            + allFilePaths.size() + " files");
-
-            branchIssueReconciliationService.reanalyzeCandidateIssues(
-                    allFilePaths, filesExistingInBranch, branch, project,
-                    syntheticRequest, consumer, branchFileSnapshot.contents(), null,
-                    branchFileSnapshot.allowContentApiFallback());
-
-            Branch branchForVerify = branchRepository.findByProjectIdAndBranchName(projectId, branchName)
-                    .orElse(branch);
-            branchIssueReconciliationService.verifyIssueLineNumbersWithSnippets(
-                    allFilePaths, project, branchForVerify);
-
-            Branch finalBranch = refreshAndSaveIssueCounts(branch);
+            Branch finalBranch = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
             long resolvedAfter = finalBranch.getResolvedCount();
             long newlyResolved = Math.max(0, resolvedAfter - resolvedBefore);
             long totalAfter = finalBranch.getTotalIssues();
-
-            String message = String.format(
-                    "Reconciliation complete: %d open issues remaining, %d newly resolved, %d total resolved, %d files checked, %d PR issues imported",
-                    totalAfter, newlyResolved, resolvedAfter, allFilePaths.size(),
-                    prSyncResult.importedIssueCount());
-
-            log.info(
-                    "Full reconciliation complete: branch={}, openBefore={}, openAfter={}, resolvedBefore={}, resolvedAfter={}, newlyResolved={}, prStatusesMerged={}, prStatusesDeclined={}",
-                    branchName, openBefore, totalAfter, resolvedBefore, resolvedAfter,
-                    newlyResolved, prStatusSyncResult.markedMerged(), prStatusSyncResult.markedDeclined());
-
-            EventNotificationEmitter.emitStatus(consumer, "completed", message);
-
+            String message = outcome.complete()
+                    ? "Reconciliation complete: " + totalAfter + " open issues, " + newlyResolved + " newly resolved"
+                    : outcome.diagnostic();
+            EventNotificationEmitter.emitStatus(consumer, outcome.complete() ? "completed" : "reconciliation_pending", message);
             Map<String, Object> result = new LinkedHashMap<>();
-            result.put("status", "completed");
+            result.put("status", outcome.complete() ? "completed" : "pending");
+            result.put("reconciliationPending", !outcome.complete());
             result.put("branch", branchName);
             result.put("totalIssues", totalAfter);
             result.put("resolvedIssues", newlyResolved);
@@ -212,10 +177,10 @@ public class BranchFullReconciliationService {
             result.put("openIssuesBefore", openBefore);
             result.put("openIssuesAfter", totalAfter);
             result.put("filesChecked", allFilePaths.size());
-            result.put("mergedPrsScanned", prSyncResult.mergedPrCount());
-            result.put("mergedPrsWithOpenIssues", prSyncResult.prsWithOpenIssues());
-            result.put("prIssueFilesChecked", prSyncResult.fileCount());
-            result.put("importedPrIssues", prSyncResult.importedIssueCount());
+            result.put("mergedPrsScanned", prPlan.mergedPrCount());
+            result.put("mergedPrsWithOpenIssues", prPlan.pathsByPr().size());
+            result.put("prIssueFilesChecked", prPlan.pathsByPr().values().stream().flatMap(Set::stream).distinct().count());
+            result.put("importedPrIssues", imported);
             addPrStatusSyncMetrics(result, prStatusSyncResult);
             result.put("message", message);
             return result;
@@ -225,79 +190,33 @@ public class BranchFullReconciliationService {
                     "Full reconciliation failed: " + e.getMessage());
             throw e;
         } finally {
-            analysisLockService.releaseLock(lockKey.get());
+            try {
+                analysisLockService.releaseLock(lockKey.get());
+            } catch (RuntimeException unavailable) {
+                log.warn("Full reconciliation lock cleanup deferred until lease expiry: {}", unavailable.getMessage());
+            }
         }
     }
 
-    private MergedPrSyncResult syncMergedPrIssuesIntoBranch(
-            Project project,
-            Branch branch,
-            String commitHash,
-            Consumer<Map<String, Object>> consumer) throws IOException {
+    private static void requireOwnership(AnalysisLockService.LockLease lease) throws IOException {
+        if (lease == null || !lease.confirmOwnership()) {
+            throw new IOException("Full branch reconciliation lost its lock lease; further writes stopped");
+        }
+    }
+
+    private record MergedPrPlan(int mergedPrCount, Map<Long, Set<String>> pathsByPr) {}
+
+    private MergedPrPlan prepareMergedPrIssues(Project project, Branch branch) {
         List<PullRequest> mergedPrs = pullRequestRepository.findByProjectIdAndTargetBranchNameAndState(
                 project.getId(), branch.getBranchName(), PullRequestState.MERGED);
-        if (mergedPrs.isEmpty()) {
-            EventNotificationEmitter.emitStatus(consumer, "sync_pr_issues",
-                    "No merged PRs recorded for branch: " + branch.getBranchName());
-            return MergedPrSyncResult.empty();
-        }
-
-        Map<Long, Set<String>> issuePathsByPr = new LinkedHashMap<>();
-        Set<String> allPrIssuePaths = new LinkedHashSet<>();
-        AnalysisScopeConfig analysisScope = AnalysisScopeFilter.scope(project);
+        Map<Long, Set<String>> pathsByPr = new LinkedHashMap<>();
         for (PullRequest pr : mergedPrs) {
-            if (!isValidPrNumber(pr.getPrNumber())) {
-                continue;
-            }
-            Set<String> paths = branchIssueMappingService.findPrIssuePaths(
-                    project.getId(), pr.getPrNumber());
-            if (paths == null || paths.isEmpty()) {
-                continue;
-            }
-            Set<String> orderedPaths = new LinkedHashSet<>(paths);
-            orderedPaths.removeIf(path -> !analysisScope.includes(path));
-            if (orderedPaths.isEmpty()) {
-                continue;
-            }
-            issuePathsByPr.put(pr.getPrNumber(), orderedPaths);
-            allPrIssuePaths.addAll(orderedPaths);
+            if (!isValidPrNumber(pr.getPrNumber())) continue;
+            Set<String> paths = new LinkedHashSet<>(branchIssueMappingService.findPrIssuePaths(project.getId(), pr.getPrNumber()));
+            AnalysisScopeFilter.retainIncluded(paths, project);
+            if (!paths.isEmpty()) pathsByPr.put(pr.getPrNumber(), paths);
         }
-
-        if (allPrIssuePaths.isEmpty()) {
-            EventNotificationEmitter.emitStatus(consumer, "sync_pr_issues",
-                    "Merged PR scan complete: no unresolved PR issues to import");
-            return new MergedPrSyncResult(mergedPrs.size(), 0, 0, 0);
-        }
-
-        EventNotificationEmitter.emitStatus(consumer, "sync_pr_issues",
-                "Syncing unresolved issues from " + issuePathsByPr.size()
-                        + " merged PRs across " + allPrIssuePaths.size() + " files");
-
-        long beforeCount = branchIssueRepository.countAllByBranchId(branch.getId());
-        VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
-        BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
-                branchFileOperationsService.downloadBranchFileSnapshot(
-                vcsRepoInfoImpl, commitHash, allPrIssuePaths);
-        Set<String> filesExistingInBranch = branchFileOperationsService.updateBranchFiles(
-                allPrIssuePaths, project, branch.getBranchName(), branchFileSnapshot);
-
-        for (Map.Entry<Long, Set<String>> entry : issuePathsByPr.entrySet()) {
-            Set<String> existingPrPaths = entry.getValue().stream()
-                    .filter(filesExistingInBranch::contains)
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
-            if (existingPrPaths.isEmpty()) {
-                continue;
-            }
-            branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
-                    existingPrPaths, filesExistingInBranch, branch, project, entry.getKey());
-        }
-
-        long afterCount = branchIssueRepository.countAllByBranchId(branch.getId());
-        long imported = Math.max(0, afterCount - beforeCount);
-        EventNotificationEmitter.emitStatus(consumer, "sync_pr_issues_complete",
-                "Merged PR issue sync complete: " + imported + " branch issues imported");
-        return new MergedPrSyncResult(
-                mergedPrs.size(), issuePathsByPr.size(), allPrIssuePaths.size(), imported);
+        return new MergedPrPlan(mergedPrs.size(), pathsByPr);
     }
 
     private Branch refreshAndSaveIssueCounts(Branch branch) {
@@ -345,14 +264,4 @@ public class BranchFullReconciliationService {
         return prNumber != null && prNumber > 0;
     }
 
-    private record MergedPrSyncResult(
-            int mergedPrCount,
-            int prsWithOpenIssues,
-            int fileCount,
-            long importedIssueCount) {
-
-        static MergedPrSyncResult empty() {
-            return new MergedPrSyncResult(0, 0, 0, 0);
-        }
-    }
 }

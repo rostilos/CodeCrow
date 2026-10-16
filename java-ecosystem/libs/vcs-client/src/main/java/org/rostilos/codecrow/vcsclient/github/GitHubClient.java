@@ -937,6 +937,7 @@ public class GitHubClient implements VcsClient {
                 metadata.path("head").path("ref").asText(null),
                 metadata.path("base").path("ref").asText(null),
                 metadata.path("base").path("sha").asText(null),
+                metadata.path("base").path("sha").asText(null),
                 metadata.path("head").path("sha").asText(null),
                 state,
                 merged,

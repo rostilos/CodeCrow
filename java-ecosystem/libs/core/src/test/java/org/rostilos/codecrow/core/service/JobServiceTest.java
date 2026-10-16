@@ -152,12 +152,12 @@ class JobServiceTest {
     }
 
     @Nested
-    @DisplayName("createRagIndexJob()")
-    class CreateRagIndexJobTests {
+    @DisplayName("createRepositoryIndexBuildJob()")
+    class CreateRepositoryIndexBuildJobTests {
 
         @Test
-        @DisplayName("should create initial RAG index job")
-        void shouldCreateInitialRagIndexJob() {
+        @DisplayName("should create a branch-bound repository index build job")
+        void shouldCreateRepositoryIndexBuildJob() {
             Project project = createProject(1L, "Test");
 
             when(jobRepository.save(any(Job.class))).thenAnswer(inv -> {
@@ -167,53 +167,24 @@ class JobServiceTest {
             });
             when(jobLogRepository.save(any(JobLog.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            Job job = jobService.createRagIndexJob(project, true, JobTriggerSource.WEBHOOK, null);
-
-            assertThat(job.getJobType()).isEqualTo(JobType.RAG_INITIAL_INDEX);
-            assertThat(job.getTitle()).contains("Initial");
-        }
-
-        @Test
-        @DisplayName("should create incremental RAG index job")
-        void shouldCreateIncrementalRagIndexJob() {
-            Project project = createProject(1L, "Test");
-
-            when(jobRepository.save(any(Job.class))).thenAnswer(inv -> {
-                Job j = inv.getArgument(0);
-                setField(j, "id", 103L);
-                return j;
-            });
-            when(jobLogRepository.save(any(JobLog.class))).thenAnswer(inv -> inv.getArgument(0));
-
-            Job job = jobService.createRagIndexJob(project, false, JobTriggerSource.API, null);
-
-            assertThat(job.getJobType()).isEqualTo(JobType.RAG_INCREMENTAL_INDEX);
-            assertThat(job.getTitle()).contains("Incremental");
-        }
-
-        @Test
-        @DisplayName("should persist branch and revision for a branch RAG job")
-        void shouldCreateBranchBoundRagIndexJob() {
-            Project project = createProject(1L, "Test");
-
-            when(jobRepository.save(any(Job.class))).thenAnswer(inv -> {
-                Job j = inv.getArgument(0);
-                setField(j, "id", 104L);
-                return j;
-            });
-            when(jobLogRepository.save(any(JobLog.class))).thenAnswer(inv -> inv.getArgument(0));
-
-            Job job = jobService.createRagIndexJob(
+            Job job = jobService.createRepositoryIndexBuildJob(
                     project,
-                    false,
                     JobTriggerSource.UI,
                     null,
                     "develop",
-                    "abc123");
+                    "abc123",
+                    "operator requested a clean rebuild");
 
+            assertThat(job.getJobType()).isEqualTo(JobType.REPOSITORY_INDEX_BUILD);
             assertThat(job.getBranchName()).isEqualTo("develop");
             assertThat(job.getCommitHash()).isEqualTo("abc123");
-            assertThat(job.getTitle()).isEqualTo("Incremental RAG Update: develop");
+            assertThat(job.getTitle()).isEqualTo("Repository Index Build: develop");
+            assertThat(job.getCurrentStep())
+                    .isEqualTo("Waiting for repository-index capacity");
+            verify(jobLogRepository).save(argThat(log ->
+                    "queued".equals(log.getStep())
+                            && log.getMessage().contains(
+                                    "operator requested a clean rebuild")));
         }
     }
 

@@ -256,7 +256,8 @@ public class AiCommandClient {
             boolean supportsMermaid,
             Integer maxAllowedTokens,
             String vcsProvider,
-            String vcsBaseUrl) {
+            String vcsBaseUrl,
+            Map<String, Object> prChangeSummary) {
     }
 
     /**
@@ -274,7 +275,10 @@ public class AiCommandClient {
             String aiBaseUrl,
             String question,
             Long pullRequestId,
-            String commitHash,
+            String branch,
+            String repositoryRevision,
+            String ragGenerationManifestSha256,
+            String ragCollectionTarget,
             String oAuthClient,
             String oAuthSecret,
             String accessToken,

@@ -181,6 +181,12 @@ public class CommentOnBitbucketCloudAction {
      * not a Code Insights annotation.</p>
      */
     public String postInlineComment(String filePath, int lineNumber, String textContent) throws IOException {
+        return postInlineComment(filePath, lineNumber, textContent,
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.HEAD);
+    }
+
+    public String postInlineComment(String filePath, int lineNumber, String textContent,
+            org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide anchorSide) throws IOException {
         if (filePath == null || filePath.isBlank()) {
             throw new IllegalArgumentException("Inline comment file path must not be blank");
         }
@@ -197,7 +203,7 @@ public class CommentOnBitbucketCloudAction {
 
         Map<String, Object> inline = new LinkedHashMap<>();
         inline.put("path", filePath);
-        inline.put("to", lineNumber);
+        inline.put(anchorSide == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "from" : "to", lineNumber);
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("content", Map.of("raw", hideCodeCrowMarkers(textContent)));

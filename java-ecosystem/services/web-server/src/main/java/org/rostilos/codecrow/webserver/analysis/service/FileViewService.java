@@ -160,6 +160,7 @@ public class FileViewService {
         }
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
                 .filter(FileViewService::hasTitle)
+                .filter(i -> i.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
                         correctLineNumber(i, lineHashes),
@@ -254,6 +255,7 @@ public class FileViewService {
                     return ln >= finalStartLine && ln <= finalEndLine;
                 })
                 .sorted(Comparator.comparingInt(i -> correctLineNumber(i, lineHashes)))
+                .filter(i -> i.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
                         correctLineNumber(i, lineHashes),
@@ -329,6 +331,7 @@ public class FileViewService {
                     return ln >= finalStart && ln <= finalEnd;
                 })
                 .sorted(Comparator.comparingInt(i -> correctLineNumber(i, lineHashes)))
+                .filter(i -> i.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
                         correctLineNumber(i, lineHashes),
@@ -434,6 +437,7 @@ public class FileViewService {
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
                 .filter(FileViewService::hasTitle)
                 .filter(i -> !i.isResolved())
+                .filter(i -> i.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
                         correctLineNumber(i, lineHashes),
@@ -504,6 +508,7 @@ public class FileViewService {
                     return ln >= finalStartLine && ln <= finalEndLine;
                 })
                 .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
+                .filter(i -> i.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
                         i.getLineNumber() != null ? i.getLineNumber() : 0,
@@ -573,6 +578,7 @@ public class FileViewService {
                     return ln >= finalStart && ln <= finalEnd;
                 })
                 .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
+                .filter(i -> i.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
                         i.getLineNumber() != null ? i.getLineNumber() : 0,
@@ -700,6 +706,7 @@ public class FileViewService {
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
                 .filter(bi -> bi.getTitle() != null && !bi.getTitle().isBlank())
                 .filter(bi -> !bi.isResolved())
+                .filter(bi -> bi.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
                 .map(bi -> new FileViewResponse.InlineIssue(
                         bi.getId(),
                         correctBranchLineNumber(bi, lineHashes),
@@ -777,6 +784,7 @@ public class FileViewService {
                     return ln >= finalStartLine && ln <= finalEndLine;
                 })
                 .sorted(Comparator.comparingInt(bi -> effectiveLine(bi)))
+                .filter(bi -> bi.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
                 .map(bi -> new FileViewResponse.InlineIssue(
                         bi.getId(),
                         effectiveLine(bi),
@@ -847,6 +855,7 @@ public class FileViewService {
                     return ln >= finalStartLine && ln <= finalEndLine;
                 })
                 .sorted(Comparator.comparingInt(bi -> effectiveLine(bi)))
+                .filter(bi -> bi.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
                 .map(bi -> new FileViewResponse.InlineIssue(
                         bi.getId(),
                         effectiveLine(bi),
@@ -916,6 +925,8 @@ public class FileViewService {
      * CodeAnalysisIssue but reads from BranchIssue's own fields.
      */
     private static int correctBranchLineNumber(BranchIssue bi, LineHashSequence lineHashes) {
+        if (bi.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
+            return bi.getLineNumber() == null ? 1 : bi.getLineNumber();
         int lineNumber = effectiveLine(bi);
         if (lineNumber <= 0 || lineHashes.getLineCount() == 0) {
             return lineNumber;
@@ -974,6 +985,8 @@ public class FileViewService {
      * @return the corrected 1-based line number, or the original if no correction needed/possible
      */
     private static int correctLineNumber(CodeAnalysisIssue issue, LineHashSequence lineHashes) {
+        if (issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
+            return issue.getLineNumber() == null ? 1 : issue.getLineNumber();
         int lineNumber = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
         if (lineNumber <= 0 || lineHashes.getLineCount() == 0) {
             return lineNumber;

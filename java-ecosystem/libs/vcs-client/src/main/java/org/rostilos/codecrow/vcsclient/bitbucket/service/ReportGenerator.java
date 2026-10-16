@@ -131,7 +131,8 @@ public class ReportGenerator {
                             issue.getSuggestedFixDiff(),
                             LinksGenerator.createIssueUrl(getBaseUrl(), project, issue.getId()),
                             issue.getId(),
-                            issue.getCodeSnippet()
+                            issue.getCodeSnippet(),
+                            issue.getAnchorSide()
                     ))
                     .toList();
 
@@ -189,7 +190,9 @@ public class ReportGenerator {
                 issue.getSuggestedFixDescription(),
                 issue.getSuggestedFixDiff(),
                 LinksGenerator.createIssueUrl(getBaseUrl(), project, issue.getId()),
-                issue.getId()
+                issue.getId(),
+                issue.getCodeSnippet(),
+                issue.getAnchorSide()
         );
     }
 

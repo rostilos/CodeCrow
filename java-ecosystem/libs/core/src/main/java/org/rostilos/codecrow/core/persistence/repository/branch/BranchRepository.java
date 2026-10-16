@@ -13,6 +13,29 @@ import java.util.List;
 @Repository
 public interface BranchRepository extends JpaRepository<Branch, Long> {
 
+    interface ReconciliationRetryCandidate {
+        Long getProjectId();
+        String getBranchName();
+        int getReconciliationAttempts();
+        java.time.OffsetDateTime getReconciliationAttemptedAt();
+    }
+
+    @Query("""
+            SELECT b.project.id AS projectId, b.branchName AS branchName,
+                   b.reconciliationAttempts AS reconciliationAttempts,
+                   b.reconciliationAttemptedAt AS reconciliationAttemptedAt
+            FROM Branch b
+            WHERE b.reconciliationPending = true AND b.reconciliationAttempts < 10
+              AND b.project.branchAnalysisEnabled = true
+              AND b.healthStatus <> org.rostilos.codecrow.core.model.branch.BranchHealthStatus.STALE
+              AND NOT EXISTS (SELECT l.id FROM AnalysisLock l WHERE l.project.id = b.project.id
+                  AND l.branchName = b.branchName AND l.expiresAt > :now
+                  AND l.analysisType = org.rostilos.codecrow.core.model.analysis.AnalysisLockType.BRANCH_ANALYSIS)
+            ORDER BY b.reconciliationAttemptedAt ASC
+            """)
+    List<ReconciliationRetryCandidate> findReconciliationRetryCandidates(
+            @Param("now") java.time.OffsetDateTime now, org.springframework.data.domain.Pageable page);
+
     interface StaleRetryCandidate {
         Long getBranchId();
         Long getProjectId();
@@ -51,7 +74,7 @@ public interface BranchRepository extends JpaRepository<Branch, Long> {
             SELECT b.id AS branchId,
                    b.project.id AS projectId,
                    b.branchName AS branchName,
-                   b.commitHash AS commitHash,
+                   coalesce(b.retryCommitHash, b.commitHash) AS commitHash,
                    b.consecutiveFailures AS consecutiveFailures,
                    b.lastHealthCheckAt AS lastHealthCheckAt,
                    b.project.branchAnalysisEnabled AS branchAnalysisEnabled

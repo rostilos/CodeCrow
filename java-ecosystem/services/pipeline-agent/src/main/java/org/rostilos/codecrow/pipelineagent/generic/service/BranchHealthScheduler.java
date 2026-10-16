@@ -60,6 +60,23 @@ public class BranchHealthScheduler {
         this.branchRepository = branchRepository;
         this.branchAnalysisProcessor = branchAnalysisProcessor;
     }
+
+    @Scheduled(fixedDelayString = "${branch.health.retry.interval.ms:600000}", initialDelay = 600000)
+    public void retryPendingReconciliations() {
+        OffsetDateTime now = OffsetDateTime.now();
+        for (var branch : branchRepository.findReconciliationRetryCandidates(
+                now, org.springframework.data.domain.PageRequest.of(0, BATCH_SIZE))) {
+            if (branch.getReconciliationAttempts() >= MAX_CONSECUTIVE_FAILURES) continue;
+            if (branch.getReconciliationAttemptedAt() != null && branch.getReconciliationAttemptedAt()
+                    .plusMinutes(BASE_BACKOFF_MINUTES * Math.max(1, branch.getReconciliationAttempts())).isAfter(now)) continue;
+            try {
+                branchAnalysisProcessor.fullReconcile(branch.getProjectId(), branch.getBranchName(), NO_OP_OBSERVER);
+            } catch (Exception failure) {
+                log.warn("Pending branch reconciliation retry failed: project={}, branch={}, detail={}",
+                        branch.getProjectId(), branch.getBranchName(), failure.getMessage());
+            }
+        }
+    }
     
     /**
      * Periodically retries analysis for branches in STALE status.

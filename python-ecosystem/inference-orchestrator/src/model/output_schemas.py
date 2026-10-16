@@ -5,7 +5,7 @@ These Pydantic models are used with MCPAgent's output_schema parameter
 to ensure structured JSON output from the LLM.
 """
 
-from typing import Optional, List, Union
+from typing import Literal, Optional, List, Union
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -16,7 +16,16 @@ class CodeReviewIssue(BaseModel):
     severity: str = Field(description="Defect severity: HIGH, MEDIUM, or LOW. INFO is historical compatibility only and must not be used for a new finding.")
     category: str = Field(description="Issue category: SECURITY, PERFORMANCE, CODE_QUALITY, BUG_RISK, STYLE, DOCUMENTATION, BEST_PRACTICES, ERROR_HANDLING, TESTING, or ARCHITECTURE")
     file: str = Field(description="File path where the issue is located")
+    anchorSide: Literal["HEAD", "BASE"] = Field(
+        default="HEAD",
+        description="Source side for annotation. HEAD normally; BASE only for a whole-file deletion. The host derives this from the diff.",
+    )
     line: Union[int, str] = Field(description="Best-effort line number hint (the system verifies the exact position using codeSnippet)")
+
+    @field_validator('anchorSide', mode='before')
+    @classmethod
+    def normalize_anchor_side(cls, value):
+        return "BASE" if str(value or "").upper() == "BASE" else "HEAD"
 
     @field_validator('line', mode='before')
     @classmethod
@@ -69,11 +78,19 @@ class CodeReviewIssue(BaseModel):
     resolvedInCommit: Optional[str] = Field(default=None, description="Commit hash where the issue was resolved")
     # Additional fields preserved from previous issues during reconciliation
     visibility: Optional[str] = Field(default=None, description="Issue visibility status")
-    codeSnippet: str = Field(default="", description="CRITICAL — PRIMARY ANCHORING MECHANISM FOR NEW FINDINGS: exact current-source code copied VERBATIM from a reviewable changed hunk. Full-file and retrieved code outside the hunk is supporting context, not a valid new-finding anchor. New findings without an in-hunk anchor are discarded. An exact matched historical issue with isResolved=true may preserve its previous snippet or leave this empty when the fixed line is gone.")
+    codeSnippet: str = Field(default="", description="CRITICAL — PRIMARY ANCHORING MECHANISM FOR NEW FINDINGS: exact source code copied VERBATIM from a reviewable changed hunk; use removed BASE-side source only for whole-file deletions and report the regression caused by removal. Full-file and retrieved code outside the hunk is supporting context, not a valid new-finding anchor. New findings without an in-hunk anchor are discarded. An exact matched historical issue with isResolved=true may preserve its previous snippet or leave this empty when the fixed line is gone.")
+    hypothesis: str = Field(
+        default="",
+        description="Concrete failure hypothesis: the trigger, violated behavior and observable impact. Do not claim certainty from another model's agreement.",
+    )
+    evidenceGaps: List[str] = Field(
+        default_factory=list,
+        description="Focused unresolved facts that could support or disprove the hypothesis; missing optional context is not proof of a defect.",
+    )
     evidenceRefs: List[str] = Field(
         default_factory=list,
         description=(
-            "Stable Evidence ID values copied from retrieved context that the "
+            "Stable structural Evidence IDs visible to the invocation that the "
             "finding relies on. Leave empty when the finding relies only on "
             "the current file/diff."
         ),
@@ -105,6 +122,24 @@ class CodeReviewIssue(BaseModel):
         if v is None:
             return ""
         return str(v).strip()
+
+    @field_validator('isResolved', mode='before')
+    @classmethod
+    def normalize_null_resolution_state(cls, v):
+        """Treat an explicit JSON null like the field's existing false default."""
+        return False if v is None else v
+
+    @field_validator('evidenceRefs', 'relatedLocations', 'evidenceGaps', mode='before')
+    @classmethod
+    def normalize_null_empty_lists(cls, v):
+        """Treat an explicit JSON null like the fields' existing empty defaults."""
+        return [] if v is None else v
+
+    @field_validator('claimKind', 'hypothesis', mode='before')
+    @classmethod
+    def normalize_null_claim_kind(cls, v):
+        """Keep the internal claim-kind contract string-only for tolerant input."""
+        return "" if v is None else v
 
 
 class CodeReviewOutput(BaseModel):
@@ -145,7 +180,9 @@ class SemanticDuplicateGroup(BaseModel):
     duplicate_indices: List[int] = Field(
         default_factory=list,
         description=(
-            "Batch-local indices describing the same root cause as keeper_index."
+            "Batch-local indices sharing the keeper's root cause or fully contained "
+            "in it; never distinct atomic findings whose existing reports already "
+            "fully cover the keeper. Use covered_summaries for that case."
         ),
     )
     confidence: str = Field(
@@ -156,8 +193,28 @@ class SemanticDuplicateGroup(BaseModel):
     )
     rationale: str = Field(
         default="",
-        description="Short root-cause identity explanation, not chain-of-thought.",
+        description=(
+            "Explain shared cause or complete containment, and why separate retained "
+            "findings for distinct root causes do not already fully cover the keeper."
+        ),
     )
+    merged_reason: str = Field(
+        default="",
+        description=(
+            "Combined evidence and impact preserving every assertion of the existing "
+            "keeper and useful evidence from every removed member; do not invent a "
+            "broader union."
+        ),
+    )
+
+
+class SemanticCoveredSummary(BaseModel):
+    """A redundant summary of multiple independently retained defects."""
+
+    summary_index: int
+    covered_by_indices: List[int] = Field(default_factory=list)
+    confidence: str
+    rationale: str = Field(default="", description="Why the retained findings cover every defect in this summary.")
 
 
 class SemanticDeduplicationDecision(BaseModel):
@@ -169,6 +226,7 @@ class SemanticDeduplicationDecision(BaseModel):
     """
 
     duplicate_groups: List[SemanticDuplicateGroup] = Field(default_factory=list)
+    covered_summaries: List[SemanticCoveredSummary] = Field(default_factory=list)
 
 
 class AskOutput(BaseModel):

@@ -68,6 +68,8 @@ class QaDocumentationService:
         target_branch: Optional[str] = None,
         vcs_provider: Optional[str] = None,
         output_language: Optional[str] = "English",
+        pr_change_summary: Optional[Dict[str, Any]] = None,
+        repository_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Generate QA documentation for a completed analysis.
@@ -78,38 +80,44 @@ class QaDocumentationService:
         Returns:
             {"documentation_needed": bool, "documentation": str | None}
         """
+        from service.review.change_summary import compatible_change_summary
+        pr_change_summary = compatible_change_summary(
+            pr_change_summary, project_id, pr_number, (repository_context or {}).get("source_revision"),
+        )
         llm = self._create_llm(
             ai_provider=ai_provider,
             ai_model=ai_model,
             ai_api_key=ai_api_key,
             ai_base_url=ai_base_url,
-            max_tokens=16_384,  # QA docs need room for structured JSON output
+            max_tokens=16_384,
         )
 
-        orchestrator = QaDocOrchestrator(llm=llm)
-
-        result = await orchestrator.run(
-            project_name=project_name,
-            pr_number=pr_number,
-            issues_found=issues_found,
-            files_analyzed=files_analyzed,
-            pr_metadata=pr_metadata,
-            template_mode=template_mode,
-            custom_template=custom_template,
-            task_context=task_context,
-            diff=diff,
-            delta_diff=delta_diff,
-            enrichment_data=enrichment_data,
-            changed_file_paths=changed_file_paths,
-            previous_documentation=previous_documentation,
-            is_same_pr_rerun=is_same_pr_rerun,
-            workspace_slug=workspace_slug,
-            repo_slug=repo_slug,
-            source_branch=source_branch,
-            target_branch=target_branch,
-            vcs_provider=vcs_provider,
-            output_language=output_language,
-        )
+        from service.qa_documentation.repository_tools import qa_repository_tools
+        async with qa_repository_tools(llm, pr_change_summary, repository_context) as agent:
+            orchestrator = QaDocOrchestrator(llm=llm, agent_service=agent)
+            result = await orchestrator.run(
+                pr_change_summary=pr_change_summary,
+                project_name=project_name,
+                pr_number=pr_number,
+                issues_found=issues_found,
+                files_analyzed=files_analyzed,
+                pr_metadata=pr_metadata,
+                template_mode=template_mode,
+                custom_template=custom_template,
+                task_context=task_context,
+                diff=diff,
+                delta_diff=delta_diff,
+                enrichment_data=enrichment_data,
+                changed_file_paths=changed_file_paths,
+                previous_documentation=previous_documentation,
+                is_same_pr_rerun=is_same_pr_rerun,
+                workspace_slug=workspace_slug,
+                repo_slug=repo_slug,
+                source_branch=source_branch,
+                target_branch=target_branch,
+                vcs_provider=vcs_provider,
+                output_language=output_language,
+            )
 
         logger.info(
             "QA documentation %s for PR #%s (project %s), length=%d",
@@ -123,7 +131,14 @@ class QaDocumentationService:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _create_llm(self, ai_provider=None, ai_model=None, ai_api_key=None, ai_base_url=None, max_tokens=None):
+    def _create_llm(
+        self,
+        ai_provider=None,
+        ai_model=None,
+        ai_api_key=None,
+        ai_base_url=None,
+        max_tokens=None,
+    ):
         """Create LLM instance. Prefers per-request credentials over server-level env vars."""
         provider = ai_provider or self._ai_provider
         model = ai_model or self._ai_model

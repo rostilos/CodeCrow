@@ -41,19 +41,6 @@
             <version>1.0</version>
         </dependency>
 
-        <!-- Events module for event-driven communication -->
-        <dependency>
-            <groupId>org.rostilos.codecrow</groupId>
-            <artifactId>codecrow-events</artifactId>
-            <version>1.0</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.rostilos.codecrow</groupId>
-            <artifactId>codecrow-queue</artifactId>
-            <version>1.0</version>
-        </dependency>
-
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-vcs-client</artifactId>

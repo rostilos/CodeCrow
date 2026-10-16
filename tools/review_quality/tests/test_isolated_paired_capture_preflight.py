@@ -39,7 +39,6 @@ def test_accepts_same_disconnected_snapshot_with_distinct_plugin_identity(
 
     assert result["status"] == "passed"
     assert result["reviewProviderCalls"] == 0
-    assert result["embeddingProviderCalls"] == 0
     assert result["modes"]["fallback"]["repositoryPlugins"] == []
     assert result["modes"]["plugin-context"]["repositoryPlugins"] == [
         "java",

@@ -2,6 +2,8 @@ package org.rostilos.codecrow.webserver.analysis.controller;
 
 import org.rostilos.codecrow.core.dto.analysis.issue.IssueDTO;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
+import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
@@ -70,12 +72,21 @@ public class AnalysisIssueController {
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
 
         int maxVersion = 0;
-        if(pullRequestId != null) {
-            maxVersion = codeAnalysisService.getMaxAnalysisPrVersion(project.getId(), Long.parseLong(pullRequestId));
+        int versionToFetch = prVersion;
+        if (pullRequestId != null && !pullRequestId.isBlank()) {
+            List<CodeAnalysis> prAnalyses = analysisService.getPrAnalyses(
+                    project.getId(), Long.parseLong(pullRequestId));
+            List<Integer> availableVersions = prAnalyses.stream()
+                    .map(CodeAnalysis::getPrVersion).filter(java.util.Objects::nonNull).distinct().toList();
+            resp.setAvailableVersions(availableVersions);
+            resp.setPartialVersions(prAnalyses.stream()
+                    .filter(analysis -> analysis.getStatus() == AnalysisStatus.PARTIAL)
+                    .map(CodeAnalysis::getPrVersion).filter(java.util.Objects::nonNull).distinct().toList());
+            maxVersion = availableVersions.isEmpty() ? 0 : availableVersions.get(0);
             resp.setMaxVersion(maxVersion);
             
             // Fetch the analysis comment/summary and commit hash for the specific version
-            int versionToFetch = prVersion > 0 ? prVersion : maxVersion;
+            versionToFetch = availableVersions.contains(prVersion) ? prVersion : maxVersion;
             resp.setCurrentVersion(versionToFetch);
             
             var analysisOpt = codeAnalysisService.findAnalysisByProjectAndPrNumberAndVersion(
@@ -86,9 +97,10 @@ public class AnalysisIssueController {
             analysisOpt.ifPresent(analysis -> {
                 resp.setAnalysisSummary(analysis.getComment());
                 resp.setCommitHash(analysis.getCommitHash());
+                resp.setAnalysisStatus(analysis.getStatus());
             });
         }
-        List<CodeAnalysisIssue> issues = analysisService.findIssues(project.getId(), branch, pullRequestId, severity, type, (prVersion > 0 ? prVersion : maxVersion));
+        List<CodeAnalysisIssue> issues = analysisService.findIssues(project.getId(), branch, pullRequestId, severity, type, versionToFetch);
         List<IssueDTO> issueDTOs = issues.stream()
                 .map(IssueDTO::fromEntity)
                 .toList();

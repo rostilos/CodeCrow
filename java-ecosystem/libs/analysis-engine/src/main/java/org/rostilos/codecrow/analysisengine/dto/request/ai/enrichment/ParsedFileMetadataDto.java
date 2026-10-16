@@ -16,7 +16,7 @@ public record ParsedFileMetadataDto(
         @JsonProperty("imports") List<String> imports,
         @JsonProperty("extends") List<String> extendsClasses,
         @JsonProperty("implements") List<String> implementsInterfaces,
-        @JsonProperty("semantic_names") List<String> semanticNames,
+        @JsonProperty("symbol_names") List<String> symbolNames,
         @JsonProperty("parent_class") String parentClass,
         @JsonProperty("namespace") String namespace,
         @JsonProperty("calls") List<String> calls,

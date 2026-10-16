@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.ragengine.branch;
 
 import org.rostilos.codecrow.core.model.job.Job;
+import org.rostilos.codecrow.core.model.job.JobType;
 import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
@@ -18,8 +19,8 @@ import java.util.HexFormat;
 /**
  * Commits the durable ownership boundary for an exact branch snapshot.
  *
- * <p>The RAG operation is registered before its child job is created. The job
- * and operation are then linked and moved to RUNNING in this one transaction,
+ * <p>The RAG operation is registered before its durable queue job is bound. The
+ * job and operation are then linked and moved to RUNNING in this one transaction,
  * so recovery can never observe a committed running exact-generation job
  * without a corresponding operation.</p>
  */
@@ -71,6 +72,22 @@ public class BranchIndexBuildAdmissionService {
             JobTriggerSource triggerSource,
             String analysisLockKey,
             BuildOrigin origin) {
+        return admit(
+                project, branch, revision, kind, triggerSource,
+                analysisLockKey, origin, null, null);
+    }
+
+    @Transactional
+    public AdmittedBuild admit(
+            Project project,
+            String branch,
+            String revision,
+            RagBranchIndexKind kind,
+            JobTriggerSource triggerSource,
+            String analysisLockKey,
+            BuildOrigin origin,
+            String representationFingerprint,
+            Job queuedJob) {
         String lockKey = requireText(analysisLockKey, "analysisLockKey");
         BuildOrigin buildOrigin = origin != null ? origin : BuildOrigin.AUTOMATIC;
 
@@ -80,6 +97,7 @@ public class BranchIndexBuildAdmissionService {
                 kind,
                 null,
                 revision,
+                representationFingerprint,
                 operationFingerprint(buildOrigin, lockKey));
         if (registration.existingOperation()) {
             // A lock key identifies one acquisition. Seeing it again means a
@@ -100,7 +118,7 @@ public class BranchIndexBuildAdmissionService {
 
         if (projectStatus == ProjectStatusAdmission.UPDATING) {
             // The active exact generation is the authoritative completed
-            // checkpoint. Align a stale/failed legacy status under the branch
+            // checkpoint. Align a stale/failed UI projection under the branch
             // lock before switching it to UPDATING, all in this transaction.
             trackingService.preparePublishedGenerationForUpdate(
                     project,
@@ -110,12 +128,13 @@ public class BranchIndexBuildAdmissionService {
                     activeSource.getChunkCount(),
                     activeSource.getActivatedAt());
         }
-        Job job = jobService.createRagIndexJob(
-                project,
-                projectStatus == ProjectStatusAdmission.INDEXING,
-                triggerSource,
-                branch,
-                revision);
+        Job job = queuedJob != null
+                ? requireQueuedJob(queuedJob, project, branch)
+                : jobService.createRepositoryIndexBuildJob(
+                        project,
+                        triggerSource,
+                        branch,
+                        revision);
         if (job == null || job.getId() == null) {
             throw new IllegalStateException(
                     "A durable branch-bound RAG job could not be created");
@@ -133,6 +152,21 @@ public class BranchIndexBuildAdmissionService {
                     project, branch, revision, job.getId());
         }
         return new AdmittedBuild(job, prepared, projectStatus);
+    }
+
+    private static Job requireQueuedJob(
+            Job job,
+            Project project,
+            String branch) {
+        if (job.getId() == null
+                || job.getJobType() != JobType.REPOSITORY_INDEX_BUILD
+                || job.getProject() == null
+                || !project.getId().equals(job.getProject().getId())
+                || !requireText(branch, "branch").equals(job.getBranchName())) {
+            throw new IllegalArgumentException(
+                    "Queued job does not own this project branch index build");
+        }
+        return job;
     }
 
     /**

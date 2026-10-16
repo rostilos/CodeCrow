@@ -87,7 +87,7 @@ class WebhookAsyncProcessorBranchGateTest {
                 org.mockito.ArgumentMatchers.contains("Superseded"));
         verify(handler, never()).handle(any(), any(), any());
         verify(jobService, never()).completeJob(any(Job.class));
-        verify(ragOperationsService).deletePrFiles(project, 41);
+        verifyNoInteractions(ragOperationsService);
     }
 
     @Test

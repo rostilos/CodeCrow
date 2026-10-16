@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.pipelineagent.generic.processor.command;
 
 import org.rostilos.codecrow.analysisengine.aiclient.AiCommandClient;
+import org.rostilos.codecrow.core.service.PrChangeSummaryService;
 import org.rostilos.codecrow.analysisengine.aiclient.AiCommandClient.SummarizeRequest;
 import org.rostilos.codecrow.analysisengine.aiclient.AiCommandClient.SummarizeResult;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
@@ -48,6 +49,7 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
     /** Cache TTL in hours */
     private static final int CACHE_TTL_HOURS = 24;
     
+    private final PrChangeSummaryService prChangeSummaryService;
     private final VcsServiceFactory vcsServiceFactory;
     private final PrSummarizeCacheRepository summarizeCacheRepository;
     private final AiCommandClient aiCommandClient;
@@ -58,8 +60,10 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
             VcsServiceFactory vcsServiceFactory,
             PrSummarizeCacheRepository summarizeCacheRepository,
             AiCommandClient aiCommandClient,
-            TokenEncryptionService tokenEncryptionService
+            TokenEncryptionService tokenEncryptionService,
+            PrChangeSummaryService prChangeSummaryService
     ) {
+        this.prChangeSummaryService = prChangeSummaryService;
         this.vcsServiceFactory = vcsServiceFactory;
         this.summarizeCacheRepository = summarizeCacheRepository;
         this.aiCommandClient = aiCommandClient;
@@ -303,7 +307,8 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
                 diagramType == PrSummarizeCache.DiagramType.MERMAID,
                 project.getEffectiveConfig().maxAnalysisTokenLimit(),
                 credentials.vcsProviderString(),
-                credentials.vcsBaseUrl()
+                credentials.vcsBaseUrl(),
+                prChangeSummaryService.find(project.getId(), Long.parseLong(payload.pullRequestId()), payload.commitHash(), null)
             );
             
         } catch (GeneralSecurityException e) {

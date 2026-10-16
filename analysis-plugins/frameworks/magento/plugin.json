@@ -38,7 +38,21 @@
         "contentMarkers": []
       },
       {
+        "filesAll": ["composer.json"],
+        "filesAny": [],
+        "pathPatternsAll": ["**/registration.php", "**/theme.xml"],
+        "pathPatternsAny": [],
+        "contentMarkers": []
+      },
+      {
         "filesAll": ["composer.json", "etc/module.xml", "registration.php"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": []
+      },
+      {
+        "filesAll": ["composer.json", "registration.php", "theme.xml"],
         "filesAny": [],
         "pathPatternsAll": [],
         "pathPatternsAny": [],

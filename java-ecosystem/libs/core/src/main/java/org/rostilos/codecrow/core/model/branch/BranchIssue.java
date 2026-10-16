@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.core.model.branch;
 
 import jakarta.persistence.*;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.DetectionSource;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
@@ -32,6 +33,10 @@ import java.time.OffsetDateTime;
 // not via @UniqueConstraint which cannot express partial indexes.
 public class BranchIssue implements ReconcilableIssue {
 
+    @Version
+    @Column(name = "row_version", nullable = false)
+    private long rowVersion;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(nullable = false, updatable = false)
@@ -55,6 +60,17 @@ public class BranchIssue implements ReconcilableIssue {
 
     @Column(name = "file_path", nullable = false, length = 500)
     private String filePath;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "anchor_side", nullable = false, length = 8)
+    private IssueAnchorSide anchorSide = IssueAnchorSide.HEAD;
+
+    public IssueAnchorSide getAnchorSide() {
+        return anchorSide == null ? IssueAnchorSide.HEAD : anchorSide;
+    }
+    public void setAnchorSide(IssueAnchorSide value) {
+        this.anchorSide = value == null ? IssueAnchorSide.HEAD : value;
+    }
 
     @Column(name = "line_number")
     private Integer lineNumber;
@@ -241,6 +257,7 @@ public class BranchIssue implements ReconcilableIssue {
         bi.setSeverity(cai.getSeverity());
         bi.setFilePath(cai.getFilePath());
         bi.setLineNumber(cai.getLineNumber());
+        bi.setAnchorSide(cai.getAnchorSide());
         bi.setReason(cai.getReason());
         bi.setTitle(cai.getTitle());
         bi.setSuggestedFixDescription(cai.getSuggestedFixDescription());

@@ -88,7 +88,12 @@ def _load_entrypoint(descriptor_path: Path, descriptor: PluginDescriptor) -> Cod
     else:
         raise ValueError(f"Python entrypoint module for {descriptor.id} is not packaged")
 
-    loaded_name = f"_codecrow_builtin_{descriptor.id}_{module_name.replace('.', '_')}"
+    # Relative imports must stay within this installation. Two catalogs may
+    # contain the same plugin ID/package name at different filesystem roots.
+    location = hashlib.sha256(str(descriptor_path.resolve()).encode("utf-8")).hexdigest()[:16]
+    loaded_name = (
+        f"_codecrow_builtin_{descriptor.id}_{module_name.replace('.', '_')}_{location}"
+    )
     spec = importlib.util.spec_from_file_location(
         loaded_name,
         source_path,

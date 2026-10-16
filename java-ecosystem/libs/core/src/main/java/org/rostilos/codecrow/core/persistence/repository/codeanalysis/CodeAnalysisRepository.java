@@ -15,6 +15,17 @@ import java.util.Optional;
 
 @Repository
 public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long> {
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT a FROM CodeAnalysis a WHERE a.id = :id AND a.project.id = :projectId")
+    Optional<CodeAnalysis> findForQaQueue(@Param("projectId") Long projectId, @Param("id") Long id);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE CodeAnalysis a SET a.qaDocumentationPending = false WHERE a.id = :id AND a.project.id = :projectId")
+    void consumeQaIntent(@Param("projectId") Long projectId, @Param("id") Long id);
+
+    @Query("SELECT a FROM CodeAnalysis a JOIN FETCH a.project WHERE a.qaDocumentationPending = true ORDER BY a.id")
+    java.util.List<CodeAnalysis> findPendingQaDocumentation(org.springframework.data.domain.Pageable page);
+
 
     List<CodeAnalysis> findByProjectIdOrderByCreatedAtDesc(Long projectId);
 
@@ -34,7 +45,12 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             "project.vcsBinding.vcsConnection",
             "project.aiBinding"
     })
-    Optional<CodeAnalysis> findByProjectIdAndCommitHashAndPrNumber(Long projectId, String commitHash, Long prNumber);
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = " +
+            "(SELECT candidate.id FROM CodeAnalysis candidate WHERE candidate.project.id = :projectId " +
+            "AND candidate.commitHash = :commitHash AND candidate.prNumber = :prNumber " +
+            "ORDER BY candidate.prVersion DESC, candidate.id DESC LIMIT 1)")
+    Optional<CodeAnalysis> findByProjectIdAndCommitHashAndPrNumber(
+            @Param("projectId") Long projectId, @Param("commitHash") String commitHash, @Param("prNumber") Long prNumber);
 
     Optional<CodeAnalysis> findByProjectIdAndCommitHash(Long projectId, String commitHash);
     
@@ -65,11 +81,33 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             "AND ca.highSeverityCount > 0 ORDER BY ca.createdAt DESC")
     List<CodeAnalysis> findByProjectIdWithHighSeverityIssues(@Param("projectId") Long projectId);
 
-    @Query("SELECT COUNT(ca) FROM CodeAnalysis ca WHERE ca.project.id = :projectId")
-    long countByProjectId(@Param("projectId") Long projectId);
+    @Query("SELECT COUNT(ca) FROM CodeAnalysis ca WHERE ca.project.id = :projectId " +
+            "AND ca.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL")
+    long countReportableByProjectId(@Param("projectId") Long projectId);
 
-    @Query("SELECT AVG(ca.totalIssues) FROM CodeAnalysis ca WHERE ca.project.id = :projectId")
-    Double getAverageIssuesPerAnalysis(@Param("projectId") Long projectId);
+    @Query("SELECT AVG(ca.totalIssues) FROM CodeAnalysis ca WHERE ca.project.id = :projectId " +
+            "AND ca.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL")
+    Double getAverageIssuesPerReportableAnalysis(@Param("projectId") Long projectId);
+
+    Optional<CodeAnalysis> findFirstByProjectIdAndStatusNotOrderByCreatedAtDescIdDesc(
+            Long projectId, AnalysisStatus excludedStatus);
+
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"issues"})
+    Optional<CodeAnalysis> findByIdAndProjectId(Long id, Long projectId);
+
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId " +
+            "AND (:branch IS NULL OR ca.branchName = :branch) " +
+            "AND (:prNumber IS NULL OR ca.prNumber = :prNumber) " +
+            "AND ((:status IS NOT NULL AND ca.status = :status) OR " +
+            "(:status IS NULL AND ca.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL)) " +
+            "ORDER BY ca.createdAt DESC, ca.id DESC")
+    Page<CodeAnalysis> findReportHistory(@Param("projectId") Long projectId,
+                                        @Param("branch") String branch,
+                                        @Param("prNumber") Long prNumber,
+                                        @Param("status") AnalysisStatus status,
+                                        Pageable pageable);
+
+    List<CodeAnalysis> findByProjectIdAndPrNumberOrderByPrVersionDescIdDesc(Long projectId, Long prNumber);
 
     @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
             "issues",
@@ -231,8 +269,10 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
      */
     @Query("SELECT a FROM CodeAnalysis a WHERE a.project.id = :projectId " +
             "AND a.prNumber IS NOT NULL " +
+            "AND a.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL " +
             "AND a.prVersion = (SELECT MAX(b.prVersion) FROM CodeAnalysis b " +
-            "WHERE b.project.id = :projectId AND b.prNumber = a.prNumber)")
+            "WHERE b.project.id = :projectId AND b.prNumber = a.prNumber " +
+            "AND b.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL)")
     List<CodeAnalysis> findLatestAnalysisPerPrNumber(@Param("projectId") Long projectId);
 
     /**
@@ -240,8 +280,10 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
      */
     @Query("SELECT a FROM CodeAnalysis a WHERE a.project.id = :projectId " +
             "AND a.prNumber IN :prNumbers " +
+            "AND a.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL " +
             "AND a.prVersion = (SELECT MAX(b.prVersion) FROM CodeAnalysis b " +
-            "WHERE b.project.id = :projectId AND b.prNumber = a.prNumber)")
+            "WHERE b.project.id = :projectId AND b.prNumber = a.prNumber " +
+            "AND b.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL)")
     List<CodeAnalysis> findLatestAnalysisForPrNumbers(
             @Param("projectId") Long projectId,
             @Param("prNumbers") List<Long> prNumbers);
@@ -264,7 +306,8 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
      */
     @Query("SELECT a FROM CodeAnalysis a WHERE a.project.id = :projectId " +
             "AND a.id IN (SELECT MAX(b.id) FROM CodeAnalysis b " +
-            "WHERE b.project.id = :projectId GROUP BY b.branchName)")
+            "WHERE b.project.id = :projectId " +
+            "AND b.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL GROUP BY b.branchName)")
     List<CodeAnalysis> findLatestAnalysisPerBranch(@Param("projectId") Long projectId);
 
     /**
