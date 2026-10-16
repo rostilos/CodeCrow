@@ -1361,6 +1361,29 @@ class TestChunkFiles:
 # ── Stage 1 prepared context ────────────────────────────────────
 
 class TestStage1PreparedContext:
+    @pytest.mark.parametrize("nested_first", [False, True])
+    def test_exact_paths_survive_colliding_suffixes(self, nested_first):
+        from service.review.orchestrator.stage_1_local_packing import _lookup_by_path
+
+        paths = ["docs/architecture.md", "apps/demo/docs/architecture.md"]
+        if nested_first:
+            paths.reverse()
+        files = [DiffFile(path=path, change_type=DiffChangeType.MODIFIED,
+                          content=f"diff for {path}") for path in paths]
+        contents = [SimpleNamespace(path=path, content=f"source for {path}", skipped=False)
+                    for path in paths]
+        metadata = [SimpleNamespace(path=path) for path in paths]
+        request = MagicMock(deltaDiff=None, taskContext=None,
+            enrichmentData=SimpleNamespace(fileContents=contents, fileMetadata=metadata))
+        context = _build_stage_1_prepared_context(
+            request, ProcessedDiff(files=files), is_incremental=False)
+
+        for file, content, meta in zip(files, contents, metadata):
+            assert _find_diff_file_for_path(context, file.path) is file
+            assert _lookup_by_path(context.file_content_by_path, file.path) == content.content
+            assert _lookup_by_path(context.enrichment_metadata_by_path, file.path) is meta
+        assert _lookup_by_path(context.file_content_by_path, "architecture.md") is None
+
     def test_diff_lookup_uses_suffix_index(self):
         request = MagicMock(deltaDiff=None, taskContext=None, enrichmentData=None)
         processed = ProcessedDiff(files=[

@@ -251,6 +251,9 @@ def _path_lookup_keys(path: Optional[str]) -> List[str]:
 
 
 def _add_path_lookup(mapping: Dict[str, Optional[Any]], path: Optional[str], value: Any) -> None:
+    if path:
+        # Suffix aliases must not erase an exact repository-relative identity.
+        mapping["/" + path.lstrip("/")] = value
     for key in _path_lookup_keys(path):
         existing = mapping.get(key)
         if existing is None and key in mapping:
@@ -263,6 +266,9 @@ def _add_path_lookup(mapping: Dict[str, Optional[Any]], path: Optional[str], val
 
 def _lookup_by_path(mapping: Dict[str, Optional[Any]], path: Optional[str]) -> Optional[Any]:
     for key in _path_lookup_keys(path):
+        exact_key = "/" + key
+        if exact_key in mapping:
+            return mapping[exact_key]
         if key in mapping and mapping[key] is not None:
             return mapping[key]
     return None

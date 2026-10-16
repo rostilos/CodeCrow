@@ -89,6 +89,19 @@ class CommentCommandWebhookHandlerQaDocTest {
                 .thenReturn(new AuthorizationResult(true, "Authorized"));
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(EVcsProvider.class)
+    void recoveryCannotBypassConfiguredAuthorizationWhenProviderActorIdIsMissing(EVcsProvider provider) {
+        var actor=new WebhookPayload.CommentData("comment","/codecrow qa-doc",null,"unapproved-user",null,false,null,null);
+        var payload=new WebhookPayload(provider,"issue_comment","repo-id","repo","workspace","42",
+                "feature/PROJ-123","main","abc123",null,actor);
+        when(authorizationService.checkAuthorization(eq(project),eq(payload),any(),any()))
+                .thenReturn(AuthorizationResult.denied("Not authorized"));
+        lenient().when(qaDocProcessor.process(any(),any(),any(),anyMap())).thenReturn(WebhookResult.success("should not run"));
+        assertThat(handler.handle(payload,project,eventConsumer).success()).isFalse();
+        verifyNoInteractions(qaDocProcessor);
+    }
+
     private WebhookPayload createQaDocPayload(String commandBody) {
         WebhookPayload.CommentData comment = new WebhookPayload.CommentData(
                 "comment-1", commandBody, "user-1", "johndoe",

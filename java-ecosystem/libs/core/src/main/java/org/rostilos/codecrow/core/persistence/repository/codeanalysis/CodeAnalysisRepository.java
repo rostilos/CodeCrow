@@ -15,6 +15,17 @@ import java.util.Optional;
 
 @Repository
 public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long> {
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT a FROM CodeAnalysis a WHERE a.id = :id AND a.project.id = :projectId")
+    Optional<CodeAnalysis> findForQaQueue(@Param("projectId") Long projectId, @Param("id") Long id);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE CodeAnalysis a SET a.qaDocumentationPending = false WHERE a.id = :id AND a.project.id = :projectId")
+    void consumeQaIntent(@Param("projectId") Long projectId, @Param("id") Long id);
+
+    @Query("SELECT a FROM CodeAnalysis a JOIN FETCH a.project WHERE a.qaDocumentationPending = true ORDER BY a.id")
+    java.util.List<CodeAnalysis> findPendingQaDocumentation(org.springframework.data.domain.Pageable page);
+
 
     List<CodeAnalysis> findByProjectIdOrderByCreatedAtDesc(Long projectId);
 
@@ -34,7 +45,12 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             "project.vcsBinding.vcsConnection",
             "project.aiBinding"
     })
-    Optional<CodeAnalysis> findByProjectIdAndCommitHashAndPrNumber(Long projectId, String commitHash, Long prNumber);
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = " +
+            "(SELECT candidate.id FROM CodeAnalysis candidate WHERE candidate.project.id = :projectId " +
+            "AND candidate.commitHash = :commitHash AND candidate.prNumber = :prNumber " +
+            "ORDER BY candidate.prVersion DESC, candidate.id DESC LIMIT 1)")
+    Optional<CodeAnalysis> findByProjectIdAndCommitHashAndPrNumber(
+            @Param("projectId") Long projectId, @Param("commitHash") String commitHash, @Param("prNumber") Long prNumber);
 
     Optional<CodeAnalysis> findByProjectIdAndCommitHash(Long projectId, String commitHash);
     

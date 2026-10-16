@@ -24,7 +24,8 @@ class MCPConfigBuilder:
         """Return nonsecret JVM args and request-scoped child credentials."""
         # Request-lived I/O workers must not all warm up optimizing JIT/GC pools.
         jvm_args: list[str] = ["-XX:TieredStopAtLevel=1", "-XX:+UseSerialGC", "-Xms16m"]
-        server_env: Dict[str, str] = {}
+        # The MCP SDK drops ambient locale variables; Java then rejects Unicode paths.
+        server_env: Dict[str, str] = {"LC_ALL": "C.UTF-8"}
 
         for key, value in (jvm_props or {}).items():
             text_value = str(value)

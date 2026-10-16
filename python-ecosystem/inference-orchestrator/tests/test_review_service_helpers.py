@@ -468,6 +468,38 @@ async def test_local_only_preflight_proves_request_bound_proposed_source(
 
 
 @pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("non_text_diff", [
+    "diff --git a/.DS_Store b/.DS_Store\nindex abc..def 100644\nGIT binary patch\nliteral 1\nAabc\n",
+    "diff --git a/.DS_Store b/.DS_Store\nBinary files a/.DS_Store and b/.DS_Store differ\n",
+    "diff --git a/vendor b/vendor\nindex 1234567..7654321 160000\n@@ -1 +1 @@\n-Subproject commit 1234567\n+Subproject commit 7654321\n",
+])
+async def test_local_only_preflight_skips_binary_and_gitlink_source_reads(
+    service, tmp_path, non_text_diff,
+):
+    non_text_path = non_text_diff.splitlines()[0].split(" b/", 1)[1]
+    request = _local_only_request(tmp_path, changedFiles=[non_text_path, "src/a.py"],
+                                 rawDiff=non_text_diff)
+    vcs = MagicMock()
+    vcs.call_tool = AsyncMock(return_value=SimpleNamespace(structuredContent={
+        "filePath": "src/a.py", "source": "review-overlay", "exists": True,
+    }))
+    client = MagicMock()
+    client.get_all_active_sessions.return_value = {"codecrow-vcs-mcp": vcs}
+
+    receipt = await service._preflight_local_only_mcp(client, request)
+
+    assert receipt["focusPath"] == "src/a.py"
+    assert vcs.call_tool.await_args.args[1]["filePath"] == "src/a.py"
+
+    request.changedFiles = [non_text_path]
+    vcs.call_tool.reset_mock()
+    receipt = await service._preflight_local_only_mcp(client, request)
+    assert receipt["status"] == "not_applicable"
+    assert receipt["reason"] == "Changed paths are binary files or gitlinks"
+    vcs.call_tool.assert_not_awaited()
+
+
+@pytest.mark.asyncio(loop_scope="function")
 async def test_local_only_preflight_does_not_call_optional_structural_session(
     service,
     tmp_path,

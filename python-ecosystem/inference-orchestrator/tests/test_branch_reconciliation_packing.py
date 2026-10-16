@@ -69,7 +69,7 @@ async def test_complete_rendered_prompt_uses_one_call_when_it_fits():
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_huge_unicode_source_and_diff_are_invocation_bounded(
+async def test_huge_unicode_source_and_diff_are_lossless_with_bounded_packets(
     monkeypatch,
 ):
     token_target = 2_500
@@ -111,7 +111,7 @@ async def test_huge_unicode_source_and_diff_are_invocation_bounded(
         direct_executor=execute,
     )
 
-    assert len(prompts) == packing.BRANCH_RECONCILIATION_MAX_SHARDS
+    assert len(prompts) > 4
     assert all(
         packing.estimated_branch_reconciliation_tokens(prompt)
         <= token_target
@@ -153,10 +153,8 @@ async def test_huge_unicode_source_and_diff_are_invocation_bounded(
 
     admitted_source = "".join(text for _, text in sorted(source_segments))
     admitted_diff = "".join(text for _, text in sorted(diff_segments))
-    assert admitted_source
-    assert admitted_source in source
-    assert len(admitted_source) < len(source)
-    assert admitted_diff in raw_diff
+    assert admitted_source == source
+    assert admitted_diff == raw_diff
     assert result["issues"] == []
     issue_provenance = result["reconciliationPromptProvenance"]["issues"][
         "huge-1"
@@ -177,24 +175,19 @@ async def test_huge_unicode_source_and_diff_are_invocation_bounded(
         for shard in shard_provenance
     )
     assert issue_provenance["resolutionAccepted"] is False
-    assert issue_provenance["resolutionBlockedByPacking"] is True
+    assert issue_provenance["resolutionBlockedByPacking"] is False
     invocation_coverage = result["reconciliationPromptProvenance"][
         "invocationCoverage"
     ]
-    assert invocation_coverage == {
-        "coverage": "PARTIAL",
-        "reason": "branch reconciliation invocation ceiling",
-        "maxShards": packing.BRANCH_RECONCILIATION_MAX_SHARDS,
-        "sourceShardCount": 13,
-        "admittedShardCount": packing.BRANCH_RECONCILIATION_MAX_SHARDS,
-        "omittedShardCount": 9,
-        "omittedRecordCount": 40,
-        "omittedIssueCount": 1,
-    }
+    assert invocation_coverage["coverage"] == "COMPLETE"
+    assert invocation_coverage["sourceShardCount"] == len(prompts)
+    assert invocation_coverage["admittedShardCount"] == len(prompts)
+    assert invocation_coverage["omittedShardCount"] == 0
+    assert invocation_coverage["omittedRecordCount"] == 0
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_dependency_scoped_anchor_stays_unresolved_when_shards_are_omitted(
+async def test_dependency_scoped_anchor_checks_every_shard_before_resolution(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -230,21 +223,22 @@ async def test_dependency_scoped_anchor_stays_unresolved_when_shards_are_omitted
         direct_executor=execute,
     )
 
-    assert result["issues"] == []
+    assert [issue["issueId"] for issue in result["issues"]] == ["anchor-1"]
     provenance = result["reconciliationPromptProvenance"]["issues"][
         "anchor-1"
     ]
     assert len(provenance["requiredShardIds"]) > 1
     assert provenance["unanimousResolutionVote"] is True
-    assert provenance["resolutionBlockedByPacking"] is True
-    assert provenance["resolutionAccepted"] is False
+    assert provenance["resolutionBlockedByPacking"] is False
+    assert provenance["resolutionAccepted"] is True
     invocation_coverage = result["reconciliationPromptProvenance"][
         "invocationCoverage"
     ]
-    assert invocation_coverage["coverage"] == "PARTIAL"
-    assert invocation_coverage["admittedShardCount"] == 4
-    assert invocation_coverage["omittedShardCount"] == 12
-    assert invocation_coverage["omittedIssueCount"] == 1
+    assert invocation_coverage["coverage"] == "COMPLETE"
+    assert invocation_coverage["admittedShardCount"] > 4
+    assert invocation_coverage["admittedShardCount"] == invocation_coverage["sourceShardCount"]
+    assert invocation_coverage["omittedShardCount"] == 0
+    assert invocation_coverage["omittedIssueCount"] == 0
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -329,6 +323,7 @@ async def test_indivisible_diff_hunk_is_not_sent_or_sliced(monkeypatch):
         direct_executor=execute,
     )
 
+    assert result["reconciliationStatus"] == "degraded"
     assert all(atomic_marker not in prompt for prompt in prompts)
     assert all(
         packing.estimated_branch_reconciliation_tokens(prompt) <= 2_500
@@ -373,5 +368,28 @@ def test_legacy_mcp_reconciliation_stops_fail_open():
     )
     assert result["issues"] == []
     provenance = result["reconciliationPromptProvenance"]
+    assert result["reconciliationStatus"] == "degraded"
     assert provenance["legacyMcpStoppedFailOpen"] is True
     assert provenance["issuesRetainedUnresolved"] == 7
+
+
+@pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("side,related,accepted", [("BASE", True, True), ("HEAD", True, False), ("BASE", False, False)])
+async def test_deleted_base_finding_uses_surviving_related_source_authority(side, related, accepted):
+    issue = {
+        "id": "removed-guard", "file": "src/deleted_guard.py", "anchorSide": side,
+        "reason": "The removed guard leaves src/caller.py unprotected." if related else "The old guard was removed.",
+        "codeSnippet": "authorize(user)",
+    }
+    executor = AsyncMock(return_value={"issues": [{
+        "id": "removed-guard", "isResolved": True,
+        "resolutionReason": "src/caller.py now checks authorization before the operation.",
+    }]})
+    result = await packing.execute_packed_branch_reconciliation(
+        llm=object(), request=_request(200_000), pr_metadata=_metadata(issue),
+        file_contents={"src/caller.py": "authorize(user)\nperform_operation()\n"},
+        raw_diff="diff --git a/src/caller.py b/src/caller.py\n--- a/src/caller.py\n+++ b/src/caller.py\n@@ -1 +1,2 @@\n+authorize(user)\n perform_operation()\n",
+        direct_executor=executor,
+    )
+    assert bool(result["issues"]) is accepted
+    assert result["reconciliationPromptProvenance"]["issues"]["removed-guard"]["resolutionAccepted"] is accepted

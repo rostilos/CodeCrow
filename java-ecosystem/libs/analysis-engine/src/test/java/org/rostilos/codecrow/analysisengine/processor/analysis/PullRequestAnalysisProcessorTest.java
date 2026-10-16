@@ -9,6 +9,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
@@ -150,7 +151,6 @@ class PullRequestAnalysisProcessorTest {
                                 pullRequestService,
                                 codeAnalysisService,
                                 taskImplementationEvidenceService,
-                                mock(org.rostilos.codecrow.core.service.PrChangeSummaryService.class),
                                 aiAnalysisClient,
                                 vcsServiceFactory,
                                 analysisLockService,
@@ -246,6 +246,30 @@ class PullRequestAnalysisProcessorTest {
                                         any(), any(), anyLong(), anyString(), anyString(), anyString(),
                                         any(), any(), any(), any(), any(), any())).thenReturn(codeAnalysis);
                         when(codeAnalysis.getId()).thenReturn(100L);
+                }
+
+                @Test
+                void persistsHostReviewSourcesAndPublishesTheExactAnalysisId() throws Exception {
+                        var response = Map.<String, Object>of("comment", "review", "issues", List.of());
+                        stubReviewThroughAi(response);
+                        stubPersistedUsageResult();
+                        when(project.getWorkspace()).thenReturn(mock(Workspace.class));
+                        when(aiAnalysisRequest.getRawDiff()).thenReturn("original full PR diff");
+                        when(aiAnalysisRequest.getBaseCommitHash()).thenReturn("review-base");
+                        when(aiAnalysisRequest.getTargetHeadCommitHash()).thenReturn("review-target");
+                        processor.process(createRequest(), ignored -> {}, project);
+                        ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
+                        verify(codeAnalysisService).createAnalysisFromAiResponse(any(), payload.capture(), anyLong(), anyString(),
+                                anyString(), anyString(), any(), any(), any(), any(), any(), any());
+                        var summary = (Map<?, ?>) payload.getValue().get("prChangeSummary");
+                        assertThat(summary).isNotNull();
+                        var source = (Map<?, ?>) ((Map<?, ?>) summary.get("toolContext")).get("reviewSource");
+                        assertThat(source.get("rawDiff")).isEqualTo("original full PR diff");
+                        assertThat(source.get("baseRevision")).isEqualTo("review-base");
+                        assertThat(source.get("targetRevision")).isEqualTo("review-target");
+                        verify(eventPublisher).publishEvent(argThat(event -> event instanceof org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent completed
+                                && Long.valueOf(100).equals(completed.getMetrics().get("analysisId"))));
+                        assertThat(response).doesNotContainKey("prChangeSummary");
                 }
 
                 @ParameterizedTest
@@ -494,7 +518,7 @@ class PullRequestAnalysisProcessorTest {
                         verify(reportingService).postAnalysisResults(any(), any(), anyLong(), any(), any());
                         verify(codeAnalysisService).createAnalysisFromAiResponse(
                                         eq(project),
-                                        eq(aiResponse),
+                                        argThat(saved -> saved.entrySet().containsAll(aiResponse.entrySet())),
                                         eq(42L),
                                         eq("main"),
                                         eq("feature-branch"),
@@ -688,7 +712,7 @@ class PullRequestAnalysisProcessorTest {
                         assertThat(result).containsEntry("status", "error");
                         verify(lockLease, times(4)).confirmOwnership();
                         verify(codeAnalysisService).createAnalysisFromAiResponse(
-                                        any(), eq(aiResponse), anyLong(), anyString(), anyString(), anyString(),
+                                        any(), argThat(saved -> saved.entrySet().containsAll(aiResponse.entrySet())), anyLong(), anyString(), anyString(), anyString(),
                                         any(), any(), any(), any(), any(), any());
                         verify(reportingService, never()).postAnalysisResults(
                                         any(), any(), anyLong(), any(), any());
@@ -1712,7 +1736,6 @@ class PullRequestAnalysisProcessorTest {
                                         pullRequestService,
                                         codeAnalysisService,
                                         taskImplementationEvidenceService,
-                                mock(org.rostilos.codecrow.core.service.PrChangeSummaryService.class),
                                         aiAnalysisClient,
                                         vcsServiceFactory,
                                         analysisLockService,

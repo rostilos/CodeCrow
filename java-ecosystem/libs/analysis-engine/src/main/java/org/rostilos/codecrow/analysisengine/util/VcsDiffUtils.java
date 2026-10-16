@@ -100,6 +100,23 @@ public final class VcsDiffUtils {
         return (double) deltaDiffLength / fullDiffLength > INCREMENTAL_ESCALATION_THRESHOLD;
     }
 
+    /** Optional QA fallback for older reviews without a persisted source receipt. */
+    public static String fetchPullRequestDiffAtRevision(org.rostilos.codecrow.vcsclient.VcsClient client,
+                                                        String workspace, String repo, long pr, String head) {
+        try {
+            var metadata = client.getPullRequest(workspace, repo, pr);
+            if (metadata == null || head == null || !head.equals(metadata.headCommit())
+                    || metadata.baseCommit() == null || metadata.baseCommit().isBlank()) {
+                log.warn("QA source fallback cannot bind PR #{} to {}; continuing with available saved context", pr, head);
+                return null;
+            }
+            return client.getCommitRangeDiff(workspace, repo, metadata.baseCommit(), head);
+        } catch (Exception unavailable) {
+            log.warn("QA pinned PR diff unavailable for #{} at {}: {}", pr, head, unavailable.getMessage());
+            return null;
+        }
+    }
+
     private static String truncateHash(String hash) {
         return (hash != null && hash.length() > 7)
                 ? hash.substring(0, 7)

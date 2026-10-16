@@ -37,6 +37,7 @@ from service.review.evidence_scopes import (
     select_review_evidence_diff,
 )
 from utils.hunk_coverage import validate_acquired_diff_manifest
+from utils.diff_processor import DiffProcessor
 from utils.error_sanitizer import create_user_friendly_error, create_error_response
 from service.review.orchestrator import MultiStageReviewOrchestrator
 from service.review.snapshot_identity import (
@@ -522,6 +523,9 @@ class ReviewService:
                                 "message": (
                                     "Local proposed-source MCP passed its "
                                     "request-binding preflight"
+                                    if preflight["status"] == "ready" else
+                                    "Local source-read probe is not applicable "
+                                    "to binary/gitlink-only changes"
                                 ),
                                 "localMcpPreflight": preflight,
                             })
@@ -848,6 +852,22 @@ class ReviewService:
             raise RuntimeError(
                 "Local-only MCP preflight requires at least one changed path"
             )
+        # Git's non-text entries cannot be decoded as a source-read probe.
+        non_text_paths = {
+            file.path
+            for file in DiffProcessor().process(
+                select_review_evidence_diff(request) or ""
+            ).files
+            if file.is_binary or file.is_gitlink or "GIT binary patch" in file.content.splitlines()
+        }
+        focus_paths = [path for path in focus_paths if path not in non_text_paths]
+        if not focus_paths:
+            logger.info("Local-only source-read probe skipped: binary/gitlink-only changes")
+            return {
+                "status": "not_applicable",
+                "reason": "Changed paths are binary files or gitlinks",
+                "baseRevision": request.localRepoRevision,
+            }
         focus_path = focus_paths[0]
 
         source_result = await vcs_session.call_tool(

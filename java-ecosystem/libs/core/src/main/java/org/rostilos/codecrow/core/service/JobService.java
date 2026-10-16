@@ -363,6 +363,29 @@ public class JobService {
 
     // ==================== Job Lifecycle ====================
 
+    @Transactional
+    public boolean claimQaJobForExecution(Job receipt) {
+        Job job = jobRepository.findByIdForUpdate(receipt.getId()).orElse(null);
+        if (job == null || job.getJobType() != JobType.QA_DOC_COMMAND
+                || (job.getStatus() != JobStatus.PENDING && job.getStatus() != JobStatus.QUEUED)) return false;
+        job.start();
+        // PostgreSQL stores microseconds; the receipt must compare exactly after a reload.
+        job.setStartedAt(OffsetDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+        jobRepository.save(job);
+        addLog(job, JobLogLevel.INFO, "qa_attempt", "QA worker claimed persisted work");
+        receipt.setStartedAt(job.getStartedAt()); receipt.setStatus(JobStatus.RUNNING);
+        return true;
+    }
+
+    private boolean ownsQaExecution(Job receipt, Job current) {
+        if (current == null) return false;
+        if (receipt.getStartedAt() == null) {
+            return current.getStatus() == JobStatus.PENDING || current.getStatus() == JobStatus.QUEUED;
+        }
+        return current.getStatus() == JobStatus.RUNNING && current.getStartedAt() != null
+                && receipt.getStartedAt().toInstant().equals(current.getStartedAt().toInstant());
+    }
+
     /**
      * Start a job (transition from PENDING to RUNNING).
      */
@@ -390,6 +413,12 @@ public class JobService {
      */
     @Transactional
     public Job completeJob(Job job) {
+        if (job != null && job.getJobType() == JobType.QA_DOC_COMMAND) {
+            Job current = jobRepository.findByIdForUpdate(job.getId()).orElse(null);
+            if (!ownsQaExecution(job, current)) return current == null ? job : current;
+            job = current;
+        }
+
         // Re-fetch the job in case it was passed from a different transaction context
         job = jobRepository.findById(job.getId()).orElse(job);
         job.complete();
@@ -468,6 +497,12 @@ public class JobService {
      */
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public Job failJob(Job job, String errorMessage) {
+        if (job != null && job.getJobType() == JobType.QA_DOC_COMMAND) {
+            Job current = jobRepository.findByIdForUpdate(job.getId()).orElse(null);
+            if (!ownsQaExecution(job, current)) return current == null ? job : current;
+            job = current;
+        }
+
         log.info("failJob called for job {} (id={}), error: {}", 
                 job != null ? job.getExternalId() : "null", 
                 job != null ? job.getId() : "null", 
@@ -512,6 +547,12 @@ public class JobService {
      */
     @Transactional
     public Job skipJob(Job job, String reason) {
+        if (job != null && job.getJobType() == JobType.QA_DOC_COMMAND) {
+            Job current = jobRepository.findByIdForUpdate(job.getId()).orElse(null);
+            if (!ownsQaExecution(job, current)) return current == null ? job : current;
+            job = current;
+        }
+
         // Re-fetch the job in case it was passed from a different transaction context
         job = jobRepository.findById(job.getId()).orElse(job);
         job.skip(reason);

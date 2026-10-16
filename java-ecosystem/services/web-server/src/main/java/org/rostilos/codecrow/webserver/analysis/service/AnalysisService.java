@@ -167,6 +167,10 @@ public class AnalysisService {
         java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
         
         issue.setResolved(isResolved);
+        if (actor == null || "manual".equals(actor)) {
+            issue.setManualStatusResolved(isResolved);
+            issue.setManualStatusUpdatedAt(now);
+        }
 
         if (isResolved) {
             // Populate resolution fields when marking as resolved

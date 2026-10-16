@@ -52,7 +52,8 @@ public record QaDocGenerationContext(
         /** Target branch of the PR. May be null. */
         String targetBranch,
         String sourceRevision,
-        Map<String, Object> prChangeSummary
+        Map<String, Object> prChangeSummary,
+        Map<String, Object> reviewSource
 ) {
     /**
      * Builder for constructing a context step-by-step as data becomes available.
@@ -78,6 +79,7 @@ public record QaDocGenerationContext(
         private String targetBranch;
         private String sourceRevision;
         private Map<String, Object> prChangeSummary;
+        private Map<String, Object> reviewSource;
 
         private Builder() {}
 
@@ -97,6 +99,7 @@ public record QaDocGenerationContext(
         public Builder targetBranch(String v) { this.targetBranch = v; return this; }
 
         public Builder sourceRevision(String v) { this.sourceRevision = v; return this; }
+        public Builder reviewSource(Map<String, Object> v) { this.reviewSource = v; return this; }
         public Builder prChangeSummary(Map<String, Object> v) { this.prChangeSummary = v; return this; }
 
         public QaDocGenerationContext build() {
@@ -105,7 +108,7 @@ public record QaDocGenerationContext(
                     diff, deltaDiff,
                     enrichmentData, changedFilePaths,
                     previousDocumentation, isSamePrRerun,
-                    vcsProvider, workspaceSlug, repoSlug, sourceBranch, targetBranch, sourceRevision, prChangeSummary);
+                    vcsProvider, workspaceSlug, repoSlug, sourceBranch, targetBranch, sourceRevision, prChangeSummary, reviewSource);
         }
     }
 }

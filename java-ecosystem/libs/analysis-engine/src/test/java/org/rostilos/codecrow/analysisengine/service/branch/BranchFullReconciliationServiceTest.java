@@ -58,11 +58,27 @@ class BranchFullReconciliationServiceTest {
     @Mock private PullRequestStatusSyncService pullRequestStatusSyncService;
     @Mock private Project project;
     @Mock private VcsConnection vcsConnection;
+    @Mock private AnalysisLockService.LockLease lease;
 
     private BranchFullReconciliationService service;
 
     @BeforeEach
     void setUp() {
+        when(analysisLockService.withOwnedLocks(any(), any())).thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
+        when(branchRepository.findById(org.mockito.ArgumentMatchers.anyLong())).thenAnswer(inv -> branchRepository.findByProjectIdAndBranchName(1L, "main"));
+        when(branchIssueReconciliationService.reanalyzeCandidateIssues(any(), any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any()))
+                .thenAnswer(inv -> {
+                    ((Consumer<Runnable>) inv.getArgument(9)).accept(() -> {});
+                    return new BranchIssueReconciliationService.ReconciliationResult(true, null);
+                });
+        when(branchFileOperationsService.prepareBranchFiles(anySet(), any(), any(), any())).thenAnswer(inv -> {
+            BranchFileOperationsService.BranchFileSnapshot snapshot = inv.getArgument(3);
+            return new BranchFileOperationsService.PreparedBranchFiles(snapshot.presentFiles(), snapshot.contents());
+        });
+        when(branchIssueReconciliationService.findReconciliationPaths(any(), anySet()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
+        when(analysisLockService.maintainLockLease(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(lease);
+        when(lease.confirmOwnership()).thenReturn(true);
         service = new BranchFullReconciliationService(
                 projectService,
                 branchRepository,
@@ -73,6 +89,36 @@ class BranchFullReconciliationServiceTest {
                 branchIssueMappingService,
                 branchIssueReconciliationService,
                 pullRequestStatusSyncService);
+    }
+
+    @Test
+    void renewsAndClosesLeaseForFullReconciliation() throws IOException {
+        var branch = branch("main", "head", 10L);
+        when(projectService.getProjectWithConnections(1L)).thenReturn(project);
+        when(branchRepository.findByProjectIdAndBranchName(1L, "main")).thenReturn(Optional.of(branch));
+        when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), any(), any()))
+                .thenReturn(Optional.of("full-lock"));
+        when(pullRequestStatusSyncService.syncOpenPullRequestStates(any(), any()))
+                .thenReturn(PullRequestStatusSyncService.SyncResult.empty());
+        service.fullReconcile(1L, "main", ignored -> {});
+        verify(analysisLockService).maintainLockLease(eq("full-lock"), org.mockito.ArgumentMatchers.anyInt());
+        verify(lease, org.mockito.Mockito.atLeastOnce()).confirmOwnership();
+        verify(lease).close();
+        verify(analysisLockService).releaseLock("full-lock");
+    }
+
+    @Test
+    void lostLeaseStopsBeforeImportOrReconciliation() throws IOException {
+        var branch = branch("main", "head", 10L);
+        when(projectService.getProjectWithConnections(1L)).thenReturn(project);
+        when(branchRepository.findByProjectIdAndBranchName(1L, "main")).thenReturn(Optional.of(branch));
+        when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), any(), any()))
+                .thenReturn(Optional.of("full-lock"));
+        when(lease.confirmOwnership()).thenReturn(false);
+        assertThatThrownBy(() -> service.fullReconcile(1L, "main", ignored -> {})).isInstanceOf(IOException.class);
+        org.mockito.Mockito.verifyNoInteractions(pullRequestStatusSyncService, branchFileOperationsService,
+                branchIssueMappingService, branchIssueReconciliationService);
+        verify(lease).close();
     }
 
     @Nested
@@ -118,8 +164,8 @@ class BranchFullReconciliationServiceTest {
             Map<String, Object> result = service.fullReconcile(1L, "main", consumer);
 
             assertThat(result).containsEntry("status", "completed");
-            assertThat(result).containsEntry("totalIssues", 0);
-            assertThat(result).containsEntry("resolvedIssues", 0);
+            assertThat(result).containsEntry("totalIssues", 0L);
+            assertThat(result).containsEntry("resolvedIssues", 0L);
             assertThat(result).containsEntry("openPrsChecked", 0);
             verify(analysisLockService).releaseLock("lock-key");
         }
@@ -170,8 +216,7 @@ class BranchFullReconciliationServiceTest {
             when(branchAfter.getTotalIssues()).thenReturn(1);
 
             when(branchRepository.findByIdWithIssues(10L))
-                    .thenReturn(Optional.of(branchBefore))
-                    .thenReturn(Optional.of(branchAfter));
+                    .thenReturn(Optional.of(branchBefore), Optional.of(branchBefore), Optional.of(branchBefore), Optional.of(branchAfter));
             when(branchRepository.save(any(Branch.class))).thenAnswer(inv -> inv.getArgument(0));
 
             Map<String, Object> result = service.fullReconcile(1L, "main", consumer);
@@ -226,8 +271,7 @@ class BranchFullReconciliationServiceTest {
             when(branchAfter.getTotalIssues()).thenReturn(1);
 
             when(branchRepository.findByIdWithIssues(10L))
-                    .thenReturn(Optional.of(branchBefore))
-                    .thenReturn(Optional.of(branchAfter));
+                    .thenReturn(Optional.of(branchBefore), Optional.of(branchBefore), Optional.of(branchBefore), Optional.of(branchAfter));
             when(branchRepository.save(any(Branch.class))).thenAnswer(inv -> inv.getArgument(0));
 
             Map<String, String> archiveContents = Map.of(
@@ -252,7 +296,7 @@ class BranchFullReconciliationServiceTest {
             assertThat((String) result.get("message")).contains("1 newly resolved");
             verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
                     anySet(), anySet(), eq(existingBranch), eq(project), any(), eq(consumer),
-                    eq(archiveContents), isNull(), eq(false));
+                    eq(archiveContents), isNull(), eq(false), any());
             verify(analysisLockService).releaseLock("lock-key");
         }
     }

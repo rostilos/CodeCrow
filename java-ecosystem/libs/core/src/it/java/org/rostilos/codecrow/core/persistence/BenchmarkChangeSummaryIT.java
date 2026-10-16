@@ -8,7 +8,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
-import org.rostilos.codecrow.core.persistence.repository.codeanalysis.PrChangeSummaryRepository;
+import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.service.PrChangeSummaryService;
 import org.rostilos.codecrow.testsupport.annotation.IntegrationTest;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,12 +37,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 class BenchmarkChangeSummaryIT {
     @SpringBootConfiguration @EnableAutoConfiguration
     @EntityScan("org.rostilos.codecrow.core.model")
-    @EnableJpaRepositories(basePackageClasses = PrChangeSummaryRepository.class)
+    @EnableJpaRepositories(basePackageClasses = CodeAnalysisRepository.class)
     static class Config {}
 
     @Autowired EntityManager em;
     @Autowired PlatformTransactionManager transactions;
-    @Autowired PrChangeSummaryRepository repository;
+    @Autowired CodeAnalysisRepository repository;
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Test void committedApplicationRoundtripPreservesWholeGraphAndTenantIdentity() throws Exception {
@@ -96,23 +96,17 @@ class BenchmarkChangeSummaryIT {
                 var analysis = new CodeAnalysis();
                 analysis.setProject(project); analysis.setAnalysisType(AnalysisType.PR_REVIEW);
                 analysis.setPrNumber(pr); analysis.setCommitHash(revision);
+                service.attach(analysis, payload);
                 em.persist(analysis); em.flush();
                 return analysis.getId();
             });
-            // Separate committed transactions ensure this is not a first-level
-            // entity-cache check or a save that is later rolled back by the test.
-            var analysis = transaction.execute(status -> {
-                var value = em.find(CodeAnalysis.class, analysisId);
-                value.getProject().getId();
-                return value;
-            });
-            service.persist(analysis, payload);
-            var restored = service.find(projectId, pr, revision);
+            // Reload from a separate committed transaction, with the exact owning analysis.
+            var restored = service.find(projectId, pr, revision, analysisId);
             assertThat(restored).as(input.getKey()).isEqualTo(payload);
-            assertThat(service.find(projectId + 1_000_000, pr, revision)).isNull();
-            assertThat(service.find(projectId, pr + 1_000_000, revision)).isNull();
-            assertThat(service.find(projectId, pr, revision + "-different")).isNull();
-            String stored = repository.findById(analysisId).orElseThrow().getPayload();
+            assertThat(service.find(projectId + 1_000_000, pr, revision, analysisId)).isNull();
+            assertThat(service.find(projectId, pr + 1_000_000, revision, analysisId)).isNull();
+            assertThat(service.find(projectId, pr, revision + "-different", analysisId)).isNull();
+            String stored = repository.findById(analysisId).orElseThrow().getPrChangeSummaryPayload();
             assertThat(mapper.readTree(stored)).isEqualTo(mapper.valueToTree(payload));
             var receipt = new LinkedHashMap<String, Object>();
             receipt.put("input", input.getKey()); receipt.put("projectId", projectId);
@@ -128,32 +122,5 @@ class BenchmarkChangeSummaryIT {
             }
         }
         assertThat(receipts).hasSize(inputs.size());
-        var first = receipts.get(0);
-        Long analysisId = (Long) first.get("analysisId");
-        Long projectId = (Long) first.get("projectId");
-        Long pr = (Long) first.get("pr");
-        String revision = (String) first.get("revision");
-        var payload = inputs.values().iterator().next();
-        var analysis = transaction.execute(status -> em.find(CodeAnalysis.class, analysisId));
-        transaction.executeWithoutResult(status -> em.createNativeQuery(
-                "ALTER TABLE pr_change_summary RENAME TO pr_change_summary_unavailable_for_test").executeUpdate());
-        try {
-            service.persist(analysis, payload);
-            assertThat(service.find(projectId, pr, revision)).isNull();
-            var retainedAnalysis = transaction.execute(status -> em.find(CodeAnalysis.class, analysisId));
-            assertThat(retainedAnalysis).isNotNull();
-        } finally {
-            transaction.executeWithoutResult(status -> em.createNativeQuery(
-                    "ALTER TABLE pr_change_summary_unavailable_for_test RENAME TO pr_change_summary").executeUpdate());
-        }
-        assertThat(service.find(projectId, pr, revision)).isEqualTo(payload);
-        String output = System.getenv("CODECROW_BENCHMARK_PERSISTENCE_EVIDENCE");
-        if (output != null && !output.isBlank()) {
-            mapper.writerWithDefaultPrettyPrinter().writeValue(
-                    Path.of(output).resolve("failure-semantics-receipt.json").toFile(),
-                    Map.of("input", first.get("input"), "analysisId", analysisId,
-                            "committedAnalysisSurvivesMissingSummaryTable", true,
-                            "missingTableLookupFallsBack", true, "restoredPayloadUnchanged", true));
-        }
     }
 }

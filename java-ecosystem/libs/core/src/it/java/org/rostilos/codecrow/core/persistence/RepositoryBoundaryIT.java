@@ -36,6 +36,42 @@ class RepositoryBoundaryIT {
     @Autowired JobRepository jobs;
     @Autowired VcsRepoBindingRepository bindings;
     @Autowired DataSource dataSource;
+    @Test void durableQaAndBranchMigrationsPreserveExistingRowsAndRecoveryDefaults() throws Exception {
+        String schema = "recovery_test_" + UUID.randomUUID().toString().replace("-", "");
+        try (var conn = dataSource.getConnection(); var sql = conn.createStatement()) {
+            sql.execute("CREATE SCHEMA " + schema);
+            try {
+                conn.setSchema(schema);
+                sql.execute("CREATE TABLE code_analysis (id bigint PRIMARY KEY); INSERT INTO code_analysis VALUES (1)");
+                sql.execute("CREATE TABLE job (id bigint PRIMARY KEY, job_type text, trigger_source text); INSERT INTO job VALUES (1,'QA_DOC_COMMAND','CHAINED')");
+                sql.execute("CREATE TABLE branch (id bigint PRIMARY KEY); INSERT INTO branch VALUES (1)");
+                sql.execute("CREATE TABLE branch_issue (id bigint PRIMARY KEY); INSERT INTO branch_issue VALUES (1)");
+                for (String migration : java.util.List.of("V2.40.0__durable_qa_jobs.sql", "V2.41.0__branch_reconciliation_state.sql")) {
+                    try (var source = getClass().getResourceAsStream("/db/migration/managed/" + migration)) {
+                        assertThat(source).isNotNull();
+                        sql.execute(new String(source.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+                    }
+                }
+                try (var rows = sql.executeQuery("SELECT qa_documentation_pending FROM code_analysis WHERE id=1")) {
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getBoolean(1)).isFalse();
+                }
+                try (var rows = sql.executeQuery("SELECT reconciliation_pending, reconciliation_attempts, row_version FROM branch WHERE id=1")) {
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getBoolean(1)).isFalse();
+                    assertThat(rows.getInt(2)).isZero(); assertThat(rows.getLong(3)).isZero();
+                }
+                try (var rows = sql.executeQuery("SELECT row_version FROM branch_issue WHERE id=1")) {
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getLong(1)).isZero();
+                }
+                sql.execute("UPDATE job SET input_analysis_id=1 WHERE id=1");
+                assertThatThrownBy(() -> sql.execute("INSERT INTO job VALUES (2,'QA_DOC_COMMAND','CHAINED',1)"))
+                        .isInstanceOf(java.sql.SQLException.class).hasMessageContaining("idx_job_qa_input");
+                sql.execute("DELETE FROM code_analysis WHERE id=1");
+                try (var rows = sql.executeQuery("SELECT input_analysis_id FROM job WHERE id=1")) {
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getObject(1)).isNull();
+                }
+            } finally { conn.setSchema("public"); sql.execute("DROP SCHEMA " + schema + " CASCADE"); }
+        }
+    }
     @Autowired CodeAnalysisIssueRepository issues;
 
     VcsRepoBinding binding(String repoId, String slug, String namespace, Workspace workspace) {
@@ -149,7 +185,7 @@ class RepositoryBoundaryIT {
     }
 
 
-    @Autowired org.rostilos.codecrow.core.persistence.repository.codeanalysis.PrChangeSummaryRepository changeSummaries;
+    @Autowired org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository changeSummaries;
 
     @Test @Transactional void changeSummarySurvivesReloadAndRequiresProjectPrAndRevision() {
         var owner = binding("summary-owner", "repo", "one", workspace()).getProject();
@@ -158,16 +194,16 @@ class RepositoryBoundaryIT {
         analysis.setAnalysisType(AnalysisType.PR_REVIEW); analysis.setPrNumber(9L);
         analysis.setCommitHash("abc123"); em.persist(analysis); em.flush();
         String payload = "{\"summary\":\"Added input guard\",\"files\":[{\"path\":\"a.py\"}]}";
-        changeSummaries.saveAndFlush(new PrChangeSummary(analysis, payload));
+        analysis.setPrChangeSummaryPayload(payload); changeSummaries.saveAndFlush(analysis);
         em.clear();
-        assertThat(changeSummaries.findFirstByProjectIdAndPrNumberAndSourceRevisionOrderByCreatedAtDesc(
-                owner.getId(), 9L, "abc123")).get().extracting(PrChangeSummary::getPayload).isEqualTo(payload);
-        assertThat(changeSummaries.findFirstByProjectIdAndPrNumberAndSourceRevisionOrderByCreatedAtDesc(
-                other.getId(), 9L, "abc123")).isEmpty();
-        assertThat(changeSummaries.findFirstByProjectIdAndPrNumberAndSourceRevisionOrderByCreatedAtDesc(
-                owner.getId(), 10L, "abc123")).isEmpty();
-        assertThat(changeSummaries.findFirstByProjectIdAndPrNumberAndSourceRevisionOrderByCreatedAtDesc(
-                owner.getId(), 9L, "new123")).isEmpty();
+        assertThat(changeSummaries.findByProjectIdAndCommitHashAndPrNumber(
+                owner.getId(), "abc123", 9L)).get().extracting(CodeAnalysis::getPrChangeSummaryPayload).isEqualTo(payload);
+        assertThat(changeSummaries.findByProjectIdAndCommitHashAndPrNumber(
+                other.getId(), "abc123", 9L)).isEmpty();
+        assertThat(changeSummaries.findByProjectIdAndCommitHashAndPrNumber(
+                owner.getId(), "abc123", 10L)).isEmpty();
+        assertThat(changeSummaries.findByProjectIdAndCommitHashAndPrNumber(
+                owner.getId(), "new123", 9L)).isEmpty();
     }
 
     @Test void changeSummaryMigrationStoresGraphAndCascadesDeletion() throws Exception {

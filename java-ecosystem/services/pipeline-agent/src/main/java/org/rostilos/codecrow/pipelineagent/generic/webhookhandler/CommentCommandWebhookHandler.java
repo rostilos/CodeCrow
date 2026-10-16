@@ -574,7 +574,7 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
         // TODO: Check if user is authorized
         // TODO: For now, we check if the comment author is a workspace member
         String authorId = payload.commentData().commentAuthorId();
-        if (authorId != null && !isAuthorizedUser(project, authorId, payload)) {
+        if (!isAuthorizedUser(project, authorId, payload)) {
             log.info("User {} not authorized for project {}", authorId, project.getId());
             return ValidationResult.invalid("You are not authorized to use CodeCrow commands on this repository");
         }

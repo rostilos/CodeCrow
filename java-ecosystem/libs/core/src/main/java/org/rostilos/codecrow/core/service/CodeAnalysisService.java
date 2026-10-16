@@ -11,6 +11,7 @@ import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
 import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator;
 import org.rostilos.codecrow.core.util.tracking.DiffSanitizer;
 import org.rostilos.codecrow.core.util.tracking.IssueFingerprint;
+import org.rostilos.codecrow.core.util.tracking.PrIssueHistory;
 import org.rostilos.codecrow.core.util.anchoring.SnippetAnchoringService;
 import org.rostilos.codecrow.core.util.tracking.LineHashSequence;
 import org.slf4j.Logger;
@@ -31,6 +32,7 @@ public class CodeAnalysisService {
     private final QualityGateRepository qualityGateRepository;
     private final QualityGateEvaluator qualityGateEvaluator;
     private final IssueDeduplicationService issueDeduplicationService;
+    private final PrChangeSummaryService prChangeSummaryService;
     private static final Logger log = LoggerFactory.getLogger(CodeAnalysisService.class);
 
     @Autowired
@@ -39,13 +41,15 @@ public class CodeAnalysisService {
             CodeAnalysisIssueRepository issueRepository,
             QualityGateRepository qualityGateRepository,
             QualityGateEvaluator qualityGateEvaluator,
-            IssueDeduplicationService issueDeduplicationService
+            IssueDeduplicationService issueDeduplicationService,
+            PrChangeSummaryService prChangeSummaryService
     ) {
         this.codeAnalysisRepository = codeAnalysisRepository;
         this.issueRepository = issueRepository;
         this.qualityGateRepository = qualityGateRepository;
         this.qualityGateEvaluator = qualityGateEvaluator;
         this.issueDeduplicationService = issueDeduplicationService;
+        this.prChangeSummaryService = prChangeSummaryService;
     }
 
     /**
@@ -126,11 +130,12 @@ public class CodeAnalysisService {
             String taskSummary
     ) {
         try {
-            // Check if analysis already exists for this commit (handles webhook retries)
+            // Retry reuse requires the full review identity, not only the source commit.
             Optional<CodeAnalysis> existingAnalysis = codeAnalysisRepository
                     .findByProjectIdAndCommitHashAndPrNumber(project.getId(), commitHash, pullRequestId);
 
-            if (existingAnalysis.isPresent()) {
+            if (existingAnalysis.isPresent() && diffFingerprint != null
+                    && diffFingerprint.equals(existingAnalysis.get().getDiffFingerprint())) {
                 log.info("Analysis already exists for project={}, commit={}, pr={}. Returning existing.",
                         project.getId(), commitHash, pullRequestId);
                 return existingAnalysis.get();
@@ -140,6 +145,7 @@ public class CodeAnalysisService {
             int previousVersion = codeAnalysisRepository.findMaxPrVersion(project.getId(), pullRequestId).orElse(0);
             analysis.setProject(project);
             analysis.setAnalysisType(AnalysisType.PR_REVIEW);
+            analysis.setQaDocumentationPending(project.getConfiguration() != null && project.getConfiguration().isQaAutoDocEnabled());
             analysis.setPrNumber(pullRequestId);
             analysis.setBranchName(targetBranchName);
             analysis.setSourceBranchName(sourceBranchName);
@@ -153,6 +159,15 @@ public class CodeAnalysisService {
         } catch (Exception e) {
             log.error("Error creating analysis from AI response: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to create analysis from AI response", e);
+        }
+    }
+
+    private void applyHistoricalManualDecisions(CodeAnalysis analysis) {
+        if (analysis.getAnalysisType() != AnalysisType.PR_REVIEW || analysis.getPrNumber() == null) return;
+        var decisions = PrIssueHistory.decisions(issueRepository.findByProjectIdAndPrNumber(
+                analysis.getProject().getId(), analysis.getPrNumber()));
+        for (var issue : analysis.getIssues()) {
+            PrIssueHistory.apply(issue, PrIssueHistory.decisionFor(issue, decisions));
         }
     }
 
@@ -244,6 +259,7 @@ public class CodeAnalysisService {
         try {
             analysis.setCommitHash(commitHash);
             analysis.setStatus(AnalysisStatus.ACCEPTED);
+            prChangeSummaryService.attach(analysis, analysisData.get("prChangeSummary"));
 
             // Extract comment from the analysis data
             String comment = (String) analysisData.get("comment");
@@ -347,22 +363,8 @@ public class CodeAnalysisService {
                     rawIssueCount, savedAnalysis.getIssues().size(),
                     deduped, linesCorrected, diffsRestored);
             
-            // Evaluate quality gate — wrapped defensively so a QG failure
-            // (e.g. detached entity, lazy-init) does not abort the entire analysis
-            try {
-                QualityGate qualityGate = getQualityGateForAnalysis(savedAnalysis);
-                if (qualityGate != null) {
-                    QualityGateResult qgResult = qualityGateEvaluator.evaluate(savedAnalysis, qualityGate);
-                    savedAnalysis.setAnalysisResult(qgResult.result());
-                    log.info("Quality gate '{}' evaluated with result: {}", qualityGate.getName(), qgResult.result());
-                } else {
-                    log.info("No quality gate found for analysis, skipping evaluation");
-                }
-            } catch (Exception qgEx) {
-                log.warn("Quality gate evaluation failed, analysis will be saved without QG result: {}", qgEx.getMessage());
-            }
-            
-            return codeAnalysisRepository.save(savedAnalysis);
+            applyHistoricalManualDecisions(savedAnalysis);
+            return saveAnalysis(savedAnalysis);
 
         } catch (Exception e) {
             log.error("Error creating analysis from AI response: {}", e.getMessage(), e);
@@ -476,10 +478,11 @@ public class CodeAnalysisService {
             String sourceBranchName,
             String diffFingerprint
     ) {
-        // Guard against duplicates (same idempotency check as createAnalysisFromAiResponse)
+        // A new model, rule set or target revision produces a distinct review at the same head.
         Optional<CodeAnalysis> existing = codeAnalysisRepository
                 .findByProjectIdAndCommitHashAndPrNumber(project.getId(), commitHash, newPrNumber);
-        if (existing.isPresent()) {
+        if (existing.isPresent() && diffFingerprint != null
+                && diffFingerprint.equals(existing.get().getDiffFingerprint())) {
             log.info("Cloned analysis already exists for project={}, commit={}, pr={}. Returning existing.",
                     project.getId(), commitHash, newPrNumber);
             return existing.get();
@@ -491,6 +494,7 @@ public class CodeAnalysisService {
         clone.setProject(project);
         clone.setAnalysisType(source.getAnalysisType());
         clone.setPrNumber(newPrNumber);
+        clone.setQaDocumentationPending(project.getConfiguration() != null && project.getConfiguration().isQaAutoDocEnabled());
         clone.setCommitHash(commitHash);
         clone.setDiffFingerprint(diffFingerprint);
         clone.setBranchName(targetBranchName);
@@ -502,6 +506,7 @@ public class CodeAnalysisService {
         clone.setAnalysisResult(source.getAnalysisResult());
         clone.setPrVersion(previousVersion + 1);
         clone.setClonedFromAnalysisId(source.getId());
+        prChangeSummaryService.copyForAnalysis(source, clone);
 
         // Save first to get an ID
         CodeAnalysis saved = codeAnalysisRepository.save(clone);
@@ -519,7 +524,20 @@ public class CodeAnalysisService {
             issueClone.setSuggestedFixDiff(srcIssue.getSuggestedFixDiff());
             issueClone.setIssueCategory(srcIssue.getIssueCategory());
             issueClone.setResolved(srcIssue.isResolved());
-            issueClone.setResolvedDescription(srcIssue.getResolvedDescription());
+            if (Objects.equals(source.getPrNumber(), newPrNumber)) {
+                issueClone.setManualStatusResolved(srcIssue.getManualStatusResolved());
+                issueClone.setManualStatusUpdatedAt(srcIssue.getManualStatusUpdatedAt());
+            } else if (Boolean.TRUE.equals(PrIssueHistory.manualStatus(srcIssue))) {
+                issueClone.setResolved(false);
+            }
+            if (issueClone.isResolved()) {
+                issueClone.setResolvedDescription(srcIssue.getResolvedDescription());
+                issueClone.setResolvedAt(srcIssue.getResolvedAt());
+                issueClone.setResolvedBy(srcIssue.getResolvedBy());
+                issueClone.setResolvedByPr(srcIssue.getResolvedByPr());
+                issueClone.setResolvedCommitHash(srcIssue.getResolvedCommitHash());
+                issueClone.setResolvedAnalysisId(srcIssue.getResolvedAnalysisId());
+            }
             issueClone.setVcsAuthorId(srcIssue.getVcsAuthorId());
             issueClone.setVcsAuthorUsername(srcIssue.getVcsAuthorUsername());
             issueClone.setIntroducingCommitHash(srcIssue.getIntroducingCommitHash());
@@ -538,13 +556,22 @@ public class CodeAnalysisService {
             saved.addIssue(issueClone);
         }
 
-        saved.updateIssueCounts();
-        CodeAnalysis result = codeAnalysisRepository.save(saved);
+        applyHistoricalManualDecisions(saved);
+        CodeAnalysis result = saveAnalysis(saved);
         log.info("Cloned analysis {} → {} for PR {} (fingerprint={}, {} issues)",
                 source.getId(), result.getId(), newPrNumber,
-                diffFingerprint != null ? diffFingerprint.substring(0, 8) + "..." : "null",
+                diffFingerprint != null ? diffFingerprint.substring(0, Math.min(8, diffFingerprint.length())) + "..." : "null",
                 result.getIssues().size());
         return result;
+    }
+
+    public Optional<CodeAnalysis> getAnalysisForReview(Long projectId, Long prNumber, String head, Long analysisId) {
+        if (projectId == null || prNumber == null || head == null || head.isBlank()) return Optional.empty();
+        var selected = analysisId == null
+                ? codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(projectId, head, prNumber)
+                : codeAnalysisRepository.findByIdAndProjectId(analysisId, projectId);
+        return selected.filter(analysis -> Objects.equals(prNumber, analysis.getPrNumber())
+                && head.equals(analysis.getCommitHash()));
     }
 
     public Optional<CodeAnalysis> getPreviousVersionCodeAnalysis(Long projectId, Long prNumber) {
@@ -609,8 +636,13 @@ public class CodeAnalysisService {
                     if (originalId != null) {
                         originalIssue = projectId == null ? null : issueRepository
                                 .findByIdAndAnalysis_Project_Id(originalId, projectId).orElse(null);
+                        if (originalIssue != null && (originalIssue.getAnalysis() == null
+                                || !java.util.Objects.equals(prNumber, originalIssue.getAnalysis().getPrNumber()))) {
+                            originalIssue = null;
+                        }
                         if (originalIssue != null) {
                             log.debug("Found original issue {} for reconciliation", originalId);
+                            issue.setTrackedFromIssueId(originalId);
                         }
                     }
                 } catch (NumberFormatException e) {
@@ -955,6 +987,15 @@ public class CodeAnalysisService {
 
     public CodeAnalysis saveAnalysis(CodeAnalysis analysis) {
         analysis.updateIssueCounts();
+        try {
+            QualityGate gate = getQualityGateForAnalysis(analysis);
+            if (gate != null) {
+                analysis.setAnalysisResult(qualityGateEvaluator.evaluate(analysis, gate).result());
+            }
+        } catch (Exception exception) {
+            log.warn("Quality gate refresh unavailable for analysis {}; counts remain current: {}",
+                    analysis.getId(), exception.getMessage());
+        }
         return codeAnalysisRepository.save(analysis);
     }
 

@@ -58,6 +58,7 @@ class TestBuildConfig:
             assert secret not in serialized_args
             assert secret not in public_identifier
         assert config["env"] == {
+            "LC_ALL": "C.UTF-8",
             "CODECROW_MCP_ACCESS_TOKEN": "review-token-sentinel",
             "CODECROW_MCP_OAUTH_CLIENT": "review-client-sentinel",
             "CODECROW_MCP_OAUTH_SECRET": "review-secret-sentinel",
@@ -107,6 +108,7 @@ class TestBuildConfig:
         assert "accessToken" not in loggable_args
         assert "internal.api.secret" not in loggable_args
         assert config["env"] == {
+            "LC_ALL": "C.UTF-8",
             "CODECROW_MCP_ACCESS_TOKEN": "platform-token-sentinel",
             "CODECROW_MCP_INTERNAL_API_SECRET": "internal-secret-sentinel",
         }
@@ -236,6 +238,7 @@ class TestBuildJvmProps:
         assert props["local.mcp.only"] == "true"
         assert "-Dlocal.mcp.only=true" in config["args"]
         assert config["env"] == {
+            "LC_ALL": "C.UTF-8",
             "CODECROW_MCP_ACCESS_TOKEN": "",
             "CODECROW_MCP_OAUTH_CLIENT": "",
             "CODECROW_MCP_OAUTH_SECRET": "",
@@ -257,3 +260,30 @@ class TestBuildJvmProps:
         )
         assert "project.id" not in result
         assert "workspace" not in result
+
+
+def test_java_child_can_read_unicode_repository_path_with_sdk_environment(tmp_path):
+    import shutil
+    import subprocess
+    from mcp.client.stdio import get_default_environment
+
+    java = shutil.which("java")
+    if java is None:
+        pytest.skip("Java runtime is needed for the real MCP filesystem regression")
+    (tmp_path / "søknad.py").write_text("unicode source π", encoding="utf-8")
+    source = tmp_path / "CheckRepositoryPath.java"
+    source.write_text(r'''import java.nio.file.*;
+import java.nio.charset.StandardCharsets;
+class CheckRepositoryPath {
+  public static void main(String[] args) throws Exception {
+    System.out.write(Files.readString(Path.of("s\u00f8knad.py"), StandardCharsets.UTF_8)
+      .getBytes(StandardCharsets.UTF_8));
+  }
+}
+''', encoding="ascii")
+    arguments, environment = MCPConfigBuilder.build_java_launch_options()
+    result = subprocess.run([java, *arguments, str(source)], cwd=tmp_path,
+        env={**get_default_environment(), **environment}, capture_output=True,
+        text=True, encoding="utf-8", timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "unicode source π"

@@ -326,7 +326,6 @@ class MultiStageReviewOrchestrator:
                 issue_count=len(all_issues),
             )
 
-        branch_profile = build_review_inference_profile(request, None)
         _emit_status(
             self.event_callback,
             "branch_reconciliation_packing",
@@ -340,9 +339,6 @@ class MultiStageReviewOrchestrator:
             raw_diff=raw_diff,
             event_callback=self.event_callback,
             direct_executor=execute_branch_reconciliation_direct,
-            max_shards=branch_profile.invocation_cap(
-                "branch_reconciliation_packets"
-            ),
         )
 
     @staticmethod

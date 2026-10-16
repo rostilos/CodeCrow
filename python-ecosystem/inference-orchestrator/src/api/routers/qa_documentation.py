@@ -23,6 +23,7 @@ router = APIRouter(tags=["qa-documentation"])
 class QaDocumentationRequest(BaseModel):
     """Request payload for QA documentation generation."""
     pr_change_summary: Optional[Dict[str, Any]] = None
+    tool_context: Optional[Dict[str, Any]] = None
     source_revision: Optional[str] = None
     project_workspace: Optional[str] = None
     project_namespace: Optional[str] = None
@@ -86,11 +87,19 @@ class QaDocumentationRequest(BaseModel):
         }
 
 
+class QaInputCoverage(BaseModel):
+    """Coverage of supplied inputs, not a claim of semantic or test completeness."""
+    status: Literal["complete", "partial", "unknown"]
+    source: Literal["saved_changes", "diff", "analysis_only"]
+    provided_file_count: int
+
+
 class QaDocumentationResponse(BaseModel):
     """Response containing the generated QA documentation."""
     documentation: Optional[str] = None
     documentation_needed: bool = True
-    template_mode_used: Literal["RAW", "BASE", "CUSTOM"] = "BASE"
+    template_mode_used: Optional[Literal["RAW", "BASE", "CUSTOM"]] = None
+    input_coverage: Optional[QaInputCoverage] = None
 
 
 @router.post("/qa-documentation", response_model=QaDocumentationResponse)
@@ -122,7 +131,7 @@ async def generate_qa_documentation(
         pr_change_summary=payload.pr_change_summary,
         repository_context={
             "project_id": payload.project_id, "pr_number": payload.pr_number,
-            "source_revision": payload.source_revision,
+            "source_revision": payload.source_revision, "tool_context": payload.tool_context,
             "project_workspace": payload.project_workspace, "project_namespace": payload.project_namespace,
             "workspace_slug": payload.workspace_slug, "repo_slug": payload.repo_slug,
             "access_token": payload.access_token, "oauth_client": payload.oauth_client,
@@ -159,5 +168,6 @@ async def generate_qa_documentation(
     return QaDocumentationResponse(
         documentation=result.get("documentation"),
         documentation_needed=result.get("documentation_needed", True),
-        template_mode_used=payload.template_mode,
+        template_mode_used=result.get("template_mode_used"),
+        input_coverage=result.get("input_coverage"),
     )

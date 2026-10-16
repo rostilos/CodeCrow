@@ -17,6 +17,16 @@ import java.util.List;
 import java.util.Optional;
 
 public interface JobRepository extends JpaRepository<Job, Long> {
+    @Query("SELECT j FROM Job j JOIN FETCH j.project WHERE j.jobType = 'QA_DOC_COMMAND' "
+            + "AND ((j.status IN ('PENDING','QUEUED') AND j.updatedAt < :queuedBefore) "
+            + "OR (j.status = 'RUNNING' AND j.updatedAt < :abandonedBefore) "
+            + "OR (j.status = 'FAILED' AND j.updatedAt < :retryBefore "
+            + "AND (SELECT COUNT(l) FROM JobLog l WHERE l.job = j AND l.step = 'qa_attempt') < 3)) "
+            + "ORDER BY j.updatedAt")
+    List<Job> findRecoverableQaJobs(@Param("queuedBefore") OffsetDateTime queuedBefore,
+            @Param("abandonedBefore") OffsetDateTime abandonedBefore,
+            @Param("retryBefore") OffsetDateTime retryBefore, Pageable page);
+
 
     Optional<Job> findByExternalId(String externalId);
 

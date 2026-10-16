@@ -1317,7 +1317,10 @@ def _render_stage1_prompt(
         plugin_context=plugin_context_text,
         batch_boundary_context=material.boundary_context,
     )
-    prompt += change_summary_context(getattr(material.request, "prChangeSummary", None), material.batch_file_paths)
+    prompt += change_summary_context(
+        getattr(material.request, "prChangeSummary", None), material.batch_file_paths,
+        max_tokens=_stage1_batch_token_limit(material.request) // 4,
+    )
     return prompt, plugin_context_text
 
 
@@ -1375,13 +1378,9 @@ def _stage1_batch_token_limit(request: ReviewRequestDto) -> int:
         getattr(request, "maxAllowedTokens", None),
         200000,
     )
-    shared_context = change_summary_context(getattr(request, 'prChangeSummary', None))
-    # Keep the existing source-review allowance while accounting for the new
-    # PR-wide context, always within the configured model context window.
-    shared_tokens = (len(shared_context.encode('utf-8')) + 1) // 2
     return min(
         max(10_000, model_context_tokens - 20_000),
-        STAGE1_BATCH_TOKEN_BUDGET + shared_tokens,
+        STAGE1_BATCH_TOKEN_BUDGET,
     )
 
 

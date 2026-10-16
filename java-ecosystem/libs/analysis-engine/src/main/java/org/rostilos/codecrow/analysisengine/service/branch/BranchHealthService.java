@@ -64,6 +64,7 @@ public class BranchHealthService {
             branchRepository.findByProjectIdAndBranchName(project.getId(), request.getTargetBranchName())
                     .ifPresent(b -> {
                         b.markStale();
+                        b.setRetryCommitHash(request.getCommitHash());
                         branchRepository.save(b);
                         log.info("Marked branch {} as STALE (consecutiveFailures={})",
                                 request.getTargetBranchName(), b.getConsecutiveFailures());

@@ -302,6 +302,39 @@ class AiAnalysisRequestImplTest {
         }
 
         @Test
+        void newestFirstHistoryPreservesOlderManualResolutionAcrossLineShift() {
+            CodeAnalysisIssue older = createIssue(1L, "File.java", 10, IssueSeverity.HIGH, "Bug found", true, 1);
+            older.setResolvedBy("manual");
+            older.setResolvedAt(java.time.OffsetDateTime.now());
+            older.setLineHash("stable-anchor"); older.setIssueFingerprint("stable-fingerprint");
+            CodeAnalysisIssue newer = createIssue(2L, "File.java", 40, IssueSeverity.HIGH, "Bug found", false, 3);
+            newer.setLineHash("stable-anchor"); newer.setIssueFingerprint("stable-fingerprint");
+            CodeAnalysis v1 = mock(CodeAnalysis.class); when(v1.getIssues()).thenReturn(List.of(older));
+            CodeAnalysis v2 = mock(CodeAnalysis.class); when(v2.getIssues()).thenReturn(List.of());
+            CodeAnalysis v3 = mock(CodeAnalysis.class); when(v3.getIssues()).thenReturn(List.of(newer));
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withAllPrAnalysesData(List.of(v3, v2, v1)).build();
+            assertThat(request.getPreviousCodeAnalysisIssues()).hasSize(1);
+            assertThat(request.getPreviousCodeAnalysisIssues().get(0).status()).isEqualTo("resolved");
+        }
+
+        @Test
+        void explicitReopenSupersedesOlderManualResolution() {
+            CodeAnalysisIssue older = createIssue(1L, "File.java", 10, IssueSeverity.HIGH, "Bug found", true, 1);
+            older.setResolvedBy("manual"); older.setResolvedAt(java.time.OffsetDateTime.now().minusDays(1));
+            older.setLineHash("stable-anchor"); older.setIssueFingerprint("stable-fingerprint");
+            CodeAnalysisIssue newer = createIssue(2L, "File.java", 40, IssueSeverity.HIGH, "Bug found", false, 3);
+            newer.setLineHash("stable-anchor"); newer.setIssueFingerprint("stable-fingerprint");
+            org.springframework.test.util.ReflectionTestUtils.setField(newer, "manualStatusResolved", false);
+            org.springframework.test.util.ReflectionTestUtils.setField(newer, "manualStatusUpdatedAt", java.time.OffsetDateTime.now());
+            CodeAnalysis v1 = mock(CodeAnalysis.class); when(v1.getIssues()).thenReturn(List.of(older));
+            CodeAnalysis v3 = mock(CodeAnalysis.class); when(v3.getIssues()).thenReturn(List.of(newer));
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder().withAllPrAnalysesData(List.of(v3, v1)).build();
+            assertThat(request.getPreviousCodeAnalysisIssues()).hasSize(1);
+            assertThat(request.getPreviousCodeAnalysisIssues().get(0).status()).isEqualTo("open");
+        }
+
+        @Test
         @DisplayName("should prefer resolved when same version")
         void shouldPreferResolvedWhenSameVersion() {
             CodeAnalysisIssue openIssue = createIssue(1L, "File.java", 10, IssueSeverity.HIGH, "Bug found", false, 1);

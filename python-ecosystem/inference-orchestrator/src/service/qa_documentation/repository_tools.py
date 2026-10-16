@@ -17,7 +17,7 @@ async def qa_repository_tools(llm, summary, context):
             from mcp_use import MCPClient
             from service.agent import AgentExecutionService
 
-            saved = (summary or {}).get("toolContext") or {}
+            saved = context.get("tool_context") or (summary or {}).get("toolContext") or {}
             repository = saved.get("repository") or {}
             props = MCPConfigBuilder.build_jvm_props(
                 project_id=context["project_id"], pull_request_id=context.get("pr_number"),

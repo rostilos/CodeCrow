@@ -115,7 +115,7 @@ public class QualityGateEvaluator implements AnalysisStatusEvaluator {
     private int getMetricValue(CodeAnalysis analysis, QualityGateCondition condition) {
         return switch (condition.getMetric()) {
             case ISSUES_BY_SEVERITY -> getIssueCountBySeverity(analysis, condition.getSeverity());
-            case NEW_ISSUES -> analysis.getTotalIssues() - analysis.getResolvedCount();
+            case NEW_ISSUES -> analysis.getTotalIssues();
             case ISSUES_BY_CATEGORY -> getIssueCountByCategory(analysis, condition.getCategory());
         };
     }

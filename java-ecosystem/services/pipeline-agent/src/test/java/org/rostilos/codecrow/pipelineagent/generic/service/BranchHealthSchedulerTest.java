@@ -26,6 +26,23 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class BranchHealthSchedulerTest {
+    @Test
+    void persistedPendingWorkUsesFullReconcileAndHonorsRetryBudget() throws Exception {
+        BranchRepository repository = mock(BranchRepository.class);
+        BranchAnalysisProcessor processor = mock(BranchAnalysisProcessor.class);
+        var pending = mock(BranchRepository.ReconciliationRetryCandidate.class);
+        when(pending.getProjectId()).thenReturn(42L);
+        when(pending.getBranchName()).thenReturn("main");
+        when(pending.getReconciliationAttempts()).thenReturn(1);
+        when(repository.findReconciliationRetryCandidates(any(), any())).thenReturn(List.of(pending));
+        new BranchHealthScheduler(repository, processor).retryPendingReconciliations();
+        verify(processor).fullReconcile(org.mockito.ArgumentMatchers.eq(42L), org.mockito.ArgumentMatchers.eq("main"), notNull());
+        verify(processor, never()).process(any(), any());
+        org.mockito.Mockito.clearInvocations(processor);
+        when(pending.getReconciliationAttempts()).thenReturn(10);
+        new BranchHealthScheduler(repository, processor).retryPendingReconciliations();
+        verify(processor, never()).fullReconcile(any(), any(), any());
+    }
 
     @Test
     void retryRunsOutsideTransactionUsingMaterializedCandidate() throws Exception {

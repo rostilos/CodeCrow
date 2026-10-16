@@ -32,6 +32,8 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -121,6 +123,25 @@ class BranchFileOperationsServiceTest {
         assertThat(existing).containsExactlyInAnyOrder("src/Text.java", "assets/logo.png");
         verify(branchFileRepository, org.mockito.Mockito.times(2)).save(any());
         verifyNoInteractions(vcsClientProvider, vcsClient);
+    }
+
+    @Test
+    void archiveFailureChecksExistenceAtTheRequestedCommitInsteadOfMovingBranch() throws Exception {
+        configureProjectRepository();
+        when(vcsRepoInfo.getVcsConnection()).thenReturn(vcsConnection);
+        when(vcsRepoInfo.getRepoWorkspace()).thenReturn("workspace");
+        when(vcsRepoInfo.getRepoSlug()).thenReturn("repo");
+        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
+        when(branchArchiveService.downloadSnapshot(eq(vcsConnection), eq("workspace"), eq("repo"), eq("pinned-head"), anySet()))
+                .thenThrow(new IOException("archive unavailable"));
+        when(fileRetrievalPolicy.allowPerFileFallback(1)).thenReturn(true);
+        org.mockito.Mockito.lenient().when(vcsClient.fileExists("workspace", "repo", "pinned-head", "src/A.java"))
+                .thenReturn(true);
+        var snapshot = service.downloadBranchFileSnapshot(new VcsRepoInfoImpl(vcsConnection, "workspace", "repo"),
+                "pinned-head", Set.of("src/A.java"));
+        assertThat(service.updateBranchFiles(Set.of("src/A.java"), project, "main", snapshot)).contains("src/A.java");
+        verify(vcsClient).fileExists("workspace", "repo", "pinned-head", "src/A.java");
+        verify(vcsClient, never()).fileExists("workspace", "repo", "main", "src/A.java");
     }
 
     @Test

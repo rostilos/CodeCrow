@@ -308,7 +308,7 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
                 project.getEffectiveConfig().maxAnalysisTokenLimit(),
                 credentials.vcsProviderString(),
                 credentials.vcsBaseUrl(),
-                prChangeSummaryService.find(project.getId(), Long.parseLong(payload.pullRequestId()), payload.commitHash())
+                prChangeSummaryService.find(project.getId(), Long.parseLong(payload.pullRequestId()), payload.commitHash(), null)
             );
             
         } catch (GeneralSecurityException e) {

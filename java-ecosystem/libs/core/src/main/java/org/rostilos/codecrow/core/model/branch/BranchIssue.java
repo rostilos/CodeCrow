@@ -33,6 +33,10 @@ import java.time.OffsetDateTime;
 // not via @UniqueConstraint which cannot express partial indexes.
 public class BranchIssue implements ReconcilableIssue {
 
+    @Version
+    @Column(name = "row_version", nullable = false)
+    private long rowVersion;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(nullable = false, updatable = false)

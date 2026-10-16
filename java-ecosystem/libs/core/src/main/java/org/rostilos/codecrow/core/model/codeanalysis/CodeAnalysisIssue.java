@@ -10,6 +10,10 @@ import java.time.OffsetDateTime;
 @Table(name = "code_analysis_issue")
 public class CodeAnalysisIssue implements ReconcilableIssue {
 
+    @Version
+    @Column(name = "row_version", nullable = false)
+    private long rowVersion;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(nullable = false, updatable = false)
@@ -88,6 +92,12 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
 
     @Column(name = "resolved_by", length = 100)
     private String resolvedBy;
+
+    @Column(name = "manual_status_resolved")
+    private Boolean manualStatusResolved;
+
+    @Column(name = "manual_status_updated_at")
+    private OffsetDateTime manualStatusUpdatedAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
@@ -227,6 +237,11 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
 
     public String getResolvedBy() { return resolvedBy; }
     public void setResolvedBy(String resolvedBy) { this.resolvedBy = resolvedBy; }
+
+    public Boolean getManualStatusResolved() { return manualStatusResolved; }
+    public void setManualStatusResolved(Boolean value) { this.manualStatusResolved = value; }
+    public OffsetDateTime getManualStatusUpdatedAt() { return manualStatusUpdatedAt; }
+    public void setManualStatusUpdatedAt(OffsetDateTime value) { this.manualStatusUpdatedAt = value; }
 
     public OffsetDateTime getCreatedAt() { return createdAt; }
 

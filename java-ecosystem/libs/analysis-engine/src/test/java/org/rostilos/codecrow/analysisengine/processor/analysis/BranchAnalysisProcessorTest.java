@@ -154,6 +154,17 @@ class BranchAnalysisProcessorTest {
 
     @BeforeEach
     void setUp() {
+        when(analysisLockService.withOwnedLocks(any(), any())).thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
+        when(branchRepository.findById(anyLong())).thenAnswer(inv -> branchRepository.findByIdWithIssues(inv.getArgument(0)));
+        when(branchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(branchIssueReconciliationService.reanalyzeCandidateIssues(any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean(), any()))
+                .thenReturn(new BranchIssueReconciliationService.ReconciliationResult(true, null));
+        when(branchFileOperationsService.prepareBranchFiles(anySet(), any(), any(), any())).thenAnswer(inv -> {
+            BranchFileOperationsService.BranchFileSnapshot snapshot = inv.getArgument(3);
+            return new BranchFileOperationsService.PreparedBranchFiles(snapshot.presentFiles(), snapshot.contents());
+        });
+        lenient().when(branchIssueReconciliationService.findReconciliationPaths(any(), anySet()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
         when(vcsClientProvider.getClient(vcsConnection)).thenReturn(authorizedClient);
         lenient().when(analysisLockService.getLeaseMinutes(any()))
                 .thenReturn(30);
@@ -527,7 +538,7 @@ class BranchAnalysisProcessorTest {
 
             // Verify orchestration calls to support services
             verify(branchFileOperationsService).downloadBranchFileSnapshot(any(), eq("new-commit"), anySet());
-            verify(branchFileOperationsService).updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot));
+            verify(branchFileOperationsService).prepareBranchFiles(anySet(), eq(project), eq(request), eq(archiveSnapshot));
             verify(branchFileOperationsService).createOrUpdateProjectBranch(eq(project), eq(request), any());
             verify(branchDiffFetcher).fetchDiff(
                     any(), any(), any(), any(), any(), isNull(), any());
@@ -536,11 +547,11 @@ class BranchAnalysisProcessorTest {
             verify(branchIssueReconciliationService).reconcileIssueLineNumbers(eq(rawDiff), anySet(), eq(savedBranch));
             verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
                     anySet(), anySet(), eq(savedBranch), eq(project), eq(request), eq(consumer),
-                    eq(archiveContents), eq(rawDiff), eq(false));
+                    eq(archiveContents), eq(rawDiff), eq(false), any());
             verify(branchIssueReconciliationService, never()).sweepDeterministicResolutions(
                     anySet(), any(), any(), any(), anyMap());
-            verify(branchFileOperationsService).updateFileSnapshotsForBranch(
-                    anySet(), eq(project), eq(request), eq(archiveSnapshot));
+            verify(branchFileOperationsService).persistPreparedFiles(
+                    eq(savedBranch), eq(project), eq(request), any());
             verify(branchIssueReconciliationService).verifyIssueLineNumbersWithSnippets(anySet(), eq(project), any());
             verify(analysisLockService).releaseLock("lock-key");
         }
@@ -688,7 +699,7 @@ class BranchAnalysisProcessorTest {
                     eq(Set.of("src/Issue.java")), eq(Set.of("src/Issue.java")),
                     eq(existingBranch), eq(project), eq(request), any(), eq(archiveContents),
                     argThat(diff -> diff.contains("src/Issue.java")
-                            && !diff.contains("src/Unrelated.java")), eq(false));
+                            && !diff.contains("src/Unrelated.java")), eq(false), any());
             verify(branchIssueReconciliationService, never()).sweepDeterministicResolutions(
                     anySet(), any(), any(), any(), anyMap());
             verify(ragOperationsService).refreshBranchGeneration(

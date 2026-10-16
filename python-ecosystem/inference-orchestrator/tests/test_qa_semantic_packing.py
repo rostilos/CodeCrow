@@ -75,7 +75,7 @@ class TestQaSemanticPackingPrimitives:
         orchestrator.set_request_input_token_target(50_000, persisted_context=True)
         assert not orchestrator.prompt_fits(messages)
 
-    def test_unicode_one_line_is_bounded_with_truthful_partial_coverage(self):
+    def test_unicode_one_line_is_bounded_and_lossless(self):
         text = "😀Привіт漢字" * 2_000
         record = QaSemanticRecord(
             key="unicode",
@@ -102,19 +102,9 @@ class TestQaSemanticPackingPrimitives:
             for item in packet
             if item.key != "codecrow:qa-coverage-diagnostic"
         ]
-        diagnostic = next(
-            item
-            for packet in packets
-            for item in packet
-            if item.key == "codecrow:qa-coverage-diagnostic"
-        )
-
-        assert len(packets) == 4
-        admitted = "".join(item.text for item in fragments)
-        assert text.startswith(admitted)
-        assert len(admitted) < len(text)
-        assert '"coverage":"PARTIAL"' in diagnostic.text
-        assert '"omittedCharacterCount":' in diagnostic.text
+        assert len(packets) > 4
+        assert "".join(item.text for item in fragments) == text
+        assert all(item.key != "codecrow:qa-coverage-diagnostic" for packet in packets for item in packet)
         assert all(
             BaseOrchestrator.estimate_rendered_input_tokens(render(packet))
             <= 1_500
@@ -137,33 +127,17 @@ class TestQaSemanticPackingPrimitives:
         assert needed is True
         llm.ainvoke.assert_not_awaited()
 
-    def test_dependency_batches_are_capped_with_file_coverage_diagnostic(self):
+    @pytest.mark.parametrize("count", [100, 200, 300])
+    def test_dependency_batches_retain_all_files(self, count):
         orchestrator = QaDocOrchestrator(llm=MagicMock())
-        paths = [f"src/file_{index:03d}.py" for index in range(75)]
-
-        batches = orchestrator.build_dependency_batches(
-            paths,
-            enrichment_data=None,
-        )
-
-        assert len(batches) == 4
-        diagnostic = orchestrator.dependency_batch_coverage_diagnostic()
-        assert diagnostic == {
-            "coverage": "PARTIAL",
-            "reason": "QA dependency-batch invocation ceiling",
-            "maxDependencyBatches": 4,
-            "sourceBatchCount": 5,
-            "omittedBatchCount": 1,
-            "omittedFileCount": 15,
-            "omittedFileSample": [
-                f"src/file_{index:03d}.py" for index in range(60, 75)
-            ],
-        }
+        paths = [f"src/file_{index:03d}.py" for index in range(count)]
+        batches = orchestrator.build_dependency_batches(paths, enrichment_data=None)
+        assert [item["file_info"].path for batch in batches for item in batch] == paths
 
 
 class TestQaPackedStages:
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_stage_1_prefers_diff_with_one_call_and_reports_omissions(self):
+    async def test_stage_1_packs_all_diff_and_source_evidence(self):
         llm = MagicMock()
         llm.ainvoke = AsyncMock(return_value=MagicMock(content=json.dumps({
             "batch_id": 1,
@@ -195,19 +169,19 @@ class TestQaPackedStages:
         )
 
         prompts = _all_prompt_text(llm)
-        assert llm.ainvoke.await_count == 1
+        assert llm.ainvoke.await_count > 1
         assert results
         assert diff_markers[0] in prompts
-        assert sum(marker in prompts for marker in diff_markers) < len(diff_markers)
-        assert sum(marker in prompts for marker in source_markers) < len(source_markers)
-        assert "QA_COVERAGE_DIAGNOSTIC" in prompts
+        assert all(marker in prompts for marker in diff_markers)
+        assert all(marker in prompts for marker in source_markers)
+        assert "QA_COVERAGE_DIAGNOSTIC" not in prompts
         assert all(
             orchestrator.estimate_rendered_input_tokens(call.args[0]) <= 7_000
             for call in llm.ainvoke.await_args_list
         )
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_stage_2_hierarchy_is_four_call_bounded_and_partial(self):
+    async def test_stage_2_hierarchy_keeps_all_prior_stage_evidence(self):
         call_number = 0
 
         async def invoke(_messages):
@@ -236,18 +210,18 @@ class TestQaPackedStages:
         )
 
         prompts = _all_prompt_text(llm)
-        assert 1 < llm.ainvoke.await_count <= 4
+        assert llm.ainvoke.await_count > 1
         assert result["cross_file_scenarios"]
         assert markers[0] in prompts
-        assert sum(marker in prompts for marker in markers) < len(markers)
-        assert "QA_COVERAGE_DIAGNOSTIC" in prompts
+        assert all(marker in prompts for marker in markers)
+        assert "QA_COVERAGE_DIAGNOSTIC" not in prompts
         assert all(
             orchestrator.estimate_rendered_input_tokens(call.args[0]) <= 7_000
             for call in llm.ainvoke.await_args_list
         )
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_stage_3_delta_prioritizes_diff_with_four_call_ceiling(self):
+    async def test_stage_3_delta_keeps_diff_history_and_stage_evidence(self):
         llm = MagicMock()
         llm.ainvoke = AsyncMock(return_value=MagicMock(
             content=_valid_document(),
@@ -273,17 +247,18 @@ class TestQaPackedStages:
 
         prompts = _all_prompt_text(llm)
         assert result.startswith("# QA Testing Guide")
-        assert 1 < llm.ainvoke.await_count <= 4
+        assert llm.ainvoke.await_count > 1
         assert diff_markers[0] in prompts
-        assert sum(marker in prompts for marker in diff_markers) < len(diff_markers)
-        assert "QA_COVERAGE_DIAGNOSTIC" in prompts
+        assert all(marker in prompts for marker in diff_markers)
+        assert all(marker in prompts for marker in stage_markers + previous_markers)
+        assert "QA_COVERAGE_DIAGNOSTIC" not in prompts
         assert all(
             orchestrator.estimate_rendered_input_tokens(call.args[0]) <= 7_000
             for call in llm.ainvoke.await_args_list
         )
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_single_pass_and_repair_are_four_call_bounded(self):
+    async def test_single_pass_and_repair_pack_all_records(self):
         llm = MagicMock()
         llm.ainvoke = AsyncMock(return_value=MagicMock(
             content=_valid_document(),
@@ -303,9 +278,9 @@ class TestQaPackedStages:
         single_pass_prompts = _all_prompt_text(llm)
 
         assert document.startswith("# QA Testing Guide")
-        assert llm.ainvoke.await_count <= 4
+        assert llm.ainvoke.await_count > 1
         assert diff_marker in single_pass_prompts
-        assert "QA_COVERAGE_DIAGNOSTIC" in single_pass_prompts
+        assert "QA_COVERAGE_DIAGNOSTIC" not in single_pass_prompts
 
         llm.ainvoke.reset_mock()
         repair_marker = "REPAIR_GUIDE_UNIQUE"
@@ -316,8 +291,8 @@ class TestQaPackedStages:
         repair_prompts = _all_prompt_text(llm)
 
         assert orchestrator._has_complete_shareable_sections(repaired)
-        assert llm.ainvoke.await_count <= 4
-        assert "QA_COVERAGE_DIAGNOSTIC" in repair_prompts
+        assert llm.ainvoke.await_count > 1
+        assert "QA_COVERAGE_DIAGNOSTIC" not in repair_prompts
         assert all(
             orchestrator.estimate_rendered_input_tokens(call.args[0]) <= 7_000
             for call in llm.ainvoke.await_args_list

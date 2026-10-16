@@ -57,7 +57,6 @@ DEFAULT_STAGE_INVOCATION_CAPS = {
     "stage_1_per_unit": {"small": 1, "medium": 2, "large": 3},
     "stage_2_packets": {"small": 1, "medium": 2, "large": 4},
     "stage_3_children": {"small": 1, "medium": 2, "large": 4},
-    "branch_reconciliation_packets": {"small": 1, "medium": 2, "large": 4},
 }
 
 @dataclass(frozen=True)

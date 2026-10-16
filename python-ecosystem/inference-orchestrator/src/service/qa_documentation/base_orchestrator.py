@@ -42,9 +42,6 @@ QA_INPUT_TOKEN_TARGET = max(
 )
 QA_INPUT_ESTIMATOR_SAFETY_TOKENS = 512
 QA_OUTPUT_CONTEXT_RESERVE_TOKENS = 20_000
-QA_MAX_SEMANTIC_PACKETS = 4
-QA_MAX_DEPENDENCY_BATCHES = 4
-QA_COVERAGE_DIAGNOSTIC_RESERVE_TOKENS = 512
 
 
 class QaPromptPackingError(RuntimeError):
@@ -339,15 +336,8 @@ class BaseOrchestrator(ABC):
         token_target: int,
         *,
         fragment_token_target: Optional[int] = None,
-        max_packets: int = QA_MAX_SEMANTIC_PACKETS,
     ) -> List[List[QaSemanticRecord]]:
-        """Pack records into a finite number of request-safe LLM calls.
-
-        Exact diff, source, and structural dependency packets are admitted
-        before optional scaffold/history packets.  When the call ceiling omits
-        evidence, the final admitted packet carries a prompt-visible coverage
-        diagnostic with exact omitted fragment/record/character counts.
-        """
+        """Pack every evidence record into request-safe calls without dropping bytes."""
         originals = list(records)
         identities = [record.identity for record in originals]
         if len(identities) != len(set(identities)):
@@ -362,11 +352,7 @@ class BaseOrchestrator(ABC):
                 )
             return [[]]
 
-        diagnostic_reserve = min(
-            QA_COVERAGE_DIAGNOSTIC_RESERVE_TOKENS,
-            max(64, token_target // 5),
-        )
-        packing_target = max(1, token_target - diagnostic_reserve)
+        packing_target = token_target
 
         expanded = [
             fragment
@@ -395,18 +381,6 @@ class BaseOrchestrator(ABC):
         if current:
             packets.append(current)
 
-        packet_ceiling = min(
-            QA_MAX_SEMANTIC_PACKETS,
-            max(1, int(max_packets or QA_MAX_SEMANTIC_PACKETS)),
-        )
-        if len(packets) > packet_ceiling:
-            packets = cls._bounded_semantic_packets(
-                packets,
-                render_messages,
-                token_target,
-                packet_ceiling,
-            )
-
         by_identity: Dict[str, List[QaSemanticRecord]] = {}
         for packet in packets:
             if cls.estimate_rendered_input_tokens(
@@ -418,180 +392,19 @@ class BaseOrchestrator(ABC):
             for record in packet:
                 by_identity.setdefault(record.identity, []).append(record)
 
-        diagnostic_present = any(
-            record.key == "codecrow:qa-coverage-diagnostic"
-            for packet in packets
-            for record in packet
-        )
-        if not diagnostic_present and set(by_identity) != set(identities):
+        if set(by_identity) != set(identities):
             raise QaPromptPackingError("QA semantic packing lost an input record")
         original_by_identity = {
             record.identity: record.text for record in originals
         }
         for identity, fragments in by_identity.items():
-            if identity == "codecrow:qa-coverage-diagnostic":
-                continue
             ordered = sorted(fragments, key=lambda item: item.part_index)
             combined = "".join(item.text for item in ordered)
-            if (
-                not diagnostic_present
-                and combined != original_by_identity[identity]
-            ):
+            if combined != original_by_identity[identity]:
                 raise QaPromptPackingError(
                     f"QA semantic packing lost or repeated bytes for {identity!r}"
                 )
         return packets
-
-    @staticmethod
-    def _semantic_packet_family(record: QaSemanticRecord) -> tuple[int, str]:
-        section = record.section.casefold()
-        if "diff" in section:
-            return (0, "diff")
-        if section == "source" or section.endswith(":source"):
-            return (1, "source")
-        if any(
-            marker in section
-            for marker in ("dependency", "architecture", "changed_path")
-        ):
-            return (2, "architecture")
-        if any(
-            marker in section
-            for marker in ("task", "acceptance", "requirement")
-        ):
-            return (3, "task")
-        if section in {"stage1", "stage2", "stage2_memo"}:
-            return (4, "analysis")
-        if "documentation" in section or "document_memo" in section:
-            return (5, "documentation")
-        if "previous" in section or "history" in section:
-            return (6, "history")
-        return (7, section or "other")
-
-    @classmethod
-    def _bounded_semantic_packets(
-        cls,
-        packets: Sequence[Sequence[QaSemanticRecord]],
-        render_messages: Callable[[Sequence[QaSemanticRecord]], Any],
-        token_target: int,
-        max_packets: int,
-    ) -> List[List[QaSemanticRecord]]:
-        """Select diverse high-value packets and add truthful omission data."""
-        indexed = [(index, list(packet)) for index, packet in enumerate(packets)]
-        packet_rank = {
-            index: min(
-                (cls._semantic_packet_family(record) for record in packet),
-                default=(99, "empty"),
-            )
-            for index, packet in indexed
-        }
-
-        selected_indexes: list[int] = []
-        selected_families: set[str] = set()
-        for index, _packet in sorted(
-            indexed,
-            key=lambda item: (packet_rank[item[0]], item[0]),
-        ):
-            family = packet_rank[index][1]
-            if family in selected_families:
-                continue
-            selected_indexes.append(index)
-            selected_families.add(family)
-            if len(selected_indexes) >= max_packets:
-                break
-        if len(selected_indexes) < max_packets:
-            for index, _packet in sorted(
-                indexed,
-                key=lambda item: (packet_rank[item[0]], item[0]),
-            ):
-                if index in selected_indexes:
-                    continue
-                selected_indexes.append(index)
-                if len(selected_indexes) >= max_packets:
-                    break
-
-        selected_indexes.sort()
-        selected = [list(packets[index]) for index in selected_indexes]
-        omitted = [
-            record
-            for index, packet in indexed
-            if index not in selected_indexes
-            for record in packet
-        ]
-        all_records = [record for _index, packet in indexed for record in packet]
-
-        def diagnostic(section: str) -> QaSemanticRecord:
-            kept = [
-                record
-                for packet in selected
-                for record in packet
-                if record.key != "codecrow:qa-coverage-diagnostic"
-            ]
-            kept_identities = {record.identity for record in kept}
-            omitted_identities = {record.identity for record in omitted}
-            fully_omitted = omitted_identities - kept_identities
-            partially_omitted = omitted_identities & kept_identities
-            payload = {
-                "coverage": "PARTIAL",
-                "reason": "semantic invocation ceiling",
-                "maxSemanticPackets": max_packets,
-                "sourcePacketCount": len(packets),
-                "omittedPacketCount": len(packets) - len(selected),
-                "omittedFragmentCount": len(omitted),
-                "fullyOmittedRecordCount": len(fully_omitted),
-                "partiallyOmittedRecordCount": len(partially_omitted),
-                "omittedCharacterCount": sum(len(record.text) for record in omitted),
-            }
-            text = "[QA_COVERAGE_DIAGNOSTIC " + json.dumps(
-                payload,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ) + "]"
-            return QaSemanticRecord(
-                key="codecrow:qa-coverage-diagnostic",
-                section=section,
-                text=text,
-                character_end=len(text),
-                source_character_count=len(text),
-            )
-
-        target_index = len(selected) - 1
-        section = (
-            selected[target_index][-1].section
-            if selected[target_index]
-            else "coverage_diagnostic"
-        )
-        while True:
-            marker = diagnostic(section)
-            candidate = [*selected[target_index], marker]
-            if cls.estimate_rendered_input_tokens(
-                render_messages(candidate)
-            ) <= token_target:
-                selected[target_index] = candidate
-                break
-            if selected[target_index]:
-                omitted.append(selected[target_index].pop())
-                continue
-            if cls.estimate_rendered_input_tokens(
-                render_messages([marker])
-            ) > token_target:
-                raise QaPromptPackingError(
-                    "QA fixed prompt cannot fit a bounded coverage diagnostic"
-                )
-            selected[target_index] = [marker]
-            break
-
-        logger.warning(
-            "QA semantic invocation ceiling admitted %d/%d packet(s); "
-            "omitted_fragments=%d omitted_characters=%d",
-            len(selected),
-            len(packets),
-            len(omitted),
-            sum(len(record.text) for record in omitted),
-        )
-        return selected
-
-    # ── Smart batching ───────────────────────────────────────────────
 
     def build_dependency_batches(
         self,
@@ -639,7 +452,7 @@ class BaseOrchestrator(ABC):
         batches: Sequence[Sequence[Dict[str, Any]]],
         enrichment_data: Optional[PrEnrichmentDataDto],
     ) -> List[List[Dict[str, Any]]]:
-        """Admit at most four dependency batches, preferring exact graph hubs."""
+        """Coalesce small groups without omitting changed paths."""
         materialized = [list(batch) for batch in batches]
         coalesced: List[List[Dict[str, Any]]] = []
         current: List[Dict[str, Any]] = []
@@ -650,79 +463,7 @@ class BaseOrchestrator(ABC):
             current.extend(batch)
         if current:
             coalesced.append(current)
-        materialized = coalesced
-        if len(materialized) <= QA_MAX_DEPENDENCY_BATCHES:
-            self._qa_dependency_coverage_diagnostic = None
-            return materialized
-
-        priority_rank = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
-        degree: Dict[str, int] = {}
-        for relation in getattr(enrichment_data, "relationships", None) or []:
-            for path in (
-                getattr(relation, "sourceFile", ""),
-                getattr(relation, "targetFile", ""),
-            ):
-                if path:
-                    degree[str(path)] = degree.get(str(path), 0) + 1
-
-        def item_path(item: Dict[str, Any]) -> str:
-            file_info = item.get("file_info") or item.get("file")
-            return str(getattr(file_info, "path", "") or "")
-
-        def rank(index_and_batch):
-            index, batch = index_and_batch
-            paths = [item_path(item) for item in batch]
-            batch_priority = min(
-                (
-                    priority_rank.get(str(item.get("priority", "MEDIUM")).upper(), 2)
-                    for item in batch
-                ),
-                default=2,
-            )
-            return (
-                batch_priority,
-                -sum(degree.get(path, 0) for path in paths),
-                -len(batch),
-                tuple(paths),
-                index,
-            )
-
-        selected_pairs = sorted(
-            enumerate(materialized),
-            key=rank,
-        )[:QA_MAX_DEPENDENCY_BATCHES]
-        selected_indexes = {index for index, _batch in selected_pairs}
-        admitted = [batch for _index, batch in selected_pairs]
-        omitted_paths = [
-            item_path(item)
-            for index, batch in enumerate(materialized)
-            if index not in selected_indexes
-            for item in batch
-            if item_path(item)
-        ]
-        diagnostic = {
-            "coverage": "PARTIAL",
-            "reason": "QA dependency-batch invocation ceiling",
-            "maxDependencyBatches": QA_MAX_DEPENDENCY_BATCHES,
-            "sourceBatchCount": len(materialized),
-            "omittedBatchCount": len(materialized) - len(admitted),
-            "omittedFileCount": len(omitted_paths),
-            "omittedFileSample": omitted_paths[:20],
-        }
-        self._qa_dependency_coverage_diagnostic = diagnostic
-        logger.warning("QA dependency batching partial coverage: %s", diagnostic)
-        emit_status(
-            self.event_callback,
-            "qa_dependency_batching",
-            "Dependency batching admitted "
-            f"{len(admitted)}/{len(materialized)} batches; "
-            f"{len(omitted_paths)} file(s) omitted by the four-call ceiling",
-        )
-        return admitted
-
-    def dependency_batch_coverage_diagnostic(self) -> Optional[Dict[str, Any]]:
-        value = getattr(self, "_qa_dependency_coverage_diagnostic", None)
-        return dict(value) if isinstance(value, dict) else None
+        return coalesced
 
     @staticmethod
     def _simple_batch(

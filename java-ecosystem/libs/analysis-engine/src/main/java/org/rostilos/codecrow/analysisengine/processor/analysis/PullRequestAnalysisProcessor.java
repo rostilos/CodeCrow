@@ -14,7 +14,6 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.TaskImplementationEvidenceService;
-import org.rostilos.codecrow.core.service.PrChangeSummaryService;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.analysisengine.service.pr.PrIssueTrackingService;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
@@ -77,7 +76,6 @@ public class PullRequestAnalysisProcessor {
 
     private final CodeAnalysisService codeAnalysisService;
     private final TaskImplementationEvidenceService taskImplementationEvidenceService;
-    private final PrChangeSummaryService prChangeSummaryService;
     private final PullRequestService pullRequestService;
     private final AiAnalysisClient aiAnalysisClient;
     private final VcsServiceFactory vcsServiceFactory;
@@ -101,7 +99,6 @@ public class PullRequestAnalysisProcessor {
             PullRequestService pullRequestService,
             CodeAnalysisService codeAnalysisService,
             TaskImplementationEvidenceService taskImplementationEvidenceService,
-            PrChangeSummaryService prChangeSummaryService,
             AiAnalysisClient aiAnalysisClient,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
@@ -116,7 +113,6 @@ public class PullRequestAnalysisProcessor {
     ) {
         this.codeAnalysisService = codeAnalysisService;
         this.taskImplementationEvidenceService = taskImplementationEvidenceService;
-        this.prChangeSummaryService = prChangeSummaryService;
         this.pullRequestService = pullRequestService;
         this.aiAnalysisClient = aiAnalysisClient;
         this.vcsServiceFactory = vcsServiceFactory;
@@ -358,7 +354,7 @@ public class PullRequestAnalysisProcessor {
             requireConfirmedLease(lockLease);
             CodeAnalysis newAnalysis = codeAnalysisService.createAnalysisFromAiResponse(
                     project,
-                    aiResponse,
+                    withReviewSource(aiResponse, aiRequest, request, project),
                     request.getPullRequestId(),
                     request.getTargetBranchName(),
                     request.getSourceBranchName(),
@@ -379,9 +375,6 @@ public class PullRequestAnalysisProcessor {
                         "message", "Review completed; usage accounting will reconcile from the saved analysis"));
             }
             persistTaskImplementationEvidence(newAnalysis, aiResponse.get("taskEvidence"));
-            prChangeSummaryService.persist(newAnalysis, aiResponse.get("prChangeSummary"));
-
-            int issuesFound = newAnalysis.getTotalIssues();
 
             // === AST scope enrichment: resolve scope boundaries for each issue ===
             try {
@@ -446,8 +439,8 @@ public class PullRequestAnalysisProcessor {
             // Publish successful completion event
             requireConfirmedLease(lockLease);
             publishAnalysisCompletedEvent(project, request, correlationId, startTime,
-                    AnalysisCompletedEvent.CompletionStatus.SUCCESS, issuesFound,
-                    allChangedFiles != null ? allChangedFiles.size() : 0, null);
+                    AnalysisCompletedEvent.CompletionStatus.SUCCESS, newAnalysis.getTotalIssues(),
+                    allChangedFiles != null ? allChangedFiles.size() : 0, null, newAnalysis.getId());
 
             return aiResponse;
         } catch (IOException e) {
@@ -927,7 +920,6 @@ public class PullRequestAnalysisProcessor {
     private void copyTaskImplementationEvidence(
             CodeAnalysis source,
             CodeAnalysis target) {
-        prChangeSummaryService.copyForAnalysis(source, target);
         try {
             TaskImplementationEvidenceService.PersistenceResult result =
                     taskImplementationEvidenceService.copyForAnalysis(source, target);
@@ -1161,6 +1153,26 @@ public class PullRequestAnalysisProcessor {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> withReviewSource(Map<String, Object> response, AiAnalysisRequest ai,
+                                               PrProcessRequest request, Project project) {
+        var payload = new HashMap<String, Object>(response);
+        var summary = response.get("prChangeSummary") instanceof Map<?, ?> saved
+                ? new HashMap<>((Map<String, Object>) saved) : new HashMap<String, Object>();
+        summary.put("projectId", project.getId()); summary.put("pullRequestId", request.getPullRequestId());
+        summary.put("sourceRevision", request.getCommitHash());
+        summary.putIfAbsent("semanticStatus", "unavailable");
+        var tools = summary.get("toolContext") instanceof Map<?, ?> savedTools
+                ? new HashMap<>((Map<String, Object>) savedTools) : new HashMap<String, Object>();
+        var source = new HashMap<String, Object>();
+        source.put("rawDiff", ai.getRawDiff()); source.put("baseRevision", ai.getBaseCommitHash());
+        source.put("targetRevision", ai.getTargetHeadCommitHash());
+        source.put("changedFiles", proposedTreeChangedFiles(ai)); source.put("deletedFiles", proposedTreeDeletedFiles(ai));
+        source.put("prTitle", request.getPrTitle()); source.put("prDescription", request.getPrDescription());
+        tools.put("reviewSource", source); summary.put("toolContext", tools); payload.put("prChangeSummary", summary);
+        return payload;
+    }
+
     /**
      * Publishes an AnalysisCompletedEvent for PR analysis.
      */
@@ -1168,6 +1180,13 @@ public class PullRequestAnalysisProcessor {
                                                String correlationId, Instant startTime,
                                                AnalysisCompletedEvent.CompletionStatus status, int issuesFound,
                                                int filesAnalyzed, String errorMessage) {
+        publishAnalysisCompletedEvent(project, request, correlationId, startTime, status, issuesFound, filesAnalyzed, errorMessage, null);
+    }
+
+    private void publishAnalysisCompletedEvent(Project project, PrProcessRequest request,
+                                               String correlationId, Instant startTime,
+                                               AnalysisCompletedEvent.CompletionStatus status, int issuesFound,
+                                               int filesAnalyzed, String errorMessage, Long analysisId) {
         if (eventPublisher == null) {
             return;
         }
@@ -1178,6 +1197,11 @@ public class PullRequestAnalysisProcessor {
             metrics.put("targetBranch", request.getTargetBranchName());
             metrics.put("sourceBranch", request.getSourceBranchName());
             metrics.put("commitHash", request.getCommitHash());
+            if (analysisId == null && status == AnalysisCompletedEvent.CompletionStatus.SUCCESS) {
+                analysisId = codeAnalysisService.getCodeAnalysisCache(project.getId(), request.getCommitHash(), request.getPullRequestId())
+                        .map(CodeAnalysis::getId).orElse(null);
+            }
+            if (analysisId != null) metrics.put("analysisId", analysisId);
             if (request.getPrTitle() != null) {
                 metrics.put("prTitle", request.getPrTitle());
             }

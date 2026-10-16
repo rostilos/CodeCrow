@@ -19,7 +19,6 @@ from service.qa_documentation.base_orchestrator import (
     BaseOrchestrator,
     QaPromptPackingError,
     QaSemanticRecord,
-    QA_MAX_SEMANTIC_PACKETS,
     emit_status,
     emit_progress,
     emit_error,
@@ -61,8 +60,7 @@ ENVIRONMENT_SENTINELS = (
 
 QA_SEMANTIC_SHARD_NOTICE = (
     "BOUNDED QA SEMANTIC SHARD: this request owns an admitted subset of input "
-    "records. A QA_COVERAGE_DIAGNOSTIC record identifies partial coverage when "
-    "the finite invocation ceiling omitted evidence. Do not "
+    "records. Other packets own the remaining evidence. Do not "
     "interpret local absence as evidence that a change or requirement does "
     "not exist."
 )
@@ -72,8 +70,6 @@ QA_HIERARCHICAL_SYNTHESIS_NOTICE = (
     "its coverage diagnostics. Do not infer that omitted sibling evidence is absent."
 )
 
-QA_CHILD_PACKET_CEILING = QA_MAX_SEMANTIC_PACKETS - 1
-QA_SYNTHESIS_PACKET_CEILING = 1
 
 
 class QaDocOrchestrator(BaseOrchestrator):
@@ -342,6 +338,22 @@ class QaDocOrchestrator(BaseOrchestrator):
         token_target = self.set_request_input_token_target(
             request_token_hint, persisted_context=bool(pr_change_summary),
         )
+        self.effective_template_mode = template_mode.upper()
+        if pr_change_summary:
+            supplied_paths = {file["path"] for file in pr_change_summary.get("files", [])}
+            supplied_files = len(supplied_paths)
+        else:
+            source_records = [record for record in self._diff_records(diff or "", key_prefix="coverage")
+                              if record.paths]
+            supplied_paths = {path for record in source_records for path in record.paths}
+            supplied_files = len(source_records)
+        input_coverage = {
+            "status": ("unknown" if not supplied_paths else "partial"
+                       if set(changed_file_paths or []) - supplied_paths or supplied_files < files_analyzed
+                       else "complete"),
+            "source": "saved_changes" if pr_change_summary else "diff" if diff else "analysis_only",
+            "provided_file_count": supplied_files,
+        }
         logger.info(
             "QA documentation request-aware input target: %d tokens",
             token_target,
@@ -393,6 +405,8 @@ class QaDocOrchestrator(BaseOrchestrator):
                 changed_file_paths=changed_file_paths or [],
                 previous_documentation=previous_documentation,
                 is_same_pr_rerun=is_same_pr_rerun,
+                template_mode=template_mode.upper(),
+                custom_template=custom_template,
             )
         else:
             logger.info(
@@ -429,7 +443,8 @@ class QaDocOrchestrator(BaseOrchestrator):
             pr_number, project_name, len(documentation),
             "multi-stage" if use_multi_stage else "single-pass",
         )
-        return {"documentation_needed": True, "documentation": documentation}
+        return {"documentation_needed": True, "documentation": documentation,
+                "template_mode_used": self.effective_template_mode, "input_coverage": input_coverage}
 
     # ==================================================================
     # Multi-stage pipeline
@@ -445,6 +460,8 @@ class QaDocOrchestrator(BaseOrchestrator):
         changed_file_paths: List[str],
         previous_documentation: Optional[str],
         is_same_pr_rerun: bool,
+        template_mode: str = "BASE",
+        custom_template: Optional[str] = None,
     ) -> str:
         """Execute the 3-stage ULTRATHINKING pipeline."""
         try:
@@ -487,13 +504,6 @@ class QaDocOrchestrator(BaseOrchestrator):
                 enrichment_data=enrichment_data,
                 placeholders=placeholders,
             )
-            dependency_coverage = self.dependency_batch_coverage_diagnostic()
-            if dependency_coverage:
-                stage_1_results.append({
-                    "batch_id": "coverage-diagnostic",
-                    "file_analyses": [],
-                    "coverage_diagnostic": dependency_coverage,
-                })
             s1_file_analyses = sum(
                 len(r.get("file_analyses", [])) for r in stage_1_results
             )
@@ -516,7 +526,16 @@ class QaDocOrchestrator(BaseOrchestrator):
 
             # ── STAGE 3: Aggregation / Delta ─────────────────────────
             emit_status(self.event_callback, "stage_3_started", "Stage 3: Generating final document...")
-            if is_same_pr_rerun and delta_diff and previous_documentation:
+            if template_mode != "BASE":
+                documentation = await self._run_single_pass(
+                    template_mode=template_mode,
+                    custom_template=custom_template,
+                    placeholders={**placeholders, "diff": "Source evidence was processed in the preceding batches.",
+                        "analysis_summary": placeholders["analysis_summary"] + "\n"
+                        + self._slim_stage_results(stage_1_results) + "\n" + self._slim_stage_results(stage_2_results)},
+                    previous_documentation=previous_documentation,
+                )
+            elif is_same_pr_rerun and delta_diff and previous_documentation:
                 documentation = await self._execute_stage_3_delta(
                     stage_1_results=stage_1_results,
                     stage_2_results=stage_2_results,
@@ -544,8 +563,8 @@ class QaDocOrchestrator(BaseOrchestrator):
             # Fallback to single-pass
             logger.info("Falling back to single-pass after multi-stage failure")
             return await self._run_single_pass(
-                template_mode="BASE",
-                custom_template=None,
+                template_mode=template_mode,
+                custom_template=custom_template,
                 placeholders=placeholders,
                 previous_documentation=previous_documentation,
             )
@@ -560,7 +579,7 @@ class QaDocOrchestrator(BaseOrchestrator):
         enrichment_data: Optional[PrEnrichmentDataDto],
         placeholders: Dict[str, str],
     ) -> List[Dict[str, Any]]:
-        """Run Stage 1 with at most four dependency-batch LLM calls."""
+        """Analyze every dependency batch with bounded model-call concurrency."""
         total_batches = len(batches)
         enrichment_lookup = self.build_enrichment_lookup(enrichment_data)
         analysis_system_prompt = QA_DOC_ANALYSIS_SYSTEM_PROMPT.format(**placeholders)
@@ -690,7 +709,6 @@ class QaDocOrchestrator(BaseOrchestrator):
                         records,
                         render_packet,
                         token_target,
-                        max_packets=1,
                     )
                     packet_messages = [
                         (
@@ -954,11 +972,6 @@ class QaDocOrchestrator(BaseOrchestrator):
                 render_packet,
                 token_target,
                 fragment_token_target=fragment_target,
-                max_packets=(
-                    QA_SYNTHESIS_PACKET_CEILING
-                    if synthesis
-                    else QA_CHILD_PACKET_CEILING
-                ),
             )
             successful: List[Dict[str, Any]] = []
             failures = 0
@@ -1050,7 +1063,6 @@ class QaDocOrchestrator(BaseOrchestrator):
         *,
         label: str,
         synthesis: bool = False,
-        max_packets: int = QA_CHILD_PACKET_CEILING,
     ) -> List[str]:
         """Invoke every required document shard or fail the stage atomically."""
         token_target = self.input_token_target()
@@ -1066,7 +1078,6 @@ class QaDocOrchestrator(BaseOrchestrator):
             render_packet,
             token_target,
             fragment_token_target=fragment_target,
-            max_packets=max_packets,
         )
         outputs: List[str] = []
         for index, packet in enumerate(packets, start=1):
@@ -1092,6 +1103,8 @@ class QaDocOrchestrator(BaseOrchestrator):
         placeholders: Dict[str, str],
         *,
         label: str,
+        template_mode: str = "BASE",
+        custom_template: Optional[str] = None,
     ) -> str:
         """Hierarchically consolidate complete child documents under target."""
         current = list(documents)
@@ -1122,6 +1135,10 @@ class QaDocOrchestrator(BaseOrchestrator):
                 ),
                 previous_doc_section="",
             )
+            if template_mode != "BASE":
+                prompt += "\nPreserve the requested " + template_mode + " format from the child documents."
+                if custom_template and self.prompt_fits(self._messages(system_prompt, prompt + "\n" + custom_template)):
+                    prompt += "\nRequested template:\n" + custom_template
             return self._messages(system_prompt, prompt)
 
         level = 1
@@ -1141,7 +1158,6 @@ class QaDocOrchestrator(BaseOrchestrator):
                 render_packet,
                 label=f"{label} synthesis level {level}",
                 synthesis=True,
-                max_packets=QA_SYNTHESIS_PACKET_CEILING,
             )
             if len(next_documents) >= len(current):
                 raise QaPromptPackingError(
@@ -1413,6 +1429,8 @@ class QaDocOrchestrator(BaseOrchestrator):
             sp_placeholders = {**sp_placeholders, "custom_template": custom_template}
         else:
             prompt_template = QA_DOC_BASE_PROMPT
+            template_mode = "BASE"
+        self.effective_template_mode = template_mode
 
         user_prompt = prompt_template.format(**sp_placeholders)
 
@@ -1495,6 +1513,8 @@ class QaDocOrchestrator(BaseOrchestrator):
                 documents,
                 placeholders,
                 label="QA single-pass generation",
+                template_mode=template_mode,
+                custom_template=custom_template,
             )
 
         if not content or len(content.strip()) < 50:

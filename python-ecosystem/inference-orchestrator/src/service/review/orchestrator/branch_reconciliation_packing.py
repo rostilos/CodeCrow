@@ -45,7 +45,7 @@ _DIFF_FILE_RE = re.compile(
     re.MULTILINE,
 )
 _DIFF_HUNK_RE = re.compile(r"^@@[^\r\n]*(?:\r?\n|$)", re.MULTILINE)
-BRANCH_RECONCILIATION_MAX_SHARDS = 4
+_MENTIONED_PATH_RE = re.compile(r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_-]+\.[A-Za-z][A-Za-z0-9]*")
 
 
 def _schema_declaration_bytes() -> bytes:
@@ -277,6 +277,9 @@ source fragment or diff hunk is owned by another shard; local absence is never
 proof of deletion or resolution. A host-side atomic merge accepts a resolution
 only when all required evidence shards agree. If evidence is incomplete or
 ambiguous, omit the issue so it remains unresolved.
+For BASE anchors, the missing primary file is expected. Reassess the deletion's
+effect using surviving referenced source; resolve only when that source proves
+the regression is fixed, never because the deleted file is still absent.
 
 COMPLETE ISSUE RECORDS ASSIGNED TO THIS SHARD (JSON):
 {json.dumps(issue_payload, ensure_ascii=False, separators=(",", ":"), default=str)}
@@ -412,6 +415,8 @@ def _record_dependency_paths(record: ReconciliationRecord) -> set[str]:
     paths = {record.file_path} if record.file_path else set()
     if record.kind != "issue":
         return paths
+    for field in ("reason", "suggestedFixDescription", "suggestedFixDiff"):
+        paths.update(_normalized_path(path) for path in _MENTIONED_PATH_RE.findall(str(record.value.get(field) or "")))
     for field in ("relatedLocations", "affected_files", "affectedFiles"):
         values = record.value.get(field) or []
         if isinstance(values, str):
@@ -433,6 +438,13 @@ def _record_dependency_paths(record: ReconciliationRecord) -> set[str]:
                 if path
             )
     return paths
+
+
+def _has_current_source_authority(record: ReconciliationRecord, source_paths: set[str]) -> bool:
+    paths = (_record_dependency_paths(record)
+             if str(record.value.get("anchorSide", "HEAD")).upper() == "BASE"
+             else {record.file_path})
+    return any(repository_paths_match(path, source) for path in paths for source in source_paths)
 
 
 def _dependency_record_groups(
@@ -682,7 +694,6 @@ async def execute_packed_branch_reconciliation(
     raw_diff: Optional[str],
     event_callback: Optional[Callable[[Dict], None]] = None,
     direct_executor=execute_branch_reconciliation_direct,
-    max_shards: int = BRANCH_RECONCILIATION_MAX_SHARDS,
 ) -> Dict[str, Any]:
     """Run finite direct reconciliation or retain affected issues unresolved."""
     issues = [
@@ -764,59 +775,6 @@ async def execute_packed_branch_reconciliation(
         blocked_record_keys=blocked_record_keys,
         resolution_blocked_issue_keys=resolution_blocked_issue_keys,
     )
-    shard_ceiling = min(
-        BRANCH_RECONCILIATION_MAX_SHARDS,
-        max(1, _positive_int_or_default(max_shards, BRANCH_RECONCILIATION_MAX_SHARDS)),
-    )
-    source_shard_count = len(shards)
-    omitted_shards: List[ReconciliationShard] = []
-    omitted_record_keys: set[str] = set()
-    omitted_issue_ids: set[str] = set()
-    if len(shards) > shard_ceiling:
-        issue_record_keys = {record.key for record in issue_records}
-
-        def shard_priority(shard: ReconciliationShard) -> tuple:
-            owned_issue_count = len(
-                issue_record_keys.intersection(shard.record_keys)
-            )
-            return (
-                0 if owned_issue_count else 1,
-                -owned_issue_count,
-                -len(shard.issue_ids),
-                -len(shard.anchor_record_keys),
-                shard.shard_id,
-            )
-
-        admitted_ids = {
-            shard.shard_id
-            for shard in sorted(shards, key=shard_priority)[:shard_ceiling]
-        }
-        omitted_shards = [
-            shard for shard in shards if shard.shard_id not in admitted_ids
-        ]
-        shards = [
-            shard for shard in shards if shard.shard_id in admitted_ids
-        ]
-        omitted_record_keys = {
-            key for shard in omitted_shards for key in shard.record_keys
-        }
-        omitted_issue_ids = {
-            issue_id for shard in omitted_shards for issue_id in shard.issue_ids
-        }
-        blocked_record_keys.update(omitted_record_keys)
-        resolution_blocked_issue_keys.update(
-            record.key
-            for record in issue_records
-            if record.issue_id in omitted_issue_ids
-        )
-        diagnostic = (
-            "Branch reconciliation invocation ceiling admitted "
-            f"{len(shards)}/{source_shard_count} shard(s); omitted "
-            f"{len(omitted_record_keys)} owned record(s) affecting "
-            f"{len(omitted_issue_ids)} issue(s). Omitted evidence remains unresolved."
-        )
-        diagnostics.append(diagnostic)
-        logger.warning(diagnostic)
     for key in sorted(resolution_blocked_issue_keys):
         diagnostics.append(
             f"complete issue authority {key} could not accompany every "
@@ -897,10 +855,7 @@ async def execute_packed_branch_reconciliation(
             for shard in shards
             if issue_id in shard.issue_ids
         ]
-        if not any(
-            repository_paths_match(issue_record.file_path, source_path)
-            for source_path in source_paths
-        ):
+        if not _has_current_source_authority(issue_record, source_paths):
             diagnostics.append(
                 f"issue {issue_id} has no complete current-source authority; "
                 "local absence cannot resolve it"
@@ -953,15 +908,13 @@ async def execute_packed_branch_reconciliation(
         if not issue_id or issue_id in issue_provenance:
             continue
         required = required_shards_by_issue.get(issue_id, [])
-        complete_source = any(
-            repository_paths_match(issue_record.file_path, source_path)
-            for source_path in source_paths
-        )
+        complete_source = _has_current_source_authority(issue_record, source_paths)
         unblocked = (
             issue_record.key not in blocked_record_keys
             and issue_record.key not in resolution_blocked_issue_keys
             and not any(
-                repository_paths_match(issue_record.file_path, blocked_file)
+                repository_paths_match(path, blocked_file)
+                for path in _record_dependency_paths(issue_record)
                 for blocked_file in blocked_files
             )
             and not blocked_global_evidence
@@ -1023,18 +976,13 @@ async def execute_packed_branch_reconciliation(
         ),
         "diagnostics": diagnostics,
         "invocationCoverage": {
-            "coverage": "PARTIAL" if omitted_shards else "COMPLETE",
-            "reason": (
-                "branch reconciliation invocation ceiling"
-                if omitted_shards
-                else "all packed shards admitted"
-            ),
-            "maxShards": shard_ceiling,
-            "sourceShardCount": source_shard_count,
+            "coverage": "COMPLETE",
+            "reason": "all packed shards admitted",
+            "sourceShardCount": len(shards),
             "admittedShardCount": len(shards),
-            "omittedShardCount": len(omitted_shards),
-            "omittedRecordCount": len(omitted_record_keys),
-            "omittedIssueCount": len(omitted_issue_ids),
+            "omittedShardCount": 0,
+            "omittedRecordCount": 0,
+            "omittedIssueCount": 0,
         },
     }
     return {
@@ -1044,6 +992,7 @@ async def execute_packed_branch_reconciliation(
             f"{len(shards)} request-aware shard(s); accepted "
             f"{len(accepted)} atomic resolution(s)."
         ),
+        "reconciliationStatus": "degraded" if diagnostics else "complete",
         "reconciliationPromptProvenance": provenance,
     }
 
@@ -1064,6 +1013,7 @@ def legacy_reconciliation_fail_open(
     return {
         "issues": [],
         "comment": diagnostic,
+        "reconciliationStatus": "degraded",
         "reconciliationPromptProvenance": {
             "inputTokenTarget": target,
             "shards": [],

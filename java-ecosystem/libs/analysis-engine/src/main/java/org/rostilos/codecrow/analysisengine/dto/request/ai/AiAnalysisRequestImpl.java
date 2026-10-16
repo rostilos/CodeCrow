@@ -7,6 +7,8 @@ import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
+import org.rostilos.codecrow.core.util.tracking.PrIssueHistory;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
 import org.rostilos.codecrow.plugins.ProjectCapabilities;
 
@@ -455,53 +457,31 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
                 return self();
             }
 
-            // Convert all issues to DTOs
-            List<AiRequestPreviousIssueDTO> allIssues = allPrAnalyses.stream()
-                    .flatMap(analysis -> analysis.getIssues().stream())
-                    .map(AiRequestPreviousIssueDTO::fromEntity)
-                    .toList();
-
-            // Deduplicate: group by fingerprint, keep most recent version but preserve
-            // resolved status
-            java.util.Map<String, AiRequestPreviousIssueDTO> deduped = new java.util.LinkedHashMap<>();
-
-            for (AiRequestPreviousIssueDTO issue : allIssues) {
-                String fingerprint = computeIssueFingerprint(issue);
-                AiRequestPreviousIssueDTO existing = deduped.get(fingerprint);
-
-                if (existing == null) {
-                    // First occurrence of this issue
-                    deduped.put(fingerprint, issue);
-                } else {
-                    // Duplicate found - keep the one with higher prVersion (more recent)
-                    // But if older version is resolved and newer is not, preserve resolved status
-                    int existingVersion = existing.prVersion() != null ? existing.prVersion() : 0;
-                    int currentVersion = issue.prVersion() != null ? issue.prVersion() : 0;
-
-                    boolean existingResolved = "resolved".equalsIgnoreCase(existing.status());
-                    boolean currentResolved = "resolved".equalsIgnoreCase(issue.status());
-
-                    if (currentVersion > existingVersion) {
-                        // Current is newer - use it, but preserve resolved status if existing was
-                        // resolved
-                        if (existingResolved && !currentResolved) {
-                            // Older version was resolved but newer one isn't marked - use resolved data
-                            // from older
-                            deduped.put(fingerprint, mergeResolvedStatus(issue, existing));
-                        } else {
-                            deduped.put(fingerprint, issue);
-                        }
-                    } else if (existingVersion == currentVersion) {
-                        // Same version - prefer resolved one
-                        if (currentResolved && !existingResolved) {
-                            deduped.put(fingerprint, issue);
-                        }
-                    }
-                    // If existing is newer, keep it (already in map)
+            List<CodeAnalysisIssue> history = allPrAnalyses.stream()
+                    .flatMap(analysis -> analysis.getIssues().stream()).toList();
+            var decisions = PrIssueHistory.decisions(history);
+            java.util.Map<String, List<CodeAnalysisIssue>> groups = new java.util.LinkedHashMap<>();
+            for (CodeAnalysisIssue issue : history) {
+                String identity = PrIssueHistory.identity(issue);
+                if (identity == null) {
+                    identity = issue.getAnchorSide() + "::" + computeIssueFingerprint(AiRequestPreviousIssueDTO.fromEntity(issue));
                 }
+                groups.computeIfAbsent(identity, key -> new java.util.ArrayList<>()).add(issue);
             }
-
-            this.previousCodeAnalysisIssues = new java.util.ArrayList<>(deduped.values());
+            this.previousCodeAnalysisIssues = new java.util.ArrayList<>();
+            for (List<CodeAnalysisIssue> group : groups.values()) {
+                CodeAnalysisIssue newest = group.stream().max(java.util.Comparator.comparingInt(issue ->
+                        issue.getAnalysis() != null && issue.getAnalysis().getPrVersion() != null
+                                ? issue.getAnalysis().getPrVersion() : 0)).orElseThrow();
+                CodeAnalysisIssue decision = PrIssueHistory.decisionFor(newest, decisions);
+                CodeAnalysisIssue statusSource = decision != null ? decision
+                        : group.stream().filter(CodeAnalysisIssue::isResolved).findFirst().orElse(newest);
+                boolean resolved = decision != null
+                        ? PrIssueHistory.effectiveResolved(newest, decision)
+                        : statusSource.isResolved();
+                this.previousCodeAnalysisIssues.add(mergeStatus(AiRequestPreviousIssueDTO.fromEntity(newest),
+                        AiRequestPreviousIssueDTO.fromEntity(statusSource), resolved ? "resolved" : "open"));
+            }
 
             return self();
         }
@@ -528,9 +508,9 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
          * Creates a new DTO with the newer issue's data but the older issue's
          * resolution info.
          */
-        private AiRequestPreviousIssueDTO mergeResolvedStatus(
+        private AiRequestPreviousIssueDTO mergeStatus(
                 AiRequestPreviousIssueDTO newer,
-                AiRequestPreviousIssueDTO resolvedOlder) {
+                AiRequestPreviousIssueDTO resolvedOlder, String status) {
             return new AiRequestPreviousIssueDTO(
                     newer.id(),
                     newer.type(),
@@ -543,12 +523,12 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
                     newer.line(),
                     newer.branch(),
                     newer.pullRequestId(),
-                    resolvedOlder.status(), // Use resolved status from older
+                    status,
                     newer.category(),
                     newer.prVersion(),
-                    resolvedOlder.resolvedDescription(),
-                    resolvedOlder.resolvedByCommit(),
-                    resolvedOlder.resolvedInAnalysisId(),
+                    "resolved".equals(status) ? resolvedOlder.resolvedDescription() : null,
+                    "resolved".equals(status) ? resolvedOlder.resolvedByCommit() : null,
+                    "resolved".equals(status) ? resolvedOlder.resolvedInAnalysisId() : null,
                     newer.anchorSide(),
                     newer.codeSnippet());
         }

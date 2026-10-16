@@ -2,6 +2,10 @@ package org.rostilos.codecrow.pipelineagent.qadoc;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService;
+import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
@@ -25,9 +29,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -57,11 +59,17 @@ public class QaDocGenerationService {
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
     private final TokenEncryptionService tokenEncryptionService;
+    private final LocalRepositorySnapshotService snapshots;
+    private final VcsClientProvider vcsClients;
 
     public QaDocGenerationService(
             @Value("${codecrow.inference-orchestrator.url:http://inference-orchestrator:8000}") String inferenceOrchestratorUrl,
             @Value("${codecrow.inference-orchestrator.service-secret:${codecrow.internal.api.secret:}}") String serviceSecret,
-            TokenEncryptionService tokenEncryptionService) {
+            TokenEncryptionService tokenEncryptionService,
+            LocalRepositorySnapshotService snapshots,
+            VcsClientProvider vcsClients) {
+        this.snapshots = snapshots;
+        this.vcsClients = vcsClients;
         this.inferenceOrchestratorUrl = inferenceOrchestratorUrl;
         this.serviceSecret = serviceSecret == null ? "" : serviceSecret.trim();
         this.tokenEncryptionService = tokenEncryptionService;
@@ -92,7 +100,7 @@ public class QaDocGenerationService {
                                            QaDocGenerationContext ctx) throws IOException {
         Map<String, Object> payload = buildPayloadFromContext(project, event.getPrNumber(),
                 event.getIssuesFound(), event.getFilesAnalyzed(), event.getMetrics(), ctx);
-        return callInferenceOrchestrator(payload);
+        return generateWithRepositorySnapshot(project, ctx, payload);
     }
 
     /**
@@ -116,7 +124,85 @@ public class QaDocGenerationService {
                                            QaDocGenerationContext ctx) throws IOException {
         Map<String, Object> payload = buildPayloadFromContext(
                 project, prNumber, issuesFound, filesAnalyzed, prMetadata, ctx);
-        return callInferenceOrchestrator(payload);
+        return generateWithRepositorySnapshot(project, ctx, payload);
+    }
+
+    private String generateWithRepositorySnapshot(Project project, QaDocGenerationContext ctx,
+                                                   Map<String, Object> payload) throws IOException {
+        LocalRepositorySnapshotService.PreparedSnapshot snapshot = null;
+        try {
+            // Saved paths belong to a completed review; every QA operation owns fresh paths.
+            if (ctx.prChangeSummary() != null || ctx.reviewSource() != null && !ctx.reviewSource().isEmpty()) {
+                ObjectNode summary = ctx.prChangeSummary() != null ? objectMapper.valueToTree(ctx.prChangeSummary()) : objectMapper.createObjectNode();
+                ObjectNode tools = summary.get("toolContext") instanceof ObjectNode savedTools ? savedTools : objectMapper.createObjectNode();
+                summary.set("toolContext", tools);
+                ObjectNode repository = tools.get("repository") instanceof ObjectNode savedRepository ? savedRepository : objectMapper.createObjectNode();
+                tools.set("repository", repository);
+                String targetRevision = ctx.reviewSource() != null && ctx.reviewSource().get("targetRevision") instanceof String target ? target : null;
+                if (targetRevision == null) targetRevision = repository.path("localRepoRevision").asText(null);
+                repository.remove(List.of("localRepoPath", "localReviewOverlayPath", "mcpLocalOnly"));
+                if (ctx.prChangeSummary() != null) payload.put("pr_change_summary", summary);
+                payload.put("tool_context", tools);
+                var repo = project.getEffectiveVcsRepoInfo();
+                if (repo != null && repo.getVcsConnection() != null && ctx.sourceRevision() != null
+                        && targetRevision != null && !targetRevision.isBlank()) {
+                    var changed = new LinkedHashSet<String>();
+                    var deleted = new LinkedHashSet<String>();
+                    if (ctx.changedFilePaths() != null) changed.addAll(ctx.changedFilePaths());
+                    if (ctx.reviewSource() != null) {
+                        if (ctx.reviewSource().get("changedFiles") instanceof List<?> paths) {
+                            paths.stream().filter(String.class::isInstance).map(String.class::cast).forEach(changed::add);
+                        }
+                        if (ctx.reviewSource().get("deletedFiles") instanceof List<?> paths) {
+                            paths.stream().filter(String.class::isInstance).map(String.class::cast).forEach(deleted::add);
+                        }
+                    }
+                    for (JsonNode file : summary.path("files")) {
+                        String path = file.path("path").asText(null);
+                        if (path == null || path.isBlank()) continue;
+                        changed.add(path);
+                        if ("deleted".equalsIgnoreCase(file.path("changeType").asText())) deleted.add(path);
+                    }
+                    if (ctx.diff() != null) deleted.addAll(DiffParser.extractDeletedFiles(ctx.diff()));
+                    var contents = new LinkedHashMap<String, String>();
+                    if (ctx.enrichmentData() != null && ctx.enrichmentData().fileContents() != null) {
+                        for (var file : ctx.enrichmentData().fileContents()) {
+                            if (!file.skipped() && file.content() != null) contents.put(file.path(), file.content());
+                        }
+                    }
+                    var client = vcsClients.getClient(repo.getVcsConnection());
+                    for (String path : changed) {
+                        if (deleted.contains(path) || contents.containsKey(path)) continue;
+                        try {
+                            String content = client.getFileContent(repo.getRepoWorkspace(), repo.getRepoSlug(), path, ctx.sourceRevision());
+                            if (content != null) contents.put(path, content);
+                        } catch (Exception unavailable) {
+                            log.warn("QA proposed source unavailable for {} at {}; exact reads will report missing content",
+                                    path, ctx.sourceRevision());
+                        }
+                    }
+                    String targetBranch = ctx.targetBranch() != null ? ctx.targetBranch()
+                            : repository.path("localRepoTargetBranch").asText(null);
+                    snapshot = snapshots.prepareForReview(repo.getVcsConnection(), repo.getRepoWorkspace(),
+                            repo.getRepoSlug(), targetBranch, targetRevision, contents, changed, deleted).orElse(null);
+                    if (snapshot != null) {
+                        var binding = snapshot.transport();
+                        repository.put("localRepoPath", binding.path());
+                        repository.put("localRepoTargetBranch", binding.targetBranch());
+                        repository.put("localRepoRevision", binding.revision());
+                        if (binding.reviewOverlayPath() != null) repository.put("localReviewOverlayPath", binding.reviewOverlayPath());
+                    }
+                }
+                if (snapshot == null) log.warn("QA exact source snapshot unavailable; continuing with saved context and provider tools");
+            }
+        } catch (Exception unavailable) {
+            log.warn("QA exact source snapshot preparation failed; continuing from available context: {}", unavailable.getMessage());
+        }
+        try {
+            return callInferenceOrchestrator(payload);
+        } finally {
+            if (snapshot != null) snapshot.close();
+        }
     }
 
     /**
@@ -294,6 +380,7 @@ public class QaDocGenerationService {
         Map<String, Object> prMeta = (prMetadata != null)
                 ? new LinkedHashMap<>(prMetadata)
                 : new LinkedHashMap<>();
+        prMeta.put("maxAllowedTokens", project.getEffectiveConfig().maxAnalysisTokenLimit());
         if (ctx.analysis() != null) {
             prMeta.put("analysisSummary", buildAnalysisSummary(ctx.analysis()));
         }

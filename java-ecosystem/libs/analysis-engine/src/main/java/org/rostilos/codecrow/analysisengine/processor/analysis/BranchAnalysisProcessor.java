@@ -211,12 +211,13 @@ public class BranchAnalysisProcessor {
 					project.getId(), request.getTargetBranchName());
 
 			if (request.getSourcePrNumber() == null
-					&& matchCache(request, existingBranchOpt, project, consumer, lockLease)) {
+					&& matchCache(request, existingBranchOpt, project, consumer, lockLease, lockKey.get())) {
 				return Map.of(
 						"status", "skipped",
 						"reason", "commit_already_analyzed",
 						"branch", request.getTargetBranchName(),
-						"commitHash", request.getCommitHash());
+						"commitHash", request.getCommitHash(),
+                        "reconciliationPending", existingBranchOpt.map(Branch::isReconciliationPending).orElse(false));
 			}
 
 			EventNotificationEmitter.emitStatus(consumer, "started",
@@ -333,7 +334,8 @@ public class BranchAnalysisProcessor {
 					&& !isMergeCommit
 					&& mergedPrNumbers.isEmpty()) {
 				requireConfirmedLease(lockLease);
-				return skipAlreadyAnalyzedRange(project, request, existingBranchOpt, consumer);
+                return analysisLockService.withOwnedLocks(List.of(lockKey.get()), () ->
+                        skipAlreadyAnalyzedRange(project, request, existingBranchOpt, consumer));
 			}
 
 			// ── Multi-tier diff strategy ─────────────────────────────────────
@@ -395,14 +397,16 @@ public class BranchAnalysisProcessor {
 
 			if (changedFiles.isEmpty()) {
 				requireConfirmedLease(lockLease);
-				branchFileOperationsService.createOrUpdateProjectBranch(
-						project, request, existingBranchOpt.orElse(null));
+                analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                    branchFileOperationsService.createOrUpdateProjectBranch(project, request, existingBranchOpt.orElse(null));
+                    branchHealthService.markBranchHealthy(project, request);
+                    return null;
+                });
 				EventNotificationEmitter.emitStatus(consumer, "skipped",
 						"No changed files match the project analysis scope");
 				requireConfirmedLease(lockLease);
 				performRagGenerationRefresh(request, project, consumer);
 				requireConfirmedLease(lockLease);
-				branchHealthService.markBranchHealthy(project, request);
 				requireConfirmedLease(lockLease);
 				branchHealthService.recordCommitsAnalyzed(project, unanalyzedCommits,
 						request.getTargetBranchName());
@@ -435,62 +439,58 @@ public class BranchAnalysisProcessor {
 			EventNotificationEmitter.emitStatus(consumer, "analyzing_files",
 					"Analyzing " + changedFiles.size() + " changed files");
 
+			Set<String> reconciliationPaths = branchIssueReconciliationService.findReconciliationPaths(
+					existingBranchOpt.orElse(null), changedFiles);
 			BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
 					branchFileOperationsService.downloadBranchFileSnapshot(
-					vcsRepoInfoImpl, request.getCommitHash(), changedFiles);
+					vcsRepoInfoImpl, request.getCommitHash(), reconciliationPaths);
 			log.info("Branch archive: {} files extracted for {} changed files",
 					branchFileSnapshot.contents().size(), changedFiles.size());
 
-			requireConfirmedLease(lockLease);
-			Set<String> existingFiles = branchFileOperationsService.updateBranchFiles(
-					changedFiles, project, request.getTargetBranchName(), branchFileSnapshot);
-
-			requireConfirmedLease(lockLease);
-			Branch branch = branchFileOperationsService.createOrUpdateProjectBranch(
-					project, request, existingBranchOpt.orElse(null));
-
-			requireConfirmedLease(lockLease);
-			if (mergedPrNumbers.size() > 1) {
-				branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
-						changedFiles, existingFiles, branch, project, mergedPrNumbers);
-			} else {
-				branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
-						changedFiles, existingFiles, branch, project, prNumber);
-			}
-			requireConfirmedLease(lockLease);
-			branchIssueReconciliationService.reconcileIssueLineNumbers(rawDiff, changedFiles, branch);
-
-			// Update branch issue counts after mapping
-			requireConfirmedLease(lockLease);
-			Branch refreshedBranch = refreshAndSaveIssueCounts(branch);
-			log.info("Updated branch issue counts after mapping: total={}, high={}, medium={}, low={}, resolved={}",
-					refreshedBranch.getTotalIssues(), refreshedBranch.getHighSeverityCount(),
-					refreshedBranch.getMediumSeverityCount(), refreshedBranch.getLowSeverityCount(),
-					refreshedBranch.getResolvedCount());
-
-			requireConfirmedLease(lockLease);
-			branchIssueReconciliationService.reanalyzeCandidateIssues(
-					changedFiles, existingFiles, refreshedBranch, project,
-					request, consumer, branchFileSnapshot.contents(), rawDiff,
-					branchFileSnapshot.allowContentApiFallback());
-
-			// An incremental push can only change issues in the files present in its
-			// diff. Repository-wide issue checks belong to the explicit full
-			// reconciliation operation; doing them here caused a sequential VCS read
-			// for every unrelated unresolved file and could hold a one-file job for
-			// nearly an hour.
-			EventNotificationEmitter.emitStatus(consumer, "finalizing_branch_state",
-					"Saving changed-file reconciliation results");
-
-			requireConfirmedLease(lockLease);
-			branchFileOperationsService.updateFileSnapshotsForBranch(existingFiles, project, request,
-					branchFileSnapshot);
-
-			Branch branchForVerify = branchRepository.findByProjectIdAndBranchName(
-					project.getId(), request.getTargetBranchName()).orElse(refreshedBranch);
-			requireConfirmedLease(lockLease);
-			branchIssueReconciliationService.verifyIssueLineNumbersWithSnippets(
-					changedFiles, project, branchForVerify);
+            var prepared = branchFileOperationsService.prepareBranchFiles(
+                    reconciliationPaths, project, request, branchFileSnapshot);
+            Set<String> existingFiles = prepared.existingFiles();
+            String committedDiff = rawDiff;
+            Long sourcePr = prNumber;
+            Branch branch = analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                Branch current = branchRepository.findByProjectIdAndBranchName(
+                        project.getId(), request.getTargetBranchName()).orElse(null);
+                boolean newRevision = current == null || !Objects.equals(current.getCommitHash(), request.getCommitHash());
+                Branch saved = branchFileOperationsService.createOrUpdateProjectBranch(project, request, current);
+                if (mergedPrNumbers.size() > 1) {
+                    branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
+                            changedFiles, existingFiles, saved, project, mergedPrNumbers);
+                } else {
+                    branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
+                            changedFiles, existingFiles, saved, project, sourcePr);
+                }
+                branchIssueReconciliationService.reconcileIssueLineNumbers(committedDiff, changedFiles, saved);
+                branchFileOperationsService.persistPreparedFiles(saved, project, request, prepared);
+                branchIssueReconciliationService.verifyIssueLineNumbersWithSnippets(prepared.contents().keySet(), project, saved);
+                Branch refreshed = refreshAndSaveIssueCounts(saved);
+                refreshed.markHealthy(request.getCommitHash());
+                refreshed.beginReconciliation(newRevision);
+                return branchRepository.save(refreshed);
+            });
+            var reconciliation = branchIssueReconciliationService.reanalyzeCandidateIssues(
+                    changedFiles, existingFiles, branch, project, request, consumer,
+                    prepared.contents(), rawDiff, branchFileSnapshot.allowContentApiFallback(), action ->
+                            analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                                action.run();
+                                Branch current = branchRepository.findById(branch.getId()).orElseThrow();
+                                current.finishReconciliation(null);
+                                branchRepository.save(current);
+                                branchFileOperationsService.persistBranchFiles(existingFiles, project, request.getTargetBranchName());
+                                return null;
+                            }));
+            if (!reconciliation.complete()) {
+                analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                    Branch current = branchRepository.findById(branch.getId()).orElseThrow();
+                    current.finishReconciliation(reconciliation.diagnostic());
+                    branchRepository.save(current);
+                    return null;
+                });
+            }
 
 			// ── Post-analysis housekeeping ────────────────────────────────────
 			requireConfirmedLease(lockLease);
@@ -498,7 +498,6 @@ public class BranchAnalysisProcessor {
 				performRagGenerationRefresh(request, project, consumer);
 			}
 			requireConfirmedLease(lockLease);
-			branchHealthService.markBranchHealthy(project, request);
 			requireConfirmedLease(lockLease);
 			branchHealthService.recordCommitsAnalyzed(project, unanalyzedCommits,
 					request.getTargetBranchName());
@@ -507,14 +506,22 @@ public class BranchAnalysisProcessor {
 					request.getTargetBranchName(), request.getCommitHash());
 
 			return Map.of("status", "accepted", "cached", false,
-					"branch", request.getTargetBranchName());
+					"branch", request.getTargetBranchName(), "reconciliationPending", !reconciliation.complete());
 
 		} catch (BranchAnalysisLeaseLostException e) {
 			log.info("Branch analysis stopped after lock lease ownership was lost: project={}, branch={}",
 					project.getId(), request.getTargetBranchName());
 			throw e;
 		} catch (Exception e) {
-			branchHealthService.handleProcessFailure(project, request, unanalyzedCommits, e);
+			List<String> failedCommits = unanalyzedCommits;
+            try {
+                analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                    branchHealthService.handleProcessFailure(project, request, failedCommits, e);
+                    return null;
+                });
+            } catch (RuntimeException noLongerOwned) {
+                log.warn("Could not record branch failure under original lease: {}", noLongerOwned.getMessage());
+            }
 			throw e;
 		} finally {
 			if (lockLease != null) {
@@ -576,7 +583,7 @@ public class BranchAnalysisProcessor {
 	 */
 	private boolean matchCache(BranchProcessRequest request, Optional<Branch> existingBranchOpt,
 			Project project, Consumer<Map<String, Object>> consumer,
-			AnalysisLockService.LockLease lockLease) throws IOException {
+			AnalysisLockService.LockLease lockLease, String lockKey) throws IOException {
 		if (request.getCommitHash() == null || existingBranchOpt.isEmpty())
 			return false;
 
@@ -599,8 +606,11 @@ public class BranchAnalysisProcessor {
 						branchFileOperationsService.downloadBranchFileSnapshot(
 						vcsRepoInfoImpl, request.getCommitHash(), branchFiles);
 				requireConfirmedLease(lockLease);
-				branchFileOperationsService.updateFileSnapshotsForBranch(
-						branchFiles, project, request, branchFileSnapshot);
+                var prepared = branchFileOperationsService.prepareBranchFiles(branchFiles, project, request, branchFileSnapshot);
+                analysisLockService.withOwnedLocks(List.of(lockKey), () -> {
+                    branchFileOperationsService.persistPreparedFiles(existingBranchOpt.get(), project, request, prepared);
+                    return null;
+                });
 			}
 		} catch (BranchAnalysisLeaseLostException leaseLost) {
 			throw leaseLost;
