@@ -35,7 +35,7 @@ import static org.mockito.Mockito.*;
 class QaDocRecoveryIT {
     @SpringBootConfiguration @EnableAutoConfiguration @EntityScan("org.rostilos.codecrow.core.model")
     @EnableJpaRepositories("org.rostilos.codecrow.core.persistence.repository")
-    @Import({QaDocQueueService.class, JobService.class, AnalysisLockService.class})
+    @Import({QaDocQueueService.class, JobService.class, AnalysisLockService.class, ProjectFeaturePolicy.class})
     static class Config {}
     @Autowired EntityManager em;
     @Autowired PlatformTransactionManager transactions;

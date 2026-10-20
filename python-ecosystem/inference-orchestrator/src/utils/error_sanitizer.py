@@ -6,6 +6,7 @@ Removes sensitive technical details like API keys, quotas, and internal stack tr
 import ast
 import re
 import logging
+from llm.inference_observer import filter_host_error
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,9 @@ def sanitize_error_for_display(error_message: str) -> str:
     """
     if not error_message:
         return "An unexpected error occurred during processing."
+    filtered = filter_host_error(error_message)
+    if filtered != error_message:
+        return filtered
     
     error_lower = error_message.lower()
 
@@ -257,6 +261,7 @@ def create_user_friendly_error(error: Exception) -> str:
 def create_error_response(error_message: str, exception_str: str = "") -> dict:
     """Return the existing HTTP review error envelope without synthetic issues."""
     full_message = f"{error_message}: {exception_str}" if exception_str else error_message
+    full_message = filter_host_error(full_message)
     return {
         "status": "error",
         "comment": full_message,

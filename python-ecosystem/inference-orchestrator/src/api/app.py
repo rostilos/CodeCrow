@@ -28,6 +28,8 @@ async def lifespan(app: FastAPI):
     services = []
     consumers = []
     try:
+        from llm.inference_observer import initialize_observer
+        initialize_observer()
         logger.info("Initializing application services...")
         review_service = ReviewService()
         services.append(review_service)

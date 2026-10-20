@@ -14,6 +14,10 @@ import java.util.Optional;
 
 @Service
 public class QaDocQueueService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.rostilos.codecrow.core.service.ProjectFeaturePolicy featurePolicy =
+            new org.rostilos.codecrow.core.service.ProjectFeaturePolicy();
+
     private final CodeAnalysisRepository analyses;
     private final JobRepository jobs;
     private final JobLogRepository logs;
@@ -29,6 +33,11 @@ public class QaDocQueueService {
         var analysis=analyses.findForQaQueue(projectId,analysisId).orElse(null);
         if (analysis == null || !analysis.isQaDocumentationPending()) return Optional.empty();
         if (analysis.getAnalysisType() != AnalysisType.PR_REVIEW || analysis.getPrNumber() == null) return Optional.empty();
+        if (!featurePolicy.qaDocumentationEnabled(analysis.getProject())) {
+            analyses.consumeQaIntent(projectId, analysisId);
+            org.slf4j.LoggerFactory.getLogger(getClass()).info("QA documentation skipped by host capability: project={}, analysis={}", projectId, analysisId);
+            return Optional.empty();
+        }
         var job=jobService.createCommandJob(analysis.getProject(),JobType.QA_DOC_COMMAND,
                 analysis.getPrNumber(),analysis.getCommitHash(),JobTriggerSource.CHAINED);
         job.setInputAnalysisId(analysis.getId()); jobs.save(job);

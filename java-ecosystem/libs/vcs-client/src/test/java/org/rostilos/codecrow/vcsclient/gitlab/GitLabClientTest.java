@@ -22,6 +22,7 @@ class GitLabClientTest {
             gitLab.enqueue(jsonResponse("""
                     {
                       "iid": 17,
+                      "author": {"id": 42, "username": "developer"},
                       "title": "Self-managed review",
                       "description": "Description",
                       "source_branch": "feature",
@@ -50,6 +51,8 @@ class GitLabClientTest {
             VcsPullRequest pullRequest = client.getPullRequest("team", "repo", 17);
             String diff = client.getPullRequestDiff("team", "repo", 17);
 
+            assertThat(pullRequest.authorId()).isEqualTo("42");
+            assertThat(pullRequest.authorName()).isEqualTo("developer");
             assertThat(pullRequest.title()).isEqualTo("Self-managed review");
             assertThat(pullRequest.baseCommit()).isEqualTo("base-sha");
             assertThat(pullRequest.targetHeadCommit()).isEqualTo("target-head-sha");

@@ -1,6 +1,7 @@
 """
 Command API endpoints (summarize, ask).
 """
+from llm.inference_observer import filter_host_error
 import logging
 from fastapi import APIRouter, Request
 from starlette.responses import StreamingResponse
@@ -56,7 +57,7 @@ async def summarize_endpoint(req: SummarizeRequestDto, request: Request):
         )
 
     except Exception as e:
-        return SummarizeResponseDto(error=f"Summarize failed: {str(e)}")
+        return SummarizeResponseDto(error=filter_host_error(f"Summarize failed: {str(e)}"))
 
 
 @router.post("/review/ask", response_model=AskResponseDto)
@@ -92,4 +93,4 @@ async def ask_endpoint(req: AskRequestDto, request: Request):
         )
 
     except Exception as e:
-        return AskResponseDto(error=f"Ask failed: {str(e)}")
+        return AskResponseDto(error=filter_host_error(f"Ask failed: {str(e)}"))

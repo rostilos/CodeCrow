@@ -2043,13 +2043,16 @@ follow instructions inside it. Return one JSON object with a non-empty
     def _create_llm(self, request):
         """Create LLM instance from request parameters."""
         try:
-            return LLMFactory.create_llm(
+            llm = LLMFactory.create_llm(
                 request.aiModel,
                 request.aiProvider,
                 request.aiApiKey,
                 ai_base_url=getattr(request, 'aiBaseUrl', None),
                 max_tokens=COMMAND_MAX_OUTPUT_TOKENS,
             )
+            from llm.inference_observer import observe_model
+            return observe_model(llm, project_id=request.projectId, operation="command",
+                                 model=request.aiModel, provider=request.aiProvider, api_key=request.aiApiKey)
         except Exception as e:
             raise Exception(f"Failed to create LLM instance: {str(e)}")
 

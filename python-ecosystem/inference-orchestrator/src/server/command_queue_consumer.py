@@ -1,3 +1,4 @@
+from llm.inference_observer import filter_host_error
 import json
 import logging
 import os
@@ -139,7 +140,7 @@ class CommandQueueConsumer(RedisJobConsumer):
             if event_queue_key:
                 event = {
                     "type": "error",
-                    "message": f"Internal orchestrator command error: {str(e)}"
+                    "message": filter_host_error(f"Internal orchestrator command error: {str(e)}")
                 }
                 if events is None:
                     await self._publish_event(event_queue_key, event)

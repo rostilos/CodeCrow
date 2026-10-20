@@ -43,6 +43,10 @@ import org.slf4j.LoggerFactory;
  * subclasses only identify their provider.
  */
 public abstract class AbstractVcsAiClientService implements VcsAiClientService {
+    @org.springframework.beans.factory.annotation.Autowired
+    protected org.rostilos.codecrow.core.service.AIConnectionResolver aiConnectionResolver =
+            new org.rostilos.codecrow.core.service.AIConnectionResolver();
+
     private static final java.util.regex.Pattern FULL_GIT_OBJECT_ID =
             java.util.regex.Pattern.compile("(?i)^(?:[0-9a-f]{40}|[0-9a-f]{64})$");
     private final Logger log = LoggerFactory.getLogger(getClass());
@@ -101,7 +105,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             Optional<CodeAnalysis> previousAnalysis,
             List<CodeAnalysis> allPrAnalyses) throws GeneralSecurityException {
         RepositoryInfo repository = repositoryInfo(project);
-        AIConnection aiConnection = project.getAiBinding().getAiConnection();
+        AIConnection aiConnection = aiConnectionResolver.resolve(project);
         String previousCommit = previousAnalysis.map(CodeAnalysis::getCommitHash).orElse(null);
         String currentCommit = request.getCommitHash();
         PullRequestData pullRequest = pullRequestData(
@@ -252,7 +256,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             Map<String, String> fileContents,
             String relevantDiff) throws GeneralSecurityException {
         RepositoryInfo repository = repositoryInfo(project);
-        AIConnection aiConnection = project.getAiBinding().getAiConnection();
+        AIConnection aiConnection = aiConnectionResolver.resolve(project);
         String resolvedCommit = resolveCommitBestEffort(
                 repository, request.getCommitHash(), request.getTargetBranchName());
         request.commitHash = resolvedCommit;
@@ -287,7 +291,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             List<String> changedFiles) throws GeneralSecurityException {
         BranchProcessRequest branchRequest = (BranchProcessRequest) request;
         RepositoryInfo repository = repositoryInfo(project);
-        AIConnection aiConnection = project.getAiBinding().getAiConnection();
+        AIConnection aiConnection = aiConnectionResolver.resolve(project);
         String resolvedCommit = resolveCommitBestEffort(
                 repository, branchRequest.getCommitHash(), branchRequest.getTargetBranchName());
         branchRequest.commitHash = resolvedCommit;

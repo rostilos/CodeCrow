@@ -32,7 +32,8 @@ class QaDocOperationLeaseIT {
     @SpringBootConfiguration @EnableAutoConfiguration
     @EntityScan("org.rostilos.codecrow.core.model")
     @EnableJpaRepositories(basePackageClasses={AnalysisLockRepository.class, QaDocDocumentRepository.class})
-    @Import({AnalysisLockService.class, QaDocOperationService.class, QaDocDocumentService.class})
+    @Import({AnalysisLockService.class, QaDocOperationService.class, QaDocDocumentService.class,
+            org.rostilos.codecrow.core.service.ProjectFeaturePolicy.class})
     static class Config {}
     @Autowired EntityManager em;
     @Autowired PlatformTransactionManager transactions;

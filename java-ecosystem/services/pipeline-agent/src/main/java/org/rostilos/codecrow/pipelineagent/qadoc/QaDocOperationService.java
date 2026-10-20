@@ -12,11 +12,16 @@ import java.util.function.Consumer;
 /** Serializes PR replacement and task accumulation through publication, without a long database transaction. */
 @Service
 public class QaDocOperationService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.rostilos.codecrow.core.service.ProjectFeaturePolicy featurePolicy =
+            new org.rostilos.codecrow.core.service.ProjectFeaturePolicy();
+
     private static final Logger log = LoggerFactory.getLogger(QaDocOperationService.class);
     private final AnalysisLockService locks;
     public QaDocOperationService(AnalysisLockService locks) { this.locks = locks; }
 
     public Operation open(Project project, Long pr, String task, Consumer<Map<String, Object>> events) {
+        featurePolicy.requireQaDocumentation(project);
         var operation = new Operation();
         try {
             // Every caller takes PR before task, including when a PR changes its linked task.

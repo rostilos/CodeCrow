@@ -44,6 +44,10 @@ import java.util.regex.Pattern;
  */
 @Component("askCommandProcessor")
 public class AskCommandProcessor implements CommentCommandProcessor {
+    @org.springframework.beans.factory.annotation.Autowired
+    protected org.rostilos.codecrow.core.service.AIConnectionResolver aiConnectionResolver =
+            new org.rostilos.codecrow.core.service.AIConnectionResolver();
+
     
     private static final Logger log = LoggerFactory.getLogger(AskCommandProcessor.class);
     
@@ -447,12 +451,12 @@ public class AskCommandProcessor implements CommentCommandProcessor {
             }
             
             // Get AI connection
-            if (project.getAiBinding() == null || project.getAiBinding().getAiConnection() == null) {
+            if (!aiConnectionResolver.isConfigured(project)) {
                 log.error("No AI connection configured for project");
                 return null;
             }
             
-            AIConnection aiConnection = project.getAiBinding().getAiConnection();
+            AIConnection aiConnection = aiConnectionResolver.resolve(project);
             String decryptedApiKey = tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted());
             
             // Get VCS credentials using centralized extractor

@@ -910,7 +910,7 @@ public class BitbucketCloudClient implements VcsClient {
                 headCommit,
                 state,
                 "MERGED".equalsIgnoreCase(state),
-                null);
+                null, metadata.getAuthorId(), metadata.getAuthorName());
     }
 
     @Override

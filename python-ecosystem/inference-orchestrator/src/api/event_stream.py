@@ -1,4 +1,5 @@
 """Shared NDJSON event stream with request-owned processing lifetime."""
+from llm.inference_observer import filter_host_error
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -35,7 +36,7 @@ async def service_event_stream(
             result = await process(emit)
             emit({"type": "final", "result": result_value(result)})
         except Exception as error:
-            emit({"type": "error", "message": str(error)})
+            emit({"type": "error", "message": filter_host_error(str(error))})
         finally:
             queue.put_nowait(None)
 

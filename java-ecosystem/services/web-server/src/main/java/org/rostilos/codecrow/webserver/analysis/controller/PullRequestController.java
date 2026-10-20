@@ -44,6 +44,10 @@ import org.rostilos.codecrow.core.dto.pullrequest.PullRequestDTO;
 @IsWorkspaceMember
 @RequestMapping("/api/{workspaceSlug}/project/{projectNamespace}/pull-requests")
 public class PullRequestController {
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.rostilos.codecrow.core.service.ProjectFeaturePolicy featurePolicy =
+            new org.rostilos.codecrow.core.service.ProjectFeaturePolicy();
+
 
     private static final Logger log = LoggerFactory.getLogger(PullRequestController.class);
 
@@ -119,6 +123,7 @@ public class PullRequestController {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
 
+        featurePolicy.requireQaDocumentation(project);
         return ResponseEntity.ok(
                 qaDocDocumentService.findLatestDocument(project.getId(), prNumber)
                         .map(QaDocDocumentResponse::fromDocument)

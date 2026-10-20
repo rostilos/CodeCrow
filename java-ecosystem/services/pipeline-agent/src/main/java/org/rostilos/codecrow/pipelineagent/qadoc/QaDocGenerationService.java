@@ -45,6 +45,10 @@ import java.util.stream.Collectors;
  */
 @Service
 public class QaDocGenerationService {
+    @org.springframework.beans.factory.annotation.Autowired
+    protected org.rostilos.codecrow.core.service.AIConnectionResolver aiConnectionResolver =
+            new org.rostilos.codecrow.core.service.AIConnectionResolver();
+
 
     private static final Logger log = LoggerFactory.getLogger(QaDocGenerationService.class);
 
@@ -421,13 +425,13 @@ public class QaDocGenerationService {
      */
     private void addAiCredentials(Map<String, Object> payload, Project project) {
         try {
-            ProjectAiConnectionBinding binding = project.getAiBinding();
-            if (binding == null || binding.getAiConnection() == null) {
+            AIConnection aiConn = aiConnectionResolver.resolve(project);
+            if (aiConn == null) {
+                if (!aiConnectionResolver.allowEnvironmentFallback(project)) throw new IllegalStateException("AI connection is not configured");
                 log.warn("No AI connection configured for project {} — inference-orchestrator will fall back to env vars",
                         project.getId());
                 return;
             }
-            AIConnection aiConn = binding.getAiConnection();
             payload.put("ai_provider", aiConn.getProviderKey().name().toLowerCase());
             payload.put("ai_model", aiConn.getAiModel());
             payload.put("ai_api_key", tokenEncryptionService.decrypt(aiConn.getApiKeyEncrypted()));
@@ -435,6 +439,7 @@ public class QaDocGenerationService {
                 payload.put("ai_base_url", aiConn.getBaseUrl());
             }
         } catch (Exception e) {
+            if (!aiConnectionResolver.allowEnvironmentFallback(project)) throw new IllegalStateException("AI credentials are unavailable", e);
             log.warn("Failed to extract AI credentials for project {} — inference-orchestrator will fall back to env vars: {}",
                     project.getId(), e.getMessage());
         }

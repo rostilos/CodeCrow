@@ -92,6 +92,11 @@ class QaDocumentationService:
             max_tokens=16_384,
         )
 
+        from llm.inference_observer import observe_model
+        llm = observe_model(llm, project_id=project_id, operation="qa_documentation",
+                            model=ai_model or self._ai_model, provider=ai_provider or self._ai_provider,
+                            api_key=ai_api_key or self._ai_api_key)
+
         from service.qa_documentation.repository_tools import qa_repository_tools
         async with qa_repository_tools(llm, pr_change_summary, repository_context) as agent:
             orchestrator = QaDocOrchestrator(llm=llm, agent_service=agent)

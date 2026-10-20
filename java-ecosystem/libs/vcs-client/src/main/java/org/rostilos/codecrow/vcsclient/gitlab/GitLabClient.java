@@ -693,7 +693,9 @@ public class GitLabClient implements VcsClient {
                 headCommit,
                 state,
                 "merged".equalsIgnoreCase(state),
-                getTextOrNull(metadata, "web_url"));
+                getTextOrNull(metadata, "web_url"),
+                metadata.path("author").path("id").asText(null),
+                metadata.path("author").path("username").asText(null));
     }
 
     @Override

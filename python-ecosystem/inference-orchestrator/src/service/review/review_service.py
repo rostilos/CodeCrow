@@ -1183,6 +1183,9 @@ class ReviewService:
                 ai_custom_parameters=getattr(request, 'aiCustomParameters', None),
             )
             
+            from llm.inference_observer import observe_model
+            llm = observe_model(llm, project_id=request.projectId, operation="review",
+                                model=request.aiModel, provider=request.aiProvider, api_key=request.aiApiKey)
             return wrap_quality_capture_llm(llm, quality_capture)
         except Exception as e:
             raise Exception(f"Failed to create LLM instance: {str(e)}")
