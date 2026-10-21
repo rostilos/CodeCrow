@@ -2,6 +2,8 @@ package org.rostilos.codecrow.core.persistence;
 
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
@@ -36,6 +38,52 @@ class RepositoryBoundaryIT {
     @Autowired JobRepository jobs;
     @Autowired VcsRepoBindingRepository bindings;
     @Autowired DataSource dataSource;
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void rowVersionRepairPreservesPopulatedTablesAndExistingCounters(boolean existingNullableColumn) throws Exception {
+        String schema = "version_repair_" + UUID.randomUUID().toString().replace("-", "");
+        try (var conn = dataSource.getConnection(); var sql = conn.createStatement();
+             var source = getClass().getResourceAsStream("/db/migration/managed/V2.44.0__restore_issue_and_qa_row_versions.sql")) {
+            assertThat(source).isNotNull();
+            String migration = new String(source.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            sql.execute("CREATE SCHEMA " + schema);
+            try {
+                conn.setSchema(schema);
+                for (String table : java.util.List.of("code_analysis_issue", "qa_doc_document")) {
+                    sql.execute("CREATE TABLE " + table + " (id bigint PRIMARY KEY, payload text"
+                            + (existingNullableColumn ? ", row_version bigint" : "") + ")");
+                    sql.execute("INSERT INTO " + table + " (id,payload) VALUES (1,'saved content'),(2,'another record')");
+                    if (existingNullableColumn) sql.execute("UPDATE " + table + " SET row_version=7 WHERE id=2");
+                }
+                sql.execute(migration);
+                for (String table : java.util.List.of("code_analysis_issue", "qa_doc_document")) {
+                    try (var rows = sql.executeQuery("SELECT payload,row_version FROM " + table + " ORDER BY id")) {
+                        assertThat(rows.next()).isTrue();
+                        assertThat(rows.getString(1)).isEqualTo("saved content");
+                        assertThat(rows.getLong(2)).isZero();
+                        assertThat(rows.next()).isTrue();
+                        assertThat(rows.getString(1)).isEqualTo("another record");
+                        assertThat(rows.getLong(2)).isEqualTo(existingNullableColumn ? 7 : 0);
+                        assertThat(rows.next()).isFalse();
+                    }
+                    sql.execute("UPDATE " + table + " SET row_version=11 WHERE id=2");
+                }
+                // A normal upgrade after an immediate repair must retain concurrent-write protection.
+                sql.execute(migration);
+                for (String table : java.util.List.of("code_analysis_issue", "qa_doc_document")) {
+                    sql.execute("INSERT INTO " + table + " (id,payload) VALUES (3,'new record')");
+                    try (var rows = sql.executeQuery("SELECT row_version FROM " + table + " ORDER BY id")) {
+                        assertThat(rows.next()).isTrue(); assertThat(rows.getLong(1)).isZero();
+                        assertThat(rows.next()).isTrue(); assertThat(rows.getLong(1)).isEqualTo(11);
+                        assertThat(rows.next()).isTrue(); assertThat(rows.getLong(1)).isZero();
+                        assertThat(rows.next()).isFalse();
+                    }
+                    assertThatThrownBy(() -> sql.execute("UPDATE " + table + " SET row_version=NULL WHERE id=1"))
+                            .isInstanceOf(java.sql.SQLException.class).hasMessageContaining("not-null constraint");
+                }
+            } finally { conn.setSchema("public"); sql.execute("DROP SCHEMA " + schema + " CASCADE"); }
+        }
+    }
     @Test void durableQaAndBranchMigrationsPreserveExistingRowsAndRecoveryDefaults() throws Exception {
         String schema = "recovery_test_" + UUID.randomUUID().toString().replace("-", "");
         try (var conn = dataSource.getConnection(); var sql = conn.createStatement()) {

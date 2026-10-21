@@ -77,6 +77,27 @@ class QaDocHistoryFlowIT {
         assertThat(documents.findLatestDocument(project.getId(), 7L).orElseThrow().getMarkdownContent()).isEqualTo("new coverage");
     }
 
+    @Test void environmentChecksSurviveReloadAndRegenerationRetainsCustomizedEnvironments() {
+        var project = newProject();
+        documents.upsertLatestDocument(project, 7L, null, 100L, "head", "coverage");
+        var tx = new TransactionTemplate(transactions);
+        tx.executeWithoutResult(status -> {
+            var doc = documentRepository.findForUpdate(project.getId(), 7L).orElseThrow();
+            doc.getEnvironmentChecks().put("develop", new ArrayList<>(List.of(0, 2)));
+            doc.getEnvironmentChecks().put("preview", new ArrayList<>(List.of(1)));
+            doc.getEnvironmentChecks().remove("production");
+            documentRepository.saveAndFlush(doc);
+        });
+        var persisted = documents.findLatestDocument(project.getId(), 7L).orElseThrow();
+        assertThat(persisted.getEnvironmentChecks().get("develop")).containsExactly(0, 2);
+        assertThat(persisted.getEnvironmentChecks().get("stage")).isEmpty();
+        assertThat(persisted.getEnvironmentChecks()).doesNotContainKey("production");
+        documents.upsertLatestDocument(project, 7L, null, 101L, "new-head", "new coverage");
+        var updated = documents.findLatestDocument(project.getId(), 7L).orElseThrow();
+        assertThat(updated.getEnvironmentChecks()).containsOnlyKeys("develop", "stage", "preview");
+        assertThat(updated.getEnvironmentChecks().values()).allMatch(List::isEmpty);
+    }
+
     @Test void staleDetachedWriterCannotReplaceACommittedDocument() {
         var project = newProject();
         var initial = documents.upsertLatestDocument(project, 7L, "TASK-123", 100L, "head", "original");

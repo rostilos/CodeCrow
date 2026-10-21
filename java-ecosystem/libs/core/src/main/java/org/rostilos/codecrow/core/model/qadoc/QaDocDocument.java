@@ -1,9 +1,16 @@
 package org.rostilos.codecrow.core.model.qadoc;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import org.rostilos.codecrow.core.model.project.Project;
 
 import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.ArrayList;
 
 /**
  * Stores the latest generated QA documentation for a project pull request.
@@ -56,6 +63,10 @@ public class QaDocDocument {
     @Column(name = "markdown_content", nullable = false, columnDefinition = "TEXT")
     private String markdownContent;
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "environment_checks", nullable = false, columnDefinition = "jsonb")
+    private Map<String, List<Integer>> environmentChecks = new LinkedHashMap<>();
+
     @Column(name = "generated_at", nullable = false)
     private OffsetDateTime generatedAt = OffsetDateTime.now();
 
@@ -66,9 +77,13 @@ public class QaDocDocument {
     private OffsetDateTime updatedAt = OffsetDateTime.now();
 
     public QaDocDocument() {
+        for (String environment : List.of("develop", "stage", "production")) {
+            environmentChecks.put(environment, new ArrayList<>());
+        }
     }
 
     public QaDocDocument(Project project, Long prNumber) {
+        this();
         this.project = project;
         this.prNumber = prNumber;
     }
@@ -84,6 +99,9 @@ public class QaDocDocument {
 
     public void replaceContent(String taskId, Long analysisId, String commitHash, String markdownContent) {
         OffsetDateTime now = OffsetDateTime.now();
+        if (!Objects.equals(this.markdownContent, markdownContent) || !Objects.equals(this.commitHash, commitHash)) {
+            environmentChecks.replaceAll((name, checks) -> new ArrayList<>());
+        }
         this.taskId = taskId;
         this.lastAnalysisId = analysisId;
         this.commitHash = commitHash;
@@ -112,6 +130,8 @@ public class QaDocDocument {
 
     public String getMarkdownContent() { return markdownContent; }
     public void setMarkdownContent(String markdownContent) { this.markdownContent = markdownContent; }
+
+    public Map<String, List<Integer>> getEnvironmentChecks() { return environmentChecks; }
 
     public OffsetDateTime getGeneratedAt() { return generatedAt; }
     public void setGeneratedAt(OffsetDateTime generatedAt) { this.generatedAt = generatedAt; }

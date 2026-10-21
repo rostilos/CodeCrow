@@ -18,6 +18,7 @@ import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequest
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.service.QaDocDocumentService;
 import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceReviewer;
 import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.analysis.dto.request.IssueStatusUpdateRequest;
 import org.rostilos.codecrow.webserver.analysis.dto.response.IssueStatusUpdateResponse;
@@ -350,7 +351,7 @@ public class PullRequestController {
      * counts are refreshed and persisted.
      */
     @PutMapping("/branches/issues/{issueId}/status")
-    @HasOwnerOrAdminRights
+    @IsWorkspaceReviewer
     public ResponseEntity<IssueStatusUpdateResponse> updateBranchIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -429,7 +430,7 @@ public class PullRequestController {
      * {@code CodeAnalysisIssue} records are intentionally <b>NOT</b> mutated.
      */
     @PutMapping("/branches/issues/bulk-status")
-    @HasOwnerOrAdminRights
+    @IsWorkspaceReviewer
     public ResponseEntity<Map<String, Object>> bulkUpdateBranchIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,

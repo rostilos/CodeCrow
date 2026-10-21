@@ -15,6 +15,15 @@ import java.util.Optional;
 
 @Repository
 public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long> {
+    @Query("SELECT a FROM CodeAnalysis a WHERE a.project.id = :projectId " +
+            "AND (:prNumber IS NULL OR a.prNumber = :prNumber) " +
+            "AND (:commitHash IS NULL OR a.commitHash = :commitHash) " +
+            "AND (:branch IS NULL OR a.sourceBranchName = :branch OR (a.prNumber IS NULL AND a.branchName = :branch)) " +
+            "ORDER BY a.createdAt DESC, a.id DESC")
+    List<CodeAnalysis> findDeveloperContext(@Param("projectId") Long projectId, @Param("prNumber") Long prNumber,
+                                            @Param("commitHash") String commitHash, @Param("branch") String branch,
+                                            Pageable page);
+
     @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT a FROM CodeAnalysis a WHERE a.id = :id AND a.project.id = :projectId")
     Optional<CodeAnalysis> findForQaQueue(@Param("projectId") Long projectId, @Param("id") Long id);

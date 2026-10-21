@@ -6,7 +6,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
-import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceReviewer;
 import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.analysis.dto.request.IssueStatusUpdateRequest;
 import org.rostilos.codecrow.webserver.analysis.dto.response.IssueStatusUpdateResponse;
@@ -147,7 +147,7 @@ public class AnalysisIssueController {
     }
 
     @PutMapping("/{issueId}/status")
-    @HasOwnerOrAdminRights
+    @IsWorkspaceReviewer
     public ResponseEntity<HttpStatus> updateIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,

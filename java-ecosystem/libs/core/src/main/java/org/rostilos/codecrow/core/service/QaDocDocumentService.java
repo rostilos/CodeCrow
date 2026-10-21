@@ -37,7 +37,7 @@ public class QaDocDocumentService {
         }
 
         QaDocDocument document = qaDocDocumentRepository
-                .findByProjectIdAndPrNumber(project.getId(), prNumber)
+                .findForUpdate(project.getId(), prNumber)
                 .orElseGet(() -> new QaDocDocument(project, prNumber));
 
         if (document.isFromNewerAnalysis(analysisId)) {

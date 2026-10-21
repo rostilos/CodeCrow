@@ -6,7 +6,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
-import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceReviewer;
 import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.analysis.dto.response.AnalysesHistoryResponse;
 import org.rostilos.codecrow.webserver.analysis.dto.response.AnalysisReportResponse;
@@ -426,7 +426,7 @@ public class ProjectAnalyticsController {
      * Update a single issue's status
      */
     @PutMapping("/issues/{issueId}/status")
-    @HasOwnerOrAdminRights
+    @IsWorkspaceReviewer
     public ResponseEntity<IssueStatusUpdateResponse> updateIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -475,7 +475,7 @@ public class ProjectAnalyticsController {
      * Update multiple issues' status at once
      */
     @PutMapping("/issues/bulk-status")
-    @HasOwnerOrAdminRights
+    @IsWorkspaceReviewer
     public ResponseEntity<BulkStatusUpdateResponse> bulkUpdateIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
