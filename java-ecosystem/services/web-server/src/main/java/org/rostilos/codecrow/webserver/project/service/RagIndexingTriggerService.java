@@ -117,7 +117,6 @@ public class RagIndexingTriggerService {
             Long projectId,
             Long userId,
             String branch,
-            boolean allConfiguredBranches,
             SseEmitter emitter
     ) {
         try {
@@ -149,7 +148,7 @@ public class RagIndexingTriggerService {
             String projectJwt = generateShortLivedProjectJwt(projectId, userId);
 
             // Start indexing via pipeline-agent
-            proxyToPipelineAgent(projectJwt, branch, allConfiguredBranches, emitter);
+            proxyToPipelineAgent(projectJwt, branch, emitter);
 
         } catch (NoSuchElementException e) {
             sendError(emitter, e.getMessage());
@@ -173,7 +172,6 @@ public class RagIndexingTriggerService {
     private void proxyToPipelineAgent(
             String projectJwt,
             String branch,
-            boolean allConfiguredBranches,
             SseEmitter emitter) {
         String pipelineUrl = getPipelineAgentBaseUrl();
         String indexUrl = pipelineUrl + "/api/rag/index";
@@ -185,10 +183,6 @@ public class RagIndexingTriggerService {
             if (branch != null && !branch.isBlank()) {
                 requestBody.put("branch", branch.trim());
             }
-            if (allConfiguredBranches) {
-                requestBody.put("allConfiguredBranches", true);
-            }
-
             RequestBody body = RequestBody.create(
                     objectMapper.writeValueAsString(requestBody),
                     MediaType.parse("application/json")

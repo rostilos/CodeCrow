@@ -1,3 +1,4 @@
+from utils.error_sanitizer import create_error_response
 """
 Unit tests for utils.error_sanitizer — sanitize_error_for_display, create_user_friendly_error.
 """
@@ -148,3 +149,17 @@ class TestCreateUserFriendlyError:
         err = RuntimeError("something happened")
         result = create_user_friendly_error(err)
         assert len(result) > 0
+
+
+class TestCreateErrorResponse:
+
+    def test_basic(self):
+        result = create_error_response("Something failed")
+        assert result["status"] == "error"
+        assert result["error"] is True
+        assert result["issues"] == []
+        assert "Something failed" in result["comment"]
+
+    def test_with_exception(self):
+        result = create_error_response("Err", "ValueError: x")
+        assert "ValueError" in result["error_message"]

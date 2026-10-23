@@ -134,7 +134,7 @@ public class BranchArchiveService {
      * Downloads a branch/commit archive and extracts the requested text files directly
      * into an isolated local directory.
      * <p>
-     * This variant is intended for consumers such as incremental RAG indexing that
+     * This variant is intended for consumers such as repository index generation builds that
      * already operate on local paths. It avoids retaining all requested file contents
      * in memory and guarantees that archive entries cannot escape {@code targetDirectory}.
      *

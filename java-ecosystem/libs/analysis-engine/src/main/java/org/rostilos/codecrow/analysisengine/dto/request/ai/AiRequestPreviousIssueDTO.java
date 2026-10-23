@@ -24,8 +24,19 @@ public record AiRequestPreviousIssueDTO(
         String resolvedByCommit, // Commit hash that resolved the issue
         Long resolvedInAnalysisId, // Analysis ID where this was resolved (null if still open)
         // Content-based anchoring
+        String anchorSide,
         String codeSnippet // Verbatim source line for line anchoring — Python passes back, Java re-resolves
 ) {
+    public AiRequestPreviousIssueDTO(String id, String type, String severity, String title,
+            String reason, String suggestedFixDescription, String suggestedFixDiff, String file,
+            Integer line, String branch, String pullRequestId, String status, String category,
+            Integer prVersion, String resolvedDescription, String resolvedByCommit,
+            Long resolvedInAnalysisId, String codeSnippet) {
+        this(id, type, severity, title, reason, suggestedFixDescription, suggestedFixDiff,
+                file, line, branch, pullRequestId, status, category, prVersion,
+                resolvedDescription, resolvedByCommit, resolvedInAnalysisId, "HEAD", codeSnippet);
+    }
+
     public static AiRequestPreviousIssueDTO fromEntity(CodeAnalysisIssue issue) {
         String categoryStr = issue.getIssueCategory() != null 
             ? issue.getIssueCategory().name() 
@@ -54,6 +65,7 @@ public record AiRequestPreviousIssueDTO(
                 issue.getResolvedDescription(),
                 issue.getResolvedCommitHash(),
                 issue.getResolvedAnalysisId(),
+                issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "BASE" : "HEAD",
                 issue.getCodeSnippet()
         );
     }
@@ -104,6 +116,7 @@ public record AiRequestPreviousIssueDTO(
                 bi.getResolvedDescription(),
                 bi.getResolvedInCommitHash(),
                 bi.getOriginAnalysisId(),    // resolvedInAnalysisId → use origin for provenance
+                bi.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "BASE" : "HEAD",
                 bi.getCodeSnippet()
         );
     }

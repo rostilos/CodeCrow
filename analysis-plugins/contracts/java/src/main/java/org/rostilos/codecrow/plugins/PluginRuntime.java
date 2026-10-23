@@ -44,7 +44,10 @@ public final class PluginRuntime {
     /**
      * Compose selected file-policy contributions in deterministic registry
      * order. Excluded is strongest, followed by generated and
-     * architecture-only. An explicit plugin failure aborts the host operation.
+     * architecture-only. Framework contributions receive paths relative to
+     * their selected detection root, while language contributions apply only
+     * to files selected for that language. An explicit plugin failure aborts
+     * the host operation.
      */
     public FileDisposition fileDisposition(
             String path,
@@ -56,13 +59,16 @@ public final class PluginRuntime {
         FileDisposition disposition = FileDisposition.FULL;
         for (String pluginId : capabilities.repositoryPlugins()) {
             PluginDescriptor descriptor = registry.descriptor(pluginId);
+            String pluginRoot = pluginRootForPath(
+                    descriptor.kind(), pluginId, normalizedPath, capabilities);
+            if (pluginRoot == null) continue;
             if (!descriptor.capabilities().contains(PluginCapability.FILE_POLICY)) continue;
             CodeCrowPlugin implementation = implementations.get(pluginId);
             if (!(implementation instanceof FilePolicyPlugin contributor)) continue;
 
             PluginOutcome<FileDisposition> outcome;
             try {
-                outcome = contributor.fileDisposition(normalizedPath);
+                outcome = contributor.fileDisposition(relativeToRoot(normalizedPath, pluginRoot));
             } catch (RuntimeException exception) {
                 throw new IllegalStateException(
                         "plugin file policy threw for " + normalizedPath + ": " + pluginId,
@@ -89,5 +95,57 @@ public final class PluginRuntime {
             }
         }
         return disposition;
+    }
+
+    private static String pluginRootForPath(
+            PluginKind kind,
+            String pluginId,
+            String path,
+            ProjectCapabilities capabilities) {
+        if (kind == PluginKind.LANGUAGE) {
+            return capabilities.filePlugins().getOrDefault(path, List.of()).contains(pluginId)
+                    ? ""
+                    : null;
+        }
+        if (kind != PluginKind.FRAMEWORK) return "";
+
+        List<String> evidence = capabilities.detectionEvidence()
+                .getOrDefault(pluginId, List.of());
+        List<String> roots = evidence.stream()
+                .filter(item -> item.startsWith("root:"))
+                .map(item -> item.substring("root:".length()))
+                .toList();
+        if (roots.isEmpty()) {
+            boolean legacyOrManual = evidence.isEmpty() || evidence.stream().anyMatch(item ->
+                    item.startsWith("manual-project-type:")
+                            || item.startsWith("manual-project-type-dependency:"));
+            return legacyOrManual ? "" : null;
+        }
+
+        String match = null;
+        for (String evidenceRoot : roots) {
+            if (evidenceRoot.isEmpty()) continue;
+            String root = ".".equals(evidenceRoot) ? "" : evidenceRoot;
+            if (!root.isEmpty() && !path.equals(root) && !path.startsWith(root + "/")) {
+                continue;
+            }
+            if (match == null || isMoreSpecificRoot(root, match)) {
+                match = root;
+            }
+        }
+        return match;
+    }
+
+    private static boolean isMoreSpecificRoot(String candidate, String current) {
+        long candidateDepth = candidate.chars().filter(character -> character == '/').count();
+        long currentDepth = current.chars().filter(character -> character == '/').count();
+        return candidateDepth > currentDepth
+                || (candidateDepth == currentDepth && candidate.length() > current.length());
+    }
+
+    private static String relativeToRoot(String path, String root) {
+        if (root.isEmpty()) return path;
+        if (path.equals(root)) return "";
+        return path.substring(root.length() + 1);
     }
 }

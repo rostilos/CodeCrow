@@ -5,14 +5,25 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
+import org.rostilos.codecrow.analysisapi.usage.ReviewUsagePolicy;
+import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.LocalRepositorySnapshot;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -29,6 +40,7 @@ import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.TaskImplementationEvidenceService;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.model.VcsCommit;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.pr.PrIssueTrackingService;
@@ -77,6 +89,12 @@ class PullRequestAnalysisProcessorTest {
         private VcsClientProvider vcsClientProvider;
 
         @Mock
+        private VcsClient vcsClient;
+
+        @Mock
+        private LocalRepositorySnapshotService localRepositorySnapshotService;
+
+        @Mock
         private FileSnapshotService fileSnapshotService;
 
         @Mock
@@ -84,6 +102,9 @@ class PullRequestAnalysisProcessorTest {
 
         @Mock
         private AstScopeEnricher astScopeEnricher;
+
+        @Mock
+        private RagOperationsService ragOperationsService;
 
         @Mock
         private ApplicationEventPublisher eventPublisher;
@@ -135,9 +156,11 @@ class PullRequestAnalysisProcessorTest {
                                 analysisLockService,
                                 analyzedCommitService,
                                 vcsClientProvider,
+                                localRepositorySnapshotService,
                                 fileSnapshotService,
                                 prIssueTrackingService,
                                 astScopeEnricher,
+                                ragOperationsService,
                                 eventPublisher);
         }
 
@@ -208,6 +231,126 @@ class PullRequestAnalysisProcessorTest {
         @Nested
         @DisplayName("process()")
         class ProcessTests {
+
+                private ReviewUsagePolicy installUsagePolicy() {
+                        ReviewUsagePolicy policy = mock(ReviewUsagePolicy.class);
+                        Workspace workspace = mock(Workspace.class);
+                        lenient().when(workspace.getId()).thenReturn(99L);
+                        lenient().when(project.getWorkspace()).thenReturn(workspace);
+                        ReflectionTestUtils.setField(processor, "reviewUsagePolicy", policy);
+                        return policy;
+                }
+
+                private void stubPersistedUsageResult() {
+                        when(codeAnalysisService.createAnalysisFromAiResponse(
+                                        any(), any(), anyLong(), anyString(), anyString(), anyString(),
+                                        any(), any(), any(), any(), any(), any())).thenReturn(codeAnalysis);
+                        when(codeAnalysis.getId()).thenReturn(100L);
+                }
+
+                @Test
+                void persistsHostReviewSourcesAndPublishesTheExactAnalysisId() throws Exception {
+                        var response = Map.<String, Object>of("comment", "review", "issues", List.of());
+                        stubReviewThroughAi(response);
+                        stubPersistedUsageResult();
+                        when(project.getWorkspace()).thenReturn(mock(Workspace.class));
+                        when(aiAnalysisRequest.getRawDiff()).thenReturn("original full PR diff");
+                        when(aiAnalysisRequest.getBaseCommitHash()).thenReturn("review-base");
+                        when(aiAnalysisRequest.getTargetHeadCommitHash()).thenReturn("review-target");
+                        processor.process(createRequest(), ignored -> {}, project);
+                        ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
+                        verify(codeAnalysisService).createAnalysisFromAiResponse(any(), payload.capture(), anyLong(), anyString(),
+                                anyString(), anyString(), any(), any(), any(), any(), any(), any());
+                        var summary = (Map<?, ?>) payload.getValue().get("prChangeSummary");
+                        assertThat(summary).isNotNull();
+                        var source = (Map<?, ?>) ((Map<?, ?>) summary.get("toolContext")).get("reviewSource");
+                        assertThat(source.get("rawDiff")).isEqualTo("original full PR diff");
+                        assertThat(source.get("baseRevision")).isEqualTo("review-base");
+                        assertThat(source.get("targetRevision")).isEqualTo("review-target");
+                        verify(eventPublisher).publishEvent(argThat(event -> event instanceof org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent completed
+                                && Long.valueOf(100).equals(completed.getMetrics().get("analysisId"))));
+                        assertThat(response).doesNotContainKey("prChangeSummary");
+                }
+
+                @ParameterizedTest
+                @EnumSource(EVcsProvider.class)
+                void accountsAfterPersistenceForEveryProvider(EVcsProvider provider) throws Exception {
+                        Map<String, Object> response = Map.of("comment", "review", "issues", List.of());
+                        stubReviewThroughAi(response, provider);
+                        stubPersistedUsageResult();
+                        ReviewUsagePolicy policy = installUsagePolicy();
+                        ReviewUsagePolicy.Reservation reservation = mock(ReviewUsagePolicy.Reservation.class);
+                        when(policy.begin(any())).thenReturn(reservation);
+
+                        assertThat(processor.process(createRequest(), event -> {}, project)).isEqualTo(response);
+
+                        var order = inOrder(policy, aiAnalysisClient, codeAnalysisService, reservation);
+                        order.verify(policy).begin(argThat(review -> review.workspaceId().equals(99L)
+                                        && review.projectId().equals(1L) && review.pullRequestId().equals(42L)));
+                        order.verify(aiAnalysisClient).performAnalysis(any(), any());
+                        order.verify(codeAnalysisService).createAnalysisFromAiResponse(
+                                        any(), any(), anyLong(), anyString(), anyString(), anyString(),
+                                        any(), any(), any(), any(), any(), any());
+                        order.verify(reservation).completed(100L);
+                        order.verify(reservation).close();
+                }
+
+                @Test
+                void explicitCloudQuotaRejectsBeforeInferenceAndReleasesAnalysisLock() throws Exception {
+                        stubReviewThroughAi(Map.of("comment", "unused"));
+                        var policy = installUsagePolicy();
+                        when(policy.begin(any())).thenThrow(new ReviewUsagePolicy.LimitExceededException("Monthly limit reached"));
+                        assertThatThrownBy(() -> processor.process(createRequest(), event -> {}, project))
+                                        .isInstanceOf(ReviewUsagePolicy.LimitExceededException.class);
+                        verify(aiAnalysisClient, never()).performAnalysis(any(), any());
+                        verify(analysisLockService).releaseLock("lock-key-123");
+                }
+
+                @Test
+                void unavailableUsageAdmissionDoesNotRejectReview() throws Exception {
+                        Map<String, Object> response = Map.of("comment", "review", "issues", List.of());
+                        stubReviewThroughAi(response);
+                        stubPersistedUsageResult();
+                        when(installUsagePolicy().begin(any())).thenThrow(new IllegalStateException("metering database unavailable"));
+                        List<Map<String, Object>> events = new ArrayList<>();
+                        assertThat(processor.process(createRequest(), events::add, project)).isEqualTo(response);
+                        assertThat(events).anyMatch(event -> "review_usage_unavailable".equals(event.get("state")));
+                }
+
+                @Test
+                void unavailableUsageCompletionDoesNotHideSavedReview() throws Exception {
+                        Map<String, Object> response = Map.of("comment", "review", "issues", List.of());
+                        stubReviewThroughAi(response);
+                        stubPersistedUsageResult();
+                        var reservation = mock(ReviewUsagePolicy.Reservation.class);
+                        when(installUsagePolicy().begin(any())).thenReturn(reservation);
+                        doThrow(new IllegalStateException("metering database unavailable")).when(reservation).completed(100L);
+                        List<Map<String, Object>> events = new ArrayList<>();
+                        assertThat(processor.process(createRequest(), events::add, project)).isEqualTo(response);
+                        assertThat(events).anyMatch(event -> "review_usage_deferred".equals(event.get("state")));
+                        verify(reservation).close();
+                }
+
+                @Test
+                void failedInferenceClosesUncompletedReservation() throws Exception {
+                        stubReviewThroughAi(Map.of("comment", "unused"));
+                        when(aiAnalysisClient.performAnalysis(any(), any())).thenThrow(new IOException("inference unavailable"));
+                        var reservation = mock(ReviewUsagePolicy.Reservation.class);
+                        when(installUsagePolicy().begin(any())).thenReturn(reservation);
+                        assertThat(processor.process(createRequest(), event -> {}, project)).containsEntry("status", "error");
+                        verify(reservation, never()).completed(any());
+                        verify(reservation).close();
+                }
+
+                @Test
+                void cachedReviewDoesNotConsumeQuotaOrChargeAgain() throws Exception {
+                        String identity = stubCacheLookupPrerequisites();
+                        when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L)).thenReturn(Optional.of(codeAnalysis));
+                        when(codeAnalysis.getDiffFingerprint()).thenReturn(identity);
+                        var policy = installUsagePolicy();
+                        assertThat(processor.process(createRequest(), event -> {}, project)).containsEntry("cached", true);
+                        verifyNoInteractions(policy);
+                }
 
                 @Test
                 @DisplayName("should persist only the provider-canonicalized full PR head")
@@ -333,6 +476,9 @@ class PullRequestAnalysisProcessorTest {
                                         .thenReturn(List.of(aiAnalysisRequest));
                         when(aiAnalysisRequest.getRawDiff()).thenReturn("");
                         when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        when(aiAnalysisRequest.getTargetBranchName()).thenReturn("main");
+                        when(aiAnalysisRequest.getTargetHeadCommitHash())
+                                        .thenReturn("target-head-a");
                         when(aiAnalysisRequest.getTaskContext()).thenReturn(Map.of(
                                         "task_key", "PROJ-123",
                                         "task_summary", "Build export"));
@@ -372,7 +518,7 @@ class PullRequestAnalysisProcessorTest {
                         verify(reportingService).postAnalysisResults(any(), any(), anyLong(), any(), any());
                         verify(codeAnalysisService).createAnalysisFromAiResponse(
                                         eq(project),
-                                        eq(aiResponse),
+                                        argThat(saved -> saved.entrySet().containsAll(aiResponse.entrySet())),
                                         eq(42L),
                                         eq("main"),
                                         eq("feature-branch"),
@@ -385,6 +531,8 @@ class PullRequestAnalysisProcessorTest {
                                         eq("Build export"));
                         verify(taskImplementationEvidenceService)
                                         .persistFromAnalysisResponse(codeAnalysis, taskEvidence);
+                        verify(ragOperationsService).refreshBranchGeneration(
+                                        eq(project), eq("main"), eq("target-head-a"), any());
                 }
 
                 @Test
@@ -564,27 +712,31 @@ class PullRequestAnalysisProcessorTest {
                         assertThat(result).containsEntry("status", "error");
                         verify(lockLease, times(4)).confirmOwnership();
                         verify(codeAnalysisService).createAnalysisFromAiResponse(
-                                        any(), eq(aiResponse), anyLong(), anyString(), anyString(), anyString(),
+                                        any(), argThat(saved -> saved.entrySet().containsAll(aiResponse.entrySet())), anyLong(), anyString(), anyString(), anyString(),
                                         any(), any(), any(), any(), any(), any());
                         verify(reportingService, never()).postAnalysisResults(
                                         any(), any(), anyLong(), any(), any());
                 }
 
                 private void stubReviewThroughAi(Map<String, Object> aiResponse) throws Exception {
+                        stubReviewThroughAi(aiResponse, EVcsProvider.BITBUCKET_CLOUD);
+                }
+
+                private void stubReviewThroughAi(Map<String, Object> aiResponse, EVcsProvider provider) throws Exception {
                         VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
                         when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
                         when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
                         when(project.getId()).thenReturn(1L);
-                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+                        when(vcsConnection.getProviderType()).thenReturn(provider);
                         when(analysisLockService.acquireLockWithWait(
                                         any(), anyString(), any(), anyString(), anyLong(), any()))
                                         .thenReturn(Optional.of("lock-key-123"));
                         when(pullRequestService.createOrUpdatePullRequest(
                                         anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
                                         .thenReturn(pullRequest);
-                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
+                        when(vcsServiceFactory.getReportingService(provider))
                                         .thenReturn(reportingService);
-                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                        when(vcsServiceFactory.getAiClientService(provider))
                                         .thenReturn(aiClientService);
                         when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong()))
                                         .thenReturn(List.of());
@@ -592,7 +744,348 @@ class PullRequestAnalysisProcessorTest {
                                         .thenReturn(List.of(aiAnalysisRequest));
                         when(aiAnalysisRequest.getRawDiff()).thenReturn("diff");
                         when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
-                        when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
+                        lenient().when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
+                }
+
+                private AiAnalysisRequestImpl stubMcpOverlayReview(
+                                List<String> changedFiles,
+                                List<String> deletedFiles,
+                                Map<String, String> enrichedContents,
+                                String sourceRevision) throws Exception {
+                        return stubMcpOverlayReview(
+                                        changedFiles,
+                                        deletedFiles,
+                                        enrichedContents,
+                                        sourceRevision,
+                                        changedFiles,
+                                        deletedFiles);
+                }
+
+                private AiAnalysisRequestImpl stubMcpOverlayReview(
+                                List<String> changedFiles,
+                                List<String> deletedFiles,
+                                Map<String, String> enrichedContents,
+                                String sourceRevision,
+                                List<String> proposedTreeChangedFiles,
+                                List<String> proposedTreeDeletedFiles) throws Exception {
+                        stubReviewThroughAi(Map.of("comment", "unused", "issues", List.of()));
+                        reset(aiAnalysisRequest);
+                        AiAnalysisRequestImpl request = mock(AiAnalysisRequestImpl.class);
+                        List<FileContentDto> fileContents = enrichedContents.entrySet().stream()
+                                        .map(entry -> FileContentDto.of(entry.getKey(), entry.getValue()))
+                                        .toList();
+                        PrEnrichmentDataDto enrichment = new PrEnrichmentDataDto(
+                                        fileContents,
+                                        List.of(),
+                                        List.of(),
+                                        PrEnrichmentDataDto.EnrichmentStats.empty());
+
+                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
+                                        .thenReturn(List.of(request));
+                        when(request.getRawDiff()).thenReturn("diff");
+                        when(request.getChangedFiles()).thenReturn(changedFiles);
+                        when(request.getDeletedFiles()).thenReturn(deletedFiles);
+                        when(request.getProposedTreeChangedFiles()).thenReturn(proposedTreeChangedFiles);
+                        when(request.getProposedTreeDeletedFiles()).thenReturn(proposedTreeDeletedFiles);
+                        when(request.getUseMcpTools()).thenReturn(true);
+                        when(request.getCurrentCommitHash()).thenReturn(sourceRevision);
+                        when(request.getTargetHeadCommitHash()).thenReturn("target-head-sha");
+                        when(request.getTargetBranchName()).thenReturn("main");
+                        when(request.getEnrichmentData()).thenReturn(enrichment);
+
+                        VcsRepoInfo repoInfo = project.getEffectiveVcsRepoInfo();
+                        when(repoInfo.getRepoWorkspace()).thenReturn("team");
+                        when(repoInfo.getRepoSlug()).thenReturn("repo");
+                        when(localRepositorySnapshotService.prepareForReview(
+                                        eq(vcsConnection),
+                                        eq("team"),
+                                        eq("repo"),
+                                        eq("main"),
+                                        eq("target-head-sha"),
+                                        anyMap(),
+                                        eq(proposedTreeChangedFiles),
+                                        eq(proposedTreeDeletedFiles)))
+                                        .thenReturn(Optional.empty());
+                        when(aiAnalysisClient.performAnalysis(eq(request), any()))
+                                        .thenThrow(new IOException("stop after overlay preparation"));
+                        return request;
+                }
+
+                @Test
+                @DisplayName("should reuse supplied proposed-tree bodies without another VCS request")
+                void shouldNotRefetchSuppliedProposedTreeBody() throws Exception {
+                        PrProcessRequest processRequest = createRequest();
+                        List<String> changedFiles = List.of("src/Supplied.java");
+                        Map<String, String> supplied = Map.of(
+                                        "src/Supplied.java", "class Supplied { int proposed; }");
+                        stubMcpOverlayReview(
+                                        changedFiles,
+                                        List.of(),
+                                        supplied,
+                                        "source-head-sha");
+
+                        Map<String, Object> result = processor.process(
+                                        processRequest,
+                                        mock(PullRequestAnalysisProcessor.EventConsumer.class),
+                                        project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verifyNoInteractions(vcsClientProvider);
+                        verify(localRepositorySnapshotService).prepareForReview(
+                                        vcsConnection,
+                                        "team",
+                                        "repo",
+                                        "main",
+                                        "target-head-sha",
+                                        supplied,
+                                        changedFiles,
+                                        List.of());
+                }
+
+                @Test
+                @DisplayName("should fetch only omitted changed bodies at the exact PR source commit")
+                void shouldCompleteProposedTreeAtExactSourceCommit() throws Exception {
+                        PrProcessRequest processRequest = createRequest();
+                        List<String> changedFiles = List.of(
+                                        "src/Supplied.java",
+                                        "src/Omitted.java");
+                        Map<String, String> supplied = Map.of(
+                                        "src/Supplied.java", "class Supplied { int proposed; }");
+                        stubMcpOverlayReview(
+                                        changedFiles,
+                                        List.of(),
+                                        supplied,
+                                        "source-head-sha");
+                        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
+                        when(vcsClient.getFileContents(
+                                        "team",
+                                        "repo",
+                                        List.of("src/Omitted.java"),
+                                        "source-head-sha",
+                                        100_000))
+                                        .thenReturn(Map.of(
+                                                        "src/Omitted.java",
+                                                        "class Omitted { int proposed; }"));
+
+                        Map<String, Object> result = processor.process(
+                                        processRequest,
+                                        mock(PullRequestAnalysisProcessor.EventConsumer.class),
+                                        project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verify(vcsClient).getFileContents(
+                                        "team",
+                                        "repo",
+                                        List.of("src/Omitted.java"),
+                                        "source-head-sha",
+                                        100_000);
+                        verify(localRepositorySnapshotService).prepareForReview(
+                                        vcsConnection,
+                                        "team",
+                                        "repo",
+                                        "main",
+                                        "target-head-sha",
+                                        Map.of(
+                                                        "src/Supplied.java",
+                                                        "class Supplied { int proposed; }",
+                                                        "src/Omitted.java",
+                                                        "class Omitted { int proposed; }"),
+                                        changedFiles,
+                                        List.of());
+                }
+
+                @Test
+                @DisplayName("should build the overlay from the full PR while reviewing only the incremental scope")
+                void shouldKeepFullProposedTreeSeparateFromIncrementalReviewScope() throws Exception {
+                        PrProcessRequest processRequest = createRequest();
+                        List<String> reviewChangedFiles = List.of("src/Delta.java");
+                        List<String> proposedTreeChangedFiles = List.of(
+                                        "src/Delta.java",
+                                        "src/Earlier.java",
+                                        "docs/Excluded.md");
+                        List<String> proposedTreeDeletedFiles = List.of("assets/Removed.bin");
+                        Map<String, String> supplied = Map.of(
+                                        "src/Delta.java", "class Delta { int current; }");
+                        AiAnalysisRequestImpl request = stubMcpOverlayReview(
+                                        reviewChangedFiles,
+                                        List.of(),
+                                        supplied,
+                                        "source-head-sha",
+                                        proposedTreeChangedFiles,
+                                        proposedTreeDeletedFiles);
+                        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
+                        when(vcsClient.getFileContents(
+                                        "team",
+                                        "repo",
+                                        List.of("src/Earlier.java", "docs/Excluded.md"),
+                                        "source-head-sha",
+                                        100_000))
+                                        .thenReturn(Map.of(
+                                                        "src/Earlier.java",
+                                                        "class Earlier { int current; }",
+                                                        "docs/Excluded.md",
+                                                        "complete proposed documentation"));
+
+                        Map<String, Object> result = processor.process(
+                                        processRequest,
+                                        mock(PullRequestAnalysisProcessor.EventConsumer.class),
+                                        project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        assertThat(request.getChangedFiles()).containsExactly("src/Delta.java");
+                        verify(vcsClient).getFileContents(
+                                        "team",
+                                        "repo",
+                                        List.of("src/Earlier.java", "docs/Excluded.md"),
+                                        "source-head-sha",
+                                        100_000);
+                        verify(localRepositorySnapshotService).prepareForReview(
+                                        vcsConnection,
+                                        "team",
+                                        "repo",
+                                        "main",
+                                        "target-head-sha",
+                                        Map.of(
+                                                        "src/Delta.java",
+                                                        "class Delta { int current; }",
+                                                        "src/Earlier.java",
+                                                        "class Earlier { int current; }",
+                                                        "docs/Excluded.md",
+                                                        "complete proposed documentation"),
+                                        proposedTreeChangedFiles,
+                                        proposedTreeDeletedFiles);
+                }
+
+                @Test
+                @DisplayName("should keep deleted and unavailable paths out of proposed-tree bodies")
+                void shouldPreserveDeletedAndUnavailableOverlaySemantics() throws Exception {
+                        PrProcessRequest processRequest = createRequest();
+                        List<String> changedFiles = List.of(
+                                        "src/Supplied.java",
+                                        "src/Deleted.java",
+                                        "src/Unavailable.java");
+                        List<String> deletedFiles = List.of("src/Deleted.java");
+                        Map<String, String> supplied = Map.of(
+                                        "src/Supplied.java", "class Supplied { int proposed; }",
+                                        "src/Deleted.java", "stale body must be discarded");
+                        stubMcpOverlayReview(
+                                        changedFiles,
+                                        deletedFiles,
+                                        supplied,
+                                        "source-head-sha");
+                        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
+                        when(vcsClient.getFileContents(
+                                        "team",
+                                        "repo",
+                                        List.of("src/Unavailable.java"),
+                                        "source-head-sha",
+                                        100_000))
+                                        .thenReturn(Map.of());
+
+                        Map<String, Object> result = processor.process(
+                                        processRequest,
+                                        mock(PullRequestAnalysisProcessor.EventConsumer.class),
+                                        project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verify(vcsClient).getFileContents(
+                                        "team",
+                                        "repo",
+                                        List.of("src/Unavailable.java"),
+                                        "source-head-sha",
+                                        100_000);
+                        verify(localRepositorySnapshotService).prepareForReview(
+                                        vcsConnection,
+                                        "team",
+                                        "repo",
+                                        "main",
+                                        "target-head-sha",
+                                        Map.of(
+                                                        "src/Supplied.java",
+                                                        "class Supplied { int proposed; }"),
+                                        changedFiles,
+                                        deletedFiles);
+                }
+
+                @Test
+                @DisplayName("should leave missing proposed bodies unavailable when source revision is unknown")
+                void shouldNotFallBackToTargetHeadForMissingProposedBody() throws Exception {
+                        PrProcessRequest processRequest = createRequest();
+                        List<String> changedFiles = List.of("src/Unavailable.java");
+                        stubMcpOverlayReview(
+                                        changedFiles,
+                                        List.of(),
+                                        Map.of(),
+                                        null);
+
+                        Map<String, Object> result = processor.process(
+                                        processRequest,
+                                        mock(PullRequestAnalysisProcessor.EventConsumer.class),
+                                        project);
+
+                        assertThat(result).containsEntry("status", "error");
+                        verifyNoInteractions(vcsClientProvider);
+                        verify(localRepositorySnapshotService).prepareForReview(
+                                        vcsConnection,
+                                        "team",
+                                        "repo",
+                                        "main",
+                                        "target-head-sha",
+                                        Map.of(),
+                                        changedFiles,
+                                        List.of());
+                }
+
+                @Test
+                @DisplayName("should close a prepared local MCP snapshot when inference fails")
+                void shouldClosePreparedLocalMcpSnapshotWhenInferenceFails() throws Exception {
+                        PrProcessRequest request = createRequest();
+                        PullRequestAnalysisProcessor.EventConsumer consumer = mock(
+                                        PullRequestAnalysisProcessor.EventConsumer.class);
+                        stubReviewThroughAi(Map.of("comment", "unused", "issues", List.of()));
+                        reset(aiAnalysisClient);
+                        VcsRepoInfo repoInfo = project.getEffectiveVcsRepoInfo();
+                        when(repoInfo.getRepoWorkspace()).thenReturn("team");
+                        when(repoInfo.getRepoSlug()).thenReturn("repo");
+                        when(aiAnalysisRequest.getUseMcpTools()).thenReturn(true);
+                        when(aiAnalysisRequest.getTargetHeadCommitHash())
+                                        .thenReturn("target-head-sha");
+                        when(aiAnalysisRequest.getProposedTreeChangedFiles())
+                                        .thenReturn(List.of("file.java"));
+                        when(aiAnalysisRequest.getProposedTreeDeletedFiles()).thenReturn(List.of());
+                        when(aiAnalysisRequest.getDeletedFiles()).thenReturn(List.of());
+                        var prepared = mock(LocalRepositorySnapshotService.PreparedSnapshot.class);
+                        LocalRepositorySnapshot transport = new LocalRepositorySnapshot(
+                                        "/tmp/codecrow-pr-review-test",
+                                        "main",
+                                        "target-head-sha");
+                        when(prepared.transport()).thenReturn(transport);
+                        when(localRepositorySnapshotService.prepareForReview(
+                                        eq(vcsConnection),
+                                        eq("team"),
+                                        eq("repo"),
+                                        eq("main"),
+                                        eq("target-head-sha"),
+                                        anyMap(),
+                                        eq(List.of("file.java")),
+                                        anyCollection()))
+                                        .thenReturn(Optional.of(prepared));
+                        when(aiAnalysisClient.performAnalysis(
+                                        eq(aiAnalysisRequest),
+                                        eq(transport),
+                                        any()))
+                                        .thenThrow(new IOException("inference unavailable"));
+
+                        Map<String, Object> result = processor.process(request, consumer, project);
+
+                        assertThat(result)
+                                        .containsEntry("status", "error")
+                                        .containsEntry("message", "inference unavailable");
+                        verify(prepared).close();
+                        verify(aiAnalysisClient).performAnalysis(
+                                        eq(aiAnalysisRequest),
+                                        eq(transport),
+                                        any());
                 }
 
                 private String stubCacheLookupPrerequisites() throws Exception {
@@ -1248,9 +1741,11 @@ class PullRequestAnalysisProcessorTest {
                                         analysisLockService,
                                         analyzedCommitService,
                                         vcsClientProvider,
+                                        localRepositorySnapshotService,
                                         fileSnapshotService,
                                         prIssueTrackingService,
                                         null, // astScopeEnricher
+                                        null, // ragOperationsService
                                         null // eventPublisher
                         );
 

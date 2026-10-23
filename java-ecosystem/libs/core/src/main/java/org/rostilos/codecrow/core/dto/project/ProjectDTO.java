@@ -105,7 +105,7 @@ public record ProjectDTO(
         Boolean prAnalysisEnabled = project.isPrAnalysisEnabled();
         Boolean branchAnalysisEnabled = project.isBranchAnalysisEnabled();
         String installationMethod = null;
-        Boolean useMcpTools = false;
+        Boolean useMcpTools = ProjectConfig.DEFAULT_USE_MCP_TOOLS;
         Boolean taskContextAnalysisEnabled = true;
 
         ProjectConfig config = project.getConfiguration();
@@ -119,10 +119,7 @@ public record ProjectDTO(
                         rc.branch(),
                         rc.includePatterns(),
                         rc.excludePatterns(),
-                        rc.multiBranchEnabled(),
-                        rc.branchRetentionDays(),
-                        rc.indexedBranches(),
-                        rc.transientBranchIndexesEnabled());
+                        rc.branchPatterns());
             }
             if (config.prAnalysisEnabled() != null) {
                 prAnalysisEnabled = config.prAnalysisEnabled();
@@ -217,27 +214,19 @@ public record ProjectDTO(
             String branch,
             java.util.List<String> includePatterns,
             java.util.List<String> excludePatterns,
-            Boolean multiBranchEnabled,
-            Integer branchRetentionDays,
-            java.util.List<String> indexedBranches,
-            Boolean transientBranchIndexesEnabled) {
-        public RagConfigDTO(
-                boolean enabled,
-                String branch,
-                java.util.List<String> includePatterns,
-                java.util.List<String> excludePatterns,
-                Boolean multiBranchEnabled,
-                Integer branchRetentionDays) {
-            this(enabled, branch, includePatterns, excludePatterns, multiBranchEnabled,
-                    branchRetentionDays, null, null);
-        }
+            java.util.List<String> branchPatterns) {
 
         /**
          * Backward-compatible constructor without include patterns and multi-branch
          * fields.
          */
         public RagConfigDTO(boolean enabled, String branch, java.util.List<String> excludePatterns) {
-            this(enabled, branch, null, excludePatterns, null, null, null, null);
+            this(enabled, branch, null, excludePatterns, null);
+        }
+
+        public RagConfigDTO(boolean enabled, String branch, java.util.List<String> includePatterns,
+                java.util.List<String> excludePatterns) {
+            this(enabled, branch, includePatterns, excludePatterns, null);
         }
     }
 

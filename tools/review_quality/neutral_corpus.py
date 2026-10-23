@@ -1,9 +1,9 @@
 """Materialize fixed, disconnected review-quality corpus candidates.
 
 The fixtures in this module are intentionally small, but they are not analyzer
-rules.  Each head revision introduces a semantic regression whose proof lives in
+rules. Each head revision introduces a behavioral regression whose proof lives in
 unchanged related code or tests.  This makes the cases useful for comparing the
-generic fallback with deterministic plugin/RAG context without contacting a
+generic fallback with deterministic plugin/structural context without contacting a
 repository provider or a review model.
 
 Generated inventories are drafts.  An operator must independently certify the
@@ -349,7 +349,7 @@ def materialize_case(
     _write_files(repository, definition.head_replacements)
     _run(("git", "add", "."), cwd=repository)
     _run(
-        ("git", "commit", "-q", "-m", "seed semantic regression"),
+        ("git", "commit", "-q", "-m", "seed behavioral regression"),
         cwd=repository,
         env=_commit_environment(_HEAD_DATE),
     )
@@ -487,7 +487,6 @@ def materialize_corpus(
         "kind": "review-quality-neutral-corpus-materialization",
         "status": "drafts-created",
         "providerCalls": 0,
-        "embeddingCalls": 0,
         "connectedRepositories": 0,
         "candidateOutputsInspected": False,
         "cases": [

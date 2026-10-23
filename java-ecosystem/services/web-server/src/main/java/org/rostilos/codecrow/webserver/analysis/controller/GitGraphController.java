@@ -130,6 +130,10 @@ public class GitGraphController {
                 if (dbBranch != null) {
                     branchInfo.put("headCommit", dbBranch.getCommitHash());
                     branchInfo.put("healthStatus", dbBranch.getHealthStatus() != null ? dbBranch.getHealthStatus().name() : null);
+                    branchInfo.put("reconciliationPending", dbBranch.isReconciliationPending());
+                    branchInfo.put("reconciliationDiagnostic", dbBranch.getReconciliationDiagnostic());
+                    branchInfo.put("reconciliationAttempts", dbBranch.getReconciliationAttempts());
+                    branchInfo.put("reconciliationAttemptedAt", dbBranch.getReconciliationAttemptedAt());
                     branchInfo.put("totalIssues", dbBranch.getTotalIssues());
                     branchInfo.put("highSeverity", dbBranch.getHighSeverityCount());
                     branchInfo.put("mediumSeverity", dbBranch.getMediumSeverityCount());
@@ -211,6 +215,10 @@ public class GitGraphController {
                 branchInfo.put("name", dbBranch.getBranchName());
                 branchInfo.put("headCommit", dbBranch.getCommitHash());
                 branchInfo.put("healthStatus", dbBranch.getHealthStatus() != null ? dbBranch.getHealthStatus().name() : null);
+                    branchInfo.put("reconciliationPending", dbBranch.isReconciliationPending());
+                    branchInfo.put("reconciliationDiagnostic", dbBranch.getReconciliationDiagnostic());
+                    branchInfo.put("reconciliationAttempts", dbBranch.getReconciliationAttempts());
+                    branchInfo.put("reconciliationAttemptedAt", dbBranch.getReconciliationAttemptedAt());
                 branchInfo.put("totalIssues", dbBranch.getTotalIssues());
                 branchInfo.put("highSeverity", dbBranch.getHighSeverityCount());
                 branchInfo.put("mediumSeverity", dbBranch.getMediumSeverityCount());

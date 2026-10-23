@@ -21,7 +21,6 @@ class RagIndexStatusTest {
         
         assertThat(status.getCreatedAt()).isNotNull();
         assertThat(status.getUpdatedAt()).isNotNull();
-        assertThat(status.getFailedIncrementalCount()).isEqualTo(0);
     }
 
     @Test
@@ -133,55 +132,6 @@ class RagIndexStatusTest {
     }
 
     @Test
-    void shouldSetAndGetCollectionName() {
-        RagIndexStatus status = new RagIndexStatus();
-        String collectionName = "workspace_project_main";
-        
-        status.setCollectionName(collectionName);
-        
-        assertThat(status.getCollectionName()).isEqualTo(collectionName);
-    }
-
-    @Test
-    void shouldSetAndGetFailedIncrementalCount() {
-        RagIndexStatus status = new RagIndexStatus();
-        status.setFailedIncrementalCount(3);
-        
-        assertThat(status.getFailedIncrementalCount()).isEqualTo(3);
-    }
-
-    @Test
-    void shouldIncrementFailedIncrementalCount() {
-        RagIndexStatus status = new RagIndexStatus();
-        assertThat(status.getFailedIncrementalCount()).isEqualTo(0);
-        
-        status.incrementFailedIncrementalCount();
-        
-        assertThat(status.getFailedIncrementalCount()).isEqualTo(1);
-    }
-
-    @Test
-    void shouldIncrementFailedIncrementalCountMultipleTimes() {
-        RagIndexStatus status = new RagIndexStatus();
-        
-        status.incrementFailedIncrementalCount();
-        status.incrementFailedIncrementalCount();
-        status.incrementFailedIncrementalCount();
-        
-        assertThat(status.getFailedIncrementalCount()).isEqualTo(3);
-    }
-
-    @Test
-    void shouldResetFailedIncrementalCount() {
-        RagIndexStatus status = new RagIndexStatus();
-        status.setFailedIncrementalCount(5);
-        
-        status.resetFailedIncrementalCount();
-        
-        assertThat(status.getFailedIncrementalCount()).isEqualTo(0);
-    }
-
-    @Test
     void shouldUpdateTimestampOnPreUpdate() {
         RagIndexStatus status = new RagIndexStatus();
         OffsetDateTime originalUpdatedAt = status.getUpdatedAt();
@@ -190,24 +140,6 @@ class RagIndexStatusTest {
         status.onUpdate();
         
         assertThat(status.getUpdatedAt()).isAfter(originalUpdatedAt);
-    }
-
-    @Test
-    void shouldHandleNullFailedIncrementalCount() {
-        RagIndexStatus status = new RagIndexStatus();
-        status.setFailedIncrementalCount(null);
-        
-        assertThat(status.getFailedIncrementalCount()).isEqualTo(0);
-    }
-
-    @Test
-    void shouldIncrementWhenFailedIncrementalCountIsNull() {
-        RagIndexStatus status = new RagIndexStatus();
-        status.setFailedIncrementalCount(null);
-        
-        status.incrementFailedIncrementalCount();
-        
-        assertThat(status.getFailedIncrementalCount()).isEqualTo(1);
     }
 
     @Test
@@ -224,8 +156,6 @@ class RagIndexStatusTest {
         status.setIndexedCommitHash("fedcba987654");
         status.setTotalFilesIndexed(450);
         status.setLastIndexedAt(lastIndexed);
-        status.setCollectionName("acme_backend_develop");
-        status.setFailedIncrementalCount(0);
         
         assertThat(status.getProject()).isEqualTo(project);
         assertThat(status.getWorkspaceName()).isEqualTo("acme-workspace");
@@ -235,8 +165,6 @@ class RagIndexStatusTest {
         assertThat(status.getIndexedCommitHash()).isEqualTo("fedcba987654");
         assertThat(status.getTotalFilesIndexed()).isEqualTo(450);
         assertThat(status.getLastIndexedAt()).isEqualTo(lastIndexed);
-        assertThat(status.getCollectionName()).isEqualTo("acme_backend_develop");
-        assertThat(status.getFailedIncrementalCount()).isEqualTo(0);
         assertThat(status.getErrorMessage()).isNull();
     }
 
@@ -246,10 +174,8 @@ class RagIndexStatusTest {
         
         status.setStatus(RagIndexingStatus.FAILED);
         status.setErrorMessage("Timeout while connecting to RAG service");
-        status.setFailedIncrementalCount(2);
         
         assertThat(status.getStatus()).isEqualTo(RagIndexingStatus.FAILED);
         assertThat(status.getErrorMessage()).isEqualTo("Timeout while connecting to RAG service");
-        assertThat(status.getFailedIncrementalCount()).isEqualTo(2);
     }
 }

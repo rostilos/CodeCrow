@@ -21,7 +21,7 @@ import java.util.regex.Pattern;
 final class GitHubReviewFormatter {
     private static final int MAX_INLINE_COMMENTS = 20;
     private static final Pattern HUNK_HEADER = Pattern.compile(
-            "^@@ -\\d+(?:,\\d+)? \\+(\\d+)(?:,\\d+)? @@.*$");
+            "^@@ -(\\d+)(?:,\\d+)? \\+(\\d+)(?:,\\d+)? @@.*$");
     private static final String OUTSIDE_DIFF_REASON =
             "The reported line is outside the current pull-request diff.";
     private static final String DIFF_UNAVAILABLE_REASON =
@@ -36,7 +36,8 @@ final class GitHubReviewFormatter {
             return ReviewPlan.empty();
         }
 
-        Map<String, Set<Integer>> rightSideLines = collectRightSideLines(filePatches);
+        Map<String, Set<Integer>> rightSideLines = collectSideLines(filePatches, false);
+        Map<String, Set<Integer>> leftSideLines = collectSideLines(filePatches, true);
         List<Map<String, Object>> comments = new ArrayList<>();
         List<NonInlineFinding> nonInlineFindings = new ArrayList<>();
         for (AnalysisSummary.IssueSummary issue : issues) {
@@ -47,7 +48,8 @@ final class GitHubReviewFormatter {
                 nonInlineFindings.add(new NonInlineFinding(issue, ineligibleReason));
                 continue;
             }
-            if (!rightSideLines.getOrDefault(path, Set.of()).contains(line)) {
+            boolean base = issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE;
+            if (!(base ? leftSideLines : rightSideLines).getOrDefault(path, Set.of()).contains(line)) {
                 nonInlineFindings.add(new NonInlineFinding(issue, OUTSIDE_DIFF_REASON));
                 continue;
             }
@@ -62,7 +64,7 @@ final class GitHubReviewFormatter {
             Map<String, Object> comment = new LinkedHashMap<>();
             comment.put("path", path);
             comment.put("line", line);
-            comment.put("side", "RIGHT");
+            comment.put("side", base ? "LEFT" : "RIGHT");
             comment.put("body", formatBody(issue, marker));
             comments.add(comment);
         }
@@ -144,8 +146,8 @@ final class GitHubReviewFormatter {
         return null;
     }
 
-    private Map<String, Set<Integer>> collectRightSideLines(
-            List<PullRequestFilePatch> filePatches
+    private Map<String, Set<Integer>> collectSideLines(
+            List<PullRequestFilePatch> filePatches, boolean base
     ) {
         Map<String, Set<Integer>> rightSideLines = new HashMap<>();
         if (filePatches == null) {
@@ -153,24 +155,25 @@ final class GitHubReviewFormatter {
         }
 
         for (PullRequestFilePatch filePatch : filePatches) {
-            String path = normalizePath(filePatch.filename());
+            String path = normalizePath(base && !filePatch.previousFilename().isBlank()
+                    ? filePatch.previousFilename() : filePatch.filename());
             if (path == null || filePatch.patch().isBlank()) {
                 continue;
             }
             Set<Integer> lines = rightSideLines.computeIfAbsent(
                     path, ignored -> new HashSet<>());
-            collectRightSideLines(filePatch.patch(), lines);
+            collectSideLines(filePatch.patch(), lines, base);
         }
         return rightSideLines;
     }
 
-    private void collectRightSideLines(String patch, Set<Integer> lines) {
+    private void collectSideLines(String patch, Set<Integer> lines, boolean base) {
         int nextRightLine = -1;
         boolean inHunk = false;
         for (String diffLine : patch.split("\\r?\\n", -1)) {
             Matcher hunk = HUNK_HEADER.matcher(diffLine);
             if (hunk.matches()) {
-                nextRightLine = Integer.parseInt(hunk.group(1));
+                nextRightLine = Integer.parseInt(hunk.group(base ? 1 : 2));
                 inHunk = true;
                 continue;
             }
@@ -179,11 +182,11 @@ final class GitHubReviewFormatter {
             }
 
             char prefix = diffLine.charAt(0);
-            if (prefix == '+') {
+            if (prefix == (base ? '-' : '+')) {
                 lines.add(nextRightLine++);
             } else if (prefix == ' ') {
                 lines.add(nextRightLine++);
-            } else if (prefix != '-') {
+            } else if (prefix != (base ? '+' : '-')) {
                 inHunk = false;
             }
         }

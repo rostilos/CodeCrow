@@ -114,6 +114,7 @@ class TestCommandServiceCreateMcpClient:
             mock_cls.from_dict.return_value = MagicMock()
             result = service._create_mcp_client({"mcpServers": {}})
             mock_cls.from_dict.assert_called_once()
+            result.add_middleware.assert_called_once()
 
     def test_failure(self, service):
         with patch("service.command.command_service.MCPClient") as mock_cls:

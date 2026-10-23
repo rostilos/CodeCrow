@@ -13,15 +13,8 @@ public class UpdateRagConfigRequest {
     private List<String> includePatterns;
     
     private List<String> excludePatterns;
+    private List<String> branchPatterns;
     
-    private Boolean multiBranchEnabled;
-    
-    private Integer branchRetentionDays;
-
-    private List<String> indexedBranches;
-
-    private Boolean transientBranchIndexesEnabled;
-
     public UpdateRagConfigRequest() {
     }
 
@@ -37,24 +30,11 @@ public class UpdateRagConfigRequest {
     }
     
     public UpdateRagConfigRequest(Boolean enabled, String branch, List<String> includePatterns,
-                                   List<String> excludePatterns,
-                                   Boolean multiBranchEnabled, Integer branchRetentionDays,
-                                   List<String> indexedBranches, Boolean transientBranchIndexesEnabled) {
+                                   List<String> excludePatterns) {
         this.enabled = enabled;
         this.branch = branch;
         this.includePatterns = includePatterns;
         this.excludePatterns = excludePatterns;
-        this.multiBranchEnabled = multiBranchEnabled;
-        this.branchRetentionDays = branchRetentionDays;
-        this.indexedBranches = indexedBranches;
-        this.transientBranchIndexesEnabled = transientBranchIndexesEnabled;
-    }
-
-    public UpdateRagConfigRequest(Boolean enabled, String branch, List<String> includePatterns,
-                                  List<String> excludePatterns,
-                                  Boolean multiBranchEnabled, Integer branchRetentionDays) {
-        this(enabled, branch, includePatterns, excludePatterns, multiBranchEnabled,
-                branchRetentionDays, null, null);
     }
 
     public Boolean getEnabled() {
@@ -88,36 +68,9 @@ public class UpdateRagConfigRequest {
     public void setExcludePatterns(List<String> excludePatterns) {
         this.excludePatterns = excludePatterns;
     }
-    
-    public Boolean getMultiBranchEnabled() {
-        return multiBranchEnabled;
-    }
-    
-    public void setMultiBranchEnabled(Boolean multiBranchEnabled) {
-        this.multiBranchEnabled = multiBranchEnabled;
-    }
-    
-    public Integer getBranchRetentionDays() {
-        return branchRetentionDays;
-    }
-    
-    public void setBranchRetentionDays(Integer branchRetentionDays) {
-        this.branchRetentionDays = branchRetentionDays;
-    }
 
-    public List<String> getIndexedBranches() {
-        return indexedBranches;
-    }
+    public List<String> getBranchPatterns() { return branchPatterns; }
 
-    public void setIndexedBranches(List<String> indexedBranches) {
-        this.indexedBranches = indexedBranches;
-    }
-
-    public Boolean getTransientBranchIndexesEnabled() {
-        return transientBranchIndexesEnabled;
-    }
-
-    public void setTransientBranchIndexesEnabled(Boolean transientBranchIndexesEnabled) {
-        this.transientBranchIndexesEnabled = transientBranchIndexesEnabled;
-    }
+    public void setBranchPatterns(List<String> branchPatterns) { this.branchPatterns = branchPatterns; }
+    
 }

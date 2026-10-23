@@ -12,6 +12,10 @@ import java.io.IOException;
  */
 @Service
 public class ProjectValidationService {
+    @org.springframework.beans.factory.annotation.Autowired
+    protected org.rostilos.codecrow.core.service.AIConnectionResolver aiConnectionResolver =
+            new org.rostilos.codecrow.core.service.AIConnectionResolver();
+
 
     private final ProjectRepository projectRepository;
 
@@ -44,7 +48,7 @@ public class ProjectValidationService {
             throw new IOException("VCS connection is not configured for project: " + project.getId());
         }
 
-        if (project.getAiBinding() == null) {
+        if (!aiConnectionResolver.isConfigured(project)) {
             throw new IOException("AI connection is not configured for project: " + project.getId());
         }
     }

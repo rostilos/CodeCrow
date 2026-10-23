@@ -4,13 +4,10 @@ import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
-import org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus;
 import org.rostilos.codecrow.core.model.rag.RagIndexOperationStatus;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
 import org.rostilos.codecrow.ragengine.service.RagBranchIndexRegistryService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -27,13 +24,11 @@ import java.util.function.Consumer;
 
 /**
  * Builds one exact branch generation without depending on analysis processors.
- * VCS acquisition, vector storage, and registry publication meet only through
+ * VCS acquisition, repository index storage, and registry publication meet only through
  * this small orchestration boundary.
  */
 @Service
 public class BranchIndexGenerationBuildService {
-    private static final Logger log = LoggerFactory.getLogger(
-            BranchIndexGenerationBuildService.class);
     private final BranchArchiveService archiveService;
     private final RagPipelineClient pipelineClient;
     private final RagBranchIndexRegistryService registryService;
@@ -51,18 +46,7 @@ public class BranchIndexGenerationBuildService {
             String collectionTarget,
             boolean alreadySucceeded,
             String manifestDigest,
-            String analysisLockKey,
-            String sourceCollectionTarget) {
-
-        public PreparedBuild(
-                long operationId,
-                String collectionTarget,
-                boolean alreadySucceeded,
-                String manifestDigest,
-                String analysisLockKey) {
-            this(operationId, collectionTarget, alreadySucceeded, manifestDigest,
-                    analysisLockKey, null);
-        }
+            String analysisLockKey) {
 
         public PreparedBuild {
             if (operationId <= 0) {
@@ -275,75 +259,38 @@ public class BranchIndexGenerationBuildService {
                     revision,
                     null,
                     snapshot);
-            boolean publishBranchAlias = kind == RagBranchIndexKind.PRIMARY
-                    || kind == RagBranchIndexKind.DURABLE;
-            boolean publishLegacyProjectAlias = kind == RagBranchIndexKind.PRIMARY;
             Map<String, Object> result;
             var analysisProfile = project.getEffectiveConfig().analysisProfile();
             String projectType = analysisProfile.projectType();
             String sourceRoot = analysisProfile.sourceRoot();
             boolean profileConfigured = projectType != null || sourceRoot != null;
             if (progressEvents == null) {
-                if (prepared.sourceCollectionTarget() == null) {
-                    result = profileConfigured
-                            ? pipelineClient.indexRepository(
-                                snapshot.toString(), project.getWorkspace().getName(),
-                                project.getNamespace(), branch, revision, includePatterns,
-                                excludePatterns, prepared.collectionTarget(),
-                                false, false, null, projectType, sourceRoot)
-                            : pipelineClient.indexRepository(
-                                snapshot.toString(), project.getWorkspace().getName(),
-                                project.getNamespace(), branch, revision, includePatterns,
-                                excludePatterns, prepared.collectionTarget(),
-                                false, false);
-                } else {
-                    result = profileConfigured
-                            ? pipelineClient.indexRepository(
-                                snapshot.toString(), project.getWorkspace().getName(),
-                                project.getNamespace(), branch, revision, includePatterns,
-                                excludePatterns, prepared.collectionTarget(),
-                                false, false, prepared.sourceCollectionTarget(),
-                                projectType, sourceRoot)
-                            : pipelineClient.indexRepository(
-                                snapshot.toString(), project.getWorkspace().getName(),
-                                project.getNamespace(), branch, revision, includePatterns,
-                                excludePatterns, prepared.collectionTarget(),
-                                false, false, prepared.sourceCollectionTarget());
-                }
+                result = profileConfigured
+                        ? pipelineClient.indexRepository(
+                            snapshot.toString(), project.getWorkspace().getName(),
+                            project.getNamespace(), branch, revision, includePatterns,
+                            excludePatterns, prepared.collectionTarget(),
+                            projectType, sourceRoot)
+                        : pipelineClient.indexRepository(
+                            snapshot.toString(), project.getWorkspace().getName(),
+                            project.getNamespace(), branch, revision, includePatterns,
+                            excludePatterns, prepared.collectionTarget());
             } else {
-                if (prepared.sourceCollectionTarget() == null) {
-                    result = profileConfigured
-                            ? pipelineClient.indexRepository(
-                                snapshot.toString(), project.getWorkspace().getName(),
-                                project.getNamespace(), branch, revision, includePatterns,
-                                excludePatterns, prepared.collectionTarget(),
-                                false, false, true, null,
-                                () -> snapshotOwnershipTransferred.set(true),
-                                progressEvents, projectType, sourceRoot)
-                            : pipelineClient.indexRepository(
-                                snapshot.toString(), project.getWorkspace().getName(),
-                                project.getNamespace(), branch, revision, includePatterns,
-                                excludePatterns, prepared.collectionTarget(),
-                                false, false, true,
-                                () -> snapshotOwnershipTransferred.set(true),
-                                progressEvents);
-                } else {
-                    result = profileConfigured
-                            ? pipelineClient.indexRepository(
-                                snapshot.toString(), project.getWorkspace().getName(),
-                                project.getNamespace(), branch, revision, includePatterns,
-                                excludePatterns, prepared.collectionTarget(),
-                                false, false, true, prepared.sourceCollectionTarget(),
-                                () -> snapshotOwnershipTransferred.set(true),
-                                progressEvents, projectType, sourceRoot)
-                            : pipelineClient.indexRepository(
-                                snapshot.toString(), project.getWorkspace().getName(),
-                                project.getNamespace(), branch, revision, includePatterns,
-                                excludePatterns, prepared.collectionTarget(),
-                                false, false, true, prepared.sourceCollectionTarget(),
-                                () -> snapshotOwnershipTransferred.set(true),
-                                progressEvents);
-                }
+                result = profileConfigured
+                        ? pipelineClient.indexRepository(
+                            snapshot.toString(), project.getWorkspace().getName(),
+                            project.getNamespace(), branch, revision, includePatterns,
+                            excludePatterns, prepared.collectionTarget(),
+                            true,
+                            () -> snapshotOwnershipTransferred.set(true),
+                            progressEvents, projectType, sourceRoot)
+                        : pipelineClient.indexRepository(
+                            snapshot.toString(), project.getWorkspace().getName(),
+                            project.getNamespace(), branch, revision, includePatterns,
+                            excludePatterns, prepared.collectionTarget(),
+                            true,
+                            () -> snapshotOwnershipTransferred.set(true),
+                            progressEvents);
             }
             Object manifest = result.get("generation_manifest_sha256");
             if (!(manifest instanceof String digest) || digest.isBlank()) {
@@ -353,14 +300,11 @@ public class BranchIndexGenerationBuildService {
                 throw new IOException(
                         "RAG indexing lock ownership was lost before generation publication");
             }
-            var published = registryService.publish(
+            registryService.publish(
                     prepared.operationId(),
                     digest,
                     number(result.get("document_count")),
                     number(result.get("chunk_count")));
-            publishReadableAliasesIfActive(
-                    project, branch, revision, prepared.collectionTarget(),
-                    published, publishBranchAlias, publishLegacyProjectAlias);
             return result;
         } catch (Throwable failure) {
             registryService.fail(
@@ -408,8 +352,7 @@ public class BranchIndexGenerationBuildService {
                 registration.generation().getCollectionName(),
                 succeeded,
                 registration.generation().getManifestDigest(),
-                analysisLockKey,
-                registration.sourceCollectionTarget());
+                analysisLockKey);
     }
 
     private AnalysisLockService.LockLease startAnalysisLockLease(PreparedBuild prepared)
@@ -427,34 +370,6 @@ public class BranchIndexGenerationBuildService {
             throw new IOException("RAG indexing lock ownership was lost before snapshot build");
         }
         return lease;
-    }
-
-    private void publishReadableAliasesIfActive(
-            Project project,
-            String branch,
-            String revision,
-            String collectionTarget,
-            org.rostilos.codecrow.core.model.rag.RagBranchIndexGeneration published,
-            boolean publishBranchAlias,
-            boolean publishLegacyProjectAlias) {
-        if (published == null
-                || published.getStatus() != RagBranchIndexGenerationStatus.ACTIVE
-                || !publishBranchAlias) {
-            return;
-        }
-        try {
-            pipelineClient.publishGenerationAliases(
-                    project.getWorkspace().getName(), project.getNamespace(),
-                    branch, revision, collectionTarget,
-                    published.getManifestDigest(),
-                    true, publishLegacyProjectAlias);
-        } catch (IOException | RuntimeException aliasFailure) {
-            // Readable aliases are operator convenience. Exact retrieval uses
-            // the registry target, and reconciliation repairs this alias later.
-            log.info("Readable aliases were not published for active RAG generation {}; "
-                            + "the reconciliation scheduler will retry: {}",
-                    published.getId(), aliasFailure.getMessage());
-        }
     }
 
     private static int number(Object value) {

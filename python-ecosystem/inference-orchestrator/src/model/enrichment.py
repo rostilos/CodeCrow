@@ -20,7 +20,7 @@ class ParsedFileMetadataDto(BaseModel):
     imports: List[str] = Field(default_factory=list)
     extendsClasses: List[str] = Field(default_factory=list, alias="extends")
     implementsInterfaces: List[str] = Field(default_factory=list, alias="implements")
-    semanticNames: List[str] = Field(default_factory=list, alias="semantic_names")
+    symbolNames: List[str] = Field(default_factory=list, alias="symbol_names")
     parentClass: Optional[str] = Field(default=None, alias="parent_class")
     namespace: Optional[str] = None
     calls: List[str] = Field(default_factory=list)
@@ -33,7 +33,6 @@ class FileRelationshipDto(BaseModel):
     targetFile: str
     relationshipType: RelationshipType
     matchedOn: Optional[str] = None
-    strength: int = 0
 
 
 class EnrichmentStats(BaseModel):

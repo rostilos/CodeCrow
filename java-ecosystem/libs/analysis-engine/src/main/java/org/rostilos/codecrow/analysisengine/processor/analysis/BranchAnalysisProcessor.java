@@ -15,6 +15,7 @@ import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
 import org.rostilos.codecrow.analysisengine.util.AnalysisLimitEnforcer;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestStatusSyncService;
@@ -90,6 +91,7 @@ public class BranchAnalysisProcessor {
 	private final PullRequestService pullRequestService;
 	private final PullRequestStatusSyncService pullRequestStatusSyncService;
 	private final AstScopeEnricher astScopeEnricher;
+	private final LocalRepositorySnapshotService localRepositorySnapshotService;
 
 	/**
 	 * Optional RAG operations service — can be null if RAG module is not deployed.
@@ -118,6 +120,7 @@ public class BranchAnalysisProcessor {
 			PullRequestService pullRequestService,
 			PullRequestStatusSyncService pullRequestStatusSyncService,
 			AstScopeEnricher astScopeEnricher,
+			LocalRepositorySnapshotService localRepositorySnapshotService,
 			@Autowired(required = false) RagOperationsService ragOperationsService) {
 		this.projectService = projectService;
 		this.branchRepository = branchRepository;
@@ -140,6 +143,7 @@ public class BranchAnalysisProcessor {
 		this.pullRequestService = pullRequestService;
 		this.pullRequestStatusSyncService = pullRequestStatusSyncService;
 		this.astScopeEnricher = astScopeEnricher;
+		this.localRepositorySnapshotService = localRepositorySnapshotService;
 		this.ragOperationsService = ragOperationsService;
 	}
 
@@ -207,12 +211,13 @@ public class BranchAnalysisProcessor {
 					project.getId(), request.getTargetBranchName());
 
 			if (request.getSourcePrNumber() == null
-					&& matchCache(request, existingBranchOpt, project, consumer, lockLease)) {
+					&& matchCache(request, existingBranchOpt, project, consumer, lockLease, lockKey.get())) {
 				return Map.of(
 						"status", "skipped",
 						"reason", "commit_already_analyzed",
 						"branch", request.getTargetBranchName(),
-						"commitHash", request.getCommitHash());
+						"commitHash", request.getCommitHash(),
+                        "reconciliationPending", existingBranchOpt.map(Branch::isReconciliationPending).orElse(false));
 			}
 
 			EventNotificationEmitter.emitStatus(consumer, "started",
@@ -329,7 +334,8 @@ public class BranchAnalysisProcessor {
 					&& !isMergeCommit
 					&& mergedPrNumbers.isEmpty()) {
 				requireConfirmedLease(lockLease);
-				return skipAlreadyAnalyzedRange(project, request, existingBranchOpt, consumer);
+                return analysisLockService.withOwnedLocks(List.of(lockKey.get()), () ->
+                        skipAlreadyAnalyzedRange(project, request, existingBranchOpt, consumer));
 			}
 
 			// ── Multi-tier diff strategy ─────────────────────────────────────
@@ -391,14 +397,16 @@ public class BranchAnalysisProcessor {
 
 			if (changedFiles.isEmpty()) {
 				requireConfirmedLease(lockLease);
-				branchFileOperationsService.createOrUpdateProjectBranch(
-						project, request, existingBranchOpt.orElse(null));
+                analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                    branchFileOperationsService.createOrUpdateProjectBranch(project, request, existingBranchOpt.orElse(null));
+                    branchHealthService.markBranchHealthy(project, request);
+                    return null;
+                });
 				EventNotificationEmitter.emitStatus(consumer, "skipped",
 						"No changed files match the project analysis scope");
 				requireConfirmedLease(lockLease);
-				performIncrementalRagUpdate(request, project, repositoryDiff, consumer, directPushLimited);
+				performRagGenerationRefresh(request, project, consumer);
 				requireConfirmedLease(lockLease);
-				branchHealthService.markBranchHealthy(project, request);
 				requireConfirmedLease(lockLease);
 				branchHealthService.recordCommitsAnalyzed(project, unanalyzedCommits,
 						request.getTargetBranchName());
@@ -413,8 +421,9 @@ public class BranchAnalysisProcessor {
 			// ── Hybrid analysis: AI analysis for uncovered direct pushes ─────
 			// Skip on first analysis — the existing codebase predates CodeCrow
 			// and should not be treated as "uncovered direct pushes".
+			boolean repositoryRefreshHandledEarly = false;
 			if (!isFirstAnalysis && !directPushLimited) {
-				performDirectPushAnalysisIfNeeded(
+				repositoryRefreshHandledEarly = performDirectPushAnalysisIfNeeded(
 						project, request, unanalyzedCommits, rawDiff,
 						changedFiles, provider, consumer, prNumber, isMergeCommit,
 						lockLease);
@@ -430,68 +439,65 @@ public class BranchAnalysisProcessor {
 			EventNotificationEmitter.emitStatus(consumer, "analyzing_files",
 					"Analyzing " + changedFiles.size() + " changed files");
 
+			Set<String> reconciliationPaths = branchIssueReconciliationService.findReconciliationPaths(
+					existingBranchOpt.orElse(null), changedFiles);
 			BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
 					branchFileOperationsService.downloadBranchFileSnapshot(
-					vcsRepoInfoImpl, request.getCommitHash(), changedFiles);
+					vcsRepoInfoImpl, request.getCommitHash(), reconciliationPaths);
 			log.info("Branch archive: {} files extracted for {} changed files",
 					branchFileSnapshot.contents().size(), changedFiles.size());
 
-			requireConfirmedLease(lockLease);
-			Set<String> existingFiles = branchFileOperationsService.updateBranchFiles(
-					changedFiles, project, request.getTargetBranchName(), branchFileSnapshot);
-
-			requireConfirmedLease(lockLease);
-			Branch branch = branchFileOperationsService.createOrUpdateProjectBranch(
-					project, request, existingBranchOpt.orElse(null));
-
-			requireConfirmedLease(lockLease);
-			if (mergedPrNumbers.size() > 1) {
-				branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
-						changedFiles, existingFiles, branch, project, mergedPrNumbers);
-			} else {
-				branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
-						changedFiles, existingFiles, branch, project, prNumber);
-			}
-			requireConfirmedLease(lockLease);
-			branchIssueReconciliationService.reconcileIssueLineNumbers(rawDiff, changedFiles, branch);
-
-			// Update branch issue counts after mapping
-			requireConfirmedLease(lockLease);
-			Branch refreshedBranch = refreshAndSaveIssueCounts(branch);
-			log.info("Updated branch issue counts after mapping: total={}, high={}, medium={}, low={}, resolved={}",
-					refreshedBranch.getTotalIssues(), refreshedBranch.getHighSeverityCount(),
-					refreshedBranch.getMediumSeverityCount(), refreshedBranch.getLowSeverityCount(),
-					refreshedBranch.getResolvedCount());
-
-			requireConfirmedLease(lockLease);
-			branchIssueReconciliationService.reanalyzeCandidateIssues(
-					changedFiles, existingFiles, refreshedBranch, project,
-					request, consumer, branchFileSnapshot.contents(), rawDiff,
-					branchFileSnapshot.allowContentApiFallback());
-
-			// An incremental push can only change issues in the files present in its
-			// diff. Repository-wide issue checks belong to the explicit full
-			// reconciliation operation; doing them here caused a sequential VCS read
-			// for every unrelated unresolved file and could hold a one-file job for
-			// nearly an hour.
-			EventNotificationEmitter.emitStatus(consumer, "finalizing_branch_state",
-					"Saving changed-file reconciliation results");
-
-			requireConfirmedLease(lockLease);
-			branchFileOperationsService.updateFileSnapshotsForBranch(existingFiles, project, request,
-					branchFileSnapshot);
-
-			Branch branchForVerify = branchRepository.findByProjectIdAndBranchName(
-					project.getId(), request.getTargetBranchName()).orElse(refreshedBranch);
-			requireConfirmedLease(lockLease);
-			branchIssueReconciliationService.verifyIssueLineNumbersWithSnippets(
-					changedFiles, project, branchForVerify);
+            var prepared = branchFileOperationsService.prepareBranchFiles(
+                    reconciliationPaths, project, request, branchFileSnapshot);
+            Set<String> existingFiles = prepared.existingFiles();
+            String committedDiff = rawDiff;
+            Long sourcePr = prNumber;
+            Branch branch = analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                Branch current = branchRepository.findByProjectIdAndBranchName(
+                        project.getId(), request.getTargetBranchName()).orElse(null);
+                boolean newRevision = current == null || !Objects.equals(current.getCommitHash(), request.getCommitHash());
+                Branch saved = branchFileOperationsService.createOrUpdateProjectBranch(project, request, current);
+                if (mergedPrNumbers.size() > 1) {
+                    branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
+                            changedFiles, existingFiles, saved, project, mergedPrNumbers);
+                } else {
+                    branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
+                            changedFiles, existingFiles, saved, project, sourcePr);
+                }
+                branchIssueReconciliationService.reconcileIssueLineNumbers(committedDiff, changedFiles, saved);
+                branchFileOperationsService.persistPreparedFiles(saved, project, request, prepared);
+                branchIssueReconciliationService.verifyIssueLineNumbersWithSnippets(prepared.contents().keySet(), project, saved);
+                Branch refreshed = refreshAndSaveIssueCounts(saved);
+                refreshed.markHealthy(request.getCommitHash());
+                refreshed.beginReconciliation(newRevision);
+                return branchRepository.save(refreshed);
+            });
+            var reconciliation = branchIssueReconciliationService.reanalyzeCandidateIssues(
+                    changedFiles, existingFiles, branch, project, request, consumer,
+                    prepared.contents(), rawDiff, branchFileSnapshot.allowContentApiFallback(), action ->
+                            analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                                action.run();
+                                Branch current = branchRepository.findById(branch.getId()).orElseThrow();
+                                current.finishReconciliation(null);
+                                branchRepository.save(current);
+                                branchFileOperationsService.persistBranchFiles(existingFiles, project, request.getTargetBranchName());
+                                return null;
+                            }));
+            if (!reconciliation.complete()) {
+                analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                    Branch current = branchRepository.findById(branch.getId()).orElseThrow();
+                    current.finishReconciliation(reconciliation.diagnostic());
+                    branchRepository.save(current);
+                    return null;
+                });
+            }
 
 			// ── Post-analysis housekeeping ────────────────────────────────────
 			requireConfirmedLease(lockLease);
-			performIncrementalRagUpdate(request, project, repositoryDiff, consumer, directPushLimited);
+			if (!repositoryRefreshHandledEarly) {
+				performRagGenerationRefresh(request, project, consumer);
+			}
 			requireConfirmedLease(lockLease);
-			branchHealthService.markBranchHealthy(project, request);
 			requireConfirmedLease(lockLease);
 			branchHealthService.recordCommitsAnalyzed(project, unanalyzedCommits,
 					request.getTargetBranchName());
@@ -500,14 +506,22 @@ public class BranchAnalysisProcessor {
 					request.getTargetBranchName(), request.getCommitHash());
 
 			return Map.of("status", "accepted", "cached", false,
-					"branch", request.getTargetBranchName());
+					"branch", request.getTargetBranchName(), "reconciliationPending", !reconciliation.complete());
 
 		} catch (BranchAnalysisLeaseLostException e) {
 			log.info("Branch analysis stopped after lock lease ownership was lost: project={}, branch={}",
 					project.getId(), request.getTargetBranchName());
 			throw e;
 		} catch (Exception e) {
-			branchHealthService.handleProcessFailure(project, request, unanalyzedCommits, e);
+			List<String> failedCommits = unanalyzedCommits;
+            try {
+                analysisLockService.withOwnedLocks(List.of(lockKey.get()), () -> {
+                    branchHealthService.handleProcessFailure(project, request, failedCommits, e);
+                    return null;
+                });
+            } catch (RuntimeException noLongerOwned) {
+                log.warn("Could not record branch failure under original lease: {}", noLongerOwned.getMessage());
+            }
 			throw e;
 		} finally {
 			if (lockLease != null) {
@@ -569,7 +583,7 @@ public class BranchAnalysisProcessor {
 	 */
 	private boolean matchCache(BranchProcessRequest request, Optional<Branch> existingBranchOpt,
 			Project project, Consumer<Map<String, Object>> consumer,
-			AnalysisLockService.LockLease lockLease) throws IOException {
+			AnalysisLockService.LockLease lockLease, String lockKey) throws IOException {
 		if (request.getCommitHash() == null || existingBranchOpt.isEmpty())
 			return false;
 
@@ -592,8 +606,11 @@ public class BranchAnalysisProcessor {
 						branchFileOperationsService.downloadBranchFileSnapshot(
 						vcsRepoInfoImpl, request.getCommitHash(), branchFiles);
 				requireConfirmedLease(lockLease);
-				branchFileOperationsService.updateFileSnapshotsForBranch(
-						branchFiles, project, request, branchFileSnapshot);
+                var prepared = branchFileOperationsService.prepareBranchFiles(branchFiles, project, request, branchFileSnapshot);
+                analysisLockService.withOwnedLocks(List.of(lockKey), () -> {
+                    branchFileOperationsService.persistPreparedFiles(existingBranchOpt.get(), project, request, prepared);
+                    return null;
+                });
 			}
 		} catch (BranchAnalysisLeaseLostException leaseLost) {
 			throw leaseLost;
@@ -767,7 +784,7 @@ public class BranchAnalysisProcessor {
 	 * {@code DetectionSource.DIRECT_PUSH_ANALYSIS}, then map issues to branch</li>
 	 * </ol>
 	 */
-	private void performDirectPushAnalysisIfNeeded(
+	private boolean performDirectPushAnalysisIfNeeded(
 			Project project,
 			BranchProcessRequest request,
 			List<String> unanalyzedCommits,
@@ -781,12 +798,12 @@ public class BranchAnalysisProcessor {
 
 		if (unanalyzedCommits.isEmpty()) {
 			log.debug("No unanalyzed commits — skipping direct push analysis check");
-			return;
+			return false;
 		}
 
 		if (rawDiff == null || rawDiff.isBlank()) {
 			log.debug("No diff available — skipping direct push analysis");
-			return;
+			return false;
 		}
 
 		// ── Fast path: PR merge ──────────────────────────────────────────
@@ -796,7 +813,7 @@ public class BranchAnalysisProcessor {
 		if (mergedPrNumber != null) {
 			log.info("Skipping direct push analysis — branch event originates from PR #{} merge (not a direct push)",
 					mergedPrNumber);
-			return;
+			return false;
 		}
 
 		// ── Safety net: merge commit without PR number ───────────────────
@@ -808,7 +825,7 @@ public class BranchAnalysisProcessor {
 			log.info("Skipping direct push analysis — HEAD commit is a merge commit " +
 					"(detected via parent count) but PR number was not resolved. " +
 					"This is a PR merge, not a direct push.");
-			return;
+			return false;
 		}
 
 		// Check if a PR analysis lock is active for this branch.
@@ -818,22 +835,19 @@ public class BranchAnalysisProcessor {
 		if (prAnalysisInProgress) {
 			log.info("PR analysis in progress for branch {} — skipping direct push analysis (PR will cover it)",
 					request.getTargetBranchName());
-			return;
+			return false;
 		}
 
 		// Check commit coverage by open/merged PRs
-		boolean exactTargetBranchCoverage = project.getConfiguration() != null
-				&& project.getConfiguration().ragConfig() != null
-				&& project.getConfiguration().ragConfig().isMultiBranchEnabled();
 		CommitCoverageService.CoverageResult coverage = commitCoverageService.checkCoverage(
 				project.getId(), request.getTargetBranchName(), unanalyzedCommits,
-				exactTargetBranchCoverage);
+				true);
 
 		switch (coverage.status()) {
 			case FULLY_COVERED:
 				log.info("All {} unanalyzed commits are covered by open PRs — skipping direct push analysis",
 						unanalyzedCommits.size());
-				return;
+				return false;
 			case PARTIALLY_COVERED:
 				log.info("{} of {} unanalyzed commits not covered by open PRs — running direct push analysis",
 						coverage.uncoveredCommits().size(), unanalyzedCommits.size());
@@ -848,18 +862,30 @@ public class BranchAnalysisProcessor {
 				"Analyzing " + coverage.uncoveredCommits().size()
 						+ " uncovered direct push commits via AI");
 
+		boolean repositoryRefreshHandled = false;
 		try {
 			// Build AI analysis request using the VCS-specific service
 			VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
+			List<AiAnalysisRequest> aiRequests = aiClientService.buildDirectPushAnalysisRequests(
+					project, request, rawDiff, Collections.emptyMap(), new ArrayList<>(changedFiles));
+			AiAnalysisRequest aiRequest = aiRequests.get(0);
+
+			// Queue the immutable branch generation as soon as the request builder has
+			// canonicalized the exact provider revision. The durable RAG operation is
+			// asynchronous, so indexing gets a head start without delaying review.
+			requireConfirmedLease(lockLease);
+			repositoryRefreshHandled = performRagGenerationRefresh(
+					request, project, consumer);
+
 			Map<String, String> fileContents = Collections.emptyMap();
+			VcsRepoInfoImpl repository = ProjectVcsInfoRetriever.getVcsInfo(project);
 
 			// Try to extract file contents from the archive for better line-hash
 			// computation
 			try {
-				VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
 				BranchFileOperationsService.BranchFileSnapshot branchFileSnapshot =
 						branchFileOperationsService.downloadBranchFileSnapshot(
-						vcsRepoInfoImpl, request.getCommitHash(), changedFiles);
+						repository, request.getCommitHash(), changedFiles);
 				if (!branchFileSnapshot.contents().isEmpty()) {
 					fileContents = branchFileSnapshot.contents();
 				}
@@ -868,12 +894,7 @@ public class BranchAnalysisProcessor {
 						e.getMessage());
 			}
 
-			List<AiAnalysisRequest> aiRequests = aiClientService.buildDirectPushAnalysisRequests(
-					project, request, rawDiff, fileContents, new ArrayList<>(changedFiles));
-
-			// Call the inference orchestrator using single request
-			requireConfirmedLease(lockLease);
-			Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiRequests.get(0), event -> {
+			Consumer<Map<String, Object>> aiEventConsumer = event -> {
 				try {
 					if (consumer != null) {
 						consumer.accept(event);
@@ -882,7 +903,31 @@ public class BranchAnalysisProcessor {
 					log.debug("Event consumer failed during direct push analysis: {}",
 							ex.getMessage());
 				}
-			});
+			};
+
+			Optional<LocalRepositorySnapshotService.PreparedSnapshot> localSnapshot = Optional.empty();
+			if (aiRequest.getUseMcpTools()) {
+				localSnapshot = localRepositorySnapshotService.prepare(
+						repository.vcsConnection(),
+						repository.workspace(),
+						repository.repoSlug(),
+						request.getTargetBranchName(),
+						aiRequest.getTargetHeadCommitHash());
+			}
+
+			// Keep the exact local tree alive for the whole agent session and remove it
+			// immediately afterwards. Snapshot preparation is optional enrichment;
+			// failure falls back to the existing provider-backed MCP path.
+			requireConfirmedLease(lockLease);
+			Map<String, Object> aiResponse;
+			if (localSnapshot.isPresent()) {
+				try (LocalRepositorySnapshotService.PreparedSnapshot snapshot = localSnapshot.get()) {
+					aiResponse = aiAnalysisClient.performAnalysis(
+							aiRequest, snapshot.transport(), aiEventConsumer);
+				}
+			} else {
+				aiResponse = aiAnalysisClient.performAnalysis(aiRequest, aiEventConsumer);
+			}
 
 			if (AiAnalysisClient.isPromptDryRunResult(aiResponse)) {
 				log.warn(
@@ -892,7 +937,7 @@ public class BranchAnalysisProcessor {
 						consumer,
 						"prompt_dry_run_completed",
 						"Prompt dry run completed without persisting a direct-push analysis");
-				return;
+				return repositoryRefreshHandled;
 			}
 
 			// Save the analysis with DetectionSource.DIRECT_PUSH_ANALYSIS
@@ -923,6 +968,7 @@ public class BranchAnalysisProcessor {
 
 			EventNotificationEmitter.emitStatus(consumer, "direct_push_analysis_complete",
 					"Direct push analysis found " + issuesFound + " issues");
+			return repositoryRefreshHandled;
 
 		} catch (BranchAnalysisLeaseLostException leaseLost) {
 			throw leaseLost;
@@ -932,96 +978,63 @@ public class BranchAnalysisProcessor {
 					e.getMessage(), e);
 			EventNotificationEmitter.emitStatus(consumer, "direct_push_analysis_failed",
 					"Direct push analysis failed (non-critical): " + e.getMessage());
+			return repositoryRefreshHandled;
 		}
 	}
 
-	// ── RAG incremental update ──────────────────────────────────────────────
-	private void performIncrementalRagUpdate(BranchProcessRequest request, Project project, String commitDiff,
-			Consumer<Map<String, Object>> consumer, boolean scopedOnly) {
+	// ── Immutable repository generation refresh ─────────────────────────────
+	private boolean performRagGenerationRefresh(BranchProcessRequest request, Project project,
+			Consumer<Map<String, Object>> consumer) {
 		if (ragOperationsService == null) {
-			log.info("Skipping RAG incremental update - RagOperationsService not available");
+			log.info("Skipping repository generation refresh - RagOperationsService not available");
 			EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
-					"RAG module not deployed — skipping incremental update");
-			return;
-		}
-		if (scopedOnly && (commitDiff == null || commitDiff.isBlank())) {
-			log.info("Skipping RAG incremental update - no scoped files require an update");
-			EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
-					"No scoped files require a RAG update");
-			return;
+					"Repository index module not deployed — skipping generation refresh");
+			return true;
 		}
 		try {
 			if (!ragOperationsService.isRagEnabled(project)) {
-				log.info("Skipping RAG incremental update - RAG not enabled for project={}",
+				log.info("Skipping repository generation refresh - repository index not enabled for project={}",
 						project.getId());
 				EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
-						"RAG not enabled for this project — skipping incremental update");
-				return;
+						"Repository index not enabled for this project — skipping generation refresh");
+				return true;
 			}
-			if (!ragOperationsService.isRagIndexReady(project)) {
-				log.info("Skipping RAG incremental update - RAG index not yet ready for project={}",
-						project.getId());
-				EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
-						"RAG index not yet ready (initial indexing may still be in progress) — skipping incremental update");
-				return;
-			}
-
 			String targetBranch = request.getTargetBranchName();
 			String baseBranch = ragOperationsService.getBaseBranch(project);
 
 			if (!targetBranch.equals(baseBranch)
 					&& !ragOperationsService.shouldHaveBranchIndex(project, targetBranch)) {
-				log.info("Skipping RAG update for non-retained branch: project={}, branch={}",
+				log.info("Skipping repository generation refresh outside analysis patterns: project={}, branch={}",
 						project.getId(), targetBranch);
 				EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
-						"Branch is analyzed but is not configured as a retained RAG branch");
-				return;
+						"Branch is outside the configured analysis target/push patterns");
+				return true;
 			}
 
-			// Health check: verify RAG pipeline is reachable before starting
-			if (!ragOperationsService.isRagPipelineHealthy()) {
-				log.warn("RAG pipeline is not reachable — skipping incremental update for project={}",
-						project.getId());
-				EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
-						"RAG pipeline not reachable — skipping incremental update");
-				return;
-			}
-
-			if (targetBranch.equals(baseBranch) || scopedOnly) {
-				log.info("Incrementally updating RAG index for project={}, branch={}, commit={}, scopedOnly={}",
-						project.getId(), targetBranch, request.getCommitHash(), scopedOnly);
-				EventNotificationEmitter.emitStatus(consumer, "rag_update",
-						scopedOnly
-								? "Updating RAG index for changed files with previous issues only"
-								: "Updating RAG index with changed files for main branch push");
-				boolean ragUpdated = ragOperationsService.triggerIncrementalUpdate(
-						project, targetBranch, request.getCommitHash(), commitDiff, consumer);
-				if (!ragUpdated) {
-					log.info("RAG incremental update did not complete; retaining the last usable index "
-							+ "for project={}, branch={}, commit={}",
-							project.getId(), targetBranch, request.getCommitHash());
-					return;
-				}
-			} else {
-				log.info("Non-main branch push - updating branch index for project={}, branch={}",
-						project.getId(), targetBranch);
-				if (!ragOperationsService.updateBranchIndex(project, targetBranch, consumer)) {
-					log.info("RAG branch index update did not complete; retaining the last usable index "
-							+ "for project={}, branch={}",
-							project.getId(), targetBranch);
-					return;
-				}
+			log.info("Queueing exact repository generation for project={}, branch={}, commit={}",
+					project.getId(), targetBranch, request.getCommitHash());
+			EventNotificationEmitter.emitStatus(consumer, "rag_update",
+					"Queueing a complete repository generation for branch '" + targetBranch + "'");
+			boolean ragUpdated = ragOperationsService.refreshBranchGeneration(
+					project, targetBranch, request.getCommitHash(), consumer);
+			if (!ragUpdated) {
+				log.info("Repository generation refresh did not complete; retaining the last usable index "
+						+ "for project={}, branch={}, commit={}",
+						project.getId(), targetBranch, request.getCommitHash());
+				return false;
 			}
 
 			// RagOperationsService owns the precise terminal event. A boolean true
 			// also covers an already-current revision, so translating it into a
 			// generic "updated" event here would be a false success report.
-			log.info("RAG reconciliation completed for project={}, branch={}, commit={}",
+			log.info("Repository generation refresh queued for project={}, branch={}, commit={}",
 					project.getId(), targetBranch, request.getCommitHash());
+			return true;
 		} catch (Exception e) {
-			log.warn("RAG incremental update failed (non-critical): {}", e.getMessage());
+			log.warn("Repository generation refresh failed (non-critical): {}", e.getMessage());
 			EventNotificationEmitter.emitStatus(consumer, "rag_update_failed",
-					"RAG incremental update failed (non-critical): " + e.getMessage());
+					"Repository generation refresh failed (non-critical): " + e.getMessage());
+			return false;
 		}
 	}
 

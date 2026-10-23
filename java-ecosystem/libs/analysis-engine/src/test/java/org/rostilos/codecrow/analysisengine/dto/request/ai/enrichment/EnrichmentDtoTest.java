@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -51,41 +52,42 @@ class EnrichmentDtoTest {
     @Nested
     @DisplayName("FileRelationshipDto")
     class FileRelationshipDtoTests {
-        @Test void imports_strength10() {
+        @Test void imports_preservesMatchedEvidence() {
             FileRelationshipDto r = FileRelationshipDto.imports("A.java", "B.java", "import B");
             assertThat(r.sourceFile()).isEqualTo("A.java");
             assertThat(r.targetFile()).isEqualTo("B.java");
             assertThat(r.relationshipType()).isEqualTo(FileRelationshipDto.RelationshipType.IMPORTS);
             assertThat(r.matchedOn()).isEqualTo("import B");
-            assertThat(r.strength()).isEqualTo(10);
         }
 
-        @Test void extendsClass_strength15() {
+        @Test void extendsClass_hasExactType() {
             FileRelationshipDto r = FileRelationshipDto.extendsClass("Child.java", "Parent.java", "Parent");
             assertThat(r.relationshipType()).isEqualTo(FileRelationshipDto.RelationshipType.EXTENDS);
-            assertThat(r.strength()).isEqualTo(15);
         }
 
-        @Test void implementsInterface_strength15() {
+        @Test void implementsInterface_hasExactType() {
             FileRelationshipDto r = FileRelationshipDto.implementsInterface("Impl.java", "Api.java", "Api");
             assertThat(r.relationshipType()).isEqualTo(FileRelationshipDto.RelationshipType.IMPLEMENTS);
-            assertThat(r.strength()).isEqualTo(15);
         }
 
-        @Test void calls_strength8() {
+        @Test void calls_hasExactType() {
             FileRelationshipDto r = FileRelationshipDto.calls("Caller.java", "Callee.java", "doWork");
             assertThat(r.relationshipType()).isEqualTo(FileRelationshipDto.RelationshipType.CALLS);
-            assertThat(r.strength()).isEqualTo(8);
         }
 
-        @Test void samePackage_strength3() {
-            FileRelationshipDto r = FileRelationshipDto.samePackage("A.java", "B.java", "com.example");
-            assertThat(r.relationshipType()).isEqualTo(FileRelationshipDto.RelationshipType.SAME_PACKAGE);
-            assertThat(r.strength()).isEqualTo(3);
+        @Test void serializedContractHasNoSyntheticStrength() throws Exception {
+            String json = new ObjectMapper().writeValueAsString(
+                    FileRelationshipDto.imports("A.java", "B.java", "B"));
+
+            assertThat(json).doesNotContain("strength");
         }
 
         @Test void relationshipType_allValues() {
-            assertThat(FileRelationshipDto.RelationshipType.values()).hasSize(6);
+            assertThat(FileRelationshipDto.RelationshipType.values()).containsExactly(
+                    FileRelationshipDto.RelationshipType.IMPORTS,
+                    FileRelationshipDto.RelationshipType.EXTENDS,
+                    FileRelationshipDto.RelationshipType.IMPLEMENTS,
+                    FileRelationshipDto.RelationshipType.CALLS);
         }
     }
 
@@ -130,7 +132,7 @@ class EnrichmentDtoTest {
                     List.of("doWork"), null);
             assertThat(dto.language()).isEqualTo("java");
             assertThat(dto.implementsInterfaces()).containsExactly("Iface");
-            assertThat(dto.semanticNames()).containsExactly("main");
+            assertThat(dto.symbolNames()).containsExactly("main");
             assertThat(dto.parentClass()).isEqualTo("BaseClass");
             assertThat(dto.namespace()).isEqualTo("com.example");
             assertThat(dto.calls()).containsExactly("doWork");

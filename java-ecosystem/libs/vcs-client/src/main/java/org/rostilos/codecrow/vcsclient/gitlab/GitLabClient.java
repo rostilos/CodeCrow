@@ -677,6 +677,7 @@ public class GitLabClient implements VcsClient {
         if (baseCommit == null || baseCommit.isBlank()) {
             baseCommit = metadata.path("diff_refs").path("start_sha").asText(null);
         }
+        String targetHeadCommit = metadata.path("diff_refs").path("start_sha").asText(null);
         String headCommit = metadata.path("diff_refs").path("head_sha").asText(null);
         if (headCommit == null || headCommit.isBlank()) {
             headCommit = metadata.path("sha").asText(null);
@@ -687,11 +688,14 @@ public class GitLabClient implements VcsClient {
                 getTextOrNull(metadata, "description"),
                 getTextOrNull(metadata, "source_branch"),
                 getTextOrNull(metadata, "target_branch"),
+                targetHeadCommit,
                 baseCommit,
                 headCommit,
                 state,
                 "merged".equalsIgnoreCase(state),
-                getTextOrNull(metadata, "web_url"));
+                getTextOrNull(metadata, "web_url"),
+                metadata.path("author").path("id").asText(null),
+                metadata.path("author").path("username").asText(null));
     }
 
     @Override
@@ -824,9 +828,25 @@ public class GitLabClient implements VcsClient {
             String filePath,
             int newLine
     ) throws IOException {
+        postMergeRequestLineComment(workspaceId, repoIdOrSlug, mergeRequestIid, body, baseSha, headSha, startSha, filePath, newLine,
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.HEAD);
+    }
+
+    public void postMergeRequestLineComment(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid,
+            String body,
+            String baseSha,
+            String headSha,
+            String startSha,
+            String filePath,
+            int newLine,
+            org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide anchorSide
+    ) throws IOException {
         mergeRequestApi.postLineComment(
                 workspaceId, repoIdOrSlug, mergeRequestIid,
-                body, baseSha, headSha, startSha, filePath, newLine);
+                body, baseSha, headSha, startSha, filePath, newLine, anchorSide);
     }
 
     public List<Map<String, Object>> listMergeRequestNotes(

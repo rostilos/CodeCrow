@@ -373,3 +373,35 @@ def test_projected_capabilities_bind_combined_revision_evidence():
                 "php": ("extension:app/code/Vendor/Module/Foo.php",),
             },
         )
+
+
+def test_catalog_relative_imports_are_isolated_between_installation_roots(tmp_path):
+    for root_name, value in (("first", "first installation"), ("second", "second installation")):
+        root = tmp_path / root_name
+        plugin = root / "languages/example"
+        source = plugin / "python/example_plugin"
+        source.mkdir(parents=True)
+        (plugin / "plugin.json").write_text(json.dumps({
+            "id": "example",
+            "kind": "language",
+            "requires": [],
+            "capabilities": ["syntax"],
+            "detection": {
+                "extensions": [".example"],
+                "filesAll": [], "filesAny": [],
+                "contentMarkers": [], "alternatives": [],
+            },
+            "entrypoints": {"python": "example_plugin:Plugin"},
+        }))
+        (source / "value.py").write_text(f"VALUE = {value!r}\n")
+        (source / "__init__.py").write_text(
+            "from .value import VALUE\n"
+            "class Plugin:\n"
+            "    def __init__(self, descriptor):\n"
+            "        self.descriptor = descriptor\n"
+            "        self.value = VALUE\n"
+        )
+    first = PluginCatalog.discover(tmp_path / "first").implementation("example")
+    second = PluginCatalog.discover(tmp_path / "second").implementation("example")
+    assert first.value == "first installation"
+    assert second.value == "second installation"

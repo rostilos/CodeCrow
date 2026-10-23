@@ -27,5 +27,3 @@ class RelationshipType(str, Enum):
     EXTENDS = "EXTENDS"
     IMPLEMENTS = "IMPLEMENTS"
     CALLS = "CALLS"
-    SAME_PACKAGE = "SAME_PACKAGE"
-    REFERENCES = "REFERENCES"

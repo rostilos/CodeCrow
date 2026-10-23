@@ -937,10 +937,13 @@ public class GitHubClient implements VcsClient {
                 metadata.path("head").path("ref").asText(null),
                 metadata.path("base").path("ref").asText(null),
                 metadata.path("base").path("sha").asText(null),
+                metadata.path("base").path("sha").asText(null),
                 metadata.path("head").path("sha").asText(null),
                 state,
                 merged,
-                getTextOrNull(metadata, "html_url"));
+                getTextOrNull(metadata, "html_url"),
+                metadata.path("user").path("id").asText(null),
+                metadata.path("user").path("login").asText(null));
     }
 
     @Override

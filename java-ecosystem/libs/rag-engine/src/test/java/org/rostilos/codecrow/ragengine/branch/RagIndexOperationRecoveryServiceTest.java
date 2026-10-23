@@ -71,7 +71,7 @@ class RagIndexOperationRecoveryServiceTest {
     @Test
     void abandonedOperationTerminalizesJobPrimaryStatusAndLock() {
         Job job = new Job();
-        job.setJobType(JobType.RAG_INCREMENTAL_INDEX);
+        job.setJobType(JobType.REPOSITORY_INDEX_BUILD);
         job.setStatus(JobStatus.RUNNING);
         RagIndexStatus status = new RagIndexStatus();
         status.setStatus(RagIndexingStatus.INDEXING);
@@ -111,7 +111,7 @@ class RagIndexOperationRecoveryServiceTest {
 
         recovery.failAbandonedOperations();
 
-        verify(tracking).markIncrementalUpdateFailed(
+        verify(tracking).markGenerationRefreshFailed(
                 eq(project), contains("stopped heartbeating"), eq(91L));
         verify(tracking, never()).markIndexingFailed(any(), anyString(), any());
     }
@@ -178,7 +178,7 @@ class RagIndexOperationRecoveryServiceTest {
         recovery.failAbandonedOperations();
 
         verify(tracking, never()).markIndexingFailed(any(), anyString(), any());
-        verify(tracking, never()).markIncrementalUpdateFailed(any(), anyString(), any());
+        verify(tracking, never()).markGenerationRefreshFailed(any(), anyString(), any());
         verify(locks).releaseLock("rag-lock-owner-91");
     }
 
@@ -197,7 +197,7 @@ class RagIndexOperationRecoveryServiceTest {
         recovery.failAbandonedOperations();
 
         verify(tracking, never()).markIndexingFailed(any(), anyString(), any());
-        verify(tracking, never()).markIncrementalUpdateFailed(any(), anyString(), any());
+        verify(tracking, never()).markGenerationRefreshFailed(any(), anyString(), any());
         verify(locks).releaseLock("rag-lock-owner-91");
     }
 
@@ -215,7 +215,7 @@ class RagIndexOperationRecoveryServiceTest {
         when(published.getChunkCount()).thenReturn(642);
         when(published.getActiveGeneration()).thenReturn(true);
         Job job = new Job();
-        job.setJobType(JobType.RAG_INITIAL_INDEX);
+        job.setJobType(JobType.REPOSITORY_INDEX_BUILD);
         job.setStatus(JobStatus.RUNNING);
         when(registry.findRecoverableOperations(any())).thenReturn(List.of());
         when(registry.findSucceededOperationsWithActiveProjections())

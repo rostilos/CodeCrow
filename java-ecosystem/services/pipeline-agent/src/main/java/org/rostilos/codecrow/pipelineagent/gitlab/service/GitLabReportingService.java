@@ -203,7 +203,8 @@ public class GitLabReportingService implements VcsReportingService {
                             headSha,
                             startSha,
                             filePath,
-                            lineNumber
+                            lineNumber,
+                            issue.getAnchorSide()
                     );
                     posted++;
                     log.debug("Posted inline comment on {}:{}", filePath, lineNumber);

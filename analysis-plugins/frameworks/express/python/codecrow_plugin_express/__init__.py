@@ -631,7 +631,7 @@ class ExpressPlugin:
                 "express-framework",
                 path,
                 "exact Express application, router, HTTP route, mount, middleware, and error-handler facts",
-            ) for path in selected[:80])),
+            ) for path in selected)),
         ))
 
     def validate(self, claim: CandidateClaim):

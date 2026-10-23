@@ -137,11 +137,21 @@ public class JobService {
         persisted.setCurrentStep("Waiting for pipeline worker");
         persisted = jobRepository.save(persisted);
         addLog(persisted, JobLogLevel.INFO, "queued",
-                "Webhook work persisted and queued for pipeline processing");
+                "Analysis work persisted and queued for pipeline processing");
         addLog(persisted, JobLogLevel.DEBUG, WEBHOOK_DISPATCH_STEP,
-                "Durable webhook dispatch payload",
+                "Durable analysis dispatch payload",
                 Map.of("payload", webhookPayload));
         return persisted;
+    }
+
+    @Transactional
+    public boolean claimPipelineJobForExecution(Long jobId) {
+        if (jobRepository.claimPipelineJobForExecution(jobId, OffsetDateTime.now()) != 1) {
+            return false;
+        }
+        jobRepository.findById(jobId).ifPresent(job ->
+                addLog(job, JobLogLevel.INFO, "start", "Pipeline worker claimed persisted work"));
+        return true;
     }
 
     public Optional<String> findWebhookDispatchPayload(Long jobId) {
@@ -189,50 +199,81 @@ public class JobService {
         return job;
     }
 
-    /**
-     * Create a new job for RAG indexing.
-     */
+    /** Create a durable repository-index job bound to the branch revision it builds. */
     @Transactional
-    public Job createRagIndexJob(
+    public Job createRepositoryIndexBuildJob(
             Project project,
-            boolean isInitial,
-            JobTriggerSource triggerSource,
-            User triggeredBy
-    ) {
-        return createRagIndexJob(
-                project, isInitial, triggerSource, triggeredBy, null, null);
-    }
-
-    /** Create a durable RAG job bound to the branch revision it builds. */
-    @Transactional
-    public Job createRagIndexJob(
-            Project project,
-            boolean isInitial,
             JobTriggerSource triggerSource,
             User triggeredBy,
             String branchName,
-            String commitHash
+            String revision
+    ) {
+        return createRepositoryIndexBuildJob(
+                project,
+                triggerSource,
+                triggeredBy,
+                branchName,
+                revision,
+                defaultRepositoryIndexReason(triggerSource));
+    }
+
+    /**
+     * Create accepted repository-index work with an operator-visible reason.
+     * The database row is the backlog, so PENDING is a real waiting state and
+     * must be understandable before executor capacity becomes available.
+     */
+    @Transactional
+    public Job createRepositoryIndexBuildJob(
+            Project project,
+            JobTriggerSource triggerSource,
+            User triggeredBy,
+            String branchName,
+            String revision,
+            String reason
     ) {
         Job job = new Job();
         job.setProject(project);
-        job.setJobType(isInitial ? JobType.RAG_INITIAL_INDEX : JobType.RAG_INCREMENTAL_INDEX);
+        job.setJobType(JobType.REPOSITORY_INDEX_BUILD);
         job.setTriggerSource(triggerSource);
         job.setTriggeredBy(triggeredBy);
         job.setBranchName(branchName);
-        job.setCommitHash(commitHash);
-        String operation = isInitial ? "Initial RAG Indexing" : "Incremental RAG Update";
+        job.setCommitHash(revision);
+        String operation = "Repository Index Build";
         job.setTitle(branchName == null || branchName.isBlank()
                 ? operation
                 : operation + ": " + branchName);
         job.setStatus(JobStatus.PENDING);
+        job.setCurrentStep("Waiting for repository-index capacity");
 
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "init",
                 branchName == null || branchName.isBlank()
-                        ? "RAG indexing job created"
-                        : "RAG indexing job created for branch: " + branchName);
+                        ? "Repository index build job created"
+                        : "Repository index build job created for branch: " + branchName);
+        addLog(job, JobLogLevel.INFO, "queued",
+                "Repository-index work persisted and waiting for capacity; reason: "
+                        + normalizeRepositoryIndexReason(reason, triggerSource));
 
         return job;
+    }
+
+    private static String defaultRepositoryIndexReason(
+            JobTriggerSource triggerSource) {
+        if (triggerSource == JobTriggerSource.UI) {
+            return "operator requested a full rebuild";
+        }
+        if (triggerSource == JobTriggerSource.WEBHOOK) {
+            return "a branch revision event requested an index refresh";
+        }
+        return "scheduled repository-state reconciliation requested a build";
+    }
+
+    private static String normalizeRepositoryIndexReason(
+            String reason,
+            JobTriggerSource triggerSource) {
+        return reason == null || reason.isBlank()
+                ? defaultRepositoryIndexReason(triggerSource)
+                : reason.trim();
     }
 
     /**
@@ -322,6 +363,29 @@ public class JobService {
 
     // ==================== Job Lifecycle ====================
 
+    @Transactional
+    public boolean claimQaJobForExecution(Job receipt) {
+        Job job = jobRepository.findByIdForUpdate(receipt.getId()).orElse(null);
+        if (job == null || job.getJobType() != JobType.QA_DOC_COMMAND
+                || (job.getStatus() != JobStatus.PENDING && job.getStatus() != JobStatus.QUEUED)) return false;
+        job.start();
+        // PostgreSQL stores microseconds; the receipt must compare exactly after a reload.
+        job.setStartedAt(OffsetDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+        jobRepository.save(job);
+        addLog(job, JobLogLevel.INFO, "qa_attempt", "QA worker claimed persisted work");
+        receipt.setStartedAt(job.getStartedAt()); receipt.setStatus(JobStatus.RUNNING);
+        return true;
+    }
+
+    private boolean ownsQaExecution(Job receipt, Job current) {
+        if (current == null) return false;
+        if (receipt.getStartedAt() == null) {
+            return current.getStatus() == JobStatus.PENDING || current.getStatus() == JobStatus.QUEUED;
+        }
+        return current.getStatus() == JobStatus.RUNNING && current.getStartedAt() != null
+                && receipt.getStartedAt().toInstant().equals(current.getStartedAt().toInstant());
+    }
+
     /**
      * Start a job (transition from PENDING to RUNNING).
      */
@@ -349,6 +413,12 @@ public class JobService {
      */
     @Transactional
     public Job completeJob(Job job) {
+        if (job != null && job.getJobType() == JobType.QA_DOC_COMMAND) {
+            Job current = jobRepository.findByIdForUpdate(job.getId()).orElse(null);
+            if (!ownsQaExecution(job, current)) return current == null ? job : current;
+            job = current;
+        }
+
         // Re-fetch the job in case it was passed from a different transaction context
         job = jobRepository.findById(job.getId()).orElse(job);
         job.complete();
@@ -427,6 +497,12 @@ public class JobService {
      */
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public Job failJob(Job job, String errorMessage) {
+        if (job != null && job.getJobType() == JobType.QA_DOC_COMMAND) {
+            Job current = jobRepository.findByIdForUpdate(job.getId()).orElse(null);
+            if (!ownsQaExecution(job, current)) return current == null ? job : current;
+            job = current;
+        }
+
         log.info("failJob called for job {} (id={}), error: {}", 
                 job != null ? job.getExternalId() : "null", 
                 job != null ? job.getId() : "null", 
@@ -471,6 +547,12 @@ public class JobService {
      */
     @Transactional
     public Job skipJob(Job job, String reason) {
+        if (job != null && job.getJobType() == JobType.QA_DOC_COMMAND) {
+            Job current = jobRepository.findByIdForUpdate(job.getId()).orElse(null);
+            if (!ownsQaExecution(job, current)) return current == null ? job : current;
+            job = current;
+        }
+
         // Re-fetch the job in case it was passed from a different transaction context
         job = jobRepository.findById(job.getId()).orElse(job);
         job.skip(reason);
@@ -799,41 +881,6 @@ public class JobService {
     public boolean claimAbandonedRunningWebhookJob(Long jobId, OffsetDateTime threshold) {
         return jobRepository.claimAbandonedRunningWebhookJob(
                 jobId, threshold, OffsetDateTime.now()) == 1;
-    }
-
-    /** Renew the database-backed lease for one live legacy RAG producer. */
-    @Transactional
-    public boolean renewLegacyRagJobLease(
-            Long jobId,
-            OffsetDateTime validAfter,
-            OffsetDateTime renewedAt) {
-        return jobRepository.renewLegacyRagJobLease(
-                jobId, validAfter, renewedAt) == 1;
-    }
-
-    public List<JobRepository.LegacyRagJobRecoveryCoordinates>
-            findAbandonedLegacyRagJobs(OffsetDateTime threshold, int limit) {
-        return jobRepository.findAbandonedLegacyRagJobs(
-                threshold, PageRequest.of(0, Math.max(1, limit)));
-    }
-
-    /**
-     * Atomically terminalize an abandoned legacy RAG job only while its lease
-     * is still stale and no exact-generation operation owns it.
-     */
-    @Transactional
-    public boolean failAbandonedLegacyRagJob(
-            Long jobId,
-            OffsetDateTime threshold,
-            String diagnostic) {
-        return jobRepository.failAbandonedLegacyRagJob(
-                jobId, threshold, OffsetDateTime.now(), diagnostic) == 1;
-    }
-
-    public List<JobRepository.LegacyRagJobRecoveryCoordinates>
-            findFailedLegacyRagJobsWithActiveStatus(int limit) {
-        return jobRepository.findFailedLegacyRagJobsWithActiveStatus(
-                PageRequest.of(0, Math.max(1, limit)));
     }
 
     private void touchJobActivity(Job job) {

@@ -734,7 +734,7 @@ class NextJsPlugin:
                 "nextjs-framework",
                 path,
                 "exact Next.js file-system route, handler, layout, middleware, boundary, and data-loader facts",
-            ) for path in selected[:80])),
+            ) for path in selected)),
         ))
 
     def validate(self, claim: CandidateClaim):

@@ -135,4 +135,17 @@ class GitLabMergeRequestApiTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody(body);
     }
+
+    @Test void deletedSourceCommentUsesOnlyOldLine() throws Exception {
+        try (MockWebServer server=new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(201).setBody("{}")); server.start();
+            var api=new GitLabMergeRequestApi(new GitLabApiContext(new OkHttpClient(),server.url("/").toString()));
+            api.postLineComment("team","repo",17,"Finding","base","head","start","deleted.java",10,
+                    org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE);
+            JsonNode position=OBJECT_MAPPER.readTree(server.takeRequest().getBody().readUtf8()).path("position");
+            assertThat(position.path("old_line").asInt()).isEqualTo(10);
+            assertThat(position.has("new_line")).isFalse();
+        }
+    }
+
 }

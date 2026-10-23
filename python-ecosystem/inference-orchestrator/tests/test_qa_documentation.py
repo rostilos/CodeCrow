@@ -186,7 +186,7 @@ class TestBuildEnrichmentLookup:
 # ── QaDocOrchestrator._slim_stage_results ────────────────────────
 
 class TestSlimStageResults:
-    def test_strips_verbose_fields(self):
+    def test_preserves_every_field(self):
         data = [
             {
                 "batch_id": 1,
@@ -197,23 +197,21 @@ class TestSlimStageResults:
         ]
         result = QaDocOrchestrator._slim_stage_results(data)
         parsed = json.loads(result)
-        assert "raw_analysis" not in parsed[0]
-        assert "error" not in parsed[0]
-        assert "batch_id" not in parsed[0]
+        assert parsed[0]["raw_analysis"] == "long text..."
+        assert parsed[0]["error"] == "some error"
+        assert parsed[0]["batch_id"] == 1
         assert "file_analyses" in parsed[0]
 
-    def test_truncates_when_max_chars(self):
+    def test_preserves_large_values(self):
         data = {"key": "x" * 10000}
-        result = QaDocOrchestrator._slim_stage_results(data, max_chars=100)
-        assert len(result) <= 150  # 100 + suffix
+        result = QaDocOrchestrator._slim_stage_results(data)
+        assert json.loads(result) == data
 
-    def test_empty_values_stripped(self):
+    def test_empty_values_preserved(self):
         data = {"key": "value", "empty_list": [], "none_val": None, "empty_str": ""}
         result = QaDocOrchestrator._slim_stage_results(data)
         parsed = json.loads(result)
-        assert "empty_list" not in parsed
-        assert "none_val" not in parsed
-        assert "empty_str" not in parsed
+        assert parsed == data
 
     def test_compact_format(self):
         data = {"a": 1}
@@ -288,6 +286,33 @@ class TestIntermediateAnalysisPrompt:
 
 
 class TestIndependentTestCases:
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_normalizes_bold_priority_without_another_model_call(self):
+        document = """**Overview (HIGH)**
+<!-- codecrow-test-cases:start -->
+### Test Scenarios
+<!-- codecrow-test-cases:content -->
+**Upload an image within the allowed size (HIGH)**
+- **Expected Result:** The image uploads successfully.
+**Upload an animated image (MEDIUM)**
+- **Expected Result:** The image remains animated.
+<!-- codecrow-test-cases:end -->
+<!-- codecrow-environment:start -->
+### Environment and Setup Notes
+<!-- codecrow-environment:content -->
+**Setup note (LOW)**
+<!-- codecrow-environment:end -->"""
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock()
+        orchestrator = QaDocOrchestrator(llm=llm)
+        normalized = await orchestrator._ensure_shareable_sections(document, {})
+        assert normalized == document.replace(
+            "**Upload an image within the allowed size (HIGH)**",
+            "**Upload an image within the allowed size** (HIGH)",
+        ).replace("**Upload an animated image (MEDIUM)**", "**Upload an animated image** (MEDIUM)")
+        assert orchestrator._has_complete_shareable_sections(normalized)
+        llm.ainvoke.assert_not_awaited()
+
     def test_custom_template_requires_both_exact_sentinel_blocks(self):
         assert "custom template MUST NOT remove test cases" in QA_DOC_CUSTOM_PROMPT
         assert "<!-- codecrow-test-cases:start -->" in QA_DOC_CUSTOM_PROMPT
@@ -403,7 +428,7 @@ class TestIndependentTestCases:
             <!-- codecrow-test-cases:start -->
             ### Тестові сценарії
             <!-- codecrow-test-cases:content -->
-            **Checkout succeeds** (HIGH)
+            **Checkout succeeds (HIGH)**
             - **Expected Result:** Confirmation appears
             <!-- codecrow-test-cases:end -->
 
@@ -669,24 +694,3 @@ class TestParseJsonFromResponse:
         result = QaDocOrchestrator._parse_json_from_response(text)
         assert result is not None
         assert result["items"] == [1, 2, 3]
-
-
-# ── QaDocOrchestrator._truncate ──────────────────────────────────
-
-class TestTruncate:
-    def test_short_text(self):
-        assert QaDocOrchestrator._truncate("hello", 10) == "hello"
-
-    def test_exact_length(self):
-        assert QaDocOrchestrator._truncate("12345", 5) == "12345"
-
-    def test_truncated(self):
-        result = QaDocOrchestrator._truncate("1234567890", 5)
-        assert len(result) <= 7  # 5 + ellipsis char
-        assert result.endswith("…")
-
-    def test_empty(self):
-        assert QaDocOrchestrator._truncate("", 10) == ""
-
-    def test_none(self):
-        assert QaDocOrchestrator._truncate(None, 10) == ""

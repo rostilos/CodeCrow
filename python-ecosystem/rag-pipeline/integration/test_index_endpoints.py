@@ -1,257 +1,220 @@
-"""Integration tests: RAG pipeline /index and /limits endpoints."""
+"""Integration coverage for exact-generation index endpoints."""
+
 import os
+
 import pytest
-from unittest.mock import MagicMock
+
+from rag_pipeline.models.config import IndexStats
 
 
-@pytest.mark.asyncio
-async def test_get_limits(client, auth_headers):
-    """GET /limits → current RAG limits from mocked config."""
-    resp = await client.get("/limits", headers=auth_headers)
-    assert resp.status_code == 200
-    data = resp.json()
-    for key in ("max_chunks_per_index", "max_files_per_index",
-                "max_file_size_bytes", "chunk_size", "chunk_overlap"):
-        assert key in data
-
-
-@pytest.mark.asyncio
-async def test_index_repository(client, auth_headers, rag_app, tmp_path):
-    """POST /index/repository succeeds with mocked index_manager."""
-    import rag_pipeline.api.api as api_module
-    from rag_pipeline.models.config import IndexStats
-
-    fake_stats = IndexStats(
-        namespace="ws1__proj1__main",
+def _stats() -> IndexStats:
+    return IndexStats(
+        namespace="ws__project__main",
         document_count=5,
         chunk_count=20,
-        last_updated="2025-01-01T00:00:00Z",
-        workspace="ws1",
-        project="proj1",
+        last_updated="2026-01-01T00:00:00Z",
+        workspace="ws",
+        project="project",
         branch="main",
+        generation_manifest_sha256="b" * 64,
+        source_tree_sha256="a" * 64,
+        collection_target="generation-target",
     )
-    api_module.index_manager.index_repository.return_value = fake_stats
-
-    repo_path = str(tmp_path / "repo")
-    os.makedirs(repo_path, exist_ok=True)
-
-    # Ensure ALLOWED_REPO_ROOT includes tmp_path
-    old_root = os.environ.get("ALLOWED_REPO_ROOT")
-    os.environ["ALLOWED_REPO_ROOT"] = str(tmp_path)
-    try:
-        resp = await client.post("/index/repository", json={
-            "repo_path": repo_path,
-            "workspace": "ws1",
-            "project": "proj1",
-            "branch": "main",
-            "commit": "abc123",
-        }, headers=auth_headers)
-        assert resp.status_code == 200
-    finally:
-        if old_root is None:
-            os.environ.pop("ALLOWED_REPO_ROOT", None)
-        else:
-            os.environ["ALLOWED_REPO_ROOT"] = old_root
 
 
-@pytest.mark.asyncio
-async def test_index_repository_no_auth(client, tmp_path):
-    resp = await client.post("/index/repository", json={
-        "repo_path": str(tmp_path),
-        "workspace": "w",
-        "project": "p",
+def _preflight_receipt() -> dict:
+    return {
+        "workspace": "ws",
+        "project": "project",
         "branch": "main",
-        "commit": "x",
-    })
-    assert resp.status_code == 401
+        "commit": "commit",
+        "point_count": 5,
+        "repository_revision": "commit",
+        "repository_facts_sha256": "1" * 64,
+        "plugin_ids": ["python"],
+        "plugin_fingerprint": "sha256:selection",
+        "plugin_descriptor_fingerprint": "sha256:descriptor",
+        "plugin_implementation_fingerprint": "sha256:implementation",
+        "index_representation_fingerprint": "sha256:representation",
+        "current_index_representation_fingerprint": "sha256:representation",
+        "generation_schema": "codecrow.repository-generation.v2",
+        "generation_member_count": 4,
+        "generation_members_sha256": "2" * 64,
+        "generation_manifest_sha256": "3" * 64,
+        "source_tree_sha256": "4" * 64,
+        "index_include_patterns": ["src/**"],
+        "index_exclude_patterns": ["vendor/**"],
+        "index_selection_policy_sha256": "5" * 64,
+    }
 
 
 @pytest.mark.asyncio
-async def test_delete_index(client, auth_headers, rag_app):
-    """DELETE /index/{w}/{p}/{b} → 200."""
-    import rag_pipeline.api.api as api_module
-    api_module.index_manager.delete_index.return_value = None
-
-    resp = await client.request(
-        "DELETE", "/index/ws1/proj1/main", headers=auth_headers
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "deleted" in data.get("message", "").lower() or "Index deleted" in data.get("message", "")
-
-
-@pytest.mark.asyncio
-async def test_list_branches(client, auth_headers, rag_app):
-    """GET /index/{w}/{p}/branches → list of branches."""
-    import rag_pipeline.api.api as api_module
-    api_module.index_manager.get_indexed_branches.return_value = ["main", "dev"]
-    api_module.index_manager.get_branch_point_count.return_value = 42
-
-    resp = await client.get("/index/ws1/proj1/branches", headers=auth_headers)
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["total_branches"] == 2
-    assert len(data["branches"]) == 2
-
-
-@pytest.mark.asyncio
-async def test_delete_branch(client, auth_headers, rag_app):
-    """DELETE /index/{w}/{p}/branch/{b} → success."""
-    import rag_pipeline.api.api as api_module
-    api_module.index_manager.delete_branch.return_value = True
-
-    resp = await client.request(
-        "DELETE", "/index/ws1/proj1/branch/feature-x", headers=auth_headers
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "success"
-
-
-@pytest.mark.asyncio
-async def test_delete_branch_not_found(client, auth_headers, rag_app):
-    import rag_pipeline.api.api as api_module
-    api_module.index_manager.delete_branch.return_value = False
-
-    resp = await client.request(
-        "DELETE", "/index/ws1/proj1/branch/gone", headers=auth_headers
-    )
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "not_found"
-
-
-@pytest.mark.asyncio
-async def test_cleanup_stale_branches(client, auth_headers, rag_app):
-    """POST /index/{w}/{p}/cleanup-branches → cleanup result."""
-    import rag_pipeline.api.api as api_module
-    api_module.index_manager.get_indexed_branches.return_value = [
-        "main", "dev", "stale-1", "stale-2"
-    ]
-    api_module.index_manager.delete_branch.return_value = True
-
-    resp = await client.post(
-        "/index/ws1/proj1/cleanup-branches",
-        json={
-            "workspace": "ws1",
-            "project": "proj1",
-            "protected_branches": ["main"],
-            "branches_to_keep": ["dev"],
-        },
-        headers=auth_headers,
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "completed"
-    # stale-1 and stale-2 should be in deleted_branches (not protected or kept)
-    assert "stale-1" in data["deleted_branches"]
-    assert "stale-2" in data["deleted_branches"]
-
-
-@pytest.mark.asyncio
-async def test_get_index_stats(client, auth_headers, rag_app):
-    """GET /index/stats/{w}/{p}/{b} → IndexStats."""
-    import rag_pipeline.api.api as api_module
-    from rag_pipeline.models.config import IndexStats
-
-    fake_stats = IndexStats(
-        namespace="ws1__proj1__main",
-        document_count=10,
-        chunk_count=50,
-        last_updated="2025-01-01T00:00:00Z",
-        workspace="ws1",
-        project="proj1",
-        branch="main",
-    )
-    api_module.index_manager._get_index_stats.return_value = fake_stats
-
-    resp = await client.get("/index/stats/ws1/proj1/main", headers=auth_headers)
-    assert resp.status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_list_indices(client, auth_headers, rag_app):
-    import rag_pipeline.api.api as api_module
-    api_module.index_manager.list_indices.return_value = []
-    resp = await client.get("/index/list", headers=auth_headers)
-    assert resp.status_code == 200
-    assert resp.json() == []
-
-
-@pytest.mark.asyncio
-async def test_estimate_repository(client, auth_headers, rag_app, tmp_path):
-    import rag_pipeline.api.api as api_module
-    api_module.index_manager.estimate_repository_size.return_value = (10, 100)
-
-    repo_path = str(tmp_path / "repo")
-    os.makedirs(repo_path, exist_ok=True)
-
-    old_root = os.environ.get("ALLOWED_REPO_ROOT")
-    os.environ["ALLOWED_REPO_ROOT"] = str(tmp_path)
-    try:
-        resp = await client.post("/index/estimate", json={
-            "repo_path": repo_path,
-        }, headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["file_count"] == 10
-        assert data["estimated_chunks"] == 100
-    finally:
-        if old_root is None:
-            os.environ.pop("ALLOWED_REPO_ROOT", None)
-        else:
-            os.environ["ALLOWED_REPO_ROOT"] = old_root
-
-
-@pytest.mark.asyncio
-async def test_apply_changes_endpoint_forwards_one_commit(
-    client,
-    auth_headers,
-    rag_app,
-    tmp_path,
+async def test_full_index_requires_and_forwards_exact_target(
+    client, auth_headers, rag_app, tmp_path
 ):
     import rag_pipeline.api.api as api_module
-    from rag_pipeline.models.config import IndexStats
 
-    api_module.index_manager.apply_changes.return_value = IndexStats(
-        namespace="ws1__proj1__main",
-        document_count=2,
-        chunk_count=4,
-        last_updated="2025-01-01T00:00:00Z",
-        workspace="ws1",
-        project="proj1",
-        branch="main",
-    )
+    api_module.index_manager.index_repository.return_value = _stats()
     repository = tmp_path / "repository"
     repository.mkdir()
-    old_root = os.environ.get("ALLOWED_REPO_ROOT")
+    previous_root = os.environ.get("ALLOWED_REPO_ROOT")
     os.environ["ALLOWED_REPO_ROOT"] = str(tmp_path)
     try:
         response = await client.post(
-            "/index/apply-changes",
+            "/index/repository",
             json={
-                "updated_file_paths": ["src/A.py"],
-                "deleted_file_paths": ["src/B.py"],
-                "repo_base": str(repository),
-                "workspace": "ws1",
-                "project": "proj1",
+                "repo_path": str(repository),
+                "workspace": "ws",
+                "project": "project",
                 "branch": "main",
-                "commit": "abc123",
+                "commit": "commit",
+                "source_tree_sha256": "a" * 64,
+                "collection_target": "generation-target",
             },
             headers=auth_headers,
         )
     finally:
-        if old_root is None:
+        if previous_root is None:
             os.environ.pop("ALLOWED_REPO_ROOT", None)
         else:
-            os.environ["ALLOWED_REPO_ROOT"] = old_root
+            os.environ["ALLOWED_REPO_ROOT"] = previous_root
 
     assert response.status_code == 200
-    api_module.index_manager.apply_changes.assert_called_once_with(
-        updated_file_paths=["src/A.py"],
-        deleted_file_paths=["src/B.py"],
-        repo_base=str(repository),
-        workspace="ws1",
-        project="proj1",
-        branch="main",
-        commit="abc123",
+    assert api_module.index_manager.index_repository.call_args.kwargs[
+        "collection_target"
+    ] == "generation-target"
+
+
+@pytest.mark.asyncio
+async def test_full_index_accepts_server_owned_exact_identity(
+    client, auth_headers, rag_app, tmp_path
+):
+    import rag_pipeline.api.api as api_module
+
+    api_module.index_manager.index_repository.return_value = _stats()
+    (tmp_path / "Example.php").write_text("<?php\n", encoding="utf-8")
+    previous_root = os.environ.get("ALLOWED_REPO_ROOT")
+    os.environ["ALLOWED_REPO_ROOT"] = str(tmp_path)
+    try:
+        response = await client.post(
+            "/index/repository",
+            json={
+                "repo_path": str(tmp_path),
+                "workspace": "ws",
+                "project": "project",
+                "branch": "main",
+                "commit": "commit",
+            },
+            headers=auth_headers,
+        )
+    finally:
+        if previous_root is None:
+            os.environ.pop("ALLOWED_REPO_ROOT", None)
+        else:
+            os.environ["ALLOWED_REPO_ROOT"] = previous_root
+
+    assert response.status_code == 200
+    forwarded = api_module.index_manager.index_repository.call_args.kwargs
+    assert forwarded["source_tree_sha256"] is None
+    assert forwarded["collection_target"].startswith("cc_http_g_")
+
+
+@pytest.mark.asyncio
+async def test_full_index_rejects_malformed_explicit_source_identity(
+    client, auth_headers, tmp_path
+):
+    previous_root = os.environ.get("ALLOWED_REPO_ROOT")
+    os.environ["ALLOWED_REPO_ROOT"] = str(tmp_path)
+    try:
+        response = await client.post(
+            "/index/repository",
+            json={
+                "repo_path": str(tmp_path),
+                "workspace": "ws",
+                "project": "project",
+                "branch": "main",
+                "commit": "commit",
+                "source_tree_sha256": "not-a-digest",
+            },
+            headers=auth_headers,
+        )
+    finally:
+        if previous_root is None:
+            os.environ.pop("ALLOWED_REPO_ROOT", None)
+        else:
+            os.environ["ALLOWED_REPO_ROOT"] = previous_root
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_exact_revision_preflight_returns_sealed_target_receipt(
+    client, auth_headers, rag_app
+):
+    import rag_pipeline.api.api as api_module
+
+    preflight = api_module.index_manager.get_revision_preflight
+    prior_return_value = preflight.return_value
+    preflight.reset_mock()
+    try:
+        preflight.return_value = _preflight_receipt()
+        response = await client.get(
+            "/index/ws/project/revision",
+            params={
+                "branch": "main",
+                "commit": "commit",
+                "collection_target": "cc_http_g_exact",
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["generation_manifest_sha256"] == "3" * 64
+        assert response.json()["generation_member_count"] == 4
+        assert response.json()["current_index_representation_fingerprint"] == (
+            "sha256:representation"
+        )
+        preflight.assert_called_once_with(
+            "ws",
+            "project",
+            "main",
+            "commit",
+            collection_target="cc_http_g_exact",
+        )
+    finally:
+        preflight.return_value = prior_return_value
+        preflight.reset_mock()
+
+
+@pytest.mark.asyncio
+async def test_exact_revision_preflight_rejects_target_discovery(
+    client, auth_headers
+):
+    response = await client.get(
+        "/index/ws/project/revision",
+        params={"branch": "main", "commit": "commit"},
+        headers=auth_headers,
     )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_exact_generation_delete_forwards_registry_receipt(
+    client, auth_headers, rag_app
+):
+    import rag_pipeline.api.api as api_module
+
+    api_module.index_manager.delete_branch.return_value = True
+    response = await client.delete(
+        "/index/ws/project/branch/main",
+        params={
+            "collection_target": "generation-target",
+            "generation_revision": "commit",
+            "generation_manifest_sha256": "b" * 64,
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"

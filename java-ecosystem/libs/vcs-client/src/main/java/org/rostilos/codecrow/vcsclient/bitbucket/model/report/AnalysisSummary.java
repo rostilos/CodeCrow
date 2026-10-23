@@ -294,6 +294,7 @@ public final class AnalysisSummary {
         private final String issueUrl;
         private final Long issueId;
         private final String codeSnippet;
+        private final org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide anchorSide;
 
         public IssueSummary(
                 IssueSeverity severity,
@@ -308,6 +309,25 @@ public final class AnalysisSummary {
                 Long issueId,
                 String codeSnippet
         ) {
+            this(severity, category, filePath, lineNumber, title, reason, suggestedFix,
+                    suggestedFixDiff, issueUrl, issueId, codeSnippet,
+                    org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.HEAD);
+        }
+
+        public IssueSummary(
+                IssueSeverity severity,
+                String category,
+                String filePath,
+                Integer lineNumber,
+                String title,
+                String reason,
+                String suggestedFix,
+                String suggestedFixDiff,
+                String issueUrl,
+                Long issueId,
+                String codeSnippet,
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide anchorSide
+        ) {
             this.severity = severity;
             this.category = category;
             this.filePath = filePath;
@@ -319,6 +339,8 @@ public final class AnalysisSummary {
             this.issueUrl = issueUrl;
             this.issueId = issueId;
             this.codeSnippet = codeSnippet;
+            this.anchorSide = anchorSide == null
+                    ? org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.HEAD : anchorSide;
         }
 
         /**
@@ -339,6 +361,8 @@ public final class AnalysisSummary {
             this(severity, category, filePath, lineNumber, title, reason,
                     suggestedFix, suggestedFixDiff, issueUrl, issueId, null);
         }
+
+        public org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide getAnchorSide() { return anchorSide; }
 
         public IssueSeverity getSeverity() {
             return severity;

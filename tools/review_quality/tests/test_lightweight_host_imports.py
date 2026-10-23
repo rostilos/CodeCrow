@@ -22,7 +22,7 @@ def test_provider_free_leaf_imports_do_not_initialize_mcp_runtime():
             "-c",
             (
                 "import sys;"
-                "import service.review.orchestrator.context_helpers;"
+                "import service.review.plugin_context;"
                 "import service.review.orchestrator.verification_agent;"
                 "assert 'mcp_use' not in sys.modules"
             ),

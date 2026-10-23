@@ -79,6 +79,8 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
     @MockBean private VcsClientProvider vcsClientProvider;
     @MockBean private RagOperationsService ragOperationsService;
     @MockBean private AnalyzedCommitService analyzedCommitService;
+    @org.springframework.boot.test.mock.mockito.SpyBean
+    private org.rostilos.codecrow.analysisengine.service.branch.BranchIssueReconciliationService reconciliationService;
 
     private VcsAiClientService vcsAiClientService;
     private VcsClient vcsClient;
@@ -98,6 +100,8 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
                 .thenReturn(Optional.of("branch-resolver-it-lock"));
         when(analysisLockService.maintainLockLease(anyString(), anyInt())).thenReturn(lockLease);
         when(lockLease.confirmOwnership()).thenReturn(true);
+        when(analysisLockService.withOwnedLocks(any(), any())).thenAnswer(inv ->
+                transactionTemplate.execute(status -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get()));
         when(analysisLockService.isLocked(any(), anyString(), any())).thenReturn(false);
 
         when(vcsServiceFactory.getAiClientService(EVcsProvider.GITHUB)).thenReturn(vcsAiClientService);
@@ -155,7 +159,7 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
     }
 
     @Test
-    void branchAnalysis_shouldReconcileLineShiftWhenCodeStillExists() {
+    void branchAnalysis_shouldReconcileLineShiftWhenCodeStillExists() throws Exception {
         Long projectId = createProjectWithConnections();
         Long issueId = seedBranchIssue(projectId, APP_PATH, 5, "dangerousCall(userInput);", "Dangerous call remains");
 
@@ -166,8 +170,10 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
         assertThat(issue.isResolved()).isFalse();
         assertThat(issue.getCurrentLineNumber()).isEqualTo(6);
         assertThat(issue.getCurrentLineHash()).isEqualTo(LineHashSequence.hashLine("        dangerousCall(userInput);"));
-        assertThat(issue.getLastVerifiedCommit()).isEqualTo("line-shift-commit");
+        // Relocating an unchanged anchor does not verify the defect itself.
+        assertThat(issue.getLastVerifiedCommit()).isNull();
         assertThat(issue.getTrackingConfidence()).isEqualTo(TrackingConfidence.EXACT);
+        verify(aiAnalysisClient, atLeastOnce()).performAnalysis(any(AiAnalysisRequest.class), any());
     }
 
     @Test
@@ -253,7 +259,7 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
 
         BranchIssue stillOpen = branchIssueRepository.findById(stillOpenIssueId).orElseThrow();
         assertThat(stillOpen.isResolved()).isFalse();
-        assertThat(stillOpen.getLastVerifiedCommit()).isEqualTo("full-reconcile-commit");
+        assertThat(stillOpen.getLastVerifiedCommit()).isNull();
         assertThat(stillOpen.getTrackingConfidence()).isEqualTo(TrackingConfidence.EXACT);
 
         var requestCaptor = org.mockito.ArgumentCaptor.forClass(AiAnalysisRequest.class);
@@ -262,6 +268,67 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
                 .anySatisfy(request -> assertThat(request.getPreviousCodeAnalysisIssues())
                         .extracting("id")
                         .contains(String.valueOf(aiResolvedIssueId)));
+        assertThat(requestCaptor.getAllValues())
+                .anySatisfy(request -> assertThat(request.getPreviousCodeAnalysisIssues())
+                        .extracting("id")
+                        .contains(String.valueOf(stillOpenIssueId)));
+    }
+
+    @Test
+    void coreFailureRollsBackCommitFilesSnapshotsAndLineRemaps() throws Exception {
+        Long projectId = createProjectWithConnections();
+        Long issueId = seedBranchIssue(projectId, APP_PATH, 5, "dangerousCall(userInput);", "Rollback fixture");
+        org.mockito.Mockito.doThrow(new IllegalStateException("injected core failure"))
+                .when(reconciliationService).verifyIssueLineNumbersWithSnippets(anySet(), any(), any());
+        var request = new org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest();
+        request.projectId = projectId;
+        request.targetBranchName = "main";
+        request.commitHash = "line-shift-commit";
+        request.sourcePrNumber = 42L;
+        request.analysisType = AnalysisType.BRANCH_ANALYSIS;
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> branchAnalysisProcessor.process(request, event -> {}))
+                .hasMessageContaining("injected core failure");
+        Branch stored = branchRepository.findByProjectIdAndBranchName(projectId, "main").orElseThrow();
+        assertThat(stored.getCommitHash()).isEqualTo("base-commit");
+        assertThat(stored.getLastSuccessfulCommitHash()).isEqualTo("base-commit");
+        assertThat(branchIssueRepository.findById(issueId).orElseThrow().getCurrentLineNumber()).isEqualTo(5);
+        transactionTemplate.executeWithoutResult(status -> {
+            assertThat(entityManager.createQuery("select count(f) from BranchFile f where f.project.id = :id", Long.class)
+                    .setParameter("id", projectId).getSingleResult()).isZero();
+            assertThat(entityManager.createQuery("select count(s) from AnalyzedFileSnapshot s where s.branch.id = :id", Long.class)
+                    .setParameter("id", stored.getId()).getSingleResult()).isZero();
+        });
+    }
+
+    @Test
+    void failedSemanticCheckRetainsDurablePendingStateAndFullRetryClearsIt() throws Exception {
+        Long projectId = createProjectWithConnections();
+        Long issueId = seedBranchIssue(projectId, APP_PATH, 5, "dangerousCall(userInput);", "Pending fixture");
+        when(aiAnalysisClient.performAnalysis(any(), any())).thenThrow(new java.io.IOException("provider unavailable"));
+        var request = new org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest();
+        request.projectId = projectId;
+        request.targetBranchName = "main";
+        request.commitHash = "ai-resolved-commit";
+        request.sourcePrNumber = 42L;
+        request.analysisType = AnalysisType.BRANCH_ANALYSIS;
+        Map<String, Object> result = branchAnalysisProcessor.process(request, event -> {});
+        assertThat(result).containsEntry("reconciliationPending", true);
+        Branch stored = branchRepository.findByProjectIdAndBranchName(projectId, "main").orElseThrow();
+        assertThat(stored.getLastSuccessfulCommitHash()).isEqualTo("ai-resolved-commit");
+        assertThat(new org.springframework.beans.BeanWrapperImpl(stored).getPropertyValue("reconciliationPending")).isEqualTo(true);
+        assertThat(branchIssueRepository.findById(issueId).orElseThrow().isResolved()).isFalse();
+        org.mockito.Mockito.doAnswer(inv -> aiResponseFor(inv.getArgument(0)))
+                .when(aiAnalysisClient).performAnalysis(any(), any());
+        transactionTemplate.executeWithoutResult(status -> {
+            Branch pending = branchRepository.findById(stored.getId()).orElseThrow();
+            org.springframework.test.util.ReflectionTestUtils.setField(pending, "reconciliationAttemptedAt",
+                    java.time.OffsetDateTime.now().minusMinutes(20));
+        });
+        new org.rostilos.codecrow.pipelineagent.generic.service.BranchHealthScheduler(branchRepository, branchAnalysisProcessor)
+                .retryPendingReconciliations();
+        assertThat(branchIssueRepository.findById(issueId).orElseThrow().isResolved()).isTrue();
+        Branch completed = branchRepository.findById(stored.getId()).orElseThrow();
+        assertThat(new org.springframework.beans.BeanWrapperImpl(completed).getPropertyValue("reconciliationPending")).isEqualTo(false);
     }
 
     private void postBranch(Long projectId, String commitHash) {
@@ -285,6 +352,7 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             Branch branch = branchRepository.findByProjectIdAndBranchName(projectId, "main").orElseThrow();
             assertThat(branch.getLastSuccessfulCommitHash()).isEqualTo(expectedCommit);
+            assertThat(branch.isReconciliationPending()).isFalse();
 
             BranchIssue issue = branchIssueRepository.findById(issueId).orElseThrow();
             assertions.accept(issue);

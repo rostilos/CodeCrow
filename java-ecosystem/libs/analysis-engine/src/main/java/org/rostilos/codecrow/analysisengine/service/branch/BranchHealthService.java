@@ -43,16 +43,8 @@ public class BranchHealthService {
                                        String branchName) {
         if (unanalyzedCommits.isEmpty()) return;
         try {
-            boolean multiBranch = project.getConfiguration() != null
-                    && project.getConfiguration().ragConfig() != null
-                    && project.getConfiguration().ragConfig().isMultiBranchEnabled();
-            if (multiBranch) {
-                analyzedCommitService.recordBranchCommitsAnalyzed(
-                        project, unanalyzedCommits, branchName);
-            } else {
-                analyzedCommitService.recordBranchCommitsAnalyzed(
-                        project, unanalyzedCommits);
-            }
+            analyzedCommitService.recordBranchCommitsAnalyzed(
+                    project, unanalyzedCommits, branchName);
             if (scmEvidenceService != null) {
                 scmEvidenceService.recordAnalysisReceipts(
                         project.getId(), unanalyzedCommits, branchName, branchName,
@@ -72,6 +64,7 @@ public class BranchHealthService {
             branchRepository.findByProjectIdAndBranchName(project.getId(), request.getTargetBranchName())
                     .ifPresent(b -> {
                         b.markStale();
+                        b.setRetryCommitHash(request.getCommitHash());
                         branchRepository.save(b);
                         log.info("Marked branch {} as STALE (consecutiveFailures={})",
                                 request.getTargetBranchName(), b.getConsecutiveFailures());

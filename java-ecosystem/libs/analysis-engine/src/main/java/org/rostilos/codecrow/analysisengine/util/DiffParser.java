@@ -144,7 +144,7 @@ public class DiffParser {
 
     /**
      * Extract representative code snippets from all changed files.
-     * These are used for semantic search in RAG.
+     * These are used as bounded changed-source context for review analysis.
      */
     public static List<String> extractDiffSnippets(String rawDiff, int maxTotalSnippets) {
         List<DiffFileInfo> diffFiles = parseDiff(rawDiff, 3);

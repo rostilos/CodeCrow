@@ -2,24 +2,36 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from codecrow_plugins import (
     CandidateClaim,
+    EvidenceRequest,
     FileArtifact,
     FileDisposition,
     GraphFact,
     PluginCatalog,
+    PluginKind,
+    PluginOutcome,
     PluginRuntime,
     ProjectCapabilities,
     ProjectSelector,
+    ReviewContribution,
     RepositoryFacts,
     ValidationDecision,
 )
 
 
 PLUGINS_ROOT = Path(__file__).resolve().parents[3]
+MAGENTO_FILE_POLICY_FIXTURE = (
+    PLUGINS_ROOT / "contracts" / "fixtures" / "magento-file-policy.json"
+)
+
+
+def _magento_file_policy_vectors():
+    return json.loads(MAGENTO_FILE_POLICY_FIXTURE.read_text(encoding="utf-8"))
 
 
 def test_manifest_schema_does_not_accept_an_absent_pattern_marker_as_evidence():
@@ -243,7 +255,7 @@ def test_inferred_framework_root_uses_plugin_relative_identifiers_and_repository
     assert not any(fact.kind.startswith("django-") for fact in outside_facts)
 
 
-def test_evidence_cap_keeps_framework_root_and_never_widens_dispatch():
+def test_detection_evidence_is_bounded_and_never_widens_dispatch():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)
     root = "services/shop"
@@ -268,8 +280,22 @@ def test_evidence_cap_keeps_framework_root_and_never_widens_dispatch():
     )
 
     django_evidence = capabilities.detection_evidence["django"]
-    assert len(django_evidence) == 64
-    assert f"root:{root}" in django_evidence
+    structural_evidence = tuple(
+        item for item in django_evidence
+        if not item.startswith("partial:")
+    )
+    assert len(structural_evidence) == 64
+    assert f"root:{root}" in structural_evidence
+    assert f"file:{root}/manage.py" in structural_evidence
+    assert (
+        f"pattern:**/settings.py:{root}/apps/app00/settings.py"
+        in structural_evidence
+    )
+    assert (
+        f"pattern:**/settings.py:{root}/apps/app69/settings.py"
+        not in structural_evidence
+    )
+    assert "partial:detection-evidence-limit:9" in django_evidence
     assert diagnostics == ()
     assert not any(fact.kind.startswith("django-") for fact in outside_facts)
 
@@ -747,7 +773,7 @@ def test_php_repository_claim_requires_matching_cited_relation():
     ]
 
 
-def test_review_evidence_cap_does_not_starve_framework_kinds():
+def test_review_contribution_bounds_framework_evidence_with_diagnostics():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)
     paths = tuple(f"src/main/java/example/Service{index:03d}.java" for index in range(100))
@@ -760,8 +786,13 @@ def test_review_evidence_cap_does_not_starve_framework_kinds():
 
     contribution, diagnostics = runtime.review_contribution(paths, capabilities)
 
-    assert diagnostics == ()
-    assert len(contribution.evidence_requests) == runtime.MAX_EVIDENCE_REQUESTS
+    assert [diagnostic.code for diagnostic in diagnostics] == [
+        "plugin-review-input-limit",
+        "plugin-review-input-limit",
+        "plugin-review-output-limit",
+    ]
+    assert all(diagnostic.recoverable for diagnostic in diagnostics)
+    assert len(contribution.evidence_requests) == 80
     counts = {
         kind: sum(
             request.kind == kind
@@ -770,6 +801,48 @@ def test_review_evidence_cap_does_not_starve_framework_kinds():
         for kind in ("java-file", "spring-component")
     }
     assert counts == {"java-file": 40, "spring-component": 40}
+    assert {
+        request.identifier
+        for request in contribution.evidence_requests
+        if request.kind == "java-file"
+    } == set(paths[:40])
+    assert {
+        request.identifier
+        for request in contribution.evidence_requests
+        if request.kind == "spring-component"
+    } == set(paths[:40])
+
+
+def test_review_contribution_bounds_rules_and_requests_with_diagnostics():
+    rules = tuple(f"deterministic rule {index:03d}" for index in range(45))
+    paths = tuple(f"src/example_{index:03d}.py" for index in range(85))
+    requests = tuple(
+        EvidenceRequest("synthetic-evidence", path, "exact synthetic fact")
+        for path in paths
+    )
+    implementation = SimpleNamespace(review=lambda _paths: PluginOutcome.handled(
+        ReviewContribution(rules=rules, evidence_requests=requests)
+    ))
+    catalog = SimpleNamespace(
+        registry=SimpleNamespace(descriptor=lambda _plugin_id: SimpleNamespace(
+            kind=PluginKind.DOMAIN
+        )),
+        implementation=lambda _plugin_id: implementation,
+    )
+    runtime = PluginRuntime(catalog)
+    capabilities = ProjectCapabilities(
+        repository_plugins=("synthetic",),
+        fingerprint="sha256:" + ("0" * 64),
+    )
+
+    contribution, diagnostics = runtime.review_contribution(paths, capabilities)
+
+    assert [diagnostic.code for diagnostic in diagnostics] == [
+        "plugin-review-input-limit",
+        "plugin-review-output-limit",
+    ]
+    assert contribution.rules == rules[:40]
+    assert contribution.evidence_requests == requests[:80]
 
 
 def test_magento_selects_installed_application_without_direct_framework_requirement():
@@ -802,6 +875,36 @@ def test_magento_selects_standalone_and_nested_module_workspaces():
     assert ProjectSelector(catalog.registry).select(nested).repository_plugins == ("json", "php", "magento")
 
 
+def test_magento_selects_standalone_and_monorepo_theme_workspaces():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    standalone = RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=("composer.json", "registration.php", "theme.xml"),
+    )
+    monorepo = RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=(
+            "composer.json",
+            "packages/acme-theme/registration.php",
+            "packages/acme-theme/theme.xml",
+        ),
+    )
+    incomplete = RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=("composer.json", "theme.xml"),
+    )
+
+    assert ProjectSelector(catalog.registry).select(
+        standalone
+    ).repository_plugins == ("json", "php", "magento")
+    assert ProjectSelector(catalog.registry).select(
+        monorepo
+    ).repository_plugins == ("json", "php", "magento")
+    assert "magento" not in ProjectSelector(catalog.registry).select(
+        incomplete
+    ).repository_plugins
+
+
 def test_php_emits_namespace_type_and_relationship_facts():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)
@@ -830,6 +933,126 @@ final class Save extends Action implements HttpPostActionInterface {
     assert ("php-construction", "constructs", "ResultFactory") in {
         (fact.kind, fact.relation, fact.target) for fact in facts
     }
+
+
+def test_php_namespace_import_is_not_misclassified_as_trait_use():
+    artifact = FileArtifact(
+        "app/code/Acme/Checkout/registration.php",
+        """<?php
+use Magento\\Framework\\Component\\ComponentRegistrar;
+
+ComponentRegistrar::register(
+    ComponentRegistrar::MODULE,
+    'Acme_Checkout',
+    __DIR__
+);
+""",
+    )
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    runtime = PluginRuntime(catalog)
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=tuple(sorted((artifact.path, "composer.json"))),
+    ))
+
+    facts, diagnostics = runtime.graph_facts(artifact, capabilities)
+
+    assert diagnostics == ()
+    assert {
+        (fact.kind, fact.source, fact.relation, fact.target)
+        for fact in facts
+        if fact.kind in {"php-import", "php-trait"}
+    } == {
+        (
+            "php-import",
+            artifact.path,
+            "imports",
+            "Magento\\Framework\\Component\\ComponentRegistrar",
+        ),
+    }
+
+
+def test_php_import_groups_and_aliases_remain_namespace_imports():
+    artifact = FileArtifact(
+        "src/GroupedImports.php",
+        """<?php
+namespace Acme\\Feature;
+
+use Vendor\\Package\\Service as LocalService;
+use Vendor\\Package\\{First, Second as LocalSecond};
+use function Vendor\\Package\\helper;
+use const Vendor\\Package\\FLAG;
+
+final class GroupedImports {}
+""",
+    )
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    runtime = PluginRuntime(catalog)
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=tuple(sorted((artifact.path, "composer.json"))),
+    ))
+
+    facts, diagnostics = runtime.graph_facts(artifact, capabilities)
+
+    assert diagnostics == ()
+    assert {
+        (fact.source, fact.target)
+        for fact in facts
+        if fact.kind == "php-import"
+    } == {
+        ("Acme\\Feature", "Vendor\\Package\\Service"),
+        ("Acme\\Feature", "Vendor\\Package\\First"),
+        ("Acme\\Feature", "Vendor\\Package\\Second"),
+        ("Acme\\Feature", "Vendor\\Package\\helper"),
+        ("Acme\\Feature", "Vendor\\Package\\FLAG"),
+    }
+    assert not any(fact.kind == "php-trait" for fact in facts)
+
+
+def test_php_trait_uses_are_owned_by_their_exact_declarations():
+    artifact = FileArtifact(
+        "src/MultipleDeclarations.php",
+        """<?php
+namespace Acme\\Feature;
+
+use Vendor\\Package\\ImportedType;
+
+final class First
+{
+    use FirstTrait;
+}
+
+trait Second
+{
+    use SharedTrait, AuditedTrait {
+        SharedTrait::run insteadof AuditedTrait;
+    }
+}
+""",
+    )
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    runtime = PluginRuntime(catalog)
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
+        revision="0123456789abcdef",
+        paths=tuple(sorted((artifact.path, "composer.json"))),
+    ))
+
+    facts, diagnostics = runtime.graph_facts(artifact, capabilities)
+
+    assert diagnostics == ()
+    assert {
+        (fact.source, fact.target)
+        for fact in facts
+        if fact.kind == "php-trait"
+    } == {
+        ("Acme\\Feature\\First", "FirstTrait"),
+        ("Acme\\Feature\\Second", "SharedTrait"),
+        ("Acme\\Feature\\Second", "AuditedTrait"),
+    }
+    assert {
+        fact.target for fact in facts if fact.kind == "php-import"
+    } == {"Vendor\\Package\\ImportedType"}
 
 
 def test_magento_emits_effective_di_from_repository_state_only():
@@ -959,29 +1182,35 @@ def test_magento_keeps_custom_entity_bearing_xml_outside_architecture_analysis()
     )
 
 
-def test_magento_file_policy_keeps_architecture_without_vendor_test_vectors():
+def test_magento_direct_file_policy_matches_shared_cross_runtime_vectors():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    plugin = catalog.implementation("magento")
+
+    for test_case in _magento_file_policy_vectors()["policyCases"]:
+        outcome = plugin.file_disposition(test_case["path"])
+        assert outcome.value is FileDisposition(test_case["expected"]), (
+            f"{test_case['name']}: {test_case['path']}"
+        )
+
+
+def test_magento_runtime_root_scoping_matches_shared_cross_runtime_vectors():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)
-    capabilities = ProjectSelector(catalog.registry).select(_facts())
 
-    assert runtime.file_disposition(
-        "vendor/magento/module-catalog/etc/di.xml", capabilities
-    ) is FileDisposition.ARCHITECTURE_ONLY
-    assert runtime.file_disposition(
-        "vendor/magento/module-catalog/Model/Product.php", capabilities
-    ) is FileDisposition.FULL
-    assert runtime.file_disposition(
-        "vendor/magento/module-catalog/Test/Unit/ProductTest.php", capabilities
-    ) is FileDisposition.EXCLUDED
-    assert runtime.file_disposition(
-        "generated/code/Magento/Catalog/Model/Product/Proxy.php", capabilities
-    ) is FileDisposition.GENERATED
-    assert runtime.file_disposition(
-        "pub/static/frontend/Acme/theme/en_US/app.js", capabilities
-    ) is FileDisposition.GENERATED
-    assert runtime.file_disposition(
-        "dev/tests/integration/testsuite/Acme/Fixture.php", capabilities
-    ) is FileDisposition.EXCLUDED
+    for test_case in _magento_file_policy_vectors()["runtimeCases"]:
+        capabilities = ProjectCapabilities(
+            repository_plugins=("php", "magento"),
+            detection_evidence={
+                "magento": tuple(test_case["evidence"]),
+            },
+            fingerprint="sha256:" + ("0" * 64),
+            descriptor_fingerprint="sha256:" + ("0" * 64),
+        )
+        assert runtime.file_disposition(
+            test_case["path"], capabilities
+        ) is FileDisposition(test_case["expected"]), (
+            f"{test_case['name']}: {test_case['path']}"
+        )
 
 
 def test_magento_validator_abstains_without_typed_proof():
@@ -1283,7 +1512,7 @@ def test_php_validator_does_not_claim_generic_candidates():
     assert runtime.validate(claim, capabilities) == ()
 
 
-def test_review_contributions_are_bounded_and_add_no_model_api():
+def test_review_contributions_are_deterministic_and_add_no_model_api():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)
     capabilities = ProjectSelector(catalog.registry).select(_facts())
@@ -1291,6 +1520,10 @@ def test_review_contributions_are_bounded_and_add_no_model_api():
     contribution, diagnostics = runtime.review_contribution(_facts().paths, capabilities)
 
     assert diagnostics == ()
-    assert 1 <= len(contribution.rules) <= runtime.MAX_RULES
-    assert 1 <= len(contribution.evidence_requests) <= runtime.MAX_EVIDENCE_REQUESTS
+    assert contribution.rules
+    assert contribution.evidence_requests
+    assert contribution.rules == tuple(sorted(set(contribution.rules)))
+    assert contribution.evidence_requests == tuple(sorted(set(
+        contribution.evidence_requests
+    )))
     assert not any(hasattr(plugin, "llm") or hasattr(plugin, "model_client") for plugin in catalog.implementations.values())

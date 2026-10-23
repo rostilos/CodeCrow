@@ -2,7 +2,7 @@ package org.rostilos.codecrow.pipelineagent.generic.processor.command;
 
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
-import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
+import org.rostilos.codecrow.core.service.PrChangeSummaryService;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
@@ -24,6 +24,7 @@ import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.CommentCommand
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler.WebhookResult;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaAutoDocListener;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocGenerationContext;
+import org.rostilos.codecrow.pipelineagent.qadoc.QaDocOperationService;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocGenerationService;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocHandoffRetryPolicy;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocPublicPreviewService;
@@ -64,6 +65,8 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(QaDocCommandProcessor.class);
 
+    private final PrChangeSummaryService prChangeSummaryService;
+    private final QaDocOperationService operations;
     private final TaskManagementConnectionRepository connectionRepository;
     private final TaskManagementClientFactory clientFactory;
     private final QaDocGenerationService qaDocGenerationService;
@@ -83,8 +86,12 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             QaDocStateRepository qaDocStateRepository,
             QaDocDocumentService qaDocDocumentService,
             QaDocPublicPreviewService qaDocPublicPreviewService,
-            PrFileEnrichmentService enrichmentService
+            PrFileEnrichmentService enrichmentService,
+            PrChangeSummaryService prChangeSummaryService,
+            QaDocOperationService operations
     ) {
+        this.prChangeSummaryService = prChangeSummaryService;
+        this.operations = operations;
         this.connectionRepository = connectionRepository;
         this.clientFactory = clientFactory;
         this.qaDocGenerationService = qaDocGenerationService;
@@ -115,6 +122,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
         log.info("Processing qa-doc command for project={}, PR={}",
                 project.getId(), payload.pullRequestId());
 
+        QaDocOperationService.Operation operation = null;
         try {
             // 1. Validate QA auto-doc is configured
             ProjectConfig config = project.getConfiguration();
@@ -140,7 +148,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
 
             // 2. Resolve task management connection
             TaskManagementConnection connection = connectionRepository
-                    .findById(taskConfig.taskManagementConnectionId())
+                    .findByIdAndWorkspaceId(taskConfig.taskManagementConnectionId(), project.getWorkspace().getId())
                     .orElse(null);
             if (connection == null) {
                 return WebhookResult.error(
@@ -165,6 +173,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                         "(`/codecrow qa-doc PROJ-123`) or configure task ID extraction in Project Settings.");
             }
 
+            operation = operations.open(project, payload.pullRequestId() == null ? null : Long.valueOf(payload.pullRequestId()), taskId, eventConsumer);
             log.info("Resolved task ID: {} for project={}, PR={}",
                     taskId, project.getId(), payload.pullRequestId());
 
@@ -216,7 +225,8 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             if (prNumber != null) {
                 // Use eager-loading query so issues are available for the analysis summary
                 Optional<CodeAnalysis> latestAnalysis = codeAnalysisService
-                        .getPreviousVersionCodeAnalysis(project.getId(), prNumber);
+                        .getAnalysisForReview(project.getId(), prNumber, payload.commitHash(),
+                                additionalData.get("analysisId") instanceof Number value ? value.longValue() : null);
                 if (latestAnalysis.isPresent()) {
                     analysis = latestAnalysis.get();
                     issuesFound = analysis.getTotalIssues();
@@ -238,14 +248,20 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             String sourceBranch = payload.sourceBranch();
             String targetBranch = payload.targetBranch();
 
-            // 5b. Fetch the raw PR diff from the VCS platform
-            String diff = null;
+            Map<String, Object> prChangeSummary = prChangeSummaryService.find(project.getId(), prNumber, commitHash, analysis == null ? null : analysis.getId());
+
+            Map<String, Object> reviewSource = prChangeSummaryService.reviewSource(analysis);
+
+            // Prefer the exact host-acquired diff over current PR metadata.
+            String diff = reviewSource.get("rawDiff") instanceof String savedDiff ? savedDiff : null;
             VcsClient vcsClient = null;
 
             if (vcsConnection != null && prNumber != null) {
                 try {
                     vcsClient = vcsClientProvider.getClient(vcsConnection);
-                    diff = vcsClient.getPullRequestDiff(workspace, repoSlug, prNumber);
+                    if (diff == null && prChangeSummary == null) {
+                        diff = VcsDiffUtils.fetchPullRequestDiffAtRevision(vcsClient, workspace, repoSlug, prNumber, commitHash);
+                    }
                     log.info("qa-doc command: fetched PR diff, size={} chars",
                             diff != null ? diff.length() : 0);
                 } catch (Exception e) {
@@ -282,17 +298,26 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                     ? qaDocStateRepository.findByProjectIdAndTaskId(project.getId(), taskId).orElse(null)
                     : null;
             boolean isSamePrRerun = (state != null && prNumber != null && state.isPrDocumented(prNumber));
+            Long requestedAnalysisId = analysis != null ? analysis.getId()
+                    : additionalData.get("analysisId") instanceof Number id ? id.longValue() : null;
+            Optional<QaDocDocument> previousPrDocument = Optional.empty();
             Optional<QaDocDocument> pendingHandoffDocument = Optional.empty();
             if (prNumber != null) {
                 try {
-                    pendingHandoffDocument = qaDocDocumentService
+                    previousPrDocument = qaDocDocumentService
                             .findLatestDocument(project.getId(), prNumber)
+                            .filter(document -> taskId.equalsIgnoreCase(document.getTaskId()));
+                    pendingHandoffDocument = previousPrDocument
+                            .filter(document -> requestedAnalysisId == null || java.util.Objects.equals(requestedAnalysisId, document.getLastAnalysisId()))
                             .filter(document -> QaDocHandoffRetryPolicy.shouldReuse(
                                     document, state, commitHash, taskId));
                 } catch (Exception e) {
-                    log.warn("qa-doc command: failed to inspect pending handoff for project {} PR #{}: {}",
-                            project.getId(), prNumber, e.getMessage());
+                    throw new IllegalStateException("QA history is unavailable; retry will preserve the stored document", e);
                 }
+            }
+
+            if (previousPrDocument.isPresent() && previousPrDocument.get().isFromNewerAnalysis(requestedAnalysisId)) {
+                return WebhookResult.ignored("A newer review already produced QA documentation for this PR.");
             }
 
             Optional<TaskComment> existingComment = Optional.empty();
@@ -306,18 +331,18 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             String previousDocumentation = null;
 
             try {
-                previousDocumentation = (isSamePrRerun && prNumber != null
-                        ? qaDocDocumentService.findLatestDocument(project.getId(), prNumber)
-                        : qaDocDocumentService.findLatestDocumentForTask(project.getId(), taskId, prNumber))
-                        .map(doc -> {
-                            log.info("qa-doc command: loaded previous QA doc from server-side storage for task {} PR #{}",
-                                    taskId, doc.getPrNumber());
-                            return doc.getMarkdownContent();
-                        })
-                        .orElse(null);
+                var latestTaskDocument = qaDocDocumentService.findLatestDocumentForTask(project.getId(), taskId, null);
+                previousDocumentation = latestTaskDocument.map(QaDocDocument::getMarkdownContent).orElse(null);
+                if (latestTaskDocument.isPresent() && pendingHandoffDocument.isPresent()
+                        && !java.util.Objects.equals(latestTaskDocument.get().getId(), pendingHandoffDocument.get().getId())) {
+                    pendingHandoffDocument = Optional.empty();
+                }
             } catch (Exception e) {
-                log.warn("qa-doc command: failed to load stored previous QA doc for task {}: {}",
-                        taskId, e.getMessage());
+                throw new IllegalStateException("QA task history is unavailable; retry will preserve accumulated coverage", e);
+            }
+
+            if (previousDocumentation == null) {
+                previousDocumentation = previousPrDocument.map(QaDocDocument::getMarkdownContent).orElse(null);
             }
 
             if (previousDocumentation == null
@@ -330,15 +355,15 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
 
             // 6a. Compute delta diff for same-PR re-runs
             String deltaDiff = null;
+            String previousPrCommit = previousPrDocument.map(QaDocDocument::getCommitHash).orElse(null);
             if (pendingHandoffDocument.isEmpty()
-                    && isSamePrRerun && state.getLastCommitHash() != null
+                    && isSamePrRerun && previousPrCommit != null
                     && commitHash != null && vcsClient != null) {
-                DiffContentFilter contentFilter = new DiffContentFilter();
                 final VcsClient clientForDiff = vcsClient;
                 deltaDiff = VcsDiffUtils.fetchDeltaDiff(
                         clientForDiff::getCommitRangeDiff,
                         workspace, repoSlug,
-                        state.getLastCommitHash(), commitHash, contentFilter);
+                        previousPrCommit, commitHash);
                 if (deltaDiff != null) {
                     log.info("qa-doc command: computed delta diff ({} chars) for same-PR re-run",
                             deltaDiff.length());
@@ -347,6 +372,9 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
 
             // 7. Build generation context and generate QA documentation
             QaDocGenerationContext ctx = QaDocGenerationContext.builder()
+                    .prChangeSummary(prChangeSummary)
+                    .reviewSource(reviewSource)
+                    .sourceRevision(commitHash)
                     .qaConfig(qaConfig)
                     .taskDetails(taskDetails)
                     .analysis(analysis)
@@ -378,11 +406,12 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                         "AI determined no QA documentation is needed for this change.");
             }
 
+            operation.assertOwnership();
             Long analysisId = (analysis != null) ? analysis.getId() : null;
             Optional<QaDocDocument> persistedDocument = pendingHandoffDocument;
             if (persistedDocument.isEmpty() && prNumber != null) {
-                persistedDocument = upsertQaDocDocument(
-                        project, prNumber, taskId, commitHash, analysisId, qaDocument);
+                persistedDocument = operation.commit(() -> upsertQaDocDocument(
+                        project, prNumber, taskId, commitHash, analysisId, qaDocument));
             }
             if (persistedDocument.isEmpty()) {
                 return WebhookResult.error(
@@ -403,6 +432,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             TaskCommentVisibility visibility = toTaskCommentVisibility(qaConfig.commentVisibility());
             String action;
 
+            operation.assertOwnership();
             try {
                 if (existingComment.isPresent()) {
                     if (visibility != null) {
@@ -430,16 +460,17 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                         "QA documentation was generated but could not be posted to " + taskId + ": " + errorMessage);
             }
 
+            operation.assertOwnership();
             // 8a. Upsert server-side QA doc state
             if (prNumber != null) {
                 try {
                     QaDocState docState = (state != null) ? state : new QaDocState(project, taskId);
                     docState.recordGeneration(commitHash, analysisId, prNumber);
-                    qaDocStateRepository.save(docState);
+                    operation.commit(() -> qaDocStateRepository.save(docState));
                     log.debug("qa-doc command: persisted state for task {} (PRs={})",
                             taskId, docState.getDocumentedPrNumbers());
                 } catch (Exception e) {
-                    log.warn("qa-doc command: failed to persist state: {}", e.getMessage());
+                    throw new IllegalStateException("QA handoff succeeded but its state was not saved; retry is required", e);
                 }
             }
 
@@ -465,6 +496,8 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
         } catch (Exception e) {
             log.error("Error processing qa-doc command: {}", e.getMessage(), e);
             return WebhookResult.error("Failed to generate QA documentation: " + e.getMessage());
+        } finally {
+            if (operation != null) operation.close();
         }
     }
 

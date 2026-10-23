@@ -5,8 +5,7 @@
 # This script:
 #   1. Copies sample config files → live config files
 #   2. Auto-generates all cryptographic secrets + database credentials
-#   3. Interactively configures the embedding LLM provider (Ollama or OpenRouter)
-#   4. Creates deployment/.env with DB credentials + shared docker-compose secrets
+#   3. Creates deployment/.env with DB credentials + shared docker-compose secrets
 #
 # After running this script, build and start the services, then finish
 # configuration in the browser (Setup Wizard).
@@ -126,7 +125,7 @@ main() {
 
   # ─── Step 1: Copy sample config files ─────────────────────────────
 
-  header "Step 1/3 — Copy sample config files"
+  header "Step 1/2 — Copy sample config files"
   copy_samples "$overwrite"
 
   # Config file paths
@@ -137,7 +136,7 @@ main() {
 
   # ─── Step 2: Generate & inject secrets ───────────────────────────────
 
-  header "Step 2/3 — Generating cryptographic secrets"
+  header "Step 2/2 — Generating cryptographic secrets"
 
   # JWT signing key
   local JWT_SECRET
@@ -156,6 +155,9 @@ main() {
   local INTERNAL_SECRET
   INTERNAL_SECRET=$(generate_hex)
   set_value "$JAVA_PROPS" "codecrow.internal.api.secret" "$INTERNAL_SECRET"
+  set_value "$JAVA_PROPS" "codecrow.rag.api.secret" "$INTERNAL_SECRET"
+  set_value "$ORCH_ENV"   "SERVICE_SECRET" "$INTERNAL_SECRET"
+  set_value "$RAG_ENV"    "SERVICE_SECRET" "$INTERNAL_SECRET"
 
   # Database credentials — auto-generated, stored only in .env
   local DB_PASSWORD
@@ -174,85 +176,9 @@ POSTGRES_PASSWORD=${DB_PASSWORD}
 PGADMIN_DEFAULT_EMAIL=pgadmin@localhost
 PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD}
 EOF
-  success "Internal API secret  (synced: application.properties + .env)"
+  success "Internal service secret (synced across Java, inference, RAG, and .env)"
   success "Database credentials (auto-generated in .env)"
   success "pgAdmin credentials  (auto-generated in .env)"
-
-  # Service / RAG secret (inference-orchestrator <-> rag-pipeline)
-  local SERVICE_SECRET
-  SERVICE_SECRET=$(generate_hex)
-  set_value "$JAVA_PROPS" "codecrow.rag.api.secret" "$SERVICE_SECRET"
-  set_value "$ORCH_ENV"   "SERVICE_SECRET"          "$SERVICE_SECRET"
-  set_value "$RAG_ENV"    "SERVICE_SECRET"          "$SERVICE_SECRET"
-  success "Service secret       (synced: application.properties + inference-orchestrator/.env + rag-pipeline/.env)"
-
-  # Qdrant API key — lives only in deployment/.env
-  # Docker Compose injects it as QDRANT__SERVICE__API_KEY into the Qdrant container
-  # and as QDRANT_API_KEY into the rag-pipeline container.
-  local QDRANT_API_KEY
-  QDRANT_API_KEY=$(generate_hex)
-  echo "QDRANT_API_KEY=${QDRANT_API_KEY}" >> "$ROOT_ENV"
-  success "Qdrant API key       (written to .env — injected into containers by docker-compose)"
-
-  # ─── Step 3: Configure embedding provider ─────────────────────────
-
-  header "Step 3/3 — Embedding LLM configuration"
-
-  echo -e "CodeCrow uses text embeddings for the RAG (code-context) pipeline."
-  echo -e "You must choose an embedding provider:\n"
-  echo -e "  ${BOLD}1)${NC} ${CYAN}Ollama${NC}   — local, free, requires Ollama running on the host"
-  echo -e "  ${BOLD}2)${NC} ${CYAN}OpenRouter${NC} — cloud, paid, requires an API key\n"
-
-  local PROVIDER_CHOICE=""
-  while [[ "$PROVIDER_CHOICE" != "1" && "$PROVIDER_CHOICE" != "2" ]]; do
-    read -rp "$(echo -e "${BOLD}Select provider [1/2]:${NC} ")" PROVIDER_CHOICE
-    if [[ "$PROVIDER_CHOICE" != "1" && "$PROVIDER_CHOICE" != "2" ]]; then
-      warn "Please enter 1 or 2."
-    fi
-  done
-
-  if [[ "$PROVIDER_CHOICE" == "1" ]]; then
-    # ── Ollama ──────────────────────────────────────────────────────────
-    set_value "$RAG_ENV" "EMBEDDING_PROVIDER" "ollama"
-    success "Embedding provider: Ollama"
-
-    local OLLAMA_URL=""
-    read -rp "$(echo -e "${BOLD}Ollama base URL${NC} [${DIM}http://host.docker.internal:11434${NC}]: ")" OLLAMA_URL
-    OLLAMA_URL="${OLLAMA_URL:-http://host.docker.internal:11434}"
-    set_value "$RAG_ENV" "OLLAMA_BASE_URL" "$OLLAMA_URL"
-    success "Ollama URL: $OLLAMA_URL"
-
-    local OLLAMA_MODEL=""
-    read -rp "$(echo -e "${BOLD}Ollama embedding model${NC} [${DIM}qwen3-embedding:0.6b${NC}]: ")" OLLAMA_MODEL
-    OLLAMA_MODEL="${OLLAMA_MODEL:-qwen3-embedding:0.6b}"
-    set_value "$RAG_ENV" "OLLAMA_EMBEDDING_MODEL" "$OLLAMA_MODEL"
-    success "Ollama model: $OLLAMA_MODEL"
-
-    echo
-    info "Make sure Ollama is running and the model is pulled:"
-    echo -e "   ${DIM}ollama pull ${OLLAMA_MODEL}${NC}"
-
-  else
-    # ── OpenRouter ──────────────────────────────────────────────────────
-    set_value "$RAG_ENV" "EMBEDDING_PROVIDER" "openrouter"
-    success "Embedding provider: OpenRouter"
-
-    local OR_KEY=""
-    while [[ -z "$OR_KEY" ]]; do
-      read -rp "$(echo -e "${BOLD}OpenRouter API key${NC} (required): ")" OR_KEY
-      if [[ -z "$OR_KEY" ]]; then
-        warn "API key cannot be empty. Get one at https://openrouter.ai/"
-      fi
-    done
-    set_value "$RAG_ENV" "OPENROUTER_API_KEY" "$OR_KEY"
-    success "OpenRouter API key: ${OR_KEY:0:12}…"
-
-    local OR_MODEL=""
-    read -rp "$(echo -e "${BOLD}OpenRouter model${NC} [${DIM}qwen/qwen3-embedding-8b${NC}]: ")" OR_MODEL
-    OR_MODEL="${OR_MODEL:-qwen/qwen3-embedding-8b}"
-    set_value "$RAG_ENV" "OPENROUTER_MODEL" "$OR_MODEL"
-    success "OpenRouter model: $OR_MODEL"
-  fi
 
   # ─── Done ────────────────────────────────────────────────────────────
 
@@ -261,10 +187,10 @@ EOF
   echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════╝${NC}\n"
 
   echo -e "Generated files:"
-  echo -e "  ${DIM}.env${NC}                                        (DB credentials + INTERNAL_API_SECRET + QDRANT_API_KEY)"
+  echo -e "  ${DIM}.env${NC}                                        (DB credentials + INTERNAL_API_SECRET)"
   echo -e "  ${DIM}config/java-shared/application.properties${NC}"
   echo -e "  ${DIM}config/inference-orchestrator/.env${NC}"
-  echo -e "  ${DIM}config/rag-pipeline/.env${NC}                    (embedding provider configured)"
+  echo -e "  ${DIM}config/rag-pipeline/.env${NC}"
   echo -e "  ${DIM}config/web-frontend/.env${NC}"
   echo
 

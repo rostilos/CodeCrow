@@ -11,6 +11,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.LocalRepositorySnapshot;
 import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
@@ -26,6 +27,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -319,8 +321,43 @@ class AiAnalysisClientTest {
                 }
 
                 @Test
+                @DisplayName("should include ephemeral local repository snapshot in queued request payload")
+                void shouldIncludeLocalRepositorySnapshotInQueuedRequestPayload() throws Exception {
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "final");
+                        finalEvent.put("result", Map.of("comment", "ok", "issues", List.of()));
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        client.performAnalysis(
+                                        mockRequest,
+                                        new LocalRepositorySnapshot(
+                                                        "/tmp/codecrow-pr-review-123",
+                                                        "main",
+                                                        "target-head-sha",
+                                                        "/tmp/codecrow-pr-overlay-123"),
+                                        null);
+
+                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> queued = objectMapper.readValue(
+                                        payloadCaptor.getValue(), Map.class);
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> requestPayload =
+                                        (Map<String, Object>) queued.get("request");
+
+                        assertThat(requestPayload)
+                                        .containsEntry("localRepoPath", "/tmp/codecrow-pr-review-123")
+                                        .containsEntry("localRepoTargetBranch", "main")
+                                        .containsEntry("localRepoRevision", "target-head-sha")
+                                        .containsEntry("localReviewOverlayPath", "/tmp/codecrow-pr-overlay-123");
+                }
+
+                @org.junit.jupiter.params.ParameterizedTest
+                @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
                 @DisplayName("should bind exact target branch generation to queued review")
-                void shouldBindExactTargetBranchGenerationToQueuedReview() throws Exception {
+                void shouldBindExactTargetBranchGenerationToQueuedReview(boolean activeUnavailable) throws Exception {
                         var repository = mock(org.rostilos.codecrow.core.persistence.repository.rag
                                         .RagBranchIndexGenerationRepository.class);
                         var branchRepository = mock(org.rostilos.codecrow.core.persistence.repository.rag
@@ -329,8 +366,9 @@ class AiAnalysisClientTest {
                                         .RagBranchIndexGeneration.class);
                         when(generation.getCollectionName()).thenReturn("opaque-master-generation");
                         when(generation.getManifestDigest()).thenReturn("master-manifest");
+                        when(generation.getRevision()).thenReturn("master-target-head");
                         when(repository.findAvailableExactGeneration(
-                                        eq(1L), eq("main"), eq("master-base"), anyList()))
+                                        eq(1L), eq("main"), eq("master-target-head"), anyList()))
                                         .thenReturn(List.of(generation));
                         org.springframework.test.util.ReflectionTestUtils.setField(
                                         client, "branchGenerationRepository", repository);
@@ -338,10 +376,32 @@ class AiAnalysisClientTest {
                                         client, "branchIndexRepository", branchRepository);
                         when(branchRepository.markAccessedIfUnclaimed(
                                         eq(1L), eq("main"), any())).thenReturn(1);
+                        var active = mock(org.rostilos.codecrow.core.persistence.repository.rag
+                                        .RagBranchIndexRepository.ActiveGenerationCoordinates.class);
+                        if (activeUnavailable) {
+                                when(branchRepository.findActiveGenerationCoordinates(1L, "main"))
+                                                .thenThrow(new IllegalStateException("optional lookup unavailable"));
+                        } else {
+                                when(active.getCollectionName()).thenReturn("active-seed");
+                                when(active.getManifestDigest()).thenReturn("active-manifest");
+                                when(active.getRevision()).thenReturn("active-revision");
+                                when(branchRepository.findActiveGenerationCoordinates(1L, "main"))
+                                                .thenReturn(Optional.of(active));
+                        }
                         AiAnalysisRequest exactRequest = new TestAiAnalysisRequest() {
                                 @Override
+                                public org.rostilos.codecrow.analysisengine.dto.request.ai.ReviewIndexPolicy getRagIndexPolicy() {
+                                        return new org.rostilos.codecrow.analysisengine.dto.request.ai.ReviewIndexPolicy(
+                                                List.of("app/**"), List.of("vendor/**"), "magento", "app");
+                                }
+                                @Override
+                                public String getTargetHeadCommitHash() {
+                                        return "master-target-head";
+                                }
+
+                                @Override
                                 public String getBaseCommitHash() {
-                                        return "master-base";
+                                        return "merge-base";
                                 }
                         };
                         Map<String, Object> finalEvent = Map.of(
@@ -361,10 +421,120 @@ class AiAnalysisClientTest {
                         Map<String, Object> requestPayload =
                                         (Map<String, Object>) queued.get("request");
                         assertThat(requestPayload)
+                                        .containsEntry("targetHeadCommitHash", "master-target-head")
+                                        .containsEntry("baseCommitHash", "merge-base")
                                         .containsEntry("ragCollectionTarget", "opaque-master-generation")
-                                        .containsEntry("ragBaseGenerationManifestSha256", "master-manifest");
+                                        .containsEntry("ragBaseGenerationManifestSha256", "master-manifest")
+                                        .containsEntry("ragBaseGenerationRevision", "master-target-head");
+                        var exactCandidate = Map.of("collection_target", "opaque-master-generation",
+                                        "generation_manifest_sha256", "master-manifest", "revision", "master-target-head");
+                        assertThat(requestPayload.get("ragGenerationCandidates")).isEqualTo(activeUnavailable
+                                        ? List.of(exactCandidate)
+                                        : List.of(exactCandidate, Map.of("collection_target", "active-seed",
+                                                "generation_manifest_sha256", "active-manifest", "revision", "active-revision")));
+                        assertThat(requestPayload.get("ragIndexPolicy")).isEqualTo(Map.of(
+                                        "include_patterns", List.of("app/**"), "exclude_patterns", List.of("vendor/**"),
+                                        "project_type", "magento", "source_root", "app"));
+                        verify(branchRepository).findActiveGenerationCoordinates(1L, "main");
                         verify(branchRepository).markAccessedIfUnclaimed(
                                         eq(1L), eq("main"), any());
+                }
+
+                @Test
+                @DisplayName("should reuse same-project target-branch seed without changing exact review revisions")
+                void shouldReuseActiveBranchSeedWithoutChangingReviewIdentity() throws Exception {
+                        var repository = mock(org.rostilos.codecrow.core.persistence.repository.rag
+                                        .RagBranchIndexGenerationRepository.class);
+                        var branchRepository = mock(org.rostilos.codecrow.core.persistence.repository.rag
+                                        .RagBranchIndexRepository.class);
+                        var seed = mock(org.rostilos.codecrow.core.persistence.repository.rag
+                                        .RagBranchIndexRepository.ActiveGenerationCoordinates.class);
+                        when(seed.getCollectionName()).thenReturn("opaque-older-main-generation");
+                        when(seed.getManifestDigest()).thenReturn("older-main-manifest");
+                        when(seed.getRevision()).thenReturn("older-main-revision");
+                        when(repository.findAvailableExactGeneration(
+                                        eq(1L), eq("main"), eq("target-head-sha"), anyList()))
+                                        .thenReturn(List.of());
+                        when(branchRepository.markAccessedIfUnclaimed(eq(1L), eq("main"), any()))
+                                        .thenReturn(1);
+                        when(branchRepository.findActiveGenerationCoordinates(1L, "main"))
+                                        .thenReturn(Optional.of(seed));
+                        org.springframework.test.util.ReflectionTestUtils.setField(
+                                        client, "branchGenerationRepository", repository);
+                        org.springframework.test.util.ReflectionTestUtils.setField(
+                                        client, "branchIndexRepository", branchRepository);
+                        AiAnalysisRequest request = new TestAiAnalysisRequest() {
+                                @Override
+                                public String getBaseCommitHash() { return "merge-base"; }
+                                @Override
+                                public String getTargetHeadCommitHash() { return "target-head-sha"; }
+                        };
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(Map.of("type", "final",
+                                                        "result", Map.of("comment", "ok", "issues", List.of()))));
+
+                        client.performAnalysis(request, new LocalRepositorySnapshot(
+                                        "/tmp/exact-target", "main", "target-head-sha", "/tmp/pr-overlay"), null);
+
+                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> queued = objectMapper.readValue(payloadCaptor.getValue(), Map.class);
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> requestPayload = (Map<String, Object>) queued.get("request");
+                        assertThat(requestPayload)
+                                        .containsEntry("projectId", 1)
+                                        .containsEntry("projectWorkspace", "Codecrow")
+                                        .containsEntry("projectNamespace", "codecrow-garden")
+                                        .containsEntry("targetBranchName", "main")
+                                        .containsEntry("targetHeadCommitHash", "target-head-sha")
+                                        .containsEntry("localRepoRevision", "target-head-sha")
+                                        .containsEntry("baseCommitHash", "merge-base")
+                                        .containsEntry("ragCollectionTarget", "opaque-older-main-generation")
+                                        .containsEntry("ragBaseGenerationManifestSha256", "older-main-manifest")
+                                        .containsEntry("ragBaseGenerationRevision", "older-main-revision");
+                        verify(branchRepository).markAccessedIfUnclaimed(eq(1L), eq("main"), any());
+                        verify(branchRepository).findActiveGenerationCoordinates(1L, "main");
+                        verifyNoMoreInteractions(branchRepository);
+                        verify(repository).findAvailableExactGeneration(
+                                        eq(1L), eq("main"), eq("target-head-sha"), anyList());
+                        verifyNoMoreInteractions(repository);
+                }
+
+                @Test
+                @DisplayName("should continue review when optional seed metadata is unavailable")
+                void shouldContinueWhenSeedMetadataIsUnavailable() throws Exception {
+                        var repository = mock(org.rostilos.codecrow.core.persistence.repository.rag
+                                        .RagBranchIndexGenerationRepository.class);
+                        var branchRepository = mock(org.rostilos.codecrow.core.persistence.repository.rag
+                                        .RagBranchIndexRepository.class);
+                        org.springframework.test.util.ReflectionTestUtils.setField(
+                                        client, "branchGenerationRepository", repository);
+                        org.springframework.test.util.ReflectionTestUtils.setField(
+                                        client, "branchIndexRepository", branchRepository);
+                        when(branchRepository.markAccessedIfUnclaimed(eq(1L), eq("main"), any()))
+                                        .thenReturn(1);
+                        when(repository.findAvailableExactGeneration(anyLong(), anyString(), anyString(), anyList()))
+                                        .thenReturn(List.of());
+                        when(branchRepository.findActiveGenerationCoordinates(1L, "main"))
+                                        .thenThrow(new IllegalStateException("seed lookup unavailable"));
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(Map.of("type", "final",
+                                                        "result", Map.of("comment", "ok", "issues", List.of()))));
+
+                        AiAnalysisRequest request = new TestAiAnalysisRequest() {
+                                @Override
+                                public String getTargetHeadCommitHash() { return "target-head-sha"; }
+                        };
+                        assertThat(client.performAnalysis(request)).containsEntry("comment", "ok");
+                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> queued = objectMapper.readValue(payloadCaptor.getValue(), Map.class);
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> requestPayload = (Map<String, Object>) queued.get("request");
+                        assertThat(requestPayload).doesNotContainKeys("ragCollectionTarget",
+                                        "ragBaseGenerationManifestSha256", "ragBaseGenerationRevision");
                 }
 
                 @Test

@@ -11,7 +11,7 @@ def _text(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
-def test_pipeline_agent_and_rag_images_share_workspace_numeric_identity():
+def test_pipeline_agent_rag_and_inference_images_share_workspace_numeric_identity():
     pipeline_dockerfiles = (
         "java-ecosystem/services/pipeline-agent/Dockerfile",
         "java-ecosystem/services/pipeline-agent/Dockerfile.observable",
@@ -19,6 +19,10 @@ def test_pipeline_agent_and_rag_images_share_workspace_numeric_identity():
     rag_dockerfiles = (
         "python-ecosystem/rag-pipeline/Dockerfile",
         "python-ecosystem/rag-pipeline/Dockerfile.observable",
+    )
+    inference_dockerfiles = (
+        "python-ecosystem/inference-orchestrator/src/Dockerfile",
+        "python-ecosystem/inference-orchestrator/src/Dockerfile.observable",
     )
 
     for relative_path in pipeline_dockerfiles:
@@ -31,6 +35,11 @@ def test_pipeline_agent_and_rag_images_share_workspace_numeric_identity():
         assert re.search(r"\bgroupadd\s+--gid\s+1001\b", content)
         assert re.search(r"\buseradd\s+--uid\s+1001\b", content)
 
+    for relative_path in inference_dockerfiles:
+        content = _text(relative_path)
+        assert re.search(r"\bgroupadd\s+--gid\s+1001\b", content)
+        assert re.search(r"\buseradd\s+--uid\s+1001\b", content)
+
 
 def test_shared_temp_root_retains_sticky_bit_protection():
     for relative_path in (
@@ -39,4 +48,5 @@ def test_shared_temp_root_retains_sticky_bit_protection():
     ):
         content = _text(relative_path)
         assert "source_code_tmp:/tmp" in content
-        assert re.search(r"chmod\s+-R\s+1777\s+/tmp", content)
+        assert re.search(r"chmod\s+1777\s+/tmp", content)
+        assert re.search(r"chmod\s+-R\s+1777\s+/tmp", content) is None

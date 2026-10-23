@@ -6,134 +6,75 @@ import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Optional;
+import java.util.function.Predicate;
 
-/**
- * Service for looking up projects from webhook payloads.
- * Provides provider-agnostic project resolution via VcsRepoBinding.
- */
+/** Resolves a repository only inside an authenticated project scope. */
 @Service
 public class WebhookProjectResolver {
-    
-    private static final Logger log = LoggerFactory.getLogger(WebhookProjectResolver.class);
-    
-    private final VcsRepoBindingRepository bindingRepository;
-    private final ProjectRepository projectRepository;
-    private final TokenEncryptionService tokenEncryptionService;
-    
-    public WebhookProjectResolver(
-            VcsRepoBindingRepository bindingRepository,
-            ProjectRepository projectRepository,
-            TokenEncryptionService tokenEncryptionService
-    ) {
-        this.bindingRepository = bindingRepository;
-        this.projectRepository = projectRepository;
-        this.tokenEncryptionService = tokenEncryptionService;
-    }
-    
-    /**
-     * Find a project by VCS provider and external repository ID.
-     * This is the primary lookup method for webhook handling.
-     *
-     * @param provider The VCS provider
-     * @param externalRepoId The external repository ID (UUID for Bitbucket, node_id for GitHub, etc.)
-     * @return The project with full connection details, or empty if not found
-     */
-    public Optional<Project> findProjectByExternalRepo(EVcsProvider provider, String externalRepoId) {
-        return findProjectByExternalRepo(provider, externalRepoId, null);
+    private final VcsRepoBindingRepository bindings;
+    private final ProjectRepository projects;
+    private final TokenEncryptionService encryption;
+
+    public WebhookProjectResolver(VcsRepoBindingRepository bindings,
+                                  ProjectRepository projects,
+                                  TokenEncryptionService encryption) {
+        this.bindings = bindings;
+        this.projects = projects;
+        this.encryption = encryption;
     }
 
-    /**
-     * Find a project by VCS provider and external repository ID, with slug fallback.
-     *
-     * @param provider The VCS provider
-     * @param externalRepoId The external repository UUID/ID from the webhook
-     * @param repoSlug The repository slug from the webhook (used for fallback lookup)
-     * @return The project with full connection details, or empty if not found
-     */
-    public Optional<Project> findProjectByExternalRepo(EVcsProvider provider, String externalRepoId, String repoSlug) {
-        log.debug("Looking up project for provider={}, externalRepoId={}, repoSlug={}", provider, externalRepoId, repoSlug);
-        
-        // 1. Primary lookup: externalRepoId column matches the UUID from webhook
-        Optional<Project> result = bindingRepository.findByProviderAndExternalRepoIdWithDetails(provider, externalRepoId)
-                .flatMap(binding -> projectRepository.findByIdWithFullDetails(binding.getProject().getId()));
-        if (result.isPresent()) {
-            return result;
-        }
-        
-        // 2. Fallback: older bindings stored the slug as externalRepoId (when repositoryId was null)
-        //    Try matching externalRepoId column with the slug from webhook payload
-        if (repoSlug != null && !repoSlug.equals(externalRepoId)) {
-            log.debug("UUID lookup failed, trying externalRepoId=slug fallback for slug={}", repoSlug);
-            result = bindingRepository.findByProviderAndExternalRepoIdWithDetails(provider, repoSlug)
-                    .flatMap(binding -> projectRepository.findByIdWithFullDetails(binding.getProject().getId()));
-            if (result.isPresent()) {
-                return result;
+    public Optional<Project> findAuthenticatedProject(EVcsProvider provider, String repoId,
+            String slug, String namespace, Predicate<Project> authenticate) {
+        Project match = null;
+        for (VcsRepoBinding binding : bindings.findWebhookCandidates(
+                provider, normalizeRepoId(provider, repoId), slug, namespace)) {
+            // A denormalized binding must never bridge workspace boundaries.
+            if (binding.getWorkspace() == null || binding.getProject() == null
+                    || binding.getVcsConnection() == null
+                    || binding.getProject().getWorkspace() == null
+                    || binding.getVcsConnection().getWorkspace() == null
+                    || !binding.getWorkspace().getId().equals(binding.getProject().getWorkspace().getId())
+                    || !binding.getWorkspace().getId().equals(binding.getVcsConnection().getWorkspace().getId())) {
+                continue;
             }
+            Project candidate = projects.findByIdWithFullDetails(binding.getProject().getId()).orElse(null);
+            if (candidate == null || !authenticate.test(candidate)) {
+                continue;
+            }
+            if (match != null && !match.getId().equals(candidate.getId())) {
+                throw new IllegalArgumentException(
+                        "Webhook matches multiple authenticated projects; use the project's token URL");
+            }
+            match = candidate;
         }
-        
-        // 3. Final fallback: match against externalRepoSlug column
-        String slugToSearch = repoSlug != null ? repoSlug : externalRepoId;
-        log.debug("ID lookups failed, trying externalRepoSlug fallback for slug={}", slugToSearch);
-        return bindingRepository.findByProviderAndExternalRepoSlugWithDetails(provider, slugToSearch)
-                .flatMap(binding -> projectRepository.findByIdWithFullDetails(binding.getProject().getId()));
+        return Optional.ofNullable(match);
     }
-    
-    /**
-     * Find the VcsRepoBinding by provider and external repository ID.
-     *
-     * @param provider The VCS provider
-     * @param externalRepoId The external repository ID
-     * @return The binding, or empty if not found
-     */
-    public Optional<VcsRepoBinding> findBinding(EVcsProvider provider, String externalRepoId) {
-        return bindingRepository.findByProviderAndExternalRepoIdWithDetails(provider, externalRepoId);
-    }
-    
-    /**
-     * Validate that a webhook request is authorized for a project.
-     * This checks the project auth token against the provided token.
-     *
-     * @param project The project
-     * @param authToken The auth token from the webhook URL
-     * @return true if authorized
-     */
-    public boolean validateWebhookAuth(Project project, String authToken) {
-        if (project.getAuthToken() == null || authToken == null) {
-            return false;
-        }
-        String storedToken = project.getAuthToken();
 
-        // Try decrypting first (new encrypted tokens)
+    public boolean validateWebhookAuth(Project project, String token) {
+        String expected = webhookSecret(project);
+        return expected != null && token != null && !expected.isBlank()
+                && MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8),
+                                         token.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Existing project auth token is also the manually configured native webhook secret. */
+    public String webhookSecret(Project project) {
+        String stored = project.getAuthToken();
+        if (stored == null || stored.isBlank()) return null;
         try {
-            String decryptedToken = tokenEncryptionService.decrypt(storedToken);
-            return decryptedToken.equals(authToken);
-        } catch (Exception e) {
-            // Decryption failed — token is likely stored as plaintext (legacy).
-            // Fall back to direct comparison.
-            log.debug("Token decryption failed for project {} — trying plaintext comparison", project.getId());
-            return storedToken.equals(authToken);
+            return encryption.decrypt(stored);
+        } catch (Exception legacyPlaintext) {
+            return stored;
         }
     }
-    
-    /**
-     * Normalize a repository ID for lookup.
-     * Bitbucket UUIDs come with braces, GitHub IDs are plain, etc.
-     *
-     * @param provider The VCS provider
-     * @param repoId The repository ID as received
-     * @return Normalized repository ID
-     */
+
     public String normalizeRepoId(EVcsProvider provider, String repoId) {
         if (repoId == null) return null;
-        
-        return switch (provider) {
-            case BITBUCKET_CLOUD -> repoId.replace("{", "").replace("}", "");
-            default -> repoId;
-        };
+        return provider == EVcsProvider.BITBUCKET_CLOUD
+                ? repoId.replace("{", "").replace("}", "") : repoId;
     }
 }

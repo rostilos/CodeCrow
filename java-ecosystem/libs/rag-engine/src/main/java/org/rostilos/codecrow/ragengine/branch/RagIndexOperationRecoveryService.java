@@ -240,7 +240,7 @@ public class RagIndexOperationRecoveryService {
             if (status.getStatus() == RagIndexingStatus.INDEXING) {
                 trackingService.markIndexingFailed(project, diagnostic, jobId);
             } else if (status.getStatus() == RagIndexingStatus.UPDATING) {
-                trackingService.markIncrementalUpdateFailed(
+                trackingService.markGenerationRefreshFailed(
                         project, diagnostic, jobId);
             }
             return true;

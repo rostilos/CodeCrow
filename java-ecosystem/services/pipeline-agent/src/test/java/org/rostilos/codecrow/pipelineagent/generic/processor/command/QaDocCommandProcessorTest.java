@@ -64,6 +64,9 @@ class QaDocCommandProcessorTest {
     @Mock private QaDocDocumentService qaDocDocumentService;
     @Mock private QaDocPublicPreviewService qaDocPublicPreviewService;
     @Mock private PrFileEnrichmentService enrichmentService;
+    @Mock private org.rostilos.codecrow.pipelineagent.qadoc.QaDocOperationService operationService;
+    @Mock private org.rostilos.codecrow.pipelineagent.qadoc.QaDocOperationService.Operation operation;
+    @Mock private org.rostilos.codecrow.core.service.PrChangeSummaryService prChangeSummaryService;
 
     private QaDocCommandProcessor processor;
     private Project project;
@@ -113,10 +116,14 @@ class QaDocCommandProcessorTest {
                 qaDocDocumentService,
                 qaDocPublicPreviewService,
                 enrichmentService
-        );
+        , prChangeSummaryService, operationService);
+        lenient().when(operationService.open(any(), any(), anyString(), any())).thenReturn(operation);
+        lenient().when(operation.commit(any())).thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
 
         project = new Project();
         ReflectionTestUtils.setField(project, "id", PROJECT_ID);
+        var workspace = new org.rostilos.codecrow.core.model.workspace.Workspace();
+        ReflectionTestUtils.setField(workspace, "id", 9L); project.setWorkspace(workspace);
         ReflectionTestUtils.setField(project, "name", "Test Project");
 
         QaDocDocument persistedDocument = new QaDocDocument(project, 7L);
@@ -139,6 +146,136 @@ class QaDocCommandProcessorTest {
     }
 
     // ── Helpers ──
+
+    @Test
+    void samePrDeltaUsesItsOwnDocumentCommitAfterAnotherPrUpdatedTheTask() throws IOException {
+        setupHappyPath();
+        when(prChangeSummaryService.find(eq(PROJECT_ID), eq(7L), eq("abc123"), isNull())).thenReturn(null);
+        project = spy(project);
+        var repo = mock(org.rostilos.codecrow.core.model.vcs.VcsRepoInfo.class);
+        var connection = mock(org.rostilos.codecrow.core.model.vcs.VcsConnection.class);
+        doReturn(repo).when(project).getEffectiveVcsRepoInfo();
+        when(repo.getVcsConnection()).thenReturn(connection);
+        when(repo.getRepoWorkspace()).thenReturn("workspace");
+        when(repo.getRepoSlug()).thenReturn("repo");
+        when(connection.getProviderType()).thenReturn(EVcsProvider.GITHUB);
+        var vcs = mock(org.rostilos.codecrow.vcsclient.VcsClient.class);
+        when(vcsClientProvider.getClient(connection)).thenReturn(vcs);
+        when(vcs.getPullRequest("workspace", "repo", 7L)).thenReturn(new org.rostilos.codecrow.vcsclient.model.VcsPullRequest(7L, "title", "body", "feature", "main", "base", "abc123", "open", false, "url"));
+        when(vcs.getCommitRangeDiff(eq("workspace"), eq("repo"), anyString(), eq("abc123"))).thenReturn("delta");
+        var previousPrDoc = new QaDocDocument(project, 7L);
+        previousPrDoc.replaceContent(TASK_ID, null, "pr-a-old", GENERATED_QA_DOC);
+        var state = new QaDocState(project, TASK_ID);
+        state.recordGeneration("pr-a-old", null, 7L);
+        state.recordGeneration("pr-b-new", null, 8L);
+        when(qaDocStateRepository.findByProjectIdAndTaskId(PROJECT_ID, TASK_ID)).thenReturn(Optional.of(state));
+        when(qaDocDocumentService.findLatestDocument(PROJECT_ID, 7L)).thenReturn(Optional.of(previousPrDoc));
+
+        assertThat(processor.process(createPayload("feature/PROJ-123"), project, eventConsumer, Map.of()).success()).isTrue();
+        verify(vcs).getCommitRangeDiff("workspace", "repo", "pr-a-old", "abc123");
+        verify(vcs, never()).getCommitRangeDiff("workspace", "repo", "pr-b-new", "abc123");
+    }
+
+    @Test
+    void samePrRerunKeepsTheLatestTaskAccumulationFromOtherPrs() throws IOException {
+        setupHappyPath();
+        var state = new QaDocState(project, TASK_ID);
+        state.recordGeneration("pr-a-old", null, 7L);
+        state.recordGeneration("pr-b-new", null, 8L);
+        when(qaDocStateRepository.findByProjectIdAndTaskId(PROJECT_ID, TASK_ID)).thenReturn(Optional.of(state));
+        var own = new QaDocDocument(project, 7L);
+        own.replaceContent(TASK_ID, null, "pr-a-old", "PR A only");
+        when(qaDocDocumentService.findLatestDocument(PROJECT_ID, 7L)).thenReturn(Optional.of(own));
+        var accumulated = new QaDocDocument(project, 8L);
+        accumulated.replaceContent(TASK_ID, null, "pr-b-new", "PR A and PR B coverage");
+        lenient().when(qaDocDocumentService.findLatestDocumentForTask(PROJECT_ID, TASK_ID, null))
+                .thenReturn(Optional.of(accumulated));
+
+        assertThat(processor.process(createPayload("feature/PROJ-123"), project, eventConsumer, Map.of()).success()).isTrue();
+        ArgumentCaptor<QaDocGenerationContext> context = ArgumentCaptor.forClass(QaDocGenerationContext.class);
+        verify(qaDocGenerationService).generateQaDocumentation(any(), eq(7L), anyInt(), anyInt(), anyMap(), context.capture());
+        assertThat(context.getValue().previousDocumentation()).isEqualTo("PR A and PR B coverage");
+    }
+
+    @Test
+    void olderReviewCannotRegenerateOrPublishOverANewerPrDocument() throws IOException {
+        setupHappyPath();
+        var older = createAnalysisWithIssues(0, "src/A.java");
+        ReflectionTestUtils.setField(older, "id", 100L);
+        when(codeAnalysisService.getAnalysisForReview(PROJECT_ID, 7L, "abc123", null)).thenReturn(Optional.of(older));
+        var newer = new QaDocDocument(project, 7L);
+        newer.replaceContent(TASK_ID, 101L, "newer-head", GENERATED_QA_DOC);
+        when(qaDocDocumentService.findLatestDocument(PROJECT_ID, 7L)).thenReturn(Optional.of(newer));
+        assertThat(processor.process(createPayload("feature/PROJ-123"), project, eventConsumer, Map.of()).status()).isEqualTo("ignored");
+        verifyNoInteractions(qaDocGenerationService);
+        verify(taskManagementClient, never()).postComment(anyString(), anyString());
+    }
+
+    @Test
+    void failedStateCommitRemainsAnExplicitFailureAfterDocumentAndHandoff() throws IOException {
+        setupHappyPath();
+        when(qaDocStateRepository.save(any())).thenThrow(new IllegalStateException("state database write unavailable"));
+        var result = processor.process(createPayload("feature/PROJ-123"), project, eventConsumer, Map.of());
+        assertThat(result.success()).isFalse();
+        verify(qaDocDocumentService).upsertLatestDocument(any(), eq(7L), eq(TASK_ID), any(), eq("abc123"), eq(GENERATED_QA_DOC));
+        verify(taskManagementClient).postComment(eq(TASK_ID), anyString());
+    }
+
+    @Test
+    void lostOperationLeasePreservesStoredDocumentationAndSkipsExternalPublication() throws IOException {
+        setupHappyPath();
+        doThrow(new IllegalStateException("QA operation lease lost")).when(operation).assertOwnership();
+        assertThat(processor.process(createPayload("feature/PROJ-123"), project, eventConsumer, Map.of()).success()).isFalse();
+        verify(qaDocDocumentService, never()).upsertLatestDocument(any(), any(), any(), any(), any(), any());
+        verify(taskManagementClient, never()).postComment(anyString(), anyString());
+        verify(operation).close();
+        var order = inOrder(operationService, qaDocStateRepository);
+        order.verify(operationService).open(eq(project), eq(7L), eq(TASK_ID), any());
+        order.verify(qaDocStateRepository).findByProjectIdAndTaskId(PROJECT_ID, TASK_ID);
+    }
+
+    @Test void handoffRetryRegeneratesWhenAnotherPrHasNewerPendingTaskCoverage() throws IOException {
+        setupHappyPath();
+        var own=new QaDocDocument(project,7L); own.replaceContent(TASK_ID,null,"abc123",GENERATED_QA_DOC);
+        ReflectionTestUtils.setField(own,"id",7L);
+        var latest=new QaDocDocument(project,8L); latest.replaceContent(TASK_ID,null,"b-head","PR A and PR B pending coverage");
+        ReflectionTestUtils.setField(latest,"id",8L);
+        when(qaDocDocumentService.findLatestDocument(PROJECT_ID,7L)).thenReturn(Optional.of(own));
+        when(qaDocDocumentService.findLatestDocumentForTask(PROJECT_ID,TASK_ID,null)).thenReturn(Optional.of(latest));
+        assertThat(processor.process(createPayload("feature/PROJ-123"),project,eventConsumer,Map.of()).success()).isTrue();
+        var context=ArgumentCaptor.forClass(QaDocGenerationContext.class);
+        verify(qaDocGenerationService).generateQaDocumentation(any(),eq(7L),anyInt(),anyInt(),anyMap(),context.capture());
+        assertThat(context.getValue().previousDocumentation()).isEqualTo("PR A and PR B pending coverage");
+    }
+
+    @Test void handoffRetryCannotReuseAnotherReviewAtTheSameHead() throws IOException {
+        setupHappyPath();
+        var analysis=createAnalysisWithIssues(0,"src/A.java"); ReflectionTestUtils.setField(analysis,"id",101L);
+        when(codeAnalysisService.getAnalysisForReview(PROJECT_ID,7L,"abc123",null)).thenReturn(Optional.of(analysis));
+        var own=new QaDocDocument(project,7L); own.replaceContent(TASK_ID,100L,"abc123",GENERATED_QA_DOC);
+        when(qaDocDocumentService.findLatestDocument(PROJECT_ID,7L)).thenReturn(Optional.of(own));
+        assertThat(processor.process(createPayload("feature/PROJ-123"),project,eventConsumer,Map.of()).success()).isTrue();
+        verify(qaDocGenerationService).generateQaDocumentation(any(),eq(7L),anyInt(),anyInt(),anyMap(),any());
+    }
+
+    @Test void unavailableHistoryRetainsStoredCoverageAndMakesTheQaJobRetryable() throws IOException {
+        setupHappyPath();
+        when(qaDocDocumentService.findLatestDocumentForTask(PROJECT_ID,TASK_ID,null)).thenThrow(new IllegalStateException("history unavailable"));
+        assertThat(processor.process(createPayload("feature/PROJ-123"),project,eventConsumer,Map.of()).success()).isFalse();
+        verifyNoInteractions(qaDocGenerationService);
+        verify(qaDocDocumentService,never()).upsertLatestDocument(any(),any(),any(),any(),any(),any());
+        verify(taskManagementClient,never()).postComment(anyString(),anyString());
+    }
+
+    @Test void taskConnectionReadIsScopedToTheProjectsWorkspace() throws IOException {
+        configureProject(enabledConfig());
+        var workspace=new org.rostilos.codecrow.core.model.workspace.Workspace();
+        ReflectionTestUtils.setField(workspace,"id",9L); project.setWorkspace(workspace);
+        when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID,9L)).thenReturn(Optional.empty());
+        assertThat(processor.process(createPayload("feature/PROJ-123"),project,eventConsumer,Map.of()).success()).isFalse();
+        verify(connectionRepository).findByIdAndWorkspaceId(CONNECTION_ID,9L);
+        verifyNoInteractions(qaDocGenerationService);
+    }
 
     private QaAutoDocConfig enabledConfig() {
         return new QaAutoDocConfig(
@@ -227,7 +364,7 @@ class QaDocCommandProcessorTest {
         configureProject(enabledConfig());
 
         TaskManagementConnection conn = createConnection();
-        when(connectionRepository.findById(CONNECTION_ID)).thenReturn(Optional.of(conn));
+        when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID, 9L)).thenReturn(Optional.of(conn));
         when(clientFactory.createClient(
                 eq(ETaskManagementPlatform.JIRA_CLOUD), anyString(), anyString(), anyString()
         )).thenReturn(taskManagementClient);
@@ -240,7 +377,7 @@ class QaDocCommandProcessorTest {
                 .thenReturn(new TaskComment("c-1", "bot", "doc", OffsetDateTime.now(), null));
 
         CodeAnalysis analysis = createAnalysisWithIssues(5, "src/A.java", "src/B.java", "src/A.java");
-        when(codeAnalysisService.getPreviousVersionCodeAnalysis(PROJECT_ID, 7L))
+        when(codeAnalysisService.getAnalysisForReview(PROJECT_ID, 7L, "abc123", null))
                 .thenReturn(Optional.of(analysis));
 
         lenient().when(qaDocGenerationService.generateQaDocumentation(
@@ -302,7 +439,7 @@ class QaDocCommandProcessorTest {
         @DisplayName("should return error when connection not found")
         void shouldReturnErrorWhenConnectionNotFound() {
             configureProject(enabledConfig());
-            when(connectionRepository.findById(CONNECTION_ID)).thenReturn(Optional.empty());
+            when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID, 9L)).thenReturn(Optional.empty());
             WebhookPayload payload = createPayload("feature/PROJ-123");
 
             WebhookResult result = processor.process(payload, project, eventConsumer, Map.of());
@@ -320,7 +457,7 @@ class QaDocCommandProcessorTest {
         void setUpConnection() {
             configureProject(enabledConfig());
             TaskManagementConnection conn = createConnection();
-            when(connectionRepository.findById(CONNECTION_ID)).thenReturn(Optional.of(conn));
+            when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID, 9L)).thenReturn(Optional.of(conn));
             when(clientFactory.createClient(any(), anyString(), anyString(), anyString()))
                     .thenReturn(taskManagementClient);
         }
@@ -679,7 +816,7 @@ class QaDocCommandProcessorTest {
         void setUpBase() {
             configureProject(enabledConfig());
             TaskManagementConnection conn = createConnection();
-            when(connectionRepository.findById(CONNECTION_ID)).thenReturn(Optional.of(conn));
+            when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID, 9L)).thenReturn(Optional.of(conn));
             when(clientFactory.createClient(any(), anyString(), anyString(), anyString()))
                     .thenReturn(taskManagementClient);
         }
@@ -776,7 +913,7 @@ class QaDocCommandProcessorTest {
         @Test
         @DisplayName("should handle no PR analysis data gracefully")
         void shouldHandleNoAnalysisData() throws IOException {
-            when(codeAnalysisService.getPreviousVersionCodeAnalysis(PROJECT_ID, 7L))
+            when(codeAnalysisService.getAnalysisForReview(PROJECT_ID, 7L, "abc123", null))
                     .thenReturn(Optional.empty());
             when(taskManagementClient.getTaskDetails(TASK_ID)).thenReturn(sampleTaskDetails());
             when(qaDocGenerationService.generateQaDocumentation(
@@ -818,7 +955,7 @@ class QaDocCommandProcessorTest {
         @DisplayName("should include Jira provider response when posting comment fails")
         void shouldIncludeProviderResponseWhenPostingCommentFails() throws IOException {
             when(taskManagementClient.getTaskDetails(TASK_ID)).thenReturn(sampleTaskDetails());
-            when(codeAnalysisService.getPreviousVersionCodeAnalysis(PROJECT_ID, 7L))
+            when(codeAnalysisService.getAnalysisForReview(PROJECT_ID, 7L, "abc123", null))
                     .thenReturn(Optional.empty());
             when(qaDocGenerationService.generateQaDocumentation(
                     any(), anyLong(), anyInt(), anyInt(), anyMap(), any(QaDocGenerationContext.class)
@@ -872,7 +1009,7 @@ class QaDocCommandProcessorTest {
         void setUpBase() {
             configureProject(enabledConfig());
             TaskManagementConnection conn = createConnection();
-            when(connectionRepository.findById(CONNECTION_ID)).thenReturn(Optional.of(conn));
+            when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID, 9L)).thenReturn(Optional.of(conn));
             when(clientFactory.createClient(any(), anyString(), anyString(), anyString()))
                     .thenReturn(taskManagementClient);
         }
@@ -924,7 +1061,7 @@ class QaDocCommandProcessorTest {
         @DisplayName("should delegate to multi-arg overload with empty additionalData")
         void shouldDelegateToMultiArgOverload() {
             configureProject(enabledConfig());
-            when(connectionRepository.findById(CONNECTION_ID)).thenReturn(Optional.empty());
+            when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID, 9L)).thenReturn(Optional.empty());
             WebhookPayload payload = createPayload("feature/PROJ-123");
 
             // Call the 3-arg overload (no additionalData)

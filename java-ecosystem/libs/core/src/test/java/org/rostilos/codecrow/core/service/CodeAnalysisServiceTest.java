@@ -44,10 +44,39 @@ class CodeAnalysisServiceTest {
     @BeforeEach
     void setUp() {
         issueDeduplicationService = new IssueDeduplicationService();
-        codeAnalysisService = new CodeAnalysisService(codeAnalysisRepository, issueRepository, qualityGateRepository, qualityGateEvaluator, issueDeduplicationService);
+        codeAnalysisService = new CodeAnalysisService(codeAnalysisRepository, issueRepository, qualityGateRepository, qualityGateEvaluator, issueDeduplicationService, new PrChangeSummaryService(codeAnalysisRepository, new com.fasterxml.jackson.databind.ObjectMapper()));
     }
 
     // ── Helper methods ──────────────────────────────────────────────────────
+
+    @Test
+    void savesSummaryWithAnalysisEvenWhenNoIssuesWereReturned() throws Exception {
+        var project = createProject(7L, "summary");
+        when(codeAnalysisRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        var summary = Map.of("projectId", 7L, "pullRequestId", 9L, "sourceRevision", "head",
+                "files", List.of(Map.of("path", "a.py")), "summary", "Guard added");
+        var analysis = codeAnalysisService.createAnalysisFromAiResponse(project,
+                Map.of("comment", "Review", "prChangeSummary", summary),
+                9L, "main", "feature", "head", null, null, "identity");
+        var field = CodeAnalysis.class.getDeclaredField("prChangeSummaryPayload");
+        field.setAccessible(true);
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().readTree((String) field.get(analysis)))
+                .isEqualTo(new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+                        new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(summary)));
+    }
+
+    @Test
+    void exactReviewLookupNeverFallsThroughToANewerOrForeignReview() {
+        var analysis = new CodeAnalysis(); analysis.setProject(createProject(7L, "own"));
+        analysis.setPrNumber(9L); analysis.setCommitHash("head");
+        when(codeAnalysisRepository.findByIdAndProjectId(101L, 7L)).thenReturn(Optional.of(analysis));
+        assertThat(codeAnalysisService.getAnalysisForReview(7L, 9L, "head", 101L)).contains(analysis);
+        assertThat(codeAnalysisService.getAnalysisForReview(7L, 10L, "head", 101L)).isEmpty();
+        assertThat(codeAnalysisService.getAnalysisForReview(7L, 9L, "different-head", 101L)).isEmpty();
+        assertThat(codeAnalysisService.getAnalysisForReview(8L, 9L, "head", 101L)).isEmpty();
+        assertThat(codeAnalysisService.getAnalysisForReview(7L, 9L, "head", 999L)).isEmpty();
+        verify(codeAnalysisRepository, never()).findByProjectIdAndCommitHashAndPrNumber(any(), any(), any());
+    }
 
     private Project createProject(Long id, String name) {
         Project project = new Project();
@@ -140,10 +169,27 @@ class CodeAnalysisServiceTest {
     class CreateAnalysisFromAiResponseTests {
 
         @Test
+        void changedReviewIdentityAtSameHeadPersistsFreshResults() {
+            Project project = createProject(1L, "Test");
+            CodeAnalysis existing = createCodeAnalysis(10L, project);
+            existing.setDiffFingerprint("old-model-and-rules");
+            when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "abc123", 42L))
+                    .thenReturn(Optional.of(existing));
+            lenient().when(codeAnalysisRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, createBasicAnalysisData("Fresh review"), 42L, "main", "feature", "abc123",
+                    "author", "author", "new-model-and-rules");
+            assertThat(result).isNotSameAs(existing);
+            assertThat(result.getComment()).isEqualTo("Fresh review");
+            assertThat(result.getDiffFingerprint()).isEqualTo("new-model-and-rules");
+        }
+
+        @Test
         @DisplayName("should return existing analysis if one already exists")
         void shouldReturnExistingAnalysis() {
             Project project = createProject(1L, "Test");
             CodeAnalysis existing = createCodeAnalysis(10L, project);
+            existing.setDiffFingerprint("fp123");
             when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "abc123", 42L))
                     .thenReturn(Optional.of(existing));
 
@@ -414,8 +460,11 @@ class CodeAnalysisServiceTest {
             });
 
             CodeAnalysisIssue originalIssue = new CodeAnalysisIssue();
+            CodeAnalysis originalAnalysis = new CodeAnalysis();
+            originalAnalysis.setPrNumber(42L); originalAnalysis.setProject(project);
+            originalIssue.setAnalysis(originalAnalysis);
             setField(originalIssue, "id", 50L);
-            when(issueRepository.findById(50L)).thenReturn(Optional.of(originalIssue));
+            when(issueRepository.findByIdAndAnalysis_Project_Id(50L, 1L)).thenReturn(Optional.of(originalIssue));
 
             Map<String, Object> issueData = createIssueData("HIGH", "App.java", 10, "Fixed");
             issueData.put("id", "50");
@@ -468,8 +517,11 @@ class CodeAnalysisServiceTest {
             stubNewPrAnalysis(1L, "abc123", 42L);
 
             CodeAnalysisIssue originalIssue = new CodeAnalysisIssue();
+            CodeAnalysis originalAnalysis = new CodeAnalysis();
+            originalAnalysis.setPrNumber(42L); originalAnalysis.setProject(project);
+            originalIssue.setAnalysis(originalAnalysis);
             setField(originalIssue, "id", 50L);
-            when(issueRepository.findById(50L)).thenReturn(Optional.of(originalIssue));
+            when(issueRepository.findByIdAndAnalysis_Project_Id(50L, 1L)).thenReturn(Optional.of(originalIssue));
 
             Map<String, Object> issueData = createIssueData(
                     "INFO", "App.java", 10, "Historical fixed-point observation");
@@ -502,8 +554,11 @@ class CodeAnalysisServiceTest {
             stubNewPrAnalysis(1L, "abc123", 42L);
 
             CodeAnalysisIssue originalIssue = new CodeAnalysisIssue();
+            CodeAnalysis originalAnalysis = new CodeAnalysis();
+            originalAnalysis.setPrNumber(42L); originalAnalysis.setProject(project);
+            originalIssue.setAnalysis(originalAnalysis);
             setField(originalIssue, "id", 51L);
-            when(issueRepository.findById(51L)).thenReturn(Optional.of(originalIssue));
+            when(issueRepository.findByIdAndAnalysis_Project_Id(51L, 1L)).thenReturn(Optional.of(originalIssue));
 
             Map<String, Object> issueData = createIssueData(
                     "MEDIUM", "App.java", 3, "Historical issue fixed by the current change");
@@ -645,7 +700,7 @@ class CodeAnalysisServiceTest {
                 if (a.getId() == null) setField(a, "id", 100L);
                 return a;
             });
-            when(issueRepository.findById(99L)).thenReturn(Optional.empty());
+            when(issueRepository.findByIdAndAnalysis_Project_Id(99L, 1L)).thenReturn(Optional.empty());
 
             Map<String, Object> issueData = createIssueData("HIGH", "App.java", 10, "Bug");
             issueData.put("id", 99); // Number type
@@ -661,7 +716,7 @@ class CodeAnalysisServiceTest {
                     "author1", "authorUser");
 
             assertThat(result.getIssues()).hasSize(1);
-            verify(issueRepository).findById(99L);
+            verify(issueRepository).findByIdAndAnalysis_Project_Id(99L, 1L);
         }
 
         @Test
@@ -741,10 +796,13 @@ class CodeAnalysisServiceTest {
 
             // Create the "original" issue in the DB with a valid diff
             CodeAnalysisIssue originalIssue = new CodeAnalysisIssue();
+            CodeAnalysis originalAnalysis = new CodeAnalysis();
+            originalAnalysis.setPrNumber(42L); originalAnalysis.setProject(project);
+            originalIssue.setAnalysis(originalAnalysis);
             setField(originalIssue, "id", 99L);
             originalIssue.setSuggestedFixDiff("--- a/App.java\n+++ b/App.java\n@@ -10,3 +10,3 @@\n- bad\n+ good");
             originalIssue.setSuggestedFixDescription("Replace bad with good");
-            when(issueRepository.findById(99L)).thenReturn(Optional.of(originalIssue));
+            when(issueRepository.findByIdAndAnalysis_Project_Id(99L, 1L)).thenReturn(Optional.of(originalIssue));
 
             // The LLM response references the original issue but omits the diff
             Map<String, Object> issueData = createIssueData("HIGH", "App.java", 10, "Still bad");
@@ -986,10 +1044,43 @@ class CodeAnalysisServiceTest {
     class CloneAnalysisForPrTests {
 
         @Test
+        void manualDismissalDoesNotTransferToAnotherPrThroughCacheClone() {
+            Project project = createProject(1L, "Test");
+            CodeAnalysis source = createCodeAnalysis(10L, project);
+            source.setPrNumber(42L);
+            CodeAnalysisIssue issue = new CodeAnalysisIssue();
+            issue.setSeverity(IssueSeverity.HIGH); issue.setFilePath("a.py");
+            issue.setResolved(true); issue.setResolvedBy("manual");
+            issue.setManualStatusResolved(true); issue.setManualStatusUpdatedAt(java.time.OffsetDateTime.now());
+            source.addIssue(issue);
+            when(codeAnalysisRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            var clone = codeAnalysisService.cloneAnalysisForPr(source, project, 99L, "head", "main", "feature", "identity");
+            assertThat(clone.getIssues().get(0).isResolved()).isFalse();
+            assertThat(clone.getIssues().get(0).getManualStatusResolved()).isNull();
+        }
+
+        @Test
+        void changedIdentityDoesNotReuseOldCloneAtSameHead() {
+            Project project = createProject(1L, "Test");
+            CodeAnalysis old = createCodeAnalysis(20L, project);
+            old.setDiffFingerprint("old");
+            CodeAnalysis source = createCodeAnalysis(10L, project);
+            source.setComment("Fresh cached result");
+            when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "abc123", 99L))
+                    .thenReturn(Optional.of(old));
+            lenient().when(codeAnalysisRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            CodeAnalysis result = codeAnalysisService.cloneAnalysisForPr(
+                    source, project, 99L, "abc123", "main", "feature", "new");
+            assertThat(result).isNotSameAs(old);
+            assertThat(result.getComment()).isEqualTo("Fresh cached result");
+        }
+
+        @Test
         @DisplayName("should return existing clone if already exists")
         void shouldReturnExistingClone() {
             Project project = createProject(1L, "Test");
             CodeAnalysis existing = createCodeAnalysis(20L, project);
+            existing.setDiffFingerprint("fp123");
             CodeAnalysis source = createCodeAnalysis(10L, project);
 
             when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "abc123", 99L))
@@ -1161,6 +1252,25 @@ class CodeAnalysisServiceTest {
     @Nested
     @DisplayName("saveAnalysis()")
     class SaveAnalysisTests {
+        @Test
+        void refreshesQualityGateAfterResolution() {
+            Project project = createProject(1L, "Test");
+            var gate = new org.rostilos.codecrow.core.model.qualitygate.QualityGate();
+            project.setQualityGate(gate);
+            CodeAnalysis analysis = createCodeAnalysis(1L, project);
+            analysis.setAnalysisResult(org.rostilos.codecrow.core.model.codeanalysis.AnalysisResult.FAILED);
+            var issue = new CodeAnalysisIssue();
+            issue.setSeverity(IssueSeverity.HIGH);
+            analysis.addIssue(issue);
+            issue.setResolved(true);
+            when(qualityGateEvaluator.evaluate(analysis, gate)).thenReturn(
+                new org.rostilos.codecrow.core.model.qualitygate.QualityGateResult(
+                    org.rostilos.codecrow.core.model.codeanalysis.AnalysisResult.PASSED, "gate", List.of()));
+            when(codeAnalysisRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            codeAnalysisService.saveAnalysis(analysis);
+            assertThat(analysis.getAnalysisResult()).isEqualTo(org.rostilos.codecrow.core.model.codeanalysis.AnalysisResult.PASSED);
+        }
+
         @Test
         @DisplayName("should save and update issue counts")
         void shouldSaveAndUpdateCounts() {
@@ -1347,8 +1457,8 @@ class CodeAnalysisServiceTest {
         @Test
         @DisplayName("should compute stats correctly")
         void shouldComputeStats() {
-            when(codeAnalysisRepository.countByProjectId(1L)).thenReturn(10L);
-            when(codeAnalysisRepository.getAverageIssuesPerAnalysis(1L)).thenReturn(5.5);
+            when(codeAnalysisRepository.countReportableByProjectId(1L)).thenReturn(10L);
+            when(codeAnalysisRepository.getAverageIssuesPerReportableAnalysis(1L)).thenReturn(5.5);
             when(issueRepository.countByProjectIdAndSeverity(1L, IssueSeverity.HIGH)).thenReturn(3L);
             when(issueRepository.countByProjectIdAndSeverity(1L, IssueSeverity.MEDIUM)).thenReturn(7L);
             when(issueRepository.countByProjectIdAndSeverity(1L, IssueSeverity.LOW)).thenReturn(5L);
@@ -1369,8 +1479,8 @@ class CodeAnalysisServiceTest {
         @Test
         @DisplayName("should handle null average")
         void shouldHandleNullAverage() {
-            when(codeAnalysisRepository.countByProjectId(1L)).thenReturn(0L);
-            when(codeAnalysisRepository.getAverageIssuesPerAnalysis(1L)).thenReturn(null);
+            when(codeAnalysisRepository.countReportableByProjectId(1L)).thenReturn(0L);
+            when(codeAnalysisRepository.getAverageIssuesPerReportableAnalysis(1L)).thenReturn(null);
             when(issueRepository.countByProjectIdAndSeverity(eq(1L), any())).thenReturn(0L);
             when(issueRepository.findMostProblematicFilesByProjectId(1L)).thenReturn(List.of());
 
@@ -1394,4 +1504,55 @@ class CodeAnalysisServiceTest {
             assertThat(result.getContent()).isEmpty();
         }
     }
+
+    @Test void baseAnchorsSurviveHeadSnippetFilteringAndBranchCloning() {
+        Project project = createProjectWithWorkspace(1L, "Test", 1L);
+        stubNewPrAnalysis(1L, "abc123", 42L);
+        Map<String,Object> finding = createIssueData("HIGH", "App.java", 10, "Removing the guard exposes the caller");
+        finding.put("anchorSide", "BASE"); finding.put("codeSnippet", "deletedGuard();");
+        Map<String,Object> data = createBasicAnalysisData("Review"); data.put("issues", List.of(finding));
+        CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(project, data, 42L,
+                "main", "feature", "abc123", "author", "user", "fp",
+                Map.of("App.java", "differentHeadContent();\n"));
+        assertThat(result.getIssues()).hasSize(1);
+        CodeAnalysisIssue issue=result.getIssues().get(0);
+        assertThat(issue.getAnchorSide()).isEqualTo(org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE);
+        assertThat(issue.getLineNumber()).isEqualTo(10);
+        assertThat(org.rostilos.codecrow.core.dto.analysis.issue.IssueDTO.fromEntity(issue).anchorSide()).isEqualTo("BASE");
+        var branchIssue = org.rostilos.codecrow.core.model.branch.BranchIssue.fromCodeAnalysisIssue(
+                issue, new org.rostilos.codecrow.core.model.branch.Branch());
+        assertThat(branchIssue.getAnchorSide()).isEqualTo(issue.getAnchorSide());
+        assertThat(org.rostilos.codecrow.core.dto.analysis.issue.IssueDTO.fromBranchIssue(branchIssue).anchorSide()).isEqualTo("BASE");
+    }
+    @Test void historicalIdCannotBorrowAnotherPrsLifecycleOrFixText() {
+        Project project = createProjectWithWorkspace(1L, "Test", 1L);
+        stubNewPrAnalysis(1L, "abc123", 42L);
+        CodeAnalysis otherPr = new CodeAnalysis(); otherPr.setProject(project); otherPr.setPrNumber(43L);
+        CodeAnalysisIssue foreign = new CodeAnalysisIssue(); foreign.setAnalysis(otherPr);
+        foreign.setSuggestedFixDescription("another-pr-fix");
+        when(issueRepository.findByIdAndAnalysis_Project_Id(987L, 1L)).thenReturn(Optional.of(foreign));
+        Map<String,Object> finding = createIssueData("HIGH", "App.java", 10, "Local finding");
+        finding.put("id", "987"); finding.put("suggestedFixDescription", null); finding.put("suggestedFixDiff", null);
+        Map<String,Object> data = createBasicAnalysisData("Review"); data.put("issues", List.of(finding));
+        CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(project, data, 42L, "main", "feature", "abc123", "author", "user");
+        assertThat(result.getIssues()).hasSize(1);
+        assertThat(result.getIssues().get(0).getTrackedFromIssueId()).isNull();
+        assertThat(result.getIssues().get(0).getSuggestedFixDescription()).isNotEqualTo("another-pr-fix");
+    }
+
+    @Test void foreignHistoricalIdCannotCopyAnotherProjectsFixText() {
+        Project project = createProjectWithWorkspace(1L, "Test", 1L);
+        stubNewPrAnalysis(1L, "abc123", 42L);
+        CodeAnalysisIssue foreign = new CodeAnalysisIssue(); foreign.setSuggestedFixDescription("foreign-private-code");
+        lenient().when(issueRepository.findById(987L)).thenReturn(Optional.of(foreign));
+        when(issueRepository.findByIdAndAnalysis_Project_Id(987L,1L)).thenReturn(Optional.empty());
+        Map<String,Object> finding = createIssueData("HIGH","App.java",10,"Local finding");
+        finding.put("id","987"); finding.put("suggestedFixDescription",null); finding.put("suggestedFixDiff",null);
+        Map<String,Object> data = createBasicAnalysisData("Review"); data.put("issues",List.of(finding));
+        CodeAnalysis result=codeAnalysisService.createAnalysisFromAiResponse(project,data,42L,"main","feature","abc123","author","user");
+        assertThat(result.getIssues()).hasSize(1);
+        assertThat(result.getIssues().get(0).getSuggestedFixDescription()).isNotEqualTo("foreign-private-code");
+        verify(issueRepository,never()).findById(987L);
+    }
+
 }

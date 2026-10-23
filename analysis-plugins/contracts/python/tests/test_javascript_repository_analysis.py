@@ -376,7 +376,7 @@ def test_javascript_validator_requires_exact_kind_path_and_identifier():
     assert coarse[0].code == "javascript-coarse-evidence-class"
 
 
-def test_component_contract_reaches_prompt_visible_exact_evidence():
+def test_component_contract_reaches_structural_graph_relation_map(tmp_path):
     _, _, analysis = _analyze(_card(), _product())
     project_root = PLUGINS_ROOT.parent
     sys.path.insert(
@@ -384,66 +384,56 @@ def test_component_contract_reaches_prompt_visible_exact_evidence():
         str(
             project_root
             / "python-ecosystem"
-            / "inference-orchestrator"
+            / "rag-pipeline"
             / "src"
         ),
     )
-    from service.review.orchestrator.context_helpers import format_rag_context
-
-    packet = analysis.packets[0]
-    fact_payload = [
-        dict(fact.as_metadata())
-        for fact in packet.facts
-    ]
-    text = "\n".join((
-        "Deterministic repository architecture context",
-        "Plugin: javascript",
-        "Kind: javascript-component-relation",
-        "Source: src/Product.jsx",
-        "Related paths: src/Card.jsx, src/Product.jsx",
-        "Facts:",
-        *(
-            f"- [{fact.kind}] {fact.source} {fact.relation} "
-            f"{fact.target} ({fact.path}:{fact.line})"
-            for fact in packet.facts
-        ),
-    ))
-    chunks = [
-        {
-            "text": text,
-            "metadata": {
-                "path": (
-                    "__analysis_architecture__/javascript/"
-                    "component-contract.context"
-                ),
-                "architecture_key": (
-                    "javascript-component-relation:src/Product.jsx:0"
-                ),
-                "architecture_paths": list(packet.paths),
-                "plugin_graph_facts": fact_payload,
-            },
-            "_source": "pr_indexed",
-            "_match_type": "architecture_relation",
-            "score": 1.0,
-        }
-    ]
-    visible = {}
-    prompt = format_rag_context(
-        {"relevant_code": chunks},
-        pr_changed_files=["src/Product.jsx"],
-        visible_evidence_by_id=visible,
+    from rag_pipeline.core.structural_store import (
+        StructuralGenerationStore,
+        StructuralGraphReader,
+        StructuralGraphWriter,
     )
 
-    assert "Evidence ID: RAG-" in prompt
-    assert "[javascript-component-resolution]" in prompt
-    assert "[javascript-jsx-prop-contract]" in prompt
-    assert "src/Product.jsx::Product::Card" in prompt
-    assert "src/Card.jsx::Card::title" in prompt
+    packet = analysis.packets[0]
+    store = StructuralGenerationStore(tmp_path / "structural-index")
+    pending = store.pending_paths("cc_workspace_project_main_generation")
+    connection = store.initialize(pending)
+    try:
+        writer = StructuralGraphWriter(connection)
+        for fact in packet.facts:
+            writer.add_graph_fact(
+                fact,
+                plugin_id="javascript",
+                packet_kind=packet.kind,
+                packet_key=packet.key,
+            )
+        writer.resolve_relations()
+        connection.commit()
+        reader = StructuralGraphReader(connection, {
+            "branch": "main",
+            "repository_revision": "0123456789abcdef",
+            "generation_manifest_sha256": "a" * 64,
+        })
+        relation_map = reader.relations_for_paths(
+            ["src/Product.jsx"],
+            max_relations=20,
+        )
+    finally:
+        connection.close()
+
+    relations = relation_map["relations"]
+    assert relation_map["coverage"]["state"] == "complete"
+    assert all(relation["evidenceId"].startswith("relation:") for relation in relations)
+    assert all(relation["origin"]["plugin"] == "javascript" for relation in relations)
     assert {
-        fact["kind"]
-        for facts in visible.values()
-        for fact in facts
+        relation["kind"]
+        for relation in relations
     } == {
         "javascript-component-resolution",
         "javascript-jsx-prop-contract",
     }
+    assert any(
+        relation["source"] == "src/Product.jsx::Product::Card"
+        and relation["target"] == "src/Card.jsx::Card::title"
+        for relation in relations
+    )

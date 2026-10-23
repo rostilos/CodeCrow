@@ -328,4 +328,17 @@ class CommentOnPullRequestActionTest {
                         "PUT /repos/owner/repo/pulls/123/reviews/51"
                 );
     }
+
+    @Test void deletedSourceCommentUsesLeftCoordinates() throws Exception {
+        ArgumentCaptor<Request> request=ArgumentCaptor.forClass(Request.class);
+        when(okHttpClient.newCall(request.capture())).thenReturn(call);
+        when(call.execute()).thenReturn(response); when(response.isSuccessful()).thenReturn(true);
+        action.postReviewComment("owner","repo",123,"Removal regression","head","deleted.java",10,
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE);
+        Buffer buffer=new Buffer(); request.getValue().body().writeTo(buffer);
+        JsonNode body=new ObjectMapper().readTree(buffer.readUtf8());
+        assertThat(body.path("side").asText()).isEqualTo("LEFT");
+        assertThat(body.path("line").asInt()).isEqualTo(10);
+    }
+
 }

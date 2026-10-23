@@ -20,8 +20,6 @@ from codecrow_plugins import (
 
 
 _EXTENSIONS = (".py", ".pyi", ".pyw")
-_MAX_FACTS_PER_FILE = 160
-_MAX_EVIDENCE_REQUESTS = 40
 _MODEL_RELATIONS = {
     "ForeignKey": "many-to-one",
     "ManyToManyField": "many-to-many",
@@ -329,29 +327,6 @@ def _qualified(module: str, name: str) -> str:
     return f"{module}.{name}" if module else name
 
 
-def _bounded_facts(facts: set[GraphFact]) -> tuple[GraphFact, ...]:
-    """Keep direct calls bounded without starving a topology kind."""
-    by_kind: dict[str, list[GraphFact]] = {}
-    for fact in sorted(facts):
-        by_kind.setdefault(fact.kind, []).append(fact)
-    selected: list[GraphFact] = []
-    offset = 0
-    kinds = tuple(sorted(by_kind))
-    while len(selected) < _MAX_FACTS_PER_FILE:
-        added = False
-        for kind in kinds:
-            values = by_kind[kind]
-            if offset < len(values):
-                selected.append(values[offset])
-                added = True
-                if len(selected) == _MAX_FACTS_PER_FILE:
-                    break
-        if not added:
-            break
-        offset += 1
-    return tuple(sorted(selected))
-
-
 def _include_target(call: ast.Call, imports: _ImportResolver) -> str:
     if not call.args:
         return ""
@@ -656,7 +631,7 @@ class DjangoPlugin:
 
         if not facts:
             return PluginOutcome.abstained()
-        return PluginOutcome.handled(_bounded_facts(facts))
+        return PluginOutcome.handled(tuple(sorted(facts)))
 
     @staticmethod
     def _settings_and_urls(
@@ -898,7 +873,7 @@ class DjangoPlugin:
         selected = tuple(sorted(
             path for path in paths
             if path.casefold().endswith(_EXTENSIONS)
-        ))[:_MAX_EVIDENCE_REQUESTS]
+        ))
         if not selected:
             return PluginOutcome.abstained()
         rules = tuple(sorted((

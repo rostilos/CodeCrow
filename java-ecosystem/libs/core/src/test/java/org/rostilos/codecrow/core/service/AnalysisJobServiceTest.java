@@ -86,15 +86,11 @@ class AnalysisJobServiceTest {
     private static class TestAnalysisJobService implements AnalysisJobService {
         
         @Override
-        public Job createRagIndexJob(org.rostilos.codecrow.core.model.project.Project project, 
-                                      org.rostilos.codecrow.core.model.user.User triggeredBy) {
-            return new Job();
-        }
-
-        @Override
-        public Job createRagIndexJob(org.rostilos.codecrow.core.model.project.Project project, 
-                                      boolean isInitial, 
-                                      org.rostilos.codecrow.core.model.job.JobTriggerSource triggerSource) {
+        public Job createRepositoryIndexBuildJob(
+                                      org.rostilos.codecrow.core.model.project.Project project,
+                                      org.rostilos.codecrow.core.model.job.JobTriggerSource triggerSource,
+                                      String branchName,
+                                      String revision) {
             return new Job();
         }
 

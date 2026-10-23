@@ -2,6 +2,7 @@
 !java-ecosystem/
 !java-ecosystem/services/
 !java-ecosystem/services/pipeline-agent/
+!java-ecosystem/services/pipeline-agent/entrypoint.sh
 !java-ecosystem/services/pipeline-agent/target/
 !java-ecosystem/services/pipeline-agent/target/codecrow-pipeline-agent-1.0.jar
 !analysis-plugins/

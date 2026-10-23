@@ -2,8 +2,21 @@
 Unit tests for service.review.orchestrator.json_utils — clean_json_text.
 (parse_llm_response and repair_json_with_llm are async and need LLM mock — tested separately.)
 """
+import json
+
 import pytest
-from service.review.orchestrator.json_utils import clean_json_text
+from pydantic import BaseModel
+from unittest.mock import AsyncMock, MagicMock
+
+from service.review.orchestrator.json_utils import (
+    clean_json_text,
+    load_json_with_local_repairs,
+    parse_llm_response,
+)
+
+
+class _Payload(BaseModel):
+    value: int
 
 
 class TestCleanJsonText:
@@ -69,3 +82,112 @@ class TestCleanJsonText:
         text = '```json\n{"incomplete": true}'
         result = clean_json_text(text)
         assert '"incomplete"' in result
+
+
+class TestLoadJsonWithLocalRepairs:
+
+    def test_invalid_markdown_and_regex_escapes_preserve_literal_backslashes(self):
+        # Saved EmDash output escaped the backticks around this template string.
+        text = r'{"source": "(obj._key as string) || \`item-${i}-${Date.now()}\`", "regex": "\d+\.\w+", "valid": "line\npath\\file\/\u263a\""}'
+        _, parsed = load_json_with_local_repairs(text)
+        assert parsed == {
+            "source": r"(obj._key as string) || \`item-${i}-${Date.now()}\`",
+            "regex": r"\d+\.\w+",
+            "valid": 'line\npath\\file/☺"',
+        }
+
+    @pytest.mark.parametrize("text", [r'{"value": "\u12Q4"}', r'{"value": \q}', r'{"value": "\`"'])
+    def test_escape_repair_does_not_accept_malformed_unicode_or_structure(self, text):
+        with pytest.raises(ValueError):
+            load_json_with_local_repairs(text)
+
+    def test_valid_json_preserves_nested_json_fence(self):
+        payload = {
+            "summary": "Example:\n```json\n{'foo': 1}\n```\nEnd.",
+        }
+        text = json.dumps(payload)
+
+        cleaned, parsed = load_json_with_local_repairs(text)
+
+        assert cleaned == text
+        assert parsed == payload
+
+    def test_valid_json_preserves_nested_diff_fence(self):
+        payload = {
+            "suggestedFixDiff": "```diff\n-old\n+new\n```",
+        }
+        text = json.dumps(payload)
+
+        cleaned, parsed = load_json_with_local_repairs(text)
+
+        assert cleaned == text
+        assert parsed == payload
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        (
+            ('```json\n{"value": 1}\n```', {"value": 1}),
+            ('Result: {"value": 2} done.', {"value": 2}),
+            ('{"value": 3,}', {"value": 3}),
+        ),
+    )
+    def test_existing_cleanup_fallbacks_remain_available(
+            self,
+            text,
+            expected,
+    ):
+        _, parsed = load_json_with_local_repairs(text)
+
+        assert parsed == expected
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_zero_provider_repair_budget_never_invokes_model():
+    llm = MagicMock()
+    llm.ainvoke = AsyncMock()
+
+    with pytest.raises(ValueError, match="Failed to parse _Payload locally"):
+        await parse_llm_response(
+            "{not-json",
+            _Payload,
+            llm,
+            max_provider_repairs=0,
+        )
+
+    llm.with_structured_output.assert_not_called()
+    llm.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_shared_provider_repair_budget_counts_structured_retry():
+    structured = MagicMock()
+    structured.ainvoke = AsyncMock(side_effect=RuntimeError("provider failed"))
+    llm = MagicMock()
+    llm.with_structured_output.return_value = structured
+    llm.ainvoke = AsyncMock()
+
+    with pytest.raises(ValueError):
+        await parse_llm_response(
+            "{not-json",
+            _Payload,
+            llm,
+            retries=2,
+            max_provider_repairs=1,
+        )
+
+    structured.ainvoke.assert_awaited_once()
+    llm.ainvoke.assert_not_awaited()
+
+
+def test_complete_json_after_source_examples_preserves_embedded_code():
+    from service.review.orchestrator.json_utils import load_json_with_local_repairs
+    data = {"reviews": [{"file": "a.rb", "reason": "```ruby\nputs 'x'\n```"}]}
+    content = "Reviewing source:\n```ruby\ninstance_variable_set(\"@#{@property}\", result)\n```\nThe inline `@#{@property}` is unchanged.\n```\n260: fetch\n```\nFinal answer." + json.dumps(data)
+    _, result = load_json_with_local_repairs(content)
+    assert result == data
+    with pytest.raises(ValueError):
+        load_json_with_local_repairs('Prose. {"reviews": [{"file": "a.rb"}')
+    with pytest.raises(ValueError):
+        load_json_with_local_repairs('Prose. [{"file": "a.rb"}')
+    with pytest.raises(ValueError):
+        load_json_with_local_repairs('Prose. ["]", {"file": "a.rb"}')
