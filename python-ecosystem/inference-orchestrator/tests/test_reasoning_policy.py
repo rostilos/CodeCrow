@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
+from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs, review_output_token_limit
 from model.multi_stage import (
     CrossFileAnalysisResult,
     FileGroup,
@@ -51,6 +51,40 @@ def _effort(call):
     return call[1]["extra_body"]["reasoning"]["effort"]
 
 
+@pytest.mark.parametrize("configured,expected", [(None, 131_072), (4096, 4096), (262_144, 262_144)])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_review_budget_honors_explicit_limits_and_deepseek_default(configured, expected, wrapped):
+    llm = ChatOpenRouter([], max_tokens=configured)
+    llm.model_name = 'deepseek/deepseek-v4.1-flash-1017'
+    if wrapped:
+        llm = SimpleNamespace(__codecrow_delegate__=llm)
+    assert review_output_token_limit(llm) == expected
+
+
+def test_review_budget_preserves_other_provider_defaults_and_configuration():
+    assert review_output_token_limit(ChatOpenRouter([])) == 16_384
+    assert review_output_token_limit(SimpleNamespace(max_output_tokens=262_144)) == 262_144
+    assert review_output_token_limit(SimpleNamespace(max_output_tokens=2048)) == 2048
+    assert review_output_token_limit(SimpleNamespace(max_tokens=True)) == 16_384
+
+
+@pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("configured,expected", [(None, 131_072), (4096, 4096), (262_144, 262_144)])
+@pytest.mark.parametrize("raw", [False, True])
+async def test_deepseek_review_paths_use_increased_or_explicit_output_budget(configured, expected, raw):
+    batch = FileReviewBatchOutput(reviews=[FileReviewOutput(file='src/a.py', analysis_summary='checked')])
+    cross = CrossFileAnalysisResult(pr_risk_level='LOW', cross_file_issues=[], pr_recommendation='PASS', confidence='HIGH')
+    for value in [batch, cross]:
+        llm = ChatOpenRouter([SimpleNamespace(content=value.model_dump_json()) if raw else value], max_tokens=configured)
+        llm.model_name = 'deepseek/deepseek-v4.1-flash-1017'
+        if value is batch:
+            assert await _invoke_stage_1_batch_llm(llm, 'review', ['src/a.py'], force_unstructured=raw) == []
+        else:
+            assert await _invoke_stage_2_llm(llm, 'review', 'budget-check', force_unstructured=raw) == cross
+        assert len(llm.calls) == 1
+        assert llm.calls[0][1]['max_tokens'] == expected
+
+
 def test_reasoning_kwargs_are_openrouter_only_and_preserve_other_extra_body():
     configured = {
         "provider": {"order": ["DeepInfra"]},
@@ -76,6 +110,36 @@ def test_reasoning_kwargs_are_openrouter_only_and_preserve_other_extra_body():
             "reasoning": {"effort": "none"},
         }
     }
+
+
+def test_recovery_replaces_both_configured_reasoning_fields():
+    llm = ChatOpenRouter([], extra_body={"reasoning": {"effort": "high"}, "reasoning_effort": "high"})
+    llm.reasoning_effort = "high"
+    kwargs = reasoning_request_kwargs(llm, ReasoningEffort.NONE)
+    assert kwargs == {"reasoning_effort": "none", "extra_body": {"reasoning": {"effort": "none"}, "reasoning_effort": "none"}}
+    assert llm.reasoning_effort == "high" and llm.extra_body["reasoning"]["effort"] == "high"
+
+
+@pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("raw", [False, True])
+async def test_stage_one_direct_recovery_honors_lower_output_cap(raw):
+    batch = FileReviewBatchOutput(reviews=[FileReviewOutput(file="src/a.py", analysis_summary="clean", issues=[], confidence="HIGH")])
+    llm = ChatOpenRouter([SimpleNamespace(content=batch.model_dump_json()) if raw else batch], max_tokens=4096)
+    assert await _invoke_stage_1_batch_llm(llm, "review", ["src/a.py"], force_unstructured=raw) == []
+    assert llm.calls[0][1]["max_tokens"] == 4096
+
+
+@pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("name,effort", [("deepseek/deepseek-v4.1-flash-1017", "none"), ("deepseek/deepseek-v3.2", "low")])
+async def test_stage_one_deepseek_direct_completion_preserves_primary_configuration(name, effort):
+    batch = FileReviewBatchOutput(reviews=[FileReviewOutput(file="a.py", analysis_summary="checked", issues=[])])
+    llm = ChatOpenRouter([batch], extra_body={"reasoning": {"effort": "high"}})
+    llm.model_name = name
+    llm.reasoning_effort = "high"
+    assert await _invoke_stage_1_batch_llm(llm, "review", ["a.py"]) == []
+    assert _effort(llm.calls[0]) == effort
+    assert llm.calls[0][1]["reasoning_effort"] == effort
+    assert llm.reasoning_effort == "high" and llm.extra_body["reasoning"]["effort"] == "high"
 
 
 @pytest.mark.asyncio(loop_scope="function")

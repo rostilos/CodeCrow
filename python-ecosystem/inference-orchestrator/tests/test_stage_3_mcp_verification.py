@@ -34,7 +34,12 @@ def test_aggregation_preserves_legacy_helper_imports() -> None:
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_mcp_subsystem_runs_through_the_typed_runtime_boundary() -> None:
+@pytest.mark.parametrize("model_name,configured,expected", [
+    ("other", None, 16_384),
+    ("deepseek/deepseek-v4.1-flash-1017", None, 131_072),
+    ("deepseek/deepseek-v4.1-flash-1017", 262_144, 262_144),
+])
+async def test_mcp_subsystem_runs_through_the_typed_runtime_boundary(model_name, configured, expected) -> None:
     response = SimpleNamespace(
         content="bounded verification report",
         tool_calls=[],
@@ -43,6 +48,7 @@ async def test_mcp_subsystem_runs_through_the_typed_runtime_boundary() -> None:
 
     class BoundLlm:
         async def ainvoke(self, _messages, **_kwargs):
+            assert _kwargs["max_tokens"] == expected
             return response
 
     class Llm:
@@ -65,8 +71,10 @@ async def test_mcp_subsystem_runs_through_the_typed_runtime_boundary() -> None:
         projectVcsRepoSlug="repository",
     )
 
+    llm = Llm()
+    llm.model_name, llm.max_tokens = model_name, configured
     result = await execute_stage_3_mcp_verification(
-        Llm(),
+        llm,
         request,
         "prompt",
         SimpleNamespace(),

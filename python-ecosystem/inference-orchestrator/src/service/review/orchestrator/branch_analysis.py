@@ -20,7 +20,7 @@ from service.review.orchestrator.structured_output import (
     invoke_structured_output,
 )
 from service.review.orchestrator.stage_helpers import emit_status, emit_error
-from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
+from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs, review_output_token_limit
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ async def execute_branch_analysis(
         allowed_tool_names=BRANCH_ANALYSIS_ALLOWED_MCP_TOOLS,
         max_steps=15,
         reasoning_effort=ReasoningEffort.LOW,
-        max_output_tokens=BRANCH_ANALYSIS_MAX_OUTPUT_TOKENS,
+        max_output_tokens=review_output_token_limit(llm, BRANCH_ANALYSIS_MAX_OUTPUT_TOKENS),
         output_schema=CodeReviewOutput,
         additional_instructions=PromptBuilder.get_additional_instructions(),
         metadata={"flow": "review", "stage": "branch_analysis"},

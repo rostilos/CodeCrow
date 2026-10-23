@@ -290,6 +290,22 @@ class TestCreateLlm:
         )
         assert llm is not None
 
+    @patch("llm.ssrf_safe_transport.create_ssrf_safe_http_client", return_value=MagicMock())
+    @patch("llm.ssrf_safe_transport.create_ssrf_safe_async_http_client", return_value=MagicMock())
+    def test_compatible_openrouter_uses_provider_adapter(self, mock_async, mock_sync):
+        with patch("llm.llm_factory.ChatOpenRouter") as router, patch("llm.llm_factory.ChatOpenAI") as generic:
+            result = LLMFactory.create_llm(
+                "deepseek/deepseek-v4.1-flash-1017", "OPENAI_COMPATIBLE", "test",
+                ai_base_url="https://openrouter.ai/api/v1",
+                ai_custom_parameters={"reasoning_effort": "high", "extra_body": {"provider": {"order": ["cloudflare", "relace"]}}},
+            )
+        assert result is router.return_value
+        generic.assert_not_called()
+        assert router.call_args.kwargs["base_url"] == "https://openrouter.ai/api/v1"
+        assert router.call_args.kwargs["reasoning_effort"] == "high"
+        assert router.call_args.kwargs["http_client"] is mock_sync.return_value
+        assert router.call_args.kwargs["http_async_client"] is mock_async.return_value
+
     def test_unsupported_provider_raises(self):
         with pytest.raises(UnsupportedProviderError, match="Unsupported AI provider"):
             LLMFactory.create_llm(
@@ -314,6 +330,24 @@ class TestCreateLlm:
             temperature=0.5,
         )
         assert llm is not None
+
+    @pytest.mark.parametrize("model,explicit,expected", [
+        ("deepseek/deepseek-v4.1-flash-1017", None, 1.0),
+        ("deepseek/deepseek-v4.1-flash-20261017:nitro", None, 1.0),
+        ("deepseek/deepseek-v4.1-flash-1017", 0.0, 0.0),
+        ("another-model", None, DEFAULT_TEMPERATURE),
+    ])
+    def test_model_sampling_default_preserves_explicit_choice(self, monkeypatch, model, explicit, expected):
+        monkeypatch.delenv("LLM_TEMPERATURE", raising=False)
+        with patch("llm.llm_factory.ChatOpenRouter") as constructor:
+            LLMFactory.create_llm(model, "OPENROUTER", "test", temperature=explicit)
+        assert constructor.call_args.kwargs["temperature"] == expected
+
+    def test_configured_temperature_overrides_model_recommendation(self, monkeypatch):
+        monkeypatch.setenv("LLM_TEMPERATURE", "0.0")
+        with patch("llm.llm_factory.ChatOpenRouter") as constructor:
+            LLMFactory.create_llm("deepseek/deepseek-v4.1-flash-1017", "OPENROUTER", "test")
+        assert constructor.call_args.kwargs["temperature"] == DEFAULT_TEMPERATURE
 
 # ── OPENAI_COMPATIBLE URL and payload helpers ───────────────────
 

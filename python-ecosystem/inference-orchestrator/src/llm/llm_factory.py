@@ -240,8 +240,8 @@ class ChatOpenRouter(ChatOpenAI):
                  api_key: Optional[str] = None,
                  **kwargs):
         api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        kwargs.setdefault("base_url", "https://openrouter.ai/api/v1")
         super().__init__(
-            base_url="https://openrouter.ai/api/v1",
             api_key=api_key,
             **kwargs
         )
@@ -829,9 +829,9 @@ class LLMFactory:
             ai_model: Model name/identifier
             ai_provider: Provider key (OPENROUTER, OPENAI, ANTHROPIC, GOOGLE, GOOGLE_VERTEX, OPENAI_COMPATIBLE)
             ai_api_key: API key for the provider
-            temperature: LLM temperature. If None, uses LLM_TEMPERATURE env var or 0.0.
-                        0.0 = deterministic results (recommended for code review)
-                        0.1-0.3 = more creative but less consistent
+            temperature: Explicit sampling temperature. Otherwise LLM_TEMPERATURE
+                         takes precedence over the model default (1.0 for DeepSeek
+                         V4.1 Flash, 0.0 for other models).
             ai_base_url: Base URL for OPENAI_COMPATIBLE provider, or Vertex project/location metadata
             max_tokens: Maximum output tokens. If None, uses the provider default.
             ai_custom_parameters: Optional provider-specific request parameters for
@@ -855,7 +855,12 @@ class LLMFactory:
             )
 
         if temperature is None:
-            temperature = DEFAULT_TEMPERATURE
+            # Use V4.1 Flash's recommended sampling; explicit settings still win.
+            model_id = ai_model.casefold().lstrip("~").split("/")[-1]
+            temperature = (
+                1.0 if model_id.startswith("deepseek-v4.1-flash")
+                and "LLM_TEMPERATURE" not in os.environ else DEFAULT_TEMPERATURE
+            )
         
         # Normalize provider
         provider = LLMFactory._normalize_provider(ai_provider)
@@ -1060,11 +1065,13 @@ class LLMFactory:
             kwargs.update(custom_request_kwargs)
             if max_tokens:
                 kwargs["max_tokens"] = max_tokens
-            chat_model = (
-                ChatCloudflareOpenAI
-                if _is_cloudflare_base_url(base_url)
-                else ChatOpenAI
-            )
+            # The endpoint's protocol controls also apply when configured as compatible.
+            if urlparse(base_url).hostname == "openrouter.ai":
+                chat_model = ChatOpenRouter
+            elif _is_cloudflare_base_url(base_url):
+                chat_model = ChatCloudflareOpenAI
+            else:
+                chat_model = ChatOpenAI
             return chat_model(**kwargs)
         
         # Unknown provider - raise error with helpful message

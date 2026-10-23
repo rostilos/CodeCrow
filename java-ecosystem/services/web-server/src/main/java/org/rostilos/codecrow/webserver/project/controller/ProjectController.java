@@ -454,7 +454,8 @@ public class ProjectController {
                                 request.getEnabled(),
                                 request.getBranch(),
                                 request.getIncludePatterns(),
-                                request.getExcludePatterns());
+                                request.getExcludePatterns(),
+                                request.getBranchPatterns());
                 return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
         }
 

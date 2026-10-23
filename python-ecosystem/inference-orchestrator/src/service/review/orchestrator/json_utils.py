@@ -315,12 +315,59 @@ def load_json_with_local_repairs(text: str) -> tuple[str, Any]:
         # outer response wrapper.
         pass
 
+    # Source examples may precede an intact JSON answer; never strip fences
+    # inside that answer's string values or salvage a nested truncated object.
+    offset = 0
+    while match := re.search(r"```|`|[\{\[]", stripped[offset:]):
+        start = offset + match.start()
+        if match.group() in {"{", "["}:
+            try:
+                candidate = stripped[start:]
+                return candidate, json.loads(candidate)
+            except ValueError:
+                if match.group() != "[":
+                    break
+            # A complete array example can be prose; an unclosed array owns
+            # every nested object and must not be mistaken for a final answer.
+            depth, end = 1, start + 1
+            while end < len(stripped) and depth:
+                char = stripped[end]
+                if char == '"':
+                    try:
+                        _, end = json.decoder.scanstring(stripped, end + 1)
+                        continue
+                    except ValueError:
+                        break
+                if char == "[":
+                    depth += 1
+                elif char == "]":
+                    depth -= 1
+                end += 1
+            if depth:
+                raise ValueError("Incomplete outer JSON array; nested objects are not a complete response")
+            offset = end
+            continue
+        if match.group() == "`":
+            end = stripped.find("`", start + 1)
+            if end < 0:
+                break
+            offset = end + 1
+            continue
+        header, separator, _ = stripped[start + 3:].partition("\n")
+        end = stripped.find("```", start + 3 + len(header) + len(separator))
+        body_start = start + 3 + len(header) + len(separator)
+        if not separator or end < 0 or header.strip().lower() == "json":
+            break
+        if not header.strip() and stripped[body_start:end].lstrip().startswith(("{", "[")):
+            break
+        offset = end + 3
+
     cleaned = clean_json_text(text)
     candidates = [
         cleaned,
         _remove_trailing_commas(cleaned),
-        _escape_newlines_in_strings(cleaned),
-        _escape_newlines_in_strings(_remove_trailing_commas(cleaned)),
+        _escape_invalid_string_characters(cleaned),
+        _escape_invalid_string_characters(_remove_trailing_commas(cleaned)),
     ]
 
     last_error = None
@@ -341,13 +388,16 @@ def _remove_trailing_commas(text: str) -> str:
     return re.sub(r",\s*([}\]])", r"\1", text)
 
 
-def _escape_newlines_in_strings(text: str) -> str:
+def _escape_invalid_string_characters(text: str) -> str:
     result = []
     in_string = False
     escaped = False
 
     for char in text:
         if escaped:
+            # Markdown/regex escapes are literal source text, not JSON escapes.
+            if in_string and char not in '"\\/bfnrtu':
+                result.append("\\")
             result.append(char)
             escaped = False
             continue

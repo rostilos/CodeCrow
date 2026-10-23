@@ -78,7 +78,7 @@ public interface IProjectService {
 
         Project updateRagConfig(Long workspaceId, Long projectId, boolean enabled, String branch,
                         List<String> includePatterns,
-                        List<String> excludePatterns);
+                        List<String> excludePatterns, List<String> branchPatterns);
 
         Project updateAnalysisSettings(Long workspaceId, Long projectId, Boolean prAnalysisEnabled,
                         Boolean branchAnalysisEnabled, InstallationMethod installationMethod,

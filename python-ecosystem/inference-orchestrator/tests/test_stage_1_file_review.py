@@ -176,7 +176,7 @@ async def test_batch_llm_attempt_details_do_not_duplicate_owner_warning(caplog):
         def with_structured_output(self, _schema):
             return self
 
-        async def ainvoke(self, _prompt):
+        async def ainvoke(self, _prompt, **kwargs):
             raise RuntimeError("provider unavailable")
 
     with caplog.at_level(logging.DEBUG):
@@ -764,7 +764,7 @@ class TestBatchReviewCoverage:
     @pytest.mark.asyncio(loop_scope="function")
     async def test_invalid_structured_coverage_leaves_retry_to_outer_loop(self):
         class StructuredAttempt:
-            async def ainvoke(self, _prompt):
+            async def ainvoke(self, _prompt, **kwargs):
                 return FileReviewBatchOutput(reviews=[])
 
         class Llm:
@@ -776,7 +776,7 @@ class TestBatchReviewCoverage:
                 self.structured_calls += 1
                 return StructuredAttempt()
 
-            async def ainvoke(self, _prompt):
+            async def ainvoke(self, _prompt, **kwargs):
                 self.raw_calls += 1
                 return (
                     '{"reviews":[{"file":"src/a.py",'
@@ -809,7 +809,12 @@ class TestBatchReviewCoverage:
         assert llm.raw_calls == 1
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_agent_executes_complete_batch_prompt_with_read_tools(self):
+    @pytest.mark.parametrize("model_name,configured,expected", [
+        ("other", None, STAGE1_AGENT_MAX_OUTPUT_TOKENS),
+        ("deepseek/deepseek-v4.1-flash-1017", None, 131_072),
+        ("deepseek/deepseek-v4.1-flash-1017", 262_144, 262_144),
+    ])
+    async def test_agent_executes_complete_batch_prompt_with_read_tools(self, model_name, configured, expected):
         class AgentService:
             def __init__(self):
                 self.requests = []
@@ -825,8 +830,10 @@ class TestBatchReviewCoverage:
                 raise AssertionError("direct model path must not run")
 
         agent_service = AgentService()
+        llm = DirectLlmMustNotRun()
+        llm.model_name, llm.max_tokens = model_name, configured
         result = await _invoke_stage_1_batch_llm(
-            DirectLlmMustNotRun(),
+            llm,
             "diff plus prepared RAG evidence",
             ["src/a.py"],
             agent_service=agent_service,
@@ -838,7 +845,7 @@ class TestBatchReviewCoverage:
         assert request.prompt == "diff plus prepared RAG evidence"
         assert request.allowed_tool_names == STAGE1_AGENT_TOOL_NAMES.difference({"runVerificationCheck"})
         assert request.reasoning_effort is ReasoningEffort.MEDIUM
-        assert request.max_output_tokens == STAGE1_AGENT_MAX_OUTPUT_TOKENS
+        assert request.max_output_tokens == expected
         assert request.output_schema is FileReviewBatchOutput
         assert request.metadata["batchPaths"] == ("src/a.py",)
         assert request.initial_required_tool_name == "getMinimalReviewContext"
@@ -918,7 +925,7 @@ class TestBatchReviewCoverage:
                 raise RuntimeError("MCP subprocess unavailable")
 
         class StructuredAttempt:
-            async def ainvoke(self, prompt):
+            async def ainvoke(self, prompt, **kwargs):
                 assert prompt == "prepared prompt without tool instructions"
                 return FileReviewBatchOutput(
                     reviews=[_clean_file_review("src/a.py")]
@@ -962,7 +969,7 @@ class TestBatchReviewCoverage:
                 )
 
         class StructuredAttempt:
-            async def ainvoke(self, prompt):
+            async def ainvoke(self, prompt, **kwargs):
                 assert prompt == "prepared direct recovery prompt"
                 return FileReviewBatchOutput(
                     reviews=[_clean_file_review("src/a.py")]
@@ -1021,7 +1028,7 @@ class TestBatchReviewCoverage:
                 raise RuntimeError("MCP subprocess unavailable")
 
         class StructuredAttempt:
-            async def ainvoke(self, prompt):
+            async def ainvoke(self, prompt, **kwargs):
                 assert prompt == "direct prompt with proposed-tree context"
                 return FileReviewBatchOutput(
                     reviews=[_clean_file_review("src/a.py")]
@@ -1069,7 +1076,7 @@ class TestBatchReviewCoverage:
                 )
 
         class StructuredAttempt:
-            async def ainvoke(self, prompt):
+            async def ainvoke(self, prompt, **kwargs):
                 assert prompt == "direct evidence-only prompt"
                 return FileReviewBatchOutput(
                     reviews=[_clean_file_review("src/a.py")]
@@ -1095,7 +1102,7 @@ class TestBatchReviewCoverage:
             def with_structured_output(self, _schema):
                 return self
 
-            async def ainvoke(self, _prompt):
+            async def ainvoke(self, _prompt, **kwargs):
                 return '{"reviews":[]}'
 
         result = await _invoke_stage_1_batch_llm(
@@ -3829,7 +3836,7 @@ class TestRenderedInputPacking:
         direct_prompts = []
 
         class StructuredAttempt:
-            async def ainvoke(self, prompt):
+            async def ainvoke(self, prompt, **kwargs):
                 direct_prompts.append(prompt)
                 return FileReviewBatchOutput(
                     reviews=[_clean_file_review(path)]

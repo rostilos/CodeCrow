@@ -46,32 +46,13 @@ from service.review.orchestrator.stage_2_semantic_packets import (
     _stage_2_input_token_budget,
     build_stage_2_prompts,
 )
-from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
-from utils.llm_delegate import unwrap_llm_delegate
+from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs, review_output_token_limit
 
 logger = logging.getLogger(__name__)
 
 
-# Stage 2 returns a compact typed finding list. A finite stage-local completion
-# budget prevents reasoning models from spending the provider's entire context
-# window without emitting the schema. The reasoning-free recovery gets the same
-# bound so a malformed direct response cannot run away either.
+# Fallback for models without a configured budget or a model-specific default.
 STAGE2_MAX_OUTPUT_TOKENS = 16_384
-
-
-def _stage_2_output_token_limit(llm: Any) -> int:
-    """Respect a provider/model cap that is lower than the Stage 2 ceiling."""
-    limits = [STAGE2_MAX_OUTPUT_TOKENS]
-    for candidate in (llm, unwrap_llm_delegate(llm)):
-        for attribute in ("max_tokens", "max_output_tokens"):
-            configured = getattr(candidate, attribute, None)
-            if (
-                isinstance(configured, int)
-                and not isinstance(configured, bool)
-                and configured > 0
-            ):
-                limits.append(configured)
-    return min(limits)
 
 
 class Stage2GenerationError(ValueError):
@@ -363,7 +344,7 @@ async def _invoke_stage_2_llm(
     label: str,
     force_unstructured: bool = False,
 ) -> Optional[CrossFileAnalysisResult]:
-    output_token_limit = _stage_2_output_token_limit(llm)
+    output_token_limit = review_output_token_limit(llm, STAGE2_MAX_OUTPUT_TOKENS)
     if supports_structured_output(llm) and not force_unstructured:
         try:
             invocation = await invoke_structured_output(

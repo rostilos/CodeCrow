@@ -22,21 +22,26 @@ public record RagConfig(
     @JsonProperty("enabled") boolean enabled,
     @JsonProperty("branch") String branch,
     @JsonProperty("includePatterns") List<String> includePatterns,
-    @JsonProperty("excludePatterns") List<String> excludePatterns
+    @JsonProperty("excludePatterns") List<String> excludePatterns,
+    @JsonProperty("branchPatterns") List<String> branchPatterns
 ) {
     public RagConfig() {
-        this(false, null, null, null);
+        this(false, null, null, null, null);
     }
     
     public RagConfig(boolean enabled) {
-        this(enabled, null, null, null);
+        this(enabled, null, null, null, null);
     }
     
     public RagConfig(boolean enabled, String branch) {
-        this(enabled, branch, null, null);
+        this(enabled, branch, null, null, null);
     }
     
     public RagConfig(boolean enabled, String branch, List<String> excludePatterns) {
-        this(enabled, branch, null, excludePatterns);
+        this(enabled, branch, null, excludePatterns, null);
+    }
+
+    public RagConfig(boolean enabled, String branch, List<String> includePatterns, List<String> excludePatterns) {
+        this(enabled, branch, includePatterns, excludePatterns, null);
     }
 }

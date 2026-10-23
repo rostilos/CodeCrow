@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Protocol
 
-from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
+from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs, review_output_token_limit
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from service.agent import AgentExecutionService
@@ -725,7 +725,7 @@ async def _execute_stage_3_mcp_verification(
                     model_session = agent_service.create_model_session(
                         tool_definitions=tool_defs,
                         reasoning_effort=ReasoningEffort.LOW,
-                        max_output_tokens=STAGE3_AGENT_MAX_OUTPUT_TOKENS,
+                        max_output_tokens=review_output_token_limit(llm, STAGE3_AGENT_MAX_OUTPUT_TOKENS),
                         usage_stage="stage_3_verification",
                     )
                 state["attempted"] = True

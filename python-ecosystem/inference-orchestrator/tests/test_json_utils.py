@@ -86,6 +86,21 @@ class TestCleanJsonText:
 
 class TestLoadJsonWithLocalRepairs:
 
+    def test_invalid_markdown_and_regex_escapes_preserve_literal_backslashes(self):
+        # Saved EmDash output escaped the backticks around this template string.
+        text = r'{"source": "(obj._key as string) || \`item-${i}-${Date.now()}\`", "regex": "\d+\.\w+", "valid": "line\npath\\file\/\u263a\""}'
+        _, parsed = load_json_with_local_repairs(text)
+        assert parsed == {
+            "source": r"(obj._key as string) || \`item-${i}-${Date.now()}\`",
+            "regex": r"\d+\.\w+",
+            "valid": 'line\npath\\file/☺"',
+        }
+
+    @pytest.mark.parametrize("text", [r'{"value": "\u12Q4"}', r'{"value": \q}', r'{"value": "\`"'])
+    def test_escape_repair_does_not_accept_malformed_unicode_or_structure(self, text):
+        with pytest.raises(ValueError):
+            load_json_with_local_repairs(text)
+
     def test_valid_json_preserves_nested_json_fence(self):
         payload = {
             "summary": "Example:\n```json\n{'foo': 1}\n```\nEnd.",
@@ -162,3 +177,17 @@ async def test_shared_provider_repair_budget_counts_structured_retry():
 
     structured.ainvoke.assert_awaited_once()
     llm.ainvoke.assert_not_awaited()
+
+
+def test_complete_json_after_source_examples_preserves_embedded_code():
+    from service.review.orchestrator.json_utils import load_json_with_local_repairs
+    data = {"reviews": [{"file": "a.rb", "reason": "```ruby\nputs 'x'\n```"}]}
+    content = "Reviewing source:\n```ruby\ninstance_variable_set(\"@#{@property}\", result)\n```\nThe inline `@#{@property}` is unchanged.\n```\n260: fetch\n```\nFinal answer." + json.dumps(data)
+    _, result = load_json_with_local_repairs(content)
+    assert result == data
+    with pytest.raises(ValueError):
+        load_json_with_local_repairs('Prose. {"reviews": [{"file": "a.rb"}')
+    with pytest.raises(ValueError):
+        load_json_with_local_repairs('Prose. [{"file": "a.rb"}')
+    with pytest.raises(ValueError):
+        load_json_with_local_repairs('Prose. ["]", {"file": "a.rb"}')

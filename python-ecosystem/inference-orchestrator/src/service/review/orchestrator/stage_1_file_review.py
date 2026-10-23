@@ -129,7 +129,10 @@ from service.review.prompt_diagnostics import record_prompt_diagnostic
 from service.review.snapshot_identity import (
     resolve_exact_structural_base_revision,
 )
-from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
+from llm.reasoning_policy import (
+    ReasoningEffort, review_output_token_limit, output_token_request_kwargs,
+    reasoning_request_kwargs, stage_one_direct_effort,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -3711,7 +3714,7 @@ async def _invoke_stage_1_batch_llm(
                 allowed_tool_names=resolved_agent_tools,
                 max_steps=agent_max_steps or STAGE1_AGENT_MAX_STEPS,
                 reasoning_effort=ReasoningEffort.MEDIUM,
-                max_output_tokens=STAGE1_AGENT_MAX_OUTPUT_TOKENS,
+                max_output_tokens=review_output_token_limit(llm, STAGE1_AGENT_MAX_OUTPUT_TOKENS),
                 timeout_seconds=STAGE1_AGENT_TIMEOUT_SECONDS,
                 # Bind the complete batch schema inside the agent graph so the
                 # reserved final call returns validated JSON without mcp-use's
@@ -3938,14 +3941,16 @@ async def _invoke_stage_1_batch_llm(
     if invocation_trace is not None:
         invocation_trace["generation_prompt"] = direct_prompt
 
+    direct_output_limit = review_output_token_limit(llm, STAGE1_AGENT_MAX_OUTPUT_TOKENS)
     if _supports_structured_output(llm) and not force_unstructured:
         try:
             invocation = await invoke_structured_output(
                 llm,
                 direct_prompt,
                 FileReviewBatchOutput,
-                effort=ReasoningEffort.LOW,
+                effort=stage_one_direct_effort(llm),
                 label=f"stage-1-{label}",
+                max_tokens=direct_output_limit,
             )
             result = await resolve_structured_output(
                 invocation,
@@ -3993,11 +3998,12 @@ async def _invoke_stage_1_batch_llm(
         async with review_model_slot("stage_1_file_review"):
             response = await llm.ainvoke(
                 direct_prompt,
+                **output_token_request_kwargs(llm, direct_output_limit),
                 **reasoning_request_kwargs(
                     llm,
                     ReasoningEffort.NONE
                     if force_unstructured
-                    else ReasoningEffort.LOW,
+                    else stage_one_direct_effort(llm),
                 ),
             )
             record_model_response(response)

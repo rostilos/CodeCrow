@@ -13,6 +13,7 @@ public class UpdateRagConfigRequest {
     private List<String> includePatterns;
     
     private List<String> excludePatterns;
+    private List<String> branchPatterns;
     
     public UpdateRagConfigRequest() {
     }
@@ -67,5 +68,9 @@ public class UpdateRagConfigRequest {
     public void setExcludePatterns(List<String> excludePatterns) {
         this.excludePatterns = excludePatterns;
     }
+
+    public List<String> getBranchPatterns() { return branchPatterns; }
+
+    public void setBranchPatterns(List<String> branchPatterns) { this.branchPatterns = branchPatterns; }
     
 }

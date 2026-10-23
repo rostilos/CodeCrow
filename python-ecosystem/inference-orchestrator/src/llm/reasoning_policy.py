@@ -17,6 +17,16 @@ class ReasoningEffort(str, Enum):
     HIGH = "high"
 
 
+def stage_one_direct_effort(llm: Any) -> ReasoningEffort:
+    """Keep DeepSeek V4.1 direct completion out of repeated deliberation."""
+    delegate = unwrap_llm_delegate(llm)
+    name = getattr(delegate, "model_name", None) or getattr(delegate, "model", "")
+    if "ChatOpenRouter" in llm_class_names(llm) and isinstance(name, str):
+        if name.casefold().lstrip("~").split("/")[-1].startswith("deepseek-v4.1-flash"):
+            return ReasoningEffort.NONE
+    return ReasoningEffort.LOW
+
+
 def reasoning_request_kwargs(llm: Any, effort: ReasoningEffort) -> dict[str, Any]:
     """Return per-invocation OpenRouter reasoning parameters.
 
@@ -39,7 +49,12 @@ def reasoning_request_kwargs(llm: Any, effort: ReasoningEffort) -> dict[str, Any
     # so incompatible settings such as reasoning.max_tokens cannot travel next
     # to reasoning.effort. Other OpenRouter fields remain intact.
     extra_body["reasoning"] = {"effort": effort.value}
-    return {"extra_body": extra_body}
+    if "reasoning_effort" in extra_body:
+        extra_body["reasoning_effort"] = effort.value
+    kwargs: dict[str, Any] = {"extra_body": extra_body}
+    if getattr(delegate, "reasoning_effort", None) is not None:
+        kwargs["reasoning_effort"] = effort.value
+    return kwargs
 
 
 def output_token_request_kwargs(
@@ -72,7 +87,23 @@ def bounded_output_token_limit(
     ):
         return None
 
-    limits = [requested_limit]
+    return min(requested_limit, _configured_output_token_limit(llm) or requested_limit)
+
+
+def review_output_token_limit(llm: Any, default_limit: int = 16_384) -> int:
+    """Use the configured budget; DeepSeek needs room for reasoning and JSON."""
+    configured = _configured_output_token_limit(llm)
+    if configured is not None:
+        return configured
+    delegate = unwrap_llm_delegate(llm)
+    name = getattr(delegate, "model_name", None) or getattr(delegate, "model", "")
+    if isinstance(name, str) and name.casefold().lstrip("~").split("/")[-1].startswith("deepseek-v4.1-flash"):
+        return 131_072
+    return default_limit
+
+
+def _configured_output_token_limit(llm: Any) -> Optional[int]:
+    limits = []
     delegate = unwrap_llm_delegate(llm)
     candidates = (llm,) if delegate is llm else (llm, delegate)
     for candidate in candidates:
@@ -84,4 +115,4 @@ def bounded_output_token_limit(
                 and configured > 0
             ):
                 limits.append(configured)
-    return min(limits)
+    return min(limits) if limits else None

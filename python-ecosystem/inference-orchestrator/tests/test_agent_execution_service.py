@@ -1392,7 +1392,6 @@ async def test_initial_required_tool_keeps_explicit_openrouter_provider_preferen
                 "data_collection": "deny",
             },
         },
-        "parallel_tool_calls": False,
     }
     assert request.model_settings == {"temperature": 0}
 
@@ -1568,7 +1567,7 @@ async def test_final_response_reserve_keeps_one_schema_correction_call():
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_structured_exploration_disables_parallel_schema_tool_calls():
+async def test_openrouter_exploration_omits_optional_parallel_control():
     class ChatOpenRouter:
         pass
 
@@ -1613,7 +1612,6 @@ async def test_structured_exploration_disables_parallel_schema_tool_calls():
             },
             "trace": "review-7",
         },
-        "parallel_tool_calls": False,
     }
     assert request.model_settings == {
         "temperature": 0,
@@ -1874,7 +1872,6 @@ async def test_request_settings_reach_exploration_and_reserved_final_calls():
     }
     assert exploration.model_settings == {
         **expected_common,
-        "parallel_tool_calls": False,
     }
     assert exploration.tools == ["repository-tool"]
     assert exploration.response_format is response_format

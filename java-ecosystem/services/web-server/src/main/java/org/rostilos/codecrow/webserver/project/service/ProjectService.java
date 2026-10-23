@@ -769,9 +769,10 @@ public class ProjectService implements IProjectService {
             boolean enabled,
             String branch,
             java.util.List<String> includePatterns,
-            java.util.List<String> excludePatterns) {
+            java.util.List<String> excludePatterns,
+            java.util.List<String> branchPatterns) {
         Project project = configurationProjectForUpdate(workspaceId, projectId);
-        return updateRagConfig(project, enabled, branch, includePatterns, excludePatterns);
+        return updateRagConfig(project, enabled, branch, includePatterns, excludePatterns, branchPatterns);
     }
 
     private Project updateRagConfig(
@@ -779,7 +780,8 @@ public class ProjectService implements IProjectService {
             boolean enabled,
             String branch,
             java.util.List<String> includePatterns,
-            java.util.List<String> excludePatterns) {
+            java.util.List<String> excludePatterns,
+            java.util.List<String> branchPatterns) {
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
         boolean useMcpTools = currentConfig != null
@@ -796,7 +798,10 @@ public class ProjectService implements IProjectService {
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
 
         RagConfig ragConfig = new RagConfig(
-                enabled, branch, includePatterns, excludePatterns);
+                enabled, branch, includePatterns, excludePatterns,
+                branchPatterns != null ? branchPatterns
+                        : currentConfig != null && currentConfig.ragConfig() != null
+                                ? currentConfig.ragConfig().branchPatterns() : null);
 
         ProjectConfig newConfig = new ProjectConfig(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands,
@@ -1003,7 +1008,7 @@ public class ProjectService implements IProjectService {
             AnalysisScopeConfig scope = config.analysisScope();
             RagConfig rag = config.ragConfig() != null ? config.ragConfig() : new RagConfig();
             config.setRagConfig(new RagConfig(
-                    rag.enabled(), rag.branch(), scope.includePatterns(), scope.excludePatterns()));
+                    rag.enabled(), rag.branch(), scope.includePatterns(), scope.excludePatterns(), rag.branchPatterns()));
         } else {
             throw new IllegalArgumentException("direction must be FROM_RAG or TO_RAG");
         }

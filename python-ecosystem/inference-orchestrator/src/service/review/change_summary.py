@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs, output_token_request_kwargs
+from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs, output_token_request_kwargs, review_output_token_limit
 from model.dtos import ReviewRequestDto
 from service.review.execution_scheduler import review_model_slot, optional_work_budget
 from service.review.inference_usage import record_model_response
@@ -268,13 +268,13 @@ async def _scan_pr_changes(llm, request: ReviewRequestDto, processed_diff=None, 
                     invocation = await invoke_structured_output(
                         llm, prompt, CumulativeChanges, effort=ReasoningEffort.LOW,
                         label="stage-0-change-scan",
-                        max_tokens=16_384,
+                        max_tokens=review_output_token_limit(llm),
                     )
                     result = await resolve_structured_output(invocation, CumulativeChanges, llm)
                 else:
                     async with review_model_slot("stage_0_change_scan"):
                         response = await llm.ainvoke(prompt, **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
-                                                    **output_token_request_kwargs(llm, 16_384))
+                                                    **output_token_request_kwargs(llm, review_output_token_limit(llm)))
                         record_model_response(response)
                     result = await parse_llm_response(
                         extract_llm_response_text(response), CumulativeChanges, llm, max_provider_repairs=0,

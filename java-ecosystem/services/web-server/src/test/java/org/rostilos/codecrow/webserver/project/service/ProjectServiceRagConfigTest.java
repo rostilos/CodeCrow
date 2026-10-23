@@ -57,13 +57,14 @@ class ProjectServiceRagConfigTest {
     void updatePersistsOnlyMaterialIndexInputs() {
         Project updated = projectService.updateRagConfig(
                 10L, 20L, true, "main",
-                List.of("app/**"), List.of("build/**"));
+                List.of("app/**"), List.of("build/**"), List.of("develop", "release/*"));
 
         RagConfig rag = updated.getConfiguration().ragConfig();
         assertThat(rag.enabled()).isTrue();
         assertThat(rag.branch()).isEqualTo("main");
         assertThat(rag.includePatterns()).containsExactly("app/**");
         assertThat(rag.excludePatterns()).containsExactly("build/**");
+        assertThat(rag.branchPatterns()).containsExactly("develop", "release/*");
         assertThat(updated.getConfiguration().useMcpTools()).isTrue();
         verify(repositoryIndexBootstrapService).enqueueAfterCommit(project);
     }
@@ -72,7 +73,7 @@ class ProjectServiceRagConfigTest {
     void updateCanDisableRagAndChangeScope() {
         Project updated = projectService.updateRagConfig(
                 10L, 20L, false, "develop",
-                List.of("service/**"), List.of("generated/**"));
+                List.of("service/**"), List.of("generated/**"), List.of());
 
         RagConfig rag = updated.getConfiguration().ragConfig();
         assertThat(rag.enabled()).isFalse();
@@ -87,7 +88,7 @@ class ProjectServiceRagConfigTest {
 
         Project updated = projectService.updateRagConfig(
                 10L, 20L, false, "develop",
-                List.of("service/**"), List.of("generated/**"));
+                List.of("service/**"), List.of("generated/**"), List.of());
 
         assertThat(updated.getConfiguration().useMcpTools()).isFalse();
     }

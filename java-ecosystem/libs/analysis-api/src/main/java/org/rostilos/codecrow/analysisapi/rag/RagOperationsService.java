@@ -80,7 +80,9 @@ public interface RagOperationsService {
             return true;
         }
         var branchConfig = config.branchAnalysis();
-        return BranchPatternMatcher.shouldAnalyze(
+        var ragConfig = config.ragConfig();
+        return (ragConfig != null && BranchPatternMatcher.matchesAny(branchName, ragConfig.branchPatterns()))
+                || BranchPatternMatcher.shouldAnalyze(
                     branchName, branchConfig.prTargetBranches())
                 || BranchPatternMatcher.shouldAnalyze(
                     branchName, branchConfig.branchPushPatterns());

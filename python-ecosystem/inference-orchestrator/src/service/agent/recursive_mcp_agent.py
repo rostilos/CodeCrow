@@ -87,7 +87,10 @@ def _supports_parallel_tool_control(model: Any) -> bool:
     """Return whether the selected adapter safely accepts the control."""
 
     class_names = llm_class_names(model)
-    if class_names.intersection({"ChatAnthropic", "ChatOpenRouter"}):
+    # OpenRouter routes may support tools without advertising this optional control.
+    if "ChatOpenRouter" in class_names:
+        return False
+    if "ChatAnthropic" in class_names:
         return True
     if "ChatOpenAI" not in class_names:
         return False

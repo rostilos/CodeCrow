@@ -18,6 +18,73 @@ _RETRIEVAL_TOOLS = frozenset({
 })
 
 
+def compact_evidence_messages(messages: list[Any]) -> tuple[list[Any], dict[str, int]]:
+    """Reference exact source already visible, without changing stored evidence.
+
+    References address earlier visible strings, never hidden artifacts or a
+    process-wide cache. Rebuilding this view also restores source after history
+    truncation, when its earlier occurrence is no longer available.
+    """
+    visible: list[tuple[int, str, str]] = []
+    prepared, reused, removed, before, after = [], 0, 0, 0, 0
+
+    def visit(value: Any, index: int, pointer: str = "") -> None:
+        nonlocal reused, removed
+        if isinstance(value, dict):
+            for key, child in list(value.items()):
+                path = pointer + "/" + str(key).replace("~", "~0").replace("/", "~1")
+                source_field = key == "fileContent" or (
+                    key == "content" and ("/sourceWindows/" in path or pointer.endswith("/unit"))
+                )
+                if source_field and isinstance(child, str) and len(child) >= 512:
+                    match = next(((i, p, text.find(child)) for i, p, text in visible if child in text), None)
+                    if match is not None and key + "Reference" not in value:
+                        i, p, offset = match
+                        value.pop(key)
+                        value[key + "Reference"] = {
+                            "description": "Exact source already visible; reuse with this result's metadata. messageIndex is zero-based, excluding separate system instructions.",
+                            "messageIndex": i,
+                            "jsonPointer": p,
+                            "characterOffset": offset,
+                            "characterLength": len(child),
+                            "sha256": hashlib.sha256(child.encode()).hexdigest(),
+                        }
+                        reused += 1
+                        removed += len(child)
+                        continue
+                visit(child, index, path)
+        elif isinstance(value, list):
+            for i, child in enumerate(value):
+                visit(child, index, pointer + "/" + str(i))
+        elif isinstance(value, str) and len(value) >= 512:
+            visible.append((index, pointer, value))
+
+    for index, message in enumerate(messages):
+        content = getattr(message, "content", None)
+        if not isinstance(content, str):
+            prepared.append(message)
+            continue
+        is_retrieval = getattr(message, "type", None) == "tool" and getattr(message, "name", None) in _RETRIEVAL_TOOLS
+        if is_retrieval:
+            try:
+                payload = json.loads(content)
+            except ValueError:
+                payload = None
+            if isinstance(payload, (dict, list)):
+                visit(payload, index)
+                compact = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                before += len(content.encode())
+                after += len(compact.encode())
+                message = message.model_copy(update={"content": compact})
+                prepared.append(message)
+                continue
+        if len(content) >= 512:
+            visible.append((index, "", content))
+        prepared.append(message)
+    return prepared, {"sourceBodiesReused": reused, "sourceCharactersReused": removed,
+                      "originalToolBytes": before, "visibleToolBytes": after}
+
+
 def evidence_payload(result: Any) -> Any:
     value = getattr(result, "artifact", None)
     if isinstance(value, Mapping):
@@ -73,6 +140,18 @@ class EvidenceAcquisitionMiddleware(AgentMiddleware):
     def __init__(self):
         super().__init__()
         self._cache: dict[str, Any] = {}
+
+    def _prepare_model_request(self, request: Any) -> Any:
+        messages, diagnostics = compact_evidence_messages(request.messages)
+        if diagnostics["originalToolBytes"]:
+            record_compute_decision("evidence_context_reuse", **diagnostics)
+        return request.override(messages=messages)
+
+    def wrap_model_call(self, request: Any, handler: Any) -> Any:
+        return handler(self._prepare_model_request(request))
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        return await handler(self._prepare_model_request(request))
 
     async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
         call = request.tool_call

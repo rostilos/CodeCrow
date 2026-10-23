@@ -24,11 +24,17 @@ def diff(path, operation="modified"):
 
 
 @pytest.mark.asyncio
-async def test_every_batch_receives_previous_output_and_retains_graph(monkeypatch):
+@pytest.mark.parametrize("model_name,configured,expected", [
+    ("other", None, 16_384),
+    ("deepseek/deepseek-v4.1-flash-1017", None, 131_072),
+    ("deepseek/deepseek-v4.1-flash-1017", 262_144, 262_144),
+])
+async def test_every_batch_receives_previous_output_and_retains_graph(monkeypatch, model_name, configured, expected):
     monkeypatch.setattr(scan, "supports_structured_output", lambda llm: False)
     paths = [f"f{i}.py" for i in range(16)]
     prompts = []
     async def invoke(prompt, **kwargs):
+        assert kwargs["max_tokens"] == expected
         prompts.append(prompt)
         records = json.loads(prompt.split(f"Batch {len(prompts)}/2:\n")[1])
         return SimpleNamespace(content=json.dumps({"summary": f"Cumulative pass {len(prompts)}",
@@ -39,7 +45,8 @@ async def test_every_batch_receives_previous_output_and_retains_graph(monkeypatc
                                "relationship": "calls", "evidence": "inferred from changed call"}]}))
     raw = "".join(diff(path, "deleted" if i == 15 else "added") for i, path in enumerate(paths))
     events = []
-    result = await scan.scan_pr_changes(SimpleNamespace(ainvoke=invoke), request(rawDiff=raw, changedFiles=paths), event_callback=events.append)
+    llm = SimpleNamespace(ainvoke=invoke, model_name=model_name, max_tokens=configured)
+    result = await scan.scan_pr_changes(llm, request(rawDiff=raw, changedFiles=paths), event_callback=events.append)
     assert len(prompts) == 2
     assert '"summary":"Cumulative pass 1"' in prompts[1]
     assert result["semanticStatus"] == "complete"
