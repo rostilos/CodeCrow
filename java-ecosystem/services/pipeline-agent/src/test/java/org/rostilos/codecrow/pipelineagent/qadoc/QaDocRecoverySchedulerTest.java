@@ -39,7 +39,7 @@ class QaDocRecoverySchedulerTest {
         var job=new Job(); ReflectionTestUtils.setField(job,"id",2L);
         job.setProject(project); job.setJobType(JobType.QA_DOC_COMMAND); job.setTriggerSource(trigger);
         job.setPrNumber(7L); job.setStatus(JobStatus.QUEUED); job.setInputAnalysisId(3L); job.setCommitHash("head");
-        when(repository.findRecoverableQaJobs(any(),any(),any(),any())).thenReturn(List.of(job));
+        when(repository.findRecoverableQaJobs(any(),any(),any())).thenReturn(List.of(job));
         when(queue.prepareRetry(eq(2L),any())).thenReturn(true);
         return job;
     }
@@ -65,7 +65,7 @@ class QaDocRecoverySchedulerTest {
         verify(webhooks).processWebhookAsync(eq(provider),eq(1L),eq(payload),eq(handler),eq(job));
         verifyNoInteractions(command);
     }
-    @Test void autoWorkerUsesSavedSourceAndExactAnalysisThenLeavesFailureRetryable() {
+    @Test void autoWorkerUsesSavedSourceAndExactAnalysisThenReportsFailure() {
         var job=candidate(JobTriggerSource.CHAINED); var project=job.getProject();
         var repo=mock(org.rostilos.codecrow.core.model.vcs.VcsRepoInfo.class);
         var conn=mock(org.rostilos.codecrow.core.model.vcs.VcsConnection.class);

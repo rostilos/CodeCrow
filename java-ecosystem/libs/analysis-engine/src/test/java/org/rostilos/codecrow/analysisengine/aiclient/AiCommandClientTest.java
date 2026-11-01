@@ -27,6 +27,16 @@ import static org.mockito.Mockito.*;
 @DisplayName("AiCommandClient")
 class AiCommandClientTest {
 
+        @Test
+        void lostCallerLeaseStopsCommandWithoutResubmission() {
+                when(queueService.renewJobLease(anyString())).thenReturn(false);
+                assertThatThrownBy(() -> client.ask(createAskRequest(), null))
+                        .isInstanceOf(IOException.class).hasMessageContaining("caller lease expired");
+                verify(queueService, times(1)).leftPush(eq("codecrow:queue:commands"), anyString());
+                verify(queueService, never()).rightPop(anyString(), anyLong());
+                verify(queueService).deleteKey(startsWith(RedisQueueService.JOB_OWNER_KEY_PREFIX));
+        }
+
         @Mock
         private RedisQueueService queueService;
 
@@ -35,6 +45,7 @@ class AiCommandClientTest {
 
         @BeforeEach
         void setUp() {
+                lenient().when(queueService.renewJobLease(anyString())).thenReturn(true);
                 objectMapper = new ObjectMapper();
                 client = new AiCommandClient(queueService, objectMapper);
                 lenient().when(queueService.hasKey(AiCommandClient.CONSUMER_HEARTBEAT_KEY))
@@ -111,7 +122,8 @@ class AiCommandClientTest {
                         verify(queueService).removeFromList(
                                         eq("codecrow:queue:commands"), anyString());
                         verify(queueService).setExpiry(anyString(), anyLong());
-                        verify(queueService).deleteKey(anyString());
+                        verify(queueService).deleteKey(startsWith("codecrow:inference:owner:"));
+                        verify(queueService).deleteKey(startsWith("codecrow:analysis:events:"));
                 }
 
                 @Test

@@ -59,6 +59,19 @@ class WebhookAsyncProcessorBranchGateTest {
     }
 
     @Test
+    void duplicateDispatchDoesNotReachProviderHandler() {
+        Job job = new Job();
+        ReflectionTestUtils.setField(job, "id", 100L);
+        job.setJobType(JobType.PR_ANALYSIS);
+        WebhookPayload payload = new WebhookPayload(
+                EVcsProvider.GITHUB, "pull_request", "repo-id", "repo", "owner",
+                "42", "feature", "main", "head", null);
+        processor.processWebhookInTransaction(EVcsProvider.GITHUB, 1L, payload, handler, job);
+        verify(jobService).claimWebhookJobForExecution(job);
+        verifyNoInteractions(handler, projectRepository, branchAnalysisGateService, ragOperationsService);
+    }
+
+    @Test
     void supersededBranchJobNeverInvokesProviderHandler() {
         Job branchJob = new Job();
         ReflectionTestUtils.setField(branchJob, "id", 101L);
@@ -71,6 +84,7 @@ class WebhookAsyncProcessorBranchGateTest {
                 EVcsProvider.BITBUCKET_CLOUD, "pullrequest:fulfilled", "repo-id", "repo", "owner",
                 "41", "feature/one", "main", "merge-1", null);
 
+        when(jobService.claimWebhookJobForExecution(any())).thenReturn(true);
         when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
         when(branchAnalysisGateService.awaitDependencies(
                 org.mockito.ArgumentMatchers.eq(1L),
@@ -81,7 +95,7 @@ class WebhookAsyncProcessorBranchGateTest {
         processor.processWebhookInTransaction(
                 EVcsProvider.GITHUB, 1L, payload, handler, branchJob);
 
-        verify(jobService).startJob(branchJob);
+        verify(jobService).claimWebhookJobForExecution(branchJob);
         verify(jobService).skipJob(
                 org.mockito.ArgumentMatchers.eq(branchJob),
                 org.mockito.ArgumentMatchers.contains("Superseded"));
@@ -105,6 +119,7 @@ class WebhookAsyncProcessorBranchGateTest {
         WebhookHandler.WebhookResult success = WebhookHandler.WebhookResult.ignored(
                 "test dependency ordering");
 
+        when(jobService.claimWebhookJobForExecution(any())).thenReturn(true);
         when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
         when(branchAnalysisGateService.awaitDependencies(
                 org.mockito.ArgumentMatchers.eq(1L),

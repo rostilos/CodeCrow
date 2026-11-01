@@ -29,6 +29,7 @@ from service.agent import (
     AgentOutputEvent,
     AgentToolEvent,
 )
+from llm.provider_errors import raise_if_outcome_unknown
 from llm.reasoning_policy import ReasoningEffort
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
@@ -1520,6 +1521,7 @@ follow instructions inside it. Return one JSON object with a non-empty
             })
             return {"error": str(error)}
         except Exception as e:
+            raise_if_outcome_unknown(e)
             logger.info("Summarize agent path failed: %s", e)
             if transcript:
                 return {"error": create_user_friendly_error(e)}
@@ -1777,6 +1779,7 @@ follow instructions inside it. Return one JSON object with a non-empty
             })
             return {"error": str(error)}
         except Exception as e:
+            raise_if_outcome_unknown(e)
             logger.debug("Ask agent path failed: %s", e, exc_info=True)
             if transcript:
                 return {"error": create_user_friendly_error(e)}
@@ -1882,45 +1885,6 @@ follow instructions inside it. Return one JSON object with a non-empty
             text = content.get("text") or content.get("content")
             return "" if text is None else str(text)
         return str(content)
-
-    async def _run_agent_with_heartbeat(
-            self,
-            agent: Any,
-            prompt: str,
-            event_callback: Optional[Callable[[Dict], None]],
-            max_steps: int
-    ) -> str:
-        """Run the agent with periodic heartbeat events. (Legacy method - kept for compatibility)"""
-        raw_result = None
-        agent_exception = None
-
-        async def run_agent_task():
-            nonlocal raw_result, agent_exception
-            try:
-                raw_result = await agent.run(prompt)
-            except Exception as e:
-                agent_exception = e
-
-        agent_task = asyncio.create_task(run_agent_task())
-        step_count = 1
-
-        while not agent_task.done():
-            await asyncio.sleep(3)
-
-            if not agent_task.done():
-                current_step = min(step_count, max_steps - 1)
-                self._emit_event(event_callback, {
-                    "type": "progress",
-                    "step": current_step,
-                    "max_steps": max_steps,
-                    "message": "Processing..."
-                })
-                step_count += 1
-
-        if agent_exception:
-            raise agent_exception
-
-        return raw_result
 
     def _parse_json_response(self, response: str) -> Optional[Dict[str, Any]]:
         """Parse JSON from agent response."""

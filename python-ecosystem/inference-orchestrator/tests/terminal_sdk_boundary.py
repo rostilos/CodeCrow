@@ -144,7 +144,36 @@ async def exercise_compatible_recovery():
             assert len(requests) == 12
             assert model.reasoning_effort == 'high' and model.extra_body['reasoning']['effort'] == 'high'
 
+async def exercise_lost_provider_response():
+    from openai import APITimeoutError
+    for base_url in ('https://openrouter.ai/api/v1', 'https://api.openai.com/v1'):
+        requests = []
+        def lost_response(request):
+            requests.append(request)
+            raise httpx.ReadTimeout('Response lost after accepting request', request=request)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lost_response)) as http:
+            with httpx.Client(transport=httpx.MockTransport(lost_response)) as sync:
+                with patch('llm.ssrf_safe_transport.create_ssrf_safe_http_client', return_value=sync), \
+                     patch('llm.ssrf_safe_transport.create_ssrf_safe_async_http_client', return_value=http):
+                    model = LLMFactory.create_llm('offline', 'OPENAI_COMPATIBLE', 'offline-test-key',
+                        ai_base_url=base_url, ai_custom_parameters={'max_retries': 5})
+                assert model.max_retries == 0
+                try:
+                    await model.ainvoke('offline response-loss test')
+                except APITimeoutError as error:
+                    from llm.provider_errors import raise_if_outcome_unknown
+                    try:
+                        raise_if_outcome_unknown(error)
+                    except APITimeoutError as propagated:
+                        assert propagated is error
+                    else:
+                        raise AssertionError('SDK timeout must not be eligible for a semantic fallback')
+                else:
+                    raise AssertionError('Lost provider response must fail')
+                assert len(requests) == 1, 'A lost response must not repeat paid inference'
+
 async def main():
+    await exercise_lost_provider_response()
     await exercise_openrouter_exploration()
     for model_type in (ChatOpenAI, ChatOpenRouter):
         for correction in (None, 'repository', 'schema'):

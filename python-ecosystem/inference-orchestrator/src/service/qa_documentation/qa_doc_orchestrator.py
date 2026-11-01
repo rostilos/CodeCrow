@@ -13,6 +13,7 @@ import json
 import logging
 import re
 from typing import Dict, Any, List, Optional, Callable, Set, Sequence
+from llm.provider_errors import raise_if_outcome_unknown
 
 from model.enrichment import PrEnrichmentDataDto
 from service.qa_documentation.base_orchestrator import (
@@ -1432,6 +1433,7 @@ class QaDocOrchestrator(BaseOrchestrator):
                 )
                 return AIMessage(content=str(result.output))
             except Exception as error:
+                raise_if_outcome_unknown(error)
                 logger.warning("QA repository tools unavailable (%s); generating from saved context", type(error).__name__)
                 self.agent_service = None
         from service.review.inference_usage import record_model_response

@@ -125,7 +125,7 @@ class WebhookJobRecoverySchedulerTest {
 
         scheduler.recoverAcceptedJobs();
 
-        verify(jobService, never()).claimAbandonedRunningWebhookJob(eq(14L), any());
+        verify(jobService, never()).failAbandonedRunningWebhookJob(eq(14L), any());
         verify(jobService, never()).findWebhookDispatchPayload(14L);
         verify(asyncProcessor, never()).processWebhookAsync(
                 any(), any(), any(), any(), any());

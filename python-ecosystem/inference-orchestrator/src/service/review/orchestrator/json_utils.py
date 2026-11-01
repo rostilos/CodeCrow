@@ -1,6 +1,7 @@
 """
 JSON parsing, repair, and cleaning utilities for LLM responses.
 """
+from llm.provider_errors import raise_if_outcome_unknown
 from service.review.execution_scheduler import review_model_slot
 from service.review.inference_usage import record_model_response
 import json
@@ -213,6 +214,7 @@ async def parse_llm_response(
                 f"Failed to parse {model_class.__name__}: {e}"
             ) from e
         except Exception as e:
+            raise_if_outcome_unknown(e)
             logger.warning(f"Structured output retry failed: {e}")
             last_error = e
         finally:
@@ -245,6 +247,7 @@ async def parse_llm_response(
                 f"Failed to parse {model_class.__name__}: {e}"
             ) from e
         except Exception as e:
+            raise_if_outcome_unknown(e)
             last_error = e
             logger.warning(f"Retry {attempt+1} failed: {e}")
     

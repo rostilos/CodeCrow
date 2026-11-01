@@ -18,6 +18,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
 import java.net.http.HttpClient;
+import java.net.http.HttpTimeoutException;
 import java.time.OffsetDateTime;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -299,7 +300,6 @@ class QaDocGenerationServiceTest {
         @Test
         @DisplayName("should throw IOException when server returns 5xx")
         void shouldThrowOn5xx() {
-            // RetryExecutor will retry on 5xx, but all attempts return 500 → IOException
             mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("Internal error"));
             mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("Internal error"));
             mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("Internal error"));
@@ -307,7 +307,22 @@ class QaDocGenerationServiceTest {
 
             assertThatThrownBy(() ->
                     service.generateQaDocumentation(project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null))
-            ).isInstanceOf(Exception.class);
+            ).isInstanceOf(IOException.class).hasMessageContaining("not automatically retried");
+            assertThat(mockWebServer.getRequestCount()).isEqualTo(1);
+        }
+
+        @Test
+        void timeoutDoesNotRepeatPaidGeneration() throws Exception {
+            var client = org.mockito.Mockito.mock(HttpClient.class);
+            ReflectionTestUtils.setField(service, "httpClient", client);
+            org.mockito.Mockito.when(client.send(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                    .thenThrow(new HttpTimeoutException("request timed out"));
+
+            assertThatThrownBy(() -> service.generateQaDocumentation(
+                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)))
+                    .isInstanceOf(IOException.class).hasMessageContaining("not automatically retried");
+            org.mockito.Mockito.verify(client, org.mockito.Mockito.times(1))
+                    .send(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         }
 
         @Test

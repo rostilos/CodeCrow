@@ -4,7 +4,6 @@ import json
 import os
 import re
 import subprocess
-import time
 import urllib.error
 import urllib.request
 from collections import Counter
@@ -157,7 +156,6 @@ class OpenAICompatibleJudge:
             else None
         )
         self.timeout = int(config.get("timeout_seconds") or 300)
-        self.max_retries = int(config.get("max_retries") or 4)
         self.temperature = float(config.get("temperature") or 0)
         extra = self.config.get("custom_parameters")
         if extra is not None and not isinstance(extra, Mapping):
@@ -194,77 +192,62 @@ class OpenAICompatibleJudge:
             "Accept": "application/json",
             "User-Agent": "codecrow-magento2-benchmark-judge",
         }
-        last_error: Exception | None = None
-        for attempt in range(1, self.max_retries + 1):
-            request = urllib.request.Request(
-                f"{self.base_url}/chat/completions",
-                data=body,
-                headers=headers,
-                method="POST",
+        request = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                raw = json.loads(response.read())
+            require_no_secret_values(
+                raw,
+                secret_values,
+                context="judge provider response",
             )
-            try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                    raw = json.loads(response.read())
-                require_no_secret_values(
-                    raw,
-                    secret_values,
-                    context="judge provider response",
+            choices = raw.get("choices") if isinstance(raw, Mapping) else None
+            if not isinstance(choices, list) or not choices:
+                raise RuntimeError("judge response has no choices")
+            message = choices[0].get("message") or {}
+            content = message.get("content")
+            if isinstance(content, list):
+                content = "".join(
+                    str(item.get("text") or "")
+                    for item in content
+                    if isinstance(item, Mapping)
                 )
-                choices = raw.get("choices") if isinstance(raw, Mapping) else None
-                if not isinstance(choices, list) or not choices:
-                    raise RuntimeError("judge response has no choices")
-                message = choices[0].get("message") or {}
-                content = message.get("content")
-                if isinstance(content, list):
-                    content = "".join(
-                        str(item.get("text") or "")
-                        for item in content
-                        if isinstance(item, Mapping)
-                    )
-                if not isinstance(content, str):
-                    raise RuntimeError("judge response has no text content")
-                provider_model = raw.get("model")
-                if (
-                    self.expected_response_model is not None
-                    and provider_model != self.expected_response_model
-                ):
-                    raise RuntimeError(
-                        "judge provider resolved model mismatch: expected "
-                        f"{self.expected_response_model!r}, received "
-                        f"{provider_model!r}"
-                    )
-                archived_request = public_config(payload)
-                return _extract_json(content), {
-                    "usage": raw.get("usage"),
-                    "responseId": raw.get("id"),
-                    "model": provider_model,
-                    "promptSha256": sha256_text(system + "\n" + user),
-                    "rawContentSha256": sha256_text(content),
-                    "request": archived_request,
-                    "requestSha256": sha256_json(archived_request),
-                    "providerResponse": raw,
-                    "providerResponseSha256": sha256_json(raw),
-                }
-            except urllib.error.HTTPError as exc:
-                detail = redact_secret_text(
-                    exc.read().decode("utf-8", errors="replace")[:2000],
-                    secret_values,
+            if not isinstance(content, str):
+                raise RuntimeError("judge response has no text content")
+            provider_model = raw.get("model")
+            if (
+                self.expected_response_model is not None
+                and provider_model != self.expected_response_model
+            ):
+                raise RuntimeError(
+                    "judge provider resolved model mismatch: expected "
+                    f"{self.expected_response_model!r}, received "
+                    f"{provider_model!r}"
                 )
-                last_error = RuntimeError(
-                    f"judge HTTP {exc.code}: {detail}"
-                )
-                if exc.code < 500 and exc.code != 429:
-                    break
-            except (
-                urllib.error.URLError,
-                TimeoutError,
-                json.JSONDecodeError,
-                RuntimeError,
-            ) as exc:
-                last_error = exc
-            if attempt < self.max_retries:
-                time.sleep(min(8, 2 ** (attempt - 1)))
-        raise RuntimeError(f"judge call failed: {last_error}")
+            archived_request = public_config(payload)
+            return _extract_json(content), {
+                "usage": raw.get("usage"),
+                "responseId": raw.get("id"),
+                "model": provider_model,
+                "promptSha256": sha256_text(system + "\n" + user),
+                "rawContentSha256": sha256_text(content),
+                "request": archived_request,
+                "requestSha256": sha256_json(archived_request),
+                "providerResponse": raw,
+                "providerResponseSha256": sha256_json(raw),
+            }
+        except urllib.error.HTTPError as exc:
+            detail = redact_secret_text(
+                exc.read().decode("utf-8", errors="replace")[:2000], secret_values,
+            )
+            raise RuntimeError(f"judge HTTP {exc.code}: {detail}; not automatically retried") from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, RuntimeError) as exc:
+            raise RuntimeError(f"judge call failed; not automatically retried: {exc}") from exc
 
 
 def _validated_judge_call(

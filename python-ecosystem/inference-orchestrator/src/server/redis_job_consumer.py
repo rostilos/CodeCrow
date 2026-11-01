@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 import redis.asyncio as redis
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
+OWNER_CHECK_SECONDS = 5
 
 class RedisJobConsumer(ABC):
     def __init__(
@@ -210,7 +211,7 @@ class RedisJobConsumer(ABC):
     async def _handle_admitted_job(self, payload_str: str):
         """Process a job using the capacity reserved before dequeue."""
         try:
-            await self._handle_job(payload_str)
+            await self._run_owned_job(payload_str)
         finally:
             self._job_semaphore.release()
 
@@ -218,7 +219,52 @@ class RedisJobConsumer(ABC):
     async def _bounded_handle_job(self, payload_str: str):
         """Compatibility helper for direct callers that do not pre-admit work."""
         async with self._job_semaphore:
-            await self._handle_job(payload_str)
+            await self._run_owned_job(payload_str)
+
+    async def _run_owned_job(self, payload_str: str):
+        """One execution per envelope, only while its Java caller remains alive."""
+        job_id = None
+        handler = watcher = None
+        try:
+            job_id = json.loads(payload_str).get("job_id")
+            if not job_id:
+                raise ValueError("Queue envelope has no job_id")
+            owner_key = f"codecrow:inference:owner:{job_id}"
+            claim_key = f"codecrow:inference:claimed:{job_id}"
+            if not await self._redis.exists(owner_key):
+                raise RuntimeError("Caller lease is absent; refusing orphaned paid work. Retry explicitly")
+            if not await self._redis.set(claim_key, "claimed", nx=True, ex=86400):
+                self._logger.warning("Ignoring duplicate inference delivery: job=%s", job_id)
+                return
+
+            async def watch_owner():
+                while True:
+                    if not await self._redis.exists(owner_key):
+                        raise RuntimeError("Caller lease ended; cancelling paid work")
+                    await self._redis.expire(claim_key, 86400)
+                    await asyncio.sleep(OWNER_CHECK_SECONDS)
+
+            handler = asyncio.create_task(self._handle_job(payload_str))
+            watcher = asyncio.create_task(watch_owner())
+            done, _ = await asyncio.wait((handler, watcher), return_when=asyncio.FIRST_COMPLETED)
+            if watcher in done:
+                await watcher
+            await handler
+        except Exception as error:
+            if handler is not None and not handler.done():
+                handler.cancel()
+                await asyncio.gather(handler, return_exceptions=True)
+            self._logger.error("Inference execution stopped: job=%s, reason=%s", job_id, error)
+            if job_id:
+                await self._publish_event(f"codecrow:analysis:events:{job_id}", {
+                    "type": "error", "message": str(error),
+                })
+        finally:
+            tasks = [task for task in (handler, watcher) if task is not None]
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
     async def _publish_event(self, key: str, event: Dict[str, Any]):

@@ -4,6 +4,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichme
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
 import org.rostilos.codecrow.core.service.PrChangeSummaryService;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
+import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
@@ -270,6 +271,9 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                 }
             }
 
+            // QA must not restore generated/project-excluded inputs omitted by the review.
+            diff = AnalysisScopeFilter.filterDiff(diff, project);
+
             // 5c. Extract changed file paths from diff
             List<String> changedFilePaths = Collections.emptyList();
             if (diff != null && !diff.isBlank()) {
@@ -364,6 +368,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                         clientForDiff::getCommitRangeDiff,
                         workspace, repoSlug,
                         previousPrCommit, commitHash);
+                deltaDiff = AnalysisScopeFilter.filterDiff(deltaDiff, project);
                 if (deltaDiff != null) {
                     log.info("qa-doc command: computed delta diff ({} chars) for same-PR re-run",
                             deltaDiff.length());

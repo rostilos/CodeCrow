@@ -1,4 +1,5 @@
 """Stage 1: Parallel file reviews with exact repository context."""
+from llm.provider_errors import raise_if_outcome_unknown
 from service.review.execution_scheduler import review_model_slot, optional_work_budget, optional_timeout_seconds
 from service.review.inference_usage import record_model_response, record_compute_decision
 from service.review.orchestrator.specialist_discovery import ReviewSpecialist, select_specialist_batches
@@ -3367,6 +3368,7 @@ async def review_file_batch(
                 fail_closed_agent=local_only_agent_required,
             )
         except Exception as error:
+            raise_if_outcome_unknown(error)
             if not local_only_agent_required:
                 raise
             primary_agent_error = error
@@ -3885,6 +3887,7 @@ async def _invoke_stage_1_batch_llm(
                     )
             elif agent_telemetry is not None:
                 agent_telemetry.mark_agent_failure(agent_error)
+            raise_if_outcome_unknown(agent_error)
             if fail_closed_agent:
                 raise RuntimeError(
                     "Local-only Stage 1 repository-agent execution failed; "
@@ -3990,6 +3993,7 @@ async def _invoke_stage_1_batch_llm(
                 label,
             )
         except Exception as e:
+            raise_if_outcome_unknown(e)
             # The batch owner emits the single exhausted-attempt warning. Keep
             # attempt detail at DEBUG to avoid duplicating one failure for every
             # nested batch call; raw-response shape failures are already logged

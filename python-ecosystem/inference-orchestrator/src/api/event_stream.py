@@ -4,6 +4,29 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
+from fastapi import HTTPException, Request
+
+
+async def run_while_connected(request: Request, process: Awaitable[Any]) -> Any:
+    """Stop paid processing when its HTTP caller disconnects or is cancelled."""
+    async def wait_for_disconnect():
+        # FastAPI has consumed the JSON body before entering the endpoint.
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+
+    generation = asyncio.create_task(process)
+    disconnect = asyncio.create_task(wait_for_disconnect())
+    try:
+        done, _ = await asyncio.wait((generation, disconnect), return_when=asyncio.FIRST_COMPLETED)
+        if generation not in done:
+            await disconnect
+            raise HTTPException(status_code=499, detail="Inference caller disconnected")
+        return await generation
+    finally:
+        for task in (generation, disconnect):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(generation, disconnect, return_exceptions=True)
 
 
 async def service_event_stream(

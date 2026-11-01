@@ -51,10 +51,10 @@ public class QaDocQueueService {
         var job=jobs.findByIdForUpdate(jobId).orElse(null);
         if (job == null || job.getJobType() != JobType.QA_DOC_COMMAND) return false;
         boolean abandoned=job.getStatus() == JobStatus.RUNNING && job.getUpdatedAt().isBefore(now.minusMinutes(30));
-        boolean failed=job.getStatus() == JobStatus.FAILED && job.getUpdatedAt().isBefore(now.minusMinutes(1));
         boolean queued=(job.getStatus() == JobStatus.PENDING || job.getStatus() == JobStatus.QUEUED)
                 && job.getUpdatedAt().isBefore(now.minusSeconds(30));
-        if (!queued && !abandoned && !failed) return false;
+        // Terminal failures need an explicit command; replaying them can repeat paid generation.
+        if (!queued && !abandoned) return false;
         if (job.getTriggerSource() == JobTriggerSource.CHAINED && job.getInputAnalysisId() != null) {
             var source = analyses.findByIdAndProjectId(job.getInputAnalysisId(), job.getProject().getId()).orElse(null);
             if (source != null && source.getSourceBranchName() != null
@@ -64,14 +64,12 @@ public class QaDocQueueService {
         if (abandoned && locks.existsActiveLock(job.getProject().getId(),"qa-pr:" + job.getPrNumber(),
                 AnalysisLockType.QA_DOCUMENTATION,now)) return false;
         int attempts=logs.findByJobIdAndStep(jobId,"qa_attempt").size();
-        if (attempts >= 3) {
-            if (abandoned) {
-                job.fail("QA worker disappeared after three attempts; retry the QA command to resume the saved document");
-                jobs.save(job);
-                var entry=new JobLog(); entry.setJob(job); entry.setLevel(JobLogLevel.ERROR);
-                entry.setStep("qa_exhausted"); entry.setMessage(job.getErrorMessage());
-                entry.setSequenceNumber(logs.getNextSequenceNumber(jobId)); logs.save(entry);
-            }
+        if (abandoned || attempts > 0) {
+            job.fail("Previous QA execution outcome is unknown; not replaying paid generation. Retry the QA command explicitly to reuse any saved document");
+            jobs.save(job);
+            var entry=new JobLog(); entry.setJob(job); entry.setLevel(JobLogLevel.ERROR);
+            entry.setStep("qa_outcome_unknown"); entry.setMessage(job.getErrorMessage());
+            entry.setSequenceNumber(logs.getNextSequenceNumber(jobId)); logs.save(entry);
             return false;
         }
         job.setStatus(JobStatus.QUEUED); job.setStartedAt(null); job.setCompletedAt(null);

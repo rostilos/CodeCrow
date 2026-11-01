@@ -125,6 +125,7 @@ public class AiAnalysisClient {
         String jobId = UUID.randomUUID().toString();
         String eventQueueKey = "codecrow:analysis:events:" + jobId;
         String jobsQueueKey = "codecrow:analysis:jobs";
+        String ownerKey = RedisQueueService.JOB_OWNER_KEY_PREFIX + jobId;
         String jsonPayload = null;
 
         try {
@@ -160,6 +161,7 @@ public class AiAnalysisClient {
             jsonPayload = objectMapper.writeValueAsString(jobPayload);
 
             // Push the job to the Redis queue
+            queueService.startJobLease(ownerKey);
             queueService.leftPush(jobsQueueKey, jsonPayload);
 
             // Set an expiration on the event queue to prevent orphaned keys if everything
@@ -176,6 +178,9 @@ public class AiAnalysisClient {
 
             // Poll the event queue for progress or final result
             while (true) {
+                if (!queueService.renewJobLease(ownerKey)) {
+                    throw new IOException("Review caller lease expired; paid execution is no longer owned");
+                }
                 long now = System.currentTimeMillis();
                 if (!workerAcknowledged) {
                     if (!queueService.hasKey(CONSUMER_HEARTBEAT_KEY)) {
@@ -260,6 +265,11 @@ public class AiAnalysisClient {
             log.error("Failed to communicate with AI async queue", e);
             throw new IOException("AI queue communication failed: " + e.getMessage(), e);
         } finally {
+            try {
+                queueService.deleteKey(ownerKey);
+            } catch (Exception cleanupError) {
+                log.warn("Could not revoke review caller lease {}; it expires within 60 seconds", jobId);
+            }
             if (jsonPayload != null) {
                 try {
                     queueService.removeFromList(jobsQueueKey, jsonPayload);

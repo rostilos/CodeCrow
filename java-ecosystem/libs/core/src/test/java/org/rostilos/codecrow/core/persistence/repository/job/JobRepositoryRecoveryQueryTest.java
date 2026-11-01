@@ -31,10 +31,11 @@ class JobRepositoryRecoveryQueryTest {
                 OffsetDateTime.class,
                 OffsetDateTime.class));
         assertGenericWebhookTypes(query(
-                "claimAbandonedRunningWebhookJob",
+                "failAbandonedRunningWebhookJob",
                 Long.class,
                 OffsetDateTime.class,
-                OffsetDateTime.class));
+                OffsetDateTime.class,
+                String.class));
     }
 
     private static String query(String methodName, Class<?>... parameters)

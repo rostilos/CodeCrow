@@ -16,6 +16,22 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.any;
 
 class QaDocQueueServiceTest {
+    @Test void oldFailedJobWithoutAttemptLogsIsNeverReplayed() {
+        var analyses = mock(CodeAnalysisRepository.class);
+        var repository = mock(JobRepository.class);
+        var logs = mock(JobLogRepository.class);
+        var locks = mock(AnalysisLockRepository.class);
+        var service = new QaDocQueueService(analyses, repository, logs, locks, mock(JobService.class));
+        var job = mock(Job.class);
+        when(repository.findByIdForUpdate(7L)).thenReturn(Optional.of(job));
+        when(job.getJobType()).thenReturn(JobType.QA_DOC_COMMAND);
+        when(job.getStatus()).thenReturn(JobStatus.FAILED);
+
+        assertThat(service.prepareRetry(7L, OffsetDateTime.now())).isFalse();
+        verify(repository, never()).save(any());
+        verifyNoInteractions(analyses, logs, locks);
+    }
+
     @Test void sourceReviewLeaseDefersDispatchWithoutChangingTheQueuedReceipt() {
         var analyses = mock(CodeAnalysisRepository.class);
         var repository = mock(JobRepository.class);

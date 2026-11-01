@@ -41,6 +41,16 @@ import static org.mockito.Mockito.*;
 @DisplayName("AiAnalysisClient - Redis Queuing")
 class AiAnalysisClientTest {
 
+        @Test
+        void lostCallerLeaseStopsPollingAndRevokesPaidExecution() {
+                when(queueService.renewJobLease(anyString())).thenReturn(false);
+                assertThatThrownBy(() -> client.performAnalysis(new TestAiAnalysisRequest()))
+                        .isInstanceOf(IOException.class).hasMessageContaining("caller lease expired");
+                verify(queueService, times(1)).leftPush(eq("codecrow:analysis:jobs"), anyString());
+                verify(queueService, never()).rightPop(anyString(), anyLong());
+                verify(queueService).deleteKey(startsWith(RedisQueueService.JOB_OWNER_KEY_PREFIX));
+        }
+
         @Mock
         private RestTemplate restTemplate;
 
@@ -207,6 +217,7 @@ class AiAnalysisClientTest {
 
         @BeforeEach
         void setUp() throws Exception {
+                lenient().when(queueService.renewJobLease(anyString())).thenReturn(true);
                 objectMapper = new ObjectMapper();
                 client = new AiAnalysisClient(restTemplate, queueService, objectMapper);
                 lenient().when(queueService.hasKey(AiAnalysisClient.CONSUMER_HEARTBEAT_KEY))

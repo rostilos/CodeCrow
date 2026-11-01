@@ -19,6 +19,9 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.model.vcs.*;
 import org.rostilos.codecrow.core.persistence.repository.job.JobRepository;
+import org.rostilos.codecrow.core.persistence.repository.reconcile.ReconcileTaskRepository;
+import org.rostilos.codecrow.core.model.reconcile.ReconcileTask;
+import org.rostilos.codecrow.core.model.reconcile.ReconcileTaskStatus;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
 import org.rostilos.codecrow.testsupport.annotation.IntegrationTest;
 import java.time.OffsetDateTime;
@@ -32,12 +35,29 @@ import static org.assertj.core.api.Assertions.*;
 class RepositoryBoundaryIT {
     @SpringBootConfiguration @EnableAutoConfiguration
     @EntityScan("org.rostilos.codecrow.core.model")
-    @EnableJpaRepositories(basePackageClasses={JobRepository.class, VcsRepoBindingRepository.class, CodeAnalysisIssueRepository.class})
+    @EnableJpaRepositories(basePackageClasses={JobRepository.class, VcsRepoBindingRepository.class, CodeAnalysisIssueRepository.class, ReconcileTaskRepository.class})
     static class Config {}
     @Autowired EntityManager em;
     @Autowired JobRepository jobs;
     @Autowired VcsRepoBindingRepository bindings;
     @Autowired DataSource dataSource;
+    @Autowired ReconcileTaskRepository reconcileTasks;
+
+    @Test @Transactional
+    void onlyOneWorkerCanClaimPendingReconciliation() {
+        var task = new ReconcileTask();
+        task.setProjectId(7L);
+        task.setBranchName("main");
+        task = reconcileTasks.saveAndFlush(task);
+        var started = OffsetDateTime.now();
+        assertThat(reconcileTasks.claimPendingTask(task.getId(), started)).isEqualTo(1);
+        assertThat(reconcileTasks.claimPendingTask(task.getId(), started)).isZero();
+        task = reconcileTasks.findById(task.getId()).orElseThrow();
+        task.markFailed("Outcome unknown");
+        reconcileTasks.saveAndFlush(task);
+        assertThat(reconcileTasks.claimPendingTask(task.getId(), started)).isZero();
+        assertThat(reconcileTasks.findById(task.getId()).orElseThrow().getStatus()).isEqualTo(ReconcileTaskStatus.FAILED);
+    }
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void rowVersionRepairPreservesPopulatedTablesAndExistingCounters(boolean existingNullableColumn) throws Exception {
@@ -167,8 +187,10 @@ class RepositoryBoundaryIT {
                 .setParameter("old",OffsetDateTime.now().minusHours(1)).setParameter("id",id).executeUpdate();
         assertThat(jobs.findAbandonedRunningWebhookJobs(OffsetDateTime.now().minusMinutes(30),PageRequest.of(0,20)))
                 .extracting(Job::getId).contains(id);
-        assertThat(jobs.claimAbandonedRunningWebhookJob(id,OffsetDateTime.now().minusMinutes(30),OffsetDateTime.now())).isEqualTo(1);
-        assertThat(jobs.claimPipelineJobForExecution(id,OffsetDateTime.now())).isEqualTo(1);
+        assertThat(jobs.failAbandonedRunningWebhookJob(id,OffsetDateTime.now().minusMinutes(30),OffsetDateTime.now(),"Outcome unknown")).isEqualTo(1);
+        assertThat(jobs.claimPipelineJobForExecution(id,OffsetDateTime.now())).isZero();
+        assertThat(jobs.findById(id).orElseThrow().getStatus()).isEqualTo(JobStatus.FAILED);
+        assertThat(jobs.findRecoverableWebhookJobs(OffsetDateTime.now(),PageRequest.of(0,50))).isEmpty();
     }
     @Test void migrationPreservesExistingBindingAndAllowsIndependentScopes() throws Exception {
         String schema="binding_test_"+UUID.randomUUID().toString().replace("-","");

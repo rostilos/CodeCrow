@@ -145,6 +145,7 @@ class ReviewFeedbackLearningIT {
             assertThat(rules.get(1).path("filePatterns").get(0).asText()).isEqualTo("src/App.java");
             var queue = mock(RedisQueueService.class);
             when(queue.hasKey("codecrow:analysis:consumer:heartbeat")).thenReturn(true);
+            when(queue.renewJobLease(anyString())).thenReturn(true);
             when(queue.rightPop(anyString(), anyLong())).thenReturn("{\"type\":\"final\",\"result\":{\"comment\":\"ok\",\"issues\":[]}}");
             new AiAnalysisClient(mock(RestTemplate.class), queue, mapper).performAnalysis(request);
             var payload = ArgumentCaptor.forClass(String.class);

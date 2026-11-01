@@ -37,6 +37,15 @@ class FakeRedis:
     def pipeline(self):
         return FakePipeline(self)
 
+    async def exists(self, key):
+        return True
+
+    async def set(self, *args, **kwargs):
+        return True
+
+    async def expire(self, *args, **kwargs):
+        return True
+
 
 def _ask_request():
     return {
@@ -303,6 +312,9 @@ async def test_stop_waits_for_admitted_command_before_closing_redis():
     consumer = CommandQueueConsumer(MagicMock())
     consumer._redis = MagicMock()
     consumer._redis.aclose = AsyncMock()
+    consumer._redis.exists = AsyncMock(return_value=True)
+    consumer._redis.set = AsyncMock(return_value=True)
+    consumer._redis.expire = AsyncMock(return_value=True)
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -312,7 +324,7 @@ async def test_stop_waits_for_admitted_command_before_closing_redis():
 
     consumer._handle_job = AsyncMock(side_effect=handle_until_released)
     await consumer._job_semaphore.acquire()
-    job_task = asyncio.create_task(consumer._handle_admitted_job("payload"))
+    job_task = asyncio.create_task(consumer._handle_admitted_job('{"job_id":"owned-job"}'))
     consumer._job_tasks.add(job_task)
     job_task.add_done_callback(consumer._job_tasks.discard)
     await started.wait()

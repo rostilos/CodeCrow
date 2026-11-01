@@ -365,14 +365,20 @@ public class JobService {
 
     @Transactional
     public boolean claimQaJobForExecution(Job receipt) {
+        return receipt.getJobType() == JobType.QA_DOC_COMMAND && claimWebhookJobForExecution(receipt);
+    }
+
+    @Transactional
+    public boolean claimWebhookJobForExecution(Job receipt) {
         Job job = jobRepository.findByIdForUpdate(receipt.getId()).orElse(null);
-        if (job == null || job.getJobType() != JobType.QA_DOC_COMMAND
+        if (job == null || job.getJobType() != receipt.getJobType()
                 || (job.getStatus() != JobStatus.PENDING && job.getStatus() != JobStatus.QUEUED)) return false;
         job.start();
         // PostgreSQL stores microseconds; the receipt must compare exactly after a reload.
         job.setStartedAt(OffsetDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
         jobRepository.save(job);
-        addLog(job, JobLogLevel.INFO, "qa_attempt", "QA worker claimed persisted work");
+        addLog(job, JobLogLevel.INFO, job.getJobType() == JobType.QA_DOC_COMMAND ? "qa_attempt" : "start",
+                "Webhook worker claimed persisted work");
         receipt.setStartedAt(job.getStartedAt()); receipt.setStatus(JobStatus.RUNNING);
         return true;
     }
@@ -878,9 +884,10 @@ public class JobService {
     }
 
     @Transactional
-    public boolean claimAbandonedRunningWebhookJob(Long jobId, OffsetDateTime threshold) {
-        return jobRepository.claimAbandonedRunningWebhookJob(
-                jobId, threshold, OffsetDateTime.now()) == 1;
+    public boolean failAbandonedRunningWebhookJob(Long jobId, OffsetDateTime threshold) {
+        return jobRepository.failAbandonedRunningWebhookJob(
+                jobId, threshold, OffsetDateTime.now(),
+                "Worker outcome is unknown after inactivity; paid work was not replayed. Retry explicitly after checking the previous execution") == 1;
     }
 
     private void touchJobActivity(Job job) {

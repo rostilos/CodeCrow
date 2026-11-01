@@ -14,6 +14,7 @@ from typing import Optional, Dict, Any, List, Literal
 
 from model.enrichment import PrEnrichmentDataDto
 from service.qa_documentation.qa_doc_service import QaDocumentationService
+from api.event_stream import run_while_connected
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,7 @@ async def generate_qa_documentation(
 
     qa_service = QaDocumentationService()
 
-    result = await qa_service.generate(
+    result = await run_while_connected(request, qa_service.generate(
         pr_change_summary=payload.pr_change_summary,
         repository_context={
             "project_id": payload.project_id, "pr_number": payload.pr_number,
@@ -163,7 +164,7 @@ async def generate_qa_documentation(
         target_branch=payload.target_branch,
         vcs_provider=payload.vcs_provider,
         output_language=payload.output_language,
-    )
+    ))
 
     return QaDocumentationResponse(
         documentation=result.get("documentation"),

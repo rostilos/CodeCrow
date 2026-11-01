@@ -19,13 +19,10 @@ import java.util.Optional;
 public interface JobRepository extends JpaRepository<Job, Long> {
     @Query("SELECT j FROM Job j JOIN FETCH j.project WHERE j.jobType = 'QA_DOC_COMMAND' "
             + "AND ((j.status IN ('PENDING','QUEUED') AND j.updatedAt < :queuedBefore) "
-            + "OR (j.status = 'RUNNING' AND j.updatedAt < :abandonedBefore) "
-            + "OR (j.status = 'FAILED' AND j.updatedAt < :retryBefore "
-            + "AND (SELECT COUNT(l) FROM JobLog l WHERE l.job = j AND l.step = 'qa_attempt') < 3)) "
+            + "OR (j.status = 'RUNNING' AND j.updatedAt < :abandonedBefore)) "
             + "ORDER BY j.updatedAt")
     List<Job> findRecoverableQaJobs(@Param("queuedBefore") OffsetDateTime queuedBefore,
-            @Param("abandonedBefore") OffsetDateTime abandonedBefore,
-            @Param("retryBefore") OffsetDateTime retryBefore, Pageable page);
+            @Param("abandonedBefore") OffsetDateTime abandonedBefore, Pageable page);
 
 
     Optional<Job> findByExternalId(String externalId);
@@ -355,18 +352,20 @@ public interface JobRepository extends JpaRepository<Job, Long> {
     int touchJob(@Param("jobId") Long jobId, @Param("activityAt") OffsetDateTime activityAt);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query("UPDATE Job j SET j.status = org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
-            "j.updatedAt = :claimedAt WHERE j.id = :jobId " +
+    @Query("UPDATE Job j SET j.status = org.rostilos.codecrow.core.model.job.JobStatus.FAILED, " +
+            "j.completedAt = :failedAt, j.updatedAt = :failedAt, j.errorMessage = :reason " +
+            "WHERE j.id = :jobId " +
             "AND j.triggerSource IN (org.rostilos.codecrow.core.model.job.JobTriggerSource.WEBHOOK, " +
             "org.rostilos.codecrow.core.model.job.JobTriggerSource.PIPELINE) " +
             "AND j.jobType IN (org.rostilos.codecrow.core.model.job.JobType.PR_ANALYSIS, " +
             "org.rostilos.codecrow.core.model.job.JobType.BRANCH_ANALYSIS) " +
             "AND j.status = org.rostilos.codecrow.core.model.job.JobStatus.RUNNING " +
             "AND j.updatedAt < :threshold")
-    int claimAbandonedRunningWebhookJob(
+    int failAbandonedRunningWebhookJob(
             @Param("jobId") Long jobId,
             @Param("threshold") OffsetDateTime threshold,
-            @Param("claimedAt") OffsetDateTime claimedAt);
+            @Param("failedAt") OffsetDateTime failedAt,
+            @Param("reason") String reason);
 
     @Query("SELECT COUNT(j) FROM Job j WHERE j.project.id = :projectId " +
             "AND j.status NOT IN (org.rostilos.codecrow.core.model.job.JobStatus.COMPLETED, " +

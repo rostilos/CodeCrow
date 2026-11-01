@@ -17,7 +17,7 @@ from magento2_benchmark.preflight import (
 )
 from magento2_benchmark.replay import build_plan
 from magento2_benchmark.util import sha256_json
-from tools.source_tree_identity import compute_repository_source_tree_sha256
+from rag_pipeline.core.source_tree import compute_repository_source_tree_sha256
 
 from conftest import make_git_pair
 

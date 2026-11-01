@@ -86,13 +86,12 @@ public class WebhookJobRecoveryScheduler {
             if (!isSupportedWebhookAnalysis(candidate)) {
                 continue;
             }
-            if (!jobService.claimAbandonedRunningWebhookJob(
+            if (!jobService.failAbandonedRunningWebhookJob(
                     candidate.getId(), abandonedThreshold)) {
                 continue;
             }
             jobService.warn(candidate, "recovery",
-                    "No pipeline activity for 30 minutes; resuming the persisted job");
-            recover(candidate);
+                    "No pipeline activity for 30 minutes; execution outcome is unknown. Failed without replaying paid work; explicit retry required");
         }
     }
 

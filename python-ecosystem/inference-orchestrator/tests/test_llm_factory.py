@@ -36,6 +36,20 @@ from service.qa_documentation.qa_doc_service import QaDocumentationService
 
 # ── LLMFactory._normalize_provider ──────────────────────────────
 
+@pytest.mark.parametrize("provider,model,constructor,base_url", [
+    ("openai", "gpt-4o", "ChatOpenAI", None),
+    ("openrouter", "openai/gpt-4o", "ChatOpenRouter", None),
+    ("anthropic", "claude-3-sonnet", "ChatAnthropic", None),
+    ("google", "gemini-2.0-flash", "ChatGoogleGenerativeAI", None),
+    ("google", "gemini-3.0-flash", "ChatGoogleGenerativeAI", None),
+    ("google_vertex", "gemini-2.5-flash", "ChatGoogleGenerativeAI", "project/global"),
+])
+def test_every_provider_disables_implicit_paid_retries(monkeypatch, provider, model, constructor, base_url):
+    monkeypatch.setenv("LLM_PROVIDER_MAX_RETRIES", "5")
+    with patch("llm.llm_factory." + constructor) as create:
+        LLMFactory.create_llm(model, provider, "offline-test-key", ai_base_url=base_url, max_tokens=1024)
+    assert create.call_args.kwargs["max_retries"] == 0
+
 class TestNormalizeProvider:
     def test_openrouter(self):
         assert LLMFactory._normalize_provider("openrouter") == "openrouter"

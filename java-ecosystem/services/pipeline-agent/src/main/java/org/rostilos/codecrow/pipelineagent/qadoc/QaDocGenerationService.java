@@ -14,7 +14,6 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
-import org.rostilos.codecrow.core.util.RetryExecutor;
 import org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
@@ -39,7 +38,7 @@ import java.util.stream.Collectors;
  * This service is responsible for:
  * <ul>
  *   <li>Assembling the request payload (analysis summary, task context, template config)</li>
- *   <li>Making the HTTP call with retry logic</li>
+ *   <li>Making one HTTP call without replaying paid generation on failure</li>
  *   <li>Parsing the response into the full document stored by CodeCrow</li>
  * </ul>
  */
@@ -51,12 +50,6 @@ public class QaDocGenerationService {
 
 
     private static final Logger log = LoggerFactory.getLogger(QaDocGenerationService.class);
-
-    private static class NonRetryableQaDocGenerationException extends RuntimeException {
-        NonRetryableQaDocGenerationException(String message) {
-            super(message);
-        }
-    }
 
     private final String inferenceOrchestratorUrl;
     private final String serviceSecret;
@@ -97,7 +90,7 @@ public class QaDocGenerationService {
      * @param event   the analysis completed event (contains metrics with issue count, files, etc.)
      * @param ctx     the immutable generation context with all data
      * @return generated QA document text, or null if the LLM decided documentation isn't needed
-     * @throws IOException if the inference orchestrator call fails after retries
+     * @throws IOException if the inference orchestrator call fails (the generation POST is never automatically retried)
      */
     public String generateQaDocumentation(Project project,
                                            AnalysisCompletedEvent event,
@@ -118,7 +111,7 @@ public class QaDocGenerationService {
      * @param prMetadata    a map with optional keys: sourceBranch, targetBranch, prTitle, prDescription
      * @param ctx           the immutable generation context with all data
      * @return generated QA document text, or null if the LLM decided documentation isn't needed
-     * @throws IOException if the inference orchestrator call fails after retries
+     * @throws IOException if the inference orchestrator call fails (the generation POST is never automatically retried)
      */
     public String generateQaDocumentation(Project project,
                                            Long prNumber,
@@ -213,47 +206,32 @@ public class QaDocGenerationService {
      * Shared HTTP call to the inference-orchestrator's /qa-documentation endpoint.
      */
     private String callInferenceOrchestrator(Map<String, Object> payload) throws IOException {
-        String responseBody;
-        try {
-            responseBody = RetryExecutor.withExponentialBackoff(() -> {
-                String jsonPayload = objectMapper.writeValueAsString(payload);
-
-                HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                        .uri(URI.create(inferenceOrchestratorUrl + "/qa-documentation"))
-                        .header("Content-Type", "application/json")
-                        .header("Accept", "application/json")
-                        .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
-                        .timeout(Duration.ofSeconds(300));
-
-                if (serviceSecret.isBlank()) {
-                    log.warn("QA doc generation service secret is not configured; inference orchestrator may reject the request");
-                } else {
-                    requestBuilder.header("x-service-secret", serviceSecret);
-                }
-
-                HttpRequest request = requestBuilder.build();
-
-                HttpResponse<String> response;
-                try {
-                    response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("QA doc generation interrupted", e);
-                }
-
-                if (response.statusCode() >= 500) {
-                    throw new IOException("Inference orchestrator returned " + response.statusCode());
-                }
-                if (response.statusCode() != 200) {
-                    log.warn("QA doc generation returned non-200: {} — {}", response.statusCode(), response.body());
-                    throw new NonRetryableQaDocGenerationException(
-                            "Inference orchestrator returned " + response.statusCode());
-                }
-                return response.body();
-            });
-        } catch (NonRetryableQaDocGenerationException e) {
-            throw new IOException(e.getMessage(), e);
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(inferenceOrchestratorUrl + "/qa-documentation"))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
+                .timeout(Duration.ofSeconds(300));
+        if (serviceSecret.isBlank()) {
+            log.warn("QA doc generation service secret is not configured; inference orchestrator may reject the request");
+        } else {
+            requestBuilder.header("x-service-secret", serviceSecret);
         }
+
+        // A lost response does not mean generation stopped; retrying this POST repeats paid work.
+        HttpResponse<String> response;
+        try {
+            response = httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("QA doc generation interrupted; not automatically retried", e);
+        } catch (IOException e) {
+            throw new IOException("QA doc generation response unavailable; not automatically retried: " + e.getMessage(), e);
+        }
+        if (response.statusCode() != 200) {
+            throw new IOException("Inference orchestrator returned " + response.statusCode() + "; not automatically retried");
+        }
+        String responseBody = response.body();
 
         if (responseBody == null || responseBody.isBlank()) {
             throw new IOException("Inference orchestrator returned an empty response");

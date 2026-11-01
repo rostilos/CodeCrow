@@ -304,7 +304,7 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
     }
 
     @Test
-    void failedSemanticCheckRetainsDurablePendingStateAndFullRetryClearsIt() throws Exception {
+    void failedSemanticCheckRetainsPendingStateUntilExplicitFullRetry() throws Exception {
         Long projectId = createProjectWithConnections();
         Long issueId = seedBranchIssue(projectId, APP_PATH, 5, "dangerousCall(userInput);", "Pending fixture");
         when(aiAnalysisClient.performAnalysis(any(), any())).thenThrow(new java.io.IOException("provider unavailable"));
@@ -322,13 +322,7 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
         assertThat(branchIssueRepository.findById(issueId).orElseThrow().isResolved()).isFalse();
         org.mockito.Mockito.doAnswer(inv -> aiResponseFor(inv.getArgument(0)))
                 .when(aiAnalysisClient).performAnalysis(any(), any());
-        transactionTemplate.executeWithoutResult(status -> {
-            Branch pending = branchRepository.findById(stored.getId()).orElseThrow();
-            org.springframework.test.util.ReflectionTestUtils.setField(pending, "reconciliationAttemptedAt",
-                    java.time.OffsetDateTime.now().minusMinutes(20));
-        });
-        new org.rostilos.codecrow.pipelineagent.generic.service.BranchHealthScheduler(branchRepository, branchAnalysisProcessor)
-                .retryPendingReconciliations();
+        branchAnalysisProcessor.fullReconcile(projectId, "main", event -> {});
         assertThat(branchIssueRepository.findById(issueId).orElseThrow().isResolved()).isTrue();
         Branch completed = branchRepository.findById(stored.getId()).orElseThrow();
         assertThat(new org.springframework.beans.BeanWrapperImpl(completed).getPropertyValue("reconciliationPending")).isEqualTo(false);

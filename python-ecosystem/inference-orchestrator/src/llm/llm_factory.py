@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.0"))
 DEFAULT_ANTHROPIC_MAX_OUTPUT_TOKENS = 40_000
 DEFAULT_LLM_PROVIDER_TIMEOUT_SECONDS = 120.0
-DEFAULT_LLM_PROVIDER_MAX_RETRIES = 1
 
 
 def _finite_provider_float(name: str, default: float) -> float:
@@ -41,38 +40,15 @@ def _finite_provider_float(name: str, default: float) -> float:
     return value
 
 
-def _finite_provider_retries(name: str, default: int) -> int:
-    """Read the OpenAI-protocol client's finite additional retry count."""
-    configured = os.environ.get(name)
-    if configured is None or not configured.strip():
-        return default
-    try:
-        value = int(configured)
-    except ValueError:
-        logger.warning("Invalid integer for %s=%r; using %s", name, configured, default)
-        return default
-    if value < 0:
-        logger.warning("Negative %s=%r; using %s", name, configured, default)
-        return default
-    return value
-
-
-def _openai_protocol_transport_settings() -> dict[str, Any]:
-    """Bound each OpenAI-protocol request and its SDK retry amplification.
-
-    The OpenAI SDK otherwise defaults to a 600-second read timeout and two
-    additional attempts. A single stalled Stage 1 turn can therefore occupy a
-    worker for about 30 minutes before the review's own recovery path runs.
-    """
+def _provider_transport_settings() -> dict[str, Any]:
+    """A lost response can still be billed; SDK retries must not repeat generation."""
+    if os.environ.get("LLM_PROVIDER_MAX_RETRIES", "0").strip() not in {"", "0"}:
+        logger.warning("LLM_PROVIDER_MAX_RETRIES is ignored: automatic paid-generation retries are disabled")
     return {
         "timeout": _finite_provider_float(
-            "LLM_PROVIDER_TIMEOUT_SECONDS",
-            DEFAULT_LLM_PROVIDER_TIMEOUT_SECONDS,
+            "LLM_PROVIDER_TIMEOUT_SECONDS", DEFAULT_LLM_PROVIDER_TIMEOUT_SECONDS,
         ),
-        "max_retries": _finite_provider_retries(
-            "LLM_PROVIDER_MAX_RETRIES",
-            DEFAULT_LLM_PROVIDER_MAX_RETRIES,
-        ),
+        "max_retries": 0,
     }
 
 
@@ -883,7 +859,7 @@ class LLMFactory:
                 temperature=temperature,
                 organization="Codecrow",
                 default_headers=extra_headers,
-                **_openai_protocol_transport_settings(),
+                **_provider_transport_settings(),
             )
             if max_tokens:
                 kwargs["max_tokens"] = max_tokens
@@ -895,7 +871,7 @@ class LLMFactory:
                 api_key=ai_api_key,
                 model=ai_model,
                 temperature=temperature,
-                **_openai_protocol_transport_settings(),
+                **_provider_transport_settings(),
             )
             if max_tokens:
                 kwargs["max_tokens"] = max_tokens
@@ -912,6 +888,7 @@ class LLMFactory:
                 # factory finite even before a review stage binds its narrower
                 # profile; unknown/new model IDs remain fail-open and observable.
                 max_tokens=anthropic_max_tokens,
+                **_provider_transport_settings(),
             )
             return ChatAnthropic(**kwargs)
         
@@ -940,6 +917,7 @@ class LLMFactory:
                     model=ai_model,
                     temperature=temperature,
                     thinking_level=effective_thinking,
+                    **_provider_transport_settings(),
                 )
                 if max_tokens:
                     # ChatGoogleGenerativeAI accepts ``max_tokens`` as the
@@ -956,6 +934,7 @@ class LLMFactory:
                     model=ai_model,
                     temperature=temperature,
                     thinking_budget=0,
+                    **_provider_transport_settings(),
                 )
                 if max_tokens:
                     kwargs["max_tokens"] = max_tokens
@@ -978,6 +957,7 @@ class LLMFactory:
                 model=_strip_google_vertex_model_prefix(ai_model),
                 vertexai=True,
                 temperature=temperature,
+                **_provider_transport_settings(),
             )
             if vertex_api_key:
                 kwargs["google_api_key"] = vertex_api_key
@@ -1008,14 +988,13 @@ class LLMFactory:
             ) = _split_openai_compatible_parameters(
                 ai_custom_parameters
             )
-            transport_settings = _openai_protocol_transport_settings()
+            transport_settings = _provider_transport_settings()
             if not {
                 "timeout",
                 "request_timeout",
             }.intersection(custom_constructor_kwargs):
                 custom_constructor_kwargs["timeout"] = transport_settings["timeout"]
-            if "max_retries" not in custom_constructor_kwargs:
-                custom_constructor_kwargs["max_retries"] = transport_settings["max_retries"]
+            custom_constructor_kwargs["max_retries"] = 0
 
             # SSRF validation — blocks private/reserved IPs unless
             # ALLOW_PRIVATE_ENDPOINTS=true. Keep the explicitly configured

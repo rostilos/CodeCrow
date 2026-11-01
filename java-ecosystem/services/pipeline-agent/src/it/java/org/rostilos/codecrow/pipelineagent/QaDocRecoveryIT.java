@@ -103,7 +103,7 @@ class QaDocRecoveryIT {
                 .as("source review lease released").isFalse();
         assertThat(queue.prepareRetry(job.getId(), recoveryTime)).isTrue();
     }
-    @Test void restartRecoveryHonorsLiveLeaseAndStaleCompletionCannotWinThenRetriesStopExplicitly() {
+    @Test void abandonedQaHonorsLiveLeaseThenFailsWithoutRepeatingPaidWork() {
         var analysis=review(); var job=claim(queue.enqueue(analysis.getProject().getId(),analysis.getId()).orElseThrow());
         var old=repository.findById(job.getId()).orElseThrow();
         var recoveryTime=OffsetDateTime.now().plusMinutes(31);
@@ -111,19 +111,42 @@ class QaDocRecoveryIT {
         assertThat(locks.extendLock(key,60)).isTrue();
         try { assertThat(queue.prepareRetry(job.getId(),recoveryTime)).isFalse(); }
         finally { locks.releaseLock(key); }
-        assertThat(queue.prepareRetry(job.getId(),recoveryTime)).isTrue();
-        var current=claim(repository.findById(job.getId()).orElseThrow());
+        assertThat(queue.prepareRetry(job.getId(),recoveryTime)).isFalse();
         jobs.completeJob(old); jobs.failJob(old,"old worker failure"); jobs.skipJob(old,"old skip");
-        assertThat(repository.findById(job.getId()).orElseThrow().getStatus()).isEqualTo(JobStatus.RUNNING);
-        jobs.failJob(current,"task handoff unavailable");
-        assertThat(queue.prepareRetry(job.getId(),recoveryTime)).isTrue();
-        current=claim(repository.findById(job.getId()).orElseThrow());
-        jobs.failJob(current,"task handoff still unavailable");
+        var terminal=repository.findById(job.getId()).orElseThrow();
+        assertThat(terminal.getStatus()).isEqualTo(JobStatus.FAILED);
+        assertThat(terminal.getErrorMessage()).contains("outcome is unknown");
+        assertThat(logs.findByJobIdAndStep(job.getId(),"qa_attempt")).hasSize(1);
+        assertThat(jobs.claimQaJobForExecution(old)).isFalse();
+    }
+    @Test void failedJobsIncludingImportedHistoryRemainTerminal() {
+        var analysis=review();
+        var job=queue.enqueue(analysis.getProject().getId(),analysis.getId()).orElseThrow();
+        jobs.failJob(job,"historical failure before deployment");
+        var recoveryTime=OffsetDateTime.now().plusDays(30);
+
+        assertThat(logs.findByJobIdAndStep(job.getId(),"qa_attempt")).isEmpty();
+        assertThat(repository.findRecoverableQaJobs(recoveryTime,recoveryTime,
+                org.springframework.data.domain.Pageable.unpaged()))
+                .extracting(Job::getId).doesNotContain(job.getId());
         assertThat(queue.prepareRetry(job.getId(),recoveryTime)).isFalse();
         assertThat(repository.findById(job.getId()).orElseThrow().getStatus()).isEqualTo(JobStatus.FAILED);
-        assertThat(logs.findByJobIdAndStep(job.getId(),"qa_attempt")).hasSize(3);
-        assertThat(jobs.claimQaJobForExecution(current)).isFalse();
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value=JobType.class, names={"PR_ANALYSIS", "BRANCH_ANALYSIS", "SUMMARIZE_COMMAND", "ASK_COMMAND", "ANALYZE_COMMAND", "REVIEW_COMMAND"})
+    void duplicateWebhookDispatchClaimsOnlyOnce(JobType type) throws Exception {
+        var analysis=review(); var job=queue.enqueue(analysis.getProject().getId(),analysis.getId()).orElseThrow();
+        job.setJobType(type); repository.saveAndFlush(job);
+        var copy=repository.findById(job.getId()).orElseThrow();
+        var executor=Executors.newFixedThreadPool(2);
+        try {
+            var a=executor.submit(() -> jobs.claimWebhookJobForExecution(job));
+            var b=executor.submit(() -> jobs.claimWebhookJobForExecution(copy));
+            assertThat(List.of(a.get(10,TimeUnit.SECONDS),b.get(10,TimeUnit.SECONDS))).containsExactlyInAnyOrder(true,false);
+        } finally { executor.shutdownNow(); }
+        assertThat(logs.findByJobIdAndStep(job.getId(),"start")).hasSize(1);
+    }
+
     @Test void duplicateDispatchClaimsOnlyOnce() throws Exception {
         var analysis=review(); var job=queue.enqueue(analysis.getProject().getId(),analysis.getId()).orElseThrow();
         var copy=repository.findById(job.getId()).orElseThrow();

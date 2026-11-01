@@ -147,6 +147,22 @@ class QaDocCommandProcessorTest {
 
     // ── Helpers ──
 
+    private static String sourceAndMapDiff() {
+        return "diff --git a/src/A.java b/src/A.java\n--- a/src/A.java\n+++ b/src/A.java\n@@ -1 +1 @@\n-old\n+source\n"
+                + "diff --git a/web/checkout.js.map b/web/checkout.js.map\n--- a/web/checkout.js.map\n+++ b/web/checkout.js.map\n@@ -1 +1 @@\n-old\n+generated-source-map\n";
+    }
+
+    @Test
+    void savedQaDiffUsesReviewExclusionsBeforeBuildingModelInputs() throws IOException {
+        setupHappyPath();
+        when(prChangeSummaryService.reviewSource(any())).thenReturn(Map.of("rawDiff", sourceAndMapDiff()));
+        assertThat(processor.process(createPayload("feature/PROJ-123"), project, eventConsumer, Map.of()).success()).isTrue();
+        var context = ArgumentCaptor.forClass(QaDocGenerationContext.class);
+        verify(qaDocGenerationService).generateQaDocumentation(any(), eq(7L), anyInt(), anyInt(), anyMap(), context.capture());
+        assertThat(context.getValue().diff()).contains("+source").doesNotContain("checkout.js.map", "generated-source-map");
+        assertThat(context.getValue().changedFilePaths()).containsExactly("src/A.java");
+    }
+
     @Test
     void samePrDeltaUsesItsOwnDocumentCommitAfterAnotherPrUpdatedTheTask() throws IOException {
         setupHappyPath();
@@ -162,7 +178,8 @@ class QaDocCommandProcessorTest {
         var vcs = mock(org.rostilos.codecrow.vcsclient.VcsClient.class);
         when(vcsClientProvider.getClient(connection)).thenReturn(vcs);
         when(vcs.getPullRequest("workspace", "repo", 7L)).thenReturn(new org.rostilos.codecrow.vcsclient.model.VcsPullRequest(7L, "title", "body", "feature", "main", "base", "abc123", "open", false, "url"));
-        when(vcs.getCommitRangeDiff(eq("workspace"), eq("repo"), anyString(), eq("abc123"))).thenReturn("delta");
+        when(vcs.getCommitRangeDiff(eq("workspace"), eq("repo"), anyString(), eq("abc123"))).thenReturn(sourceAndMapDiff());
+        when(enrichmentService.isEnrichmentEnabled()).thenReturn(true);
         var previousPrDoc = new QaDocDocument(project, 7L);
         previousPrDoc.replaceContent(TASK_ID, null, "pr-a-old", GENERATED_QA_DOC);
         var state = new QaDocState(project, TASK_ID);
@@ -174,6 +191,10 @@ class QaDocCommandProcessorTest {
         assertThat(processor.process(createPayload("feature/PROJ-123"), project, eventConsumer, Map.of()).success()).isTrue();
         verify(vcs).getCommitRangeDiff("workspace", "repo", "pr-a-old", "abc123");
         verify(vcs, never()).getCommitRangeDiff("workspace", "repo", "pr-b-new", "abc123");
+        var context = ArgumentCaptor.forClass(QaDocGenerationContext.class);
+        verify(qaDocGenerationService).generateQaDocumentation(any(), eq(7L), anyInt(), anyInt(), anyMap(), context.capture());
+        assertThat(context.getValue().deltaDiff()).contains("+source").doesNotContain("checkout.js.map");
+        verify(enrichmentService).enrichPrFiles(any(), eq("workspace"), eq("repo"), eq("abc123"), eq(List.of("src/A.java")));
     }
 
     @Test

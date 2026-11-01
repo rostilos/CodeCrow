@@ -30,7 +30,7 @@ class PipelineRecoveryTest {
         when(job.getJobType()).thenReturn(branch ? JobType.BRANCH_ANALYSIS : JobType.PR_ANALYSIS);
         if (abandoned) {
             when(jobs.findAbandonedRunningWebhookJobs(any(), eq(20))).thenReturn(List.of(job));
-            when(jobs.claimAbandonedRunningWebhookJob(eq(1L), any())).thenReturn(true);
+            when(jobs.failAbandonedRunningWebhookJob(eq(1L), any())).thenReturn(true);
         } else {
             when(jobs.findRecoverableWebhookJobs(any(), eq(50))).thenReturn(List.of(job));
             when(jobs.claimRecoverableWebhookJob(eq(1L), any())).thenReturn(true);
@@ -57,13 +57,11 @@ class PipelineRecoveryTest {
         } else assertThat(((BranchProcessRequest)request.getValue()).getSourcePrNumber()).isEqualTo(17L);
         verify(pipelineJobs).completeJob(eq(job), any());
     }
-    @Test void abandonedRunningJobIsClaimedAndResumed() throws Exception {
+    @Test void abandonedRunningJobFailsWithoutAnotherPaidExecution() throws Exception {
         var scheduler = scheduler(Runnable::run, false, true);
-        when(jobs.findWebhookDispatchPayload(1L)).thenReturn(Optional.of(payload(false)));
-        when(pipelineJobs.claimForExecution(job)).thenReturn(true);
-        when(processor.processPipelineActionWithConsumer(any(), any(), eq(job))).thenReturn(Map.of("status", "complete"));
         scheduler.recoverAcceptedJobs();
-        verify(processor).processPipelineActionWithConsumer(any(), any(), eq(job));
+        verify(jobs).failAbandonedRunningWebhookJob(eq(1L), any());
+        verifyNoInteractions(processor, pipelineJobs);
     }
     @Test void missingLegacyPayloadAndCrossProjectPayloadTerminateWithDiagnostic() throws Exception {
         var scheduler = scheduler(Runnable::run, false, false);

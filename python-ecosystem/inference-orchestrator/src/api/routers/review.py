@@ -1,13 +1,13 @@
 """
 Review API endpoints.
 """
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import StreamingResponse
 
 from model.dtos import ReviewRequestDto, ReviewResponseDto
 from service.review.review_service import ReviewService
 from utils.error_sanitizer import create_error_response
-from api.event_stream import service_event_stream, wants_streaming
+from api.event_stream import run_while_connected, service_event_stream, wants_streaming
 
 router = APIRouter(tags=["review"])
 
@@ -42,7 +42,7 @@ async def review_endpoint(req: ReviewRequestDto, request: Request):
 
         if not wants_stream:
             # Non-streaming (legacy) behavior
-            result = await review_service.process_review_request(req)
+            result = await run_while_connected(request, review_service.process_review_request(req))
             return ReviewResponseDto(
                 result=result.get("result"),
                 error=result.get("error")
@@ -57,6 +57,8 @@ async def review_endpoint(req: ReviewRequestDto, request: Request):
             media_type="application/x-ndjson",
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         error_response = create_error_response(
             "HTTP request processing failed", str(e)

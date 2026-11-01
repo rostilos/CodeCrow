@@ -1164,10 +1164,12 @@ path diff, and source window. It records the compaction policy, cap, configured
 maximum, and preserved candidate count in the prompt. If the minimum complete
 prompt still exceeds the limit, judging fails instead of dropping candidates.
 
-Transport retries (`judge.max_retries`) are separate from structured-output
-retries (`judge.max_structured_retries`). A syntactically valid provider reply
-that violates the expected rubric is retained as a rejected attempt and retried
-until one response validates or the configured limit fails the run.
+Each judge transport request is sent once. Timeouts, HTTP errors and lost or
+unparseable responses fail the run without repeating the paid request; legacy
+`judge.max_retries` values no longer enable transport retries. Structured-output
+retries (`judge.max_structured_retries`) only follow a completed, syntactically
+valid provider reply that violates the rubric. Each rejected reply is retained;
+validation retries stop at the configured limit.
 
 Judging resumes automatically when the same output directory is reused. Each
 validated repeat is atomically saved under `checkpoints/<case>/`, bound to the

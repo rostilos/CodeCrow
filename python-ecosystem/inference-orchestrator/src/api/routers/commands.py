@@ -3,7 +3,7 @@ Command API endpoints (summarize, ask).
 """
 from llm.inference_observer import filter_host_error
 import logging
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import StreamingResponse
 
 from model.dtos import (
@@ -11,7 +11,7 @@ from model.dtos import (
     AskRequestDto, AskResponseDto,
 )
 from service.command.command_service import CommandService
-from api.event_stream import service_event_stream, wants_streaming
+from api.event_stream import run_while_connected, service_event_stream, wants_streaming
 
 router = APIRouter(tags=["commands"])
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ async def summarize_endpoint(req: SummarizeRequestDto, request: Request):
 
         if not wants_stream:
             # Non-streaming behavior
-            result = await command_service.process_summarize(req)
+            result = await run_while_connected(request, command_service.process_summarize(req))
             return SummarizeResponseDto(
                 summary=result.get("summary"),
                 diagram=result.get("diagram"),
@@ -56,6 +56,8 @@ async def summarize_endpoint(req: SummarizeRequestDto, request: Request):
             media_type="application/x-ndjson",
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         return SummarizeResponseDto(error=filter_host_error(f"Summarize failed: {str(e)}"))
 
@@ -78,7 +80,7 @@ async def ask_endpoint(req: AskRequestDto, request: Request):
 
         if not wants_stream:
             # Non-streaming behavior
-            result = await command_service.process_ask(req)
+            result = await run_while_connected(request, command_service.process_ask(req))
             return AskResponseDto(
                 answer=result.get("answer"),
                 error=result.get("error")
@@ -92,5 +94,7 @@ async def ask_endpoint(req: AskRequestDto, request: Request):
             media_type="application/x-ndjson",
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         return AskResponseDto(error=filter_host_error(f"Ask failed: {str(e)}"))

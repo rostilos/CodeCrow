@@ -1,4 +1,5 @@
 """Stage 2: Cross-file and architectural analysis."""
+from llm.provider_errors import raise_if_outcome_unknown
 from service.review.execution_scheduler import review_model_slot
 from service.review.inference_usage import record_model_response, record_compute_decision
 import json
@@ -370,6 +371,7 @@ async def _invoke_stage_2_llm(
                 return result
             logger.debug("Structured output returned empty Stage 2 result (%s)", label)
         except Exception as e:
+            raise_if_outcome_unknown(e)
             logger.warning(
                 "Structured output failed for Stage 2 (%s): error_type=%s",
                 label,

@@ -137,14 +137,11 @@ public class WebhookAsyncProcessor {
         
         try {
             if (job.getJobType() == JobType.QA_DOC_COMMAND && !jobService.claimQaJobForExecution(job)) return;
+            if (job.getJobType() != JobType.QA_DOC_COMMAND && !jobService.claimWebhookJobForExecution(job)) return;
             // Load project in a short read-only transaction
             // All lazy associations are eagerly initialized before the transaction closes
             project = self.loadAndInitializeProject(projectId);
             
-            log.info("Calling jobService.startJob for job {}", job.getExternalId());
-            if (job.getJobType() != JobType.QA_DOC_COMMAND) jobService.startJob(job);
-            log.info("jobService.startJob completed for job {}", job.getExternalId());
-
             if (job.getJobType() == JobType.BRANCH_ANALYSIS
                     || job.getJobType() == JobType.PR_ANALYSIS) {
                 BranchAnalysisGateService.GateResult gateResult =

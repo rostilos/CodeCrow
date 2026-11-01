@@ -10,11 +10,52 @@ from api.routers.review import review_endpoint
 
 
 def _streaming_request(service_name, service):
+    async def receive():
+        await asyncio.Future()
     state = SimpleNamespace(**{service_name: service})
     return SimpleNamespace(
+        receive=receive,
         headers={"accept": "application/x-ndjson"},
         app=SimpleNamespace(state=state),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint,service_name,method", [
+    (review_endpoint, "review_service", "process_review_request"),
+    (ask_endpoint, "command_service", "process_ask"),
+    (summarize_endpoint, "command_service", "process_summarize"),
+])
+async def test_json_disconnect_stops_paid_processing(endpoint, service_name, method):
+    from fastapi import HTTPException
+    started, disconnected, stopped = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def process(_request):
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            stopped.set()
+
+    async def receive():
+        await disconnected.wait()
+        return {"type": "http.disconnect"}
+
+    service = SimpleNamespace(**{method: AsyncMock(side_effect=process)})
+    request = _streaming_request(service_name, service)
+    request.headers = {}
+    request.receive = receive
+    task = asyncio.create_task(endpoint(MagicMock(), request))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        disconnected.set()
+        with pytest.raises(HTTPException) as error:
+            await asyncio.wait_for(task, 1)
+        assert error.value.status_code == 499
+        assert stopped.is_set()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def _assert_disconnect_cancels_runner(response, cancelled):

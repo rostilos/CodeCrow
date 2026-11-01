@@ -982,46 +982,28 @@ class TestBatchReviewCoverage:
         )
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_agent_batch_deadline_is_passed_to_shared_direct_recovery(
-        self,
-        monkeypatch,
-    ):
+    async def test_agent_batch_deadline_does_not_start_another_paid_attempt(self, monkeypatch):
+        calls = []
         class AgentService:
             async def execute(self, request):
+                calls.append(request)
                 assert request.timeout_seconds == 17
-                raise TimeoutError(
-                    "Agent execution exceeded its 17s deadline"
-                )
-
-        class StructuredAttempt:
-            async def ainvoke(self, prompt, **kwargs):
-                assert prompt == "prepared direct recovery prompt"
-                return FileReviewBatchOutput(
-                    reviews=[_clean_file_review("src/a.py")]
-                )
+                raise TimeoutError("Agent execution exceeded its 17s deadline")
 
         class Llm:
-            def with_structured_output(self, _schema):
-                return StructuredAttempt()
+            def with_structured_output(self, _schema, **kwargs):
+                pytest.fail("Expired execution must not start a direct recovery")
 
-        monkeypatch.setattr(
-            "service.review.orchestrator.stage_1_file_review."
-            "STAGE1_AGENT_TIMEOUT_SECONDS",
-            17,
-        )
-        events = []
+            async def ainvoke(self, *args, **kwargs):
+                pytest.fail("Expired execution must not start another paid call")
 
-        result = await _invoke_stage_1_batch_llm(
-            Llm(),
-            "agent prompt",
-            ["src/a.py"],
-            agent_service=AgentService(),
-            event_callback=events.append,
-            direct_fallback_prompt="prepared direct recovery prompt",
-        )
-
-        assert result == []
-        assert events[-1]["state"] == "stage_1_agent_degraded"
+        monkeypatch.setattr("service.review.orchestrator.stage_1_file_review.STAGE1_AGENT_TIMEOUT_SECONDS", 17)
+        with pytest.raises(TimeoutError, match="17s deadline"):
+            await _invoke_stage_1_batch_llm(
+                Llm(), "agent prompt", ["src/a.py"], agent_service=AgentService(),
+                direct_fallback_prompt="must not run",
+            )
+        assert len(calls) == 1
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_local_only_agent_failure_never_calls_direct_fallback(self):

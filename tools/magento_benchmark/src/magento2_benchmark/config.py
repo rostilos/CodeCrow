@@ -79,7 +79,6 @@ DEFAULTS: dict[str, Any] = {
         "timeout_seconds": 300,
         "temperature": 0,
         "repeats": 1,
-        "max_retries": 4,
         "max_structured_retries": 3,
         "max_prompt_characters": 400_000,
         "validate_unmatched_findings": True,

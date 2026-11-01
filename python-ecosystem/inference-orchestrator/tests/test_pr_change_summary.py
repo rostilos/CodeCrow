@@ -384,12 +384,19 @@ async def test_qa_reuses_graph_task_and_issues_without_diff_pipeline():
 
 
 @pytest.mark.asyncio
-async def test_qa_agent_failure_keeps_generation_available():
+@pytest.mark.parametrize("error", [TimeoutError(), RuntimeError("optional tools unavailable")])
+async def test_qa_agent_failure_distinguishes_unavailable_tools_from_unknown_execution(error):
     llm = SimpleNamespace(ainvoke=AsyncMock(return_value=SimpleNamespace(content="saved context document")))
-    agent = SimpleNamespace(available_tool_names=frozenset({"getImpactRadius"}), execute=AsyncMock(side_effect=TimeoutError))
+    agent = SimpleNamespace(available_tool_names=frozenset({"getImpactRadius"}), execute=AsyncMock(side_effect=error))
     orchestrator = QaDocOrchestrator(llm, agent_service=agent)
+    if isinstance(error, TimeoutError):
+        with pytest.raises(TimeoutError):
+            await orchestrator._invoke_document([{"content": "QA task and graph"}])
+        llm.ainvoke.assert_not_awaited()
+        return
     result = await orchestrator._invoke_document([{"content": "QA task and graph"}])
     assert result.content == "saved context document"
+    llm.ainvoke.assert_awaited_once()
     assert agent.execute.call_args.args[0].tool_argument_bindings == {}
     assert orchestrator.agent_service is None
 

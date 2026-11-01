@@ -50,9 +50,12 @@ public class QaDocRecoveryScheduler {
             catch (Exception e) { log.warn("QA intent {} remains pending: {}",analysis.getId(),e.getMessage()); }
         }
         var now=OffsetDateTime.now();
-        for (var job : repository.findRecoverableQaJobs(now.minusSeconds(30),now.minusMinutes(30),now.minusMinutes(1),PageRequest.of(0,50))) {
+        for (var job : repository.findRecoverableQaJobs(now.minusSeconds(30),now.minusMinutes(30),PageRequest.of(0,50))) {
             try {
                 if (!queue.prepareRetry(job.getId(),now)) continue;
+                log.info("Recovering persisted QA job: job={}, project={}, pr={}, previousStatus={}, trigger={}, analysis={}",
+                        job.getId(), job.getProject().getId(), job.getPrNumber(), job.getStatus(),
+                        job.getTriggerSource(), job.getInputAnalysisId());
                 job.setStartedAt(null); job.setStatus(JobStatus.QUEUED);
                 if (job.getTriggerSource() == JobTriggerSource.CHAINED) executor.execute(() -> executeAutomatic(job));
                 else replayCommand(job);

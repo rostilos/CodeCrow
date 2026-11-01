@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import io
+import urllib.error
 import subprocess
 
 import pytest
@@ -699,3 +701,23 @@ def test_structured_call_rejects_wrong_provider_model_before_checkpoint(tmp_path
         )
 
     assert not checkpoint.exists()
+
+
+@pytest.mark.parametrize("failure", [TimeoutError("response lost"), urllib.error.URLError("connection lost"),
+    urllib.error.HTTPError("https://example.invalid", 503, "unavailable", {}, io.BytesIO(b"response lost"))])
+def test_judge_transport_failure_sends_one_paid_request(monkeypatch, failure):
+    monkeypatch.setenv("BENCHMARK_JUDGE_KEY", "offline-test-key")
+    calls = []
+
+    def lost_response(*args, **kwargs):
+        calls.append(args)
+        raise failure
+
+    monkeypatch.setattr("urllib.request.urlopen", lost_response)
+    client = OpenAICompatibleJudge({
+        "api_key_env": "BENCHMARK_JUDGE_KEY", "base_url": "https://example.invalid/v1",
+        "model": "fixture", "max_retries": 4,
+    })
+    with pytest.raises(RuntimeError, match="not automatically retried"):
+        client.call(system="system", user="prompt")
+    assert len(calls) == 1

@@ -9,6 +9,16 @@ from service.qa_documentation.qa_doc_orchestrator import QaDocOrchestrator
 from service.qa_documentation.qa_doc_service import QaDocumentationService
 
 
+def connected_request():
+    import asyncio
+    from starlette.requests import Request
+
+    async def receive():
+        await asyncio.Future()
+
+    return Request({"type": "http"}, receive=receive)
+
+
 def saved_summary(**updates):
     return {"projectId": 7, "pullRequestId": 9, "sourceRevision": "abc",
             "files": [{"path": "a.py", "scanStatus": "scanned", "summary": "Input validation"}],
@@ -186,7 +196,7 @@ async def test_qa_endpoint_returns_effective_template_and_input_coverage(monkeyp
         "documentation": "Generated document", "documentation_needed": True,
         "template_mode_used": "BASE", "input_coverage": {
             "status": "unknown", "source": "analysis_only", "provided_file_count": 0}}))
-    response = await generate_qa_documentation(None, QaDocumentationRequest(
+    response = await generate_qa_documentation(connected_request(), QaDocumentationRequest(
         project_id=7, project_name="repo", pr_number=9, issues_found=0, files_analyzed=0,
         template_mode="CUSTOM", custom_template="Custom instructions"))
     assert response.template_mode_used == "BASE"
@@ -215,7 +225,7 @@ async def test_qa_api_keeps_host_tool_context_when_semantic_summary_is_unavailab
     generation = AsyncMock(return_value={"documentation": "QA", "documentation_needed": True})
     monkeypatch.setattr(QaDocumentationService, "generate", generation)
     binding = {"repository": {"localRepoPath": "/qa/fresh", "localReviewOverlayPath": "/qa/overlay"}}
-    await generate_qa_documentation(None, QaDocumentationRequest(
+    await generate_qa_documentation(connected_request(), QaDocumentationRequest(
         project_id=7, project_name="repo", pr_number=9, source_revision="abc", tool_context=binding))
     assert generation.call_args.kwargs["repository_context"]["tool_context"] == binding
 

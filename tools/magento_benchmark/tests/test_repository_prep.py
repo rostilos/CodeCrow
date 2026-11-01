@@ -103,7 +103,7 @@ def test_prepare_repository_rejects_nonofficial_origin(tmp_path):
     repository = _prepared_fixture(tmp_path)
     _git(repository, "remote", "set-url", "origin", "https://example.test/repo.git")
 
-    with pytest.raises(ValueError, match="official magento/magento2"):
+    with pytest.raises(ValueError, match="canonical HTTPS.*github.com/magento/magento2"):
         repository_prep.prepare_official_repository(repository)
 
 
@@ -129,16 +129,16 @@ def test_prepare_repository_rejects_custom_upload_pack(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "remote_url",
+    "remote_url, allowed",
     [
-        "https://github.com/magento/magento2",
-        "https://github.com/magento/magento2.git",
-        "git@github.com:magento/magento2.git",
-        "ssh://git@github.com/magento/magento2.git",
+        ("https://github.com/magento/magento2", True),
+        ("https://github.com/magento/magento2.git", True),
+        ("git@github.com:magento/magento2.git", False),
+        ("ssh://git@github.com/magento/magento2.git", False),
     ],
 )
-def test_official_remote_url_forms_are_explicit(remote_url):
-    assert repository_prep._official_remote(remote_url) is True
+def test_official_remote_url_forms_are_explicit(remote_url, allowed):
+    assert repository_prep._official_remote(remote_url) is allowed
 
 
 @pytest.mark.parametrize(
